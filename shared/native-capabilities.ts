@@ -20,6 +20,7 @@ export interface NativeEndpointCapabilities {
   contextTokens?: number;
   maxOutputTokens?: number;
   supportedServiceTiers?: string[];
+  hostedTools?: Array<"web_search">;
   inference?: { chat?: boolean; decision?: NativeDecisionCapabilities };
 }
 export interface NativeModelCapabilities {
