@@ -512,7 +512,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, backgroundRecovery, continuation };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

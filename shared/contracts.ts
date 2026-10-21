@@ -41,7 +41,7 @@ export interface ClientCatalogProvider {
   policies: string[];
   readiness: ProviderReadiness;
   connectionTypes: string[];
-  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" }>;
+  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime" }>;
   models: ClientCatalogModel[];
   offers: CatalogOffer[];
 }
@@ -321,6 +321,7 @@ export interface UsageSummary { requestCount: number; successCount: number; erro
 export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageAuditEvent {
+  realtime_usage?: { unit_id: string; response_id: string | null; output_cap: number; text_input_tokens?: number; audio_input_tokens?: number; cached_text_input_tokens?: number; cached_audio_input_tokens?: number; text_output_tokens?: number; audio_output_tokens?: number };
   id: string;
   type: string;
   occurred_at_ms: number;

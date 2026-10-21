@@ -107,6 +107,7 @@ quota:
           unit: credit
           remainingPointer: /credits/balance
 capabilities:
+  - {"id":"audio.realtime","endpoint":"realtime","methods":["GET"]}
   - id: llm.responses
     endpoint: responses
     methods: [POST]
@@ -123,6 +124,7 @@ capabilities:
     endpoint: images_generations
     methods: [POST]
 endpoints:
+  realtime: {"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses:
     modelPassthrough: {}
     path: /v1/responses
@@ -176,6 +178,7 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - {"id":"openai/gpt-realtime-2.1","upstream":"gpt-realtime-2.1","capabilities":["audio.realtime"],"pricingRef":"openai-realtime-2.1-manual-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/pricing","inputMicrosPerMillion":32000000,"outputMicrosPerMillion":64000000,"cachedInputMicrosPerMillion":400000,"maxInputTokens":128000,"maxRequestInputTokens":128000,"defaultMaxOutputTokens":4096,"inputTokenOverhead":0,"settlementBasis":"published_upper_bound"},"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"realtime":{"sources":["https://developers.openai.com/api/docs/models/gpt-realtime-2.1"],"checkedAt":"2026-10-20","input":["text","audio"],"contextWindow":128000,"maxOutputTokens":4096,"inference":{"chat":false}}}}}
     - id: openai/gpt-image-2.5-sunburst
       upstream: gpt-image-2.5-sunburst
       capabilities: [image.generation]

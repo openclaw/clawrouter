@@ -324,7 +324,9 @@ function validateManifest(manifest) {
         if (models.length !== 1 || !models[0].pricing || !models[0].capabilities?.some((capability) => capabilities.includes(capability))) throw new Error(`provider ${manifest.id} endpoint ${id} modelPassthrough pricingRef must resolve to one priced endpoint-compatible model`);
       }
     }
-    if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
+    if (endpoint.websocket === "openai.realtime") {
+      if ((endpoint.method ?? "POST") !== "GET" || endpoint.requestFormat !== "openai.realtime" || endpoint.responseFormat !== "openai.realtime" || endpoint.streaming || endpoint.nativeProxy === false || endpoint.modelPassthrough) throw new Error("Realtime requires a native GA GET endpoint");
+    } else if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }

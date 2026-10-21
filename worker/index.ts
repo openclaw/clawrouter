@@ -21,6 +21,7 @@ import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey } from "./proxy-auth";
 import { proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
+import { proxyRealtimeWebSocket } from "./realtime-websocket";
 import { proxyResponsesWebSocket } from "./responses-websocket";
 import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
@@ -104,6 +105,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, control.id, url.searchParams, "proxy_key");
   }
+  if (request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket" && ["/v1/realtime", "/v1/native/openai/v1/realtime"].includes(path)) return proxyRealtimeWebSocket(request, env, context);
   if (request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket" && (path === "/v1/responses" || path.startsWith("/v1/native/"))) return proxyResponsesWebSocket(request, env, context, path);
   if (request.method === "POST" && openAiPath(path)) return proxyOpenAi(request, env, context, path, "proxy_key");
   if (request.method === "POST" && ["/v1/messages", "/v1/messages/count_tokens"].includes(path)) return proxyNative(request, env, context, `/v1/native/anthropic${path}`);

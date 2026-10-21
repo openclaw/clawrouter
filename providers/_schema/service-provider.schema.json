@@ -658,7 +658,7 @@
           "additionalProperties": false,
           "properties": { "pricingRef": { "type": "string", "minLength": 1 } }
         },
-        "websocket": { "enum": ["openai.responses"] },
+        "websocket": { "enum": ["openai.responses", "openai.realtime"] },
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }
     },

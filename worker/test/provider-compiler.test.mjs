@@ -24,7 +24,11 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
     assert.deepEqual([pricing.inputMicrosPerMillion, pricing.cachedInputMicrosPerMillion, pricing.outputMicrosPerMillion], pro ? [1_320_000, 44_000, 3_960_000] : [300_000, 6_000, 1_200_000]);
     assert.deepEqual(compiled.model_index[model.id], { provider: "deepseek", ...Object.fromEntries(Object.entries(model).filter(([key]) => key !== "id")) });
   }
-  assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
+  const realtime = compiled.model_index["openai/gpt-realtime-2.1"];
+  assert.equal(realtime.pricing.settlementBasis, "published_upper_bound");
+  assert.equal(realtime.pricing.maxRequestInputTokens, 128000);
+  assert.deepEqual([realtime.pricing.inputMicrosPerMillion, realtime.pricing.outputMicrosPerMillion], [32000000, 64000000]);
+  assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).filter(model => model.id !== "openai/gpt-realtime-2.1").every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   const gemini = compiled.model_index["google/gemini-3.5-flash"];
   assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");

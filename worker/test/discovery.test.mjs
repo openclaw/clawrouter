@@ -391,13 +391,16 @@ test("catalog and session preserve saved provider health independently of operat
         assert.equal(view.readiness.latencyMs, health?.latencyMs ?? null);
         assert.equal(view.readiness.status, blockedStatus ?? probeStatus);
         assert.deepEqual(view.readiness.reasons, [
-          ...(reasonCode ? [reasonCode] : []),
+          ...(reasonCode ? [reasonCode, ...(reasonCode === "budget_exhausted" ? ["grant_transport_unavailable"] : [])] : ["grant_transport_unavailable", ...(mode === "key" ? ["budget_exhausted"] : [])]),
           ...(executable && !verified ? ["Configured but not recently verified by a live smoke test."] : []),
           ...(failure ? [failure] : []),
         ]);
         assert.equal(view.readiness.executable, executable);
         assert.equal(view.offers.some(({ eligible }) => eligible), executable);
-        if (reasonCode) assert.ok(view.offers.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
+        if (reasonCode) {
+          assert.ok(view.offers.filter(offer => offer.endpoint !== "realtime").every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
+          assert.ok(view.offers.filter(offer => offer.endpoint === "realtime").every(offer => !offer.eligible));
+        }
         if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
         if (body.catalog) assert.deepEqual(body.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
         assert.equal(fixture.calls.filter(({ path }) => path === "kv-list").length, 0);
@@ -748,7 +751,11 @@ test("ordered policy selection does not shop for a richer budget", async (t) => 
   for (const [cooldown, expectedPolicy, eligible] of [[false, "fixture", false], [true, "second", true]]) {
     if (cooldown) fixture.states["oauth/fixture/api"] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
     const catalog = await (await catalogResponse(fixture.request("session"), fixture.env)).json();
-    const offers = catalog.providers.find(({ id }) => id === "openai").offers;
+    const all = catalog.providers.find(({ id }) => id === "openai").offers;
+    const realtime = all.filter(offer => offer.endpoint === "realtime");
+    assert.ok(realtime.length > 0);
+    assert.ok(realtime.every(offer => !offer.eligible && offer.transport === "http" && ["grant_transport_unavailable", "upstream_grant_pool_unavailable"].includes(offer.reasonCode)), "browser session cannot inherit server-only Realtime WebSocket authority");
+    const offers = all.filter(offer => offer.endpoint !== "realtime");
     assert.ok(offers.length > 0);
     assert.ok(offers.every((offer) => offer.policyId === expectedPolicy));
     assert.equal(offers.some((offer) => offer.eligible), eligible);

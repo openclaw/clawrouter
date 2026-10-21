@@ -2,6 +2,7 @@ import { validateBudgetReservation } from "./accounting";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
 import type { AuthorizedIdentity, CompiledModel, ProviderConnection } from "./types";
+import { REALTIME } from "./realtime-protocol";
 import { HttpError } from "./utils";
 
 export interface BudgetObservation { policyRemaining: number | null; dailyRemaining?: number | null; weeklyRemaining?: number | null; providerRemaining: number | null }
@@ -13,7 +14,9 @@ export interface OperationAffordability {
 export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation): OperationAffordability {
   // Only the basis is used for variable prices; an empty body's default output
   // allowance is not a claim that every real request fits the observed balance.
-  const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
+  const realtime = endpoint.request_format === "openai.realtime";
+  if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
+  const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, auth.policy.requestCostMicros ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
   try {
     if (auth.policy.budgetMode === "soft") {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };
@@ -25,7 +28,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (auth.policy.budgetScope === "principal" && !auth.principalId && !auth.credentialId)
     return { status: "exact-blocked", reasonCode: "principal_required" };
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
-  const exact = cost.basis === "policy_fixed" ? cost.reserveMicros : bounds?.zero ? 0 : null;
+  const exact = realtime ? cost.reserveMicros : cost.basis === "policy_fixed" ? cost.reserveMicros : bounds?.zero ? 0 : null;
   const minimum = exact ?? bounds?.minimumMicros ?? 0;
   if (exact === 0 && auth.policy.budgetMode !== "soft") return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };

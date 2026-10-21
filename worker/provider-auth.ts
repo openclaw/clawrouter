@@ -10,6 +10,7 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
 export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
   if (requirement.responsesLifecycle) {
@@ -17,7 +18,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
     if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel].every(id =>
       requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
   }
-  return requirement.mode === "http" || (requirement.endpoint.websocket === "openai.responses" && transport === null);
+  return requirement.mode === "http" || (["openai.responses", "openai.realtime"].includes(requirement.endpoint.websocket ?? "") && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"));
 }
 
 // Catalogs inspect credential metadata; dispatch repeats these checks after the
