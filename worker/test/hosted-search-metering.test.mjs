@@ -191,6 +191,39 @@ test('anonymous search without a corroborating terminal cannot assert a complete
   assertAudit(f.events[0], 0, false, 56); assert.equal(f.events[0].hosted_tool_cost_micros, null);
 });
 
+for (const [name, firstAction, secondAction, finalAction] of [
+  ['ID-only search masked by indexed open_page', 'search', 'open_page', 'open_page'],
+  ['indexed search masks ID-only open_page', 'open_page', 'search', 'search'],
+]) test(name + ' cannot qualify contradictory identity evidence', async t => {
+  const f = setup(t), indexed = { ...search('ws_fixture', secondAction), id: undefined };
+  const body = sse({ type: 'response.output_item.done', item: search('ws_fixture', firstAction) },
+    { type: 'response.output_item.done', output_index: 0, item: indexed }, frame(terminal([search('ws_fixture', finalAction)])));
+  upstream(t, body, true); const r = await f.request({ stream: true }); assert.equal(await r.text(), body); await f.drain();
+  assertAudit(f.events[0], 1, false, 56); assert.equal(f.events[0].hosted_tool_cost_micros, null);
+  assert.equal(await spent(f), 56); assert.equal((await providerBudgetStatus(f.env, 'openai', 1_000_000)).spentMicros, 56);
+});
+
+for (const [name, later] of [
+  ['conflicting same-ID done action', done(search('ws_fixture', 'open_page'))],
+  ['conflicting repeated terminal output', frame(terminal([search('ws_fixture', 'open_page')]))],
+  ['conflicting repeated terminal status', { type: 'response.failed', response: terminal([search()], { status: 'failed' }) }],
+  ['post-terminal error payload', { type: 'error', code: 'synthetic_upstream_error', message: 'synthetic failure' }],
+  ['new post-terminal item', { type: 'response.output_item.done', output_index: 1, item: search('ws_late') }],
+  ['unresolvable anonymous post-terminal search', { type: 'response.output_item.done', item: { ...search(), id: undefined } }],
+]) test(name + ' invalidates only call completeness, never mints a fee', async t => {
+  const f = setup(t), body = sse(done(search()), frame(terminal([search()])), later, '[DONE]');
+  upstream(t, body, true); const r = await f.request({ stream: true }); assert.equal(await r.text(), body); await f.drain();
+  assertAudit(f.events[0], 1, false, 56); assert.equal(f.events[0].hosted_tool_cost_micros, null);
+  assert.equal(await spent(f), 56); assert.equal((await providerBudgetStatus(f.env, 'openai', 1_000_000)).spentMicros, 56);
+});
+
+test('exact named post-terminal repeats retain one qualified component and idempotent charge owner', async t => {
+  const f = setup(t), body = sse(done(search()), frame(terminal([search()])), done(search()), frame(terminal([search()])), '[DONE]');
+  upstream(t, body, true); const r = await f.request({ stream: true }); assert.equal(await r.text(), body); await f.drain();
+  assertAudit(f.events[0], 1, true, 10_056); assert.equal(f.events[0].hosted_tool_cost_micros, 10_000);
+  assert.equal(await spent(f), 10_056); assert.equal(f.calls.filter(c => c.path === '/charge').length, 2);
+});
+
 test('large ignored search content does not invalidate the bounded action count or enter accounting', async t => {
   const f = setup(t), item = { ...search(), action: { type: 'search', query: 'synthetic private content'.repeat(100_000) } };
   const body = JSON.stringify(terminal([item, { type: 'message', content: [{ type: 'output_text', text: 'synthetic private answer'.repeat(100_000) }] }]));

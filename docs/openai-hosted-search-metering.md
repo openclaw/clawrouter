@@ -41,8 +41,13 @@ parallel parser, output buffer or eager tee.
   conflicting identities, duplicate terminal IDs or unavailable projection make
   it incomplete. Done-only anonymous items defer to that terminal enumeration;
   they never acquire guessed stream positions or duplicate partial charges.
-  Uncorroborated anonymous search cannot assert a complete zero count. Partial
-  counts are observed evidence, never an exact zero bill.
+  Uncorroborated anonymous search cannot assert a complete zero count. Both
+  ID and index associations must agree; one selector cannot hide another
+  contradictory item. Qualification remains open until delivery EOF: bounded
+  terminal identities/counts reject later conflicting item, terminal or error
+  facts without retaining content. Exact identifiable repeats remain idempotent;
+  unresolvable late anonymous items cannot qualify a fee. Partial counts are
+  observed evidence, never an exact zero bill.
 - Only a complete delivered enumeration plus authoritative terminal token usage
   can add the nominal component to an already-admitted SOFT budget with actual
   budget legs. Missing usage, interruption, cancellation, failed response,

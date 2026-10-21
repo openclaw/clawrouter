@@ -16,6 +16,7 @@ type Item = { id?: string; index?: number; count: number; done: boolean };
 export function createHostedSearchUsage() {
   const items = new Set<Item>(), ids = new Map<string, Item>(), indices = new Map<number, Item>();
   let uncertain = false, terminal = false, complete = false, total = 0, observed = false, anonymousSearch = false;
+  let snapshot: { id: string; status: string; output: Array<{ id?: string; count: number }> } | undefined;
   function observe(value: unknown, position: unknown, done: boolean) {
     if (!record(value)) { uncertain = true; return; }
     observed ||= value.type === "web_search_call";
@@ -43,8 +44,28 @@ export function createHostedSearchUsage() {
   return {
     invalid() { uncertain = true; complete = false; },
     accept(value: unknown, sse: boolean) {
-      if (terminal) return;
-      if (!record(value)) { uncertain = true; return; }
+      if (!record(value) || value.type === "error") { uncertain = true; return; }
+      if (terminal) {
+        const final = snapshot;
+        if (!final) return; // An incomplete first terminal can never qualify later.
+        // EOF, not the first terminal frame, closes hosted evidence. Keep only
+        // bounded identities/counts to reject later contradictions, not content.
+        if (value.response_id !== undefined && value.response_id !== final.id) uncertain = true;
+        if (sse && ["response.output_item.added", "response.output_item.done"].includes(value.type as string)) {
+          const item = record(value.item) ? value.item : null, index = value.output_index, id = item?.id;
+          const indexed = Number.isSafeInteger(index) && (index as number) >= 0 ? final.output[index as number] : undefined;
+          const named = typeof id === "string" ? final.output.find(item => item.id === id) : undefined;
+          const match = indexed ?? named;
+          if (!item || !match || indexed && named && indexed !== named || index !== undefined && !indexed
+            || id !== undefined && id !== match.id || call(item) !== match.count) uncertain = true;
+        } else if (sse && ["response.completed", "response.incomplete", "response.failed", "response.cancelled"].includes(value.type as string)) {
+          const response = record(value.response) ? value.response : null;
+          if (!response || response.id !== final.id || response.status !== final.status || value.type !== "response." + final.status
+            || !Array.isArray(response.output) || response.output.length !== final.output.length
+            || response.output.some((item, index) => !record(item) || item.id !== final.output[index].id || call(item) !== final.output[index].count)) uncertain = true;
+        }
+        return;
+      }
       if (sse && ["response.output_item.added", "response.output_item.done"].includes(value.type as string)) {
         observe(value.item, value.output_index, value.type === "response.output_item.done"); return;
       }
@@ -64,7 +85,9 @@ export function createHostedSearchUsage() {
           if (seen.has(value.id)) { uncertain = true; continue; }
           seen.add(value.id);
         }
-        const item = indices.get(index) ?? (typeof value.id === "string" ? ids.get(value.id) : undefined);
+        const indexed = indices.get(index), named = typeof value.id === "string" ? ids.get(value.id) : undefined;
+        if (indexed && named && indexed !== named) uncertain = true;
+        const item = indexed ?? named;
         if (item && (item.id !== undefined && value.id !== item.id || item.index !== undefined && item.index !== index || item.done && item.count !== next)) uncertain = true;
         count += next;
       }
@@ -74,6 +97,8 @@ export function createHostedSearchUsage() {
       complete = !uncertain && typeof response.id === "string" && response.id.length > 0 && response.id.length <= 256
         && (sse || response.object === "response") && ["completed", "incomplete"].includes(response.status as string)
         && (!sse || value.type === "response.completed" || value.type === "response.incomplete");
+      if (complete) snapshot = { id: response.id as string, status: response.status as string,
+        output: response.output.map(value => ({ ...(typeof value.id === "string" ? { id: value.id } : {}), count: call(value)! })) };
     },
     result(ended: boolean): HostedSearchUsage | undefined {
       if (!observed) return undefined;
