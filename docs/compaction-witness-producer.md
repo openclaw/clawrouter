@@ -25,6 +25,27 @@ observed completed calls. This does not certify a retained inventory, reduce
 opaque token bounds, qualify hard-budget hosted-search admission, or change the
 producer's conservative unknown knowledge for encrypted-reasoning ancestry.
 
+## Authority and upgrade proof
+
+`worker/test/compaction-witness-runtime.test.mjs` runs the real Worker, authority
+and ledgers in workerd with persistent SQLite storage. Witness scope is the
+existing continuation identity (auth type, tenant, policy, credential id,
+principal). A foreign tenant's lookup returns nothing, and its own production of
+the same item lands in its own scope. A foreign binding written into the owner's
+object is a conflict. Revocation fails authentication before any lookup or
+write. Reassigning a credential to another policy derives a new, empty scope.
+Rotation keeps the credential's scope. Pooled-grant revocation or a new grant
+lineage cannot replace the original owner binding. An administrator re-enabling
+the same credential id under the same policy keeps the same identity, as for
+continuation ownership; consumer B must not treat scope equality alone as
+current-owner proof.
+
+The upgrade case opens pre-producer storage with the producer and checks
+settings, grants, continuation rows, the background job, budget reservations and
+usage events. Only additive witness DDL appears, on first use. CI emulates the
+pre-producer store. `CLAWROUTER_UPGRADE_BASE=<extracted tree with node_modules>`
+runs the same case from an exact earlier source tree.
+
 ## Qualification and next stage
 
 Before publication, bind the exact producer commit/tree, full source audit,
