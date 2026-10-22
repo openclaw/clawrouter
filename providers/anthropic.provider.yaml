@@ -208,6 +208,72 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
+    - id: anthropic/claude-sonnet-5-5
+      upstream: claude-sonnet-5-5
+      capabilities: [llm.messages, llm.count_tokens]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://platform.claude.com/docs/en/models/sonnet-5-5/overview]
+            checkedAt: "2026-10-21"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+            inference: {chat: true}
+          count_tokens:
+            sources: [https://platform.claude.com/docs/en/models/sonnet-5-5/overview, https://platform.claude.com/docs/en/build-with-claude/token-counting]
+            checkedAt: "2026-10-21"
+            input: [text, image]
+            contextWindow: 1000000
+      pricingRef: anthropic-claude-sonnet-5-5-standard-2026-09-28
+      pricing:
+        effectiveAt: "2026-09-28"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 2000000
+        cachedInputMicrosPerMillion: 100000
+        cacheWrite5mInputMicrosPerMillion: 2500000
+        cacheWrite1hInputMicrosPerMillion: 4000000
+        outputMicrosPerMillion: 10000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-haiku-5-5
+      upstream: claude-haiku-5-5
+      capabilities: [llm.messages, llm.count_tokens]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://platform.claude.com/docs/en/models/haiku-5-5/overview]
+            checkedAt: "2026-10-21"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+            inference: {chat: true}
+          count_tokens:
+            sources: [https://platform.claude.com/docs/en/models/haiku-5-5/overview, https://platform.claude.com/docs/en/build-with-claude/token-counting]
+            checkedAt: "2026-10-21"
+            input: [text, image]
+            contextWindow: 1000000
+      pricingRef: anthropic-claude-haiku-5-5-standard-2026-10-07
+      pricing:
+        effectiveAt: "2026-10-07"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 100000
+        cachedInputMicrosPerMillion: 10000
+        cacheWrite5mInputMicrosPerMillion: 125000
+        cacheWrite1hInputMicrosPerMillion: 200000
+        outputMicrosPerMillion: 500000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
+        # The full prompt (including cache reads/writes) selects one request rate.
+        longContext:
+          thresholdInputTokens: 100000
+          inputMicrosPerMillion: 500000
+          cachedInputMicrosPerMillion: 50000
+          cacheWrite5mInputMicrosPerMillion: 625000
+          cacheWrite1hInputMicrosPerMillion: 1000000
+          outputMicrosPerMillion: 2500000
     - id: anthropic/claude-opus-5-5
       upstream: claude-opus-5-5
       capabilities: [llm.messages, llm.count_tokens]
