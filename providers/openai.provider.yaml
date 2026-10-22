@@ -179,25 +179,9 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: openai/omni-moderation-latest
-      upstream: omni-moderation-latest
-      capabilities: [llm.moderations]
-      pricingRef: openai-omni-moderation-free-2026-10-21
-      # Free endpoint pricing is operation-owned; no token-context ceiling is
-      # published here, so do not invent a token-priced model card.
-      nativeCapabilities: &omniModerationCapabilities
-        version: clawrouter.native-capabilities.v1
-        endpoints:
-          moderations:
-            sources: [https://developers.openai.com/api/docs/models/omni-moderation-latest, https://developers.openai.com/api/docs/guides/moderation]
-            checkedAt: "2026-10-21"
-            input: [text, image]
-            inference: {chat: false}
-    - id: openai/omni-moderation-2024-09-26
-      upstream: omni-moderation-2024-09-26
-      capabilities: [llm.moderations]
-      pricingRef: openai-omni-moderation-free-2026-10-21
-      nativeCapabilities: *omniModerationCapabilities
+    # Free endpoint tariff; no invented token-context ceiling. See docs/openai-moderations.md.
+    - {id: openai/omni-moderation-latest, upstream: omni-moderation-latest, capabilities: [llm.moderations], pricingRef: openai-omni-moderation-free-2026-10-21, nativeCapabilities: &omniModerationCapabilities {version: clawrouter.native-capabilities.v1, endpoints: {moderations: {sources: [https://developers.openai.com/api/docs/models/omni-moderation-latest, https://developers.openai.com/api/docs/guides/moderation], checkedAt: "2026-10-21", input: [text, image], inference: {chat: false}}}}}
+    - {id: openai/omni-moderation-2024-09-26, upstream: omni-moderation-2024-09-26, capabilities: [llm.moderations], pricingRef: openai-omni-moderation-free-2026-10-21, nativeCapabilities: *omniModerationCapabilities}
     - {"id":"openai/gpt-realtime-2.1","upstream":"gpt-realtime-2.1","capabilities":["audio.realtime"],"pricingRef":"openai-realtime-2.1-manual-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/pricing","inputMicrosPerMillion":32000000,"outputMicrosPerMillion":64000000,"cachedInputMicrosPerMillion":400000,"maxInputTokens":128000,"maxRequestInputTokens":128000,"defaultMaxOutputTokens":4096,"inputTokenOverhead":0,"settlementBasis":"published_upper_bound"},"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"realtime":{"sources":["https://developers.openai.com/api/docs/models/gpt-realtime-2.1"],"checkedAt":"2026-10-20","input":["text","audio"],"contextWindow":128000,"maxOutputTokens":4096,"inference":{"chat":false}}}}}
     - {"id":"openai/gpt-4o-transcribe","upstream":"gpt-4o-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-transcribe","inputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
     - {"id":"openai/gpt-4o-mini-transcribe","upstream":"gpt-4o-mini-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-mini-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe","inputMicrosPerMillion":1250000,"outputMicrosPerMillion":5000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
