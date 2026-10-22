@@ -61,6 +61,11 @@ export interface AccountingOutcome {
 
 export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOutcome): UsageEvent {
   const { model, fixed, cost, requestFormat, event } = facts;
+  // Moderation is a free upstream operation, not a generation tariff. Even
+  // unknown delivery or a future usage-shaped payload cannot create a charge.
+  if (requestFormat === "openai.moderations") return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+    reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
+    content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
   const soft = reservation.charges !== undefined;
@@ -163,7 +168,7 @@ export function createProxyAccounting(options: AccountingContext) {
 }
 
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint, parentTools?: ToolKnowledge): EstimatedCost {
-  if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
+  if (endpoint.request_format === "openai.moderations" || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;

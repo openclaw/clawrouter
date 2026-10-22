@@ -30,7 +30,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (auth.policy.budgetScope === "principal" && !auth.principalId && !auth.credentialId)
     return { status: "exact-blocked", reasonCode: "principal_required" };
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
-  const exact = realtime ? cost.reserveMicros : cost.basis === "policy_fixed" ? cost.reserveMicros : bounds?.zero ? 0 : null;
+  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" ? cost.reserveMicros : bounds?.zero ? 0 : null;
   const minimum = exact ?? bounds?.minimumMicros ?? 0;
   if (exact === 0 && auth.policy.budgetMode !== "soft") return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };
