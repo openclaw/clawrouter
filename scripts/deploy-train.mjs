@@ -62,8 +62,8 @@ export async function recoverTrain({ api, state, save = () => {} }) {
   if (recoveryDecision(remote) === 'freeze') { state.recovery = 'freeze'; save(state); return 'freeze'; }
   if (recoveryDecision(remote) === 'none') return 'none';
   const rolledBack = { ...state, status: 'rolled-back' };
-  await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage(rolledBack), latest.id);
-  state.status = 'rolled-back'; state.recovery = 'rollback'; save(state);
+  const restored = await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage(rolledBack), latest.id);
+  state.deploymentId = restored.id; state.status = 'rolled-back'; state.recovery = 'rollback'; save(state);
   return 'rollback';
 }
 export async function runTrain({ state, api, upload, smoke, save = () => {}, now = Date.now, wait = sleep, analytics = observeAnalytics, mode = 'rollout', negativeSmoke = async () => { throw new Error('Deliberate 0% smoke failure'); } }) {
@@ -118,8 +118,8 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
         await wait(Math.min(POLL_MS, deadline - now()));
       } while (true);
       if (mode === 'zero-smoke') {
-        await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage({ ...state, status: 'rehearsed' }), state.deploymentId);
-        state.status = 'rehearsed'; save(state); return state;
+        const restored = await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage({ ...state, status: 'rehearsed' }), state.deploymentId);
+        state.deploymentId = restored.id; state.status = 'rehearsed'; save(state); return state;
       }
     }
     // A terminal receipt is remote as well as local. The failure job can distinguish

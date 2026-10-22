@@ -1492,3 +1492,28 @@ The FakeCo workflow had no runs and its GitHub environment lookup returned 404 o
 not prove that no stray Cloudflare resource exists, but it means FakeCo is not a
 configured deployment rehearsal target. Do not provision it solely for this proof.
 Use the authorized production 0% rehearsals, then one normal manual train.
+
+#### Verified initial rehearsals (2026-10-22)
+
+At candidate `517d2d432afab80a841098b340b82075d2c3d6c2`, main push CI
+[39840237804](https://github.com/openclaw/clawrouter/actions/runs/39840237804)
+passed. Production blue was `d06cab69-8847-46da-b6b6-cc1585b42371`.
+
+- [Zero-smoke 39841010254](https://github.com/openclaw/clawrouter/actions/runs/39841010254)
+  proved green `efe82347-afc3-4ebf-8d43-182b8e01cf83` at 0%, the full provider/usage
+  smoke, and shared asset bytes/R2-only probe, then restored blue alone at 100%.
+- [Deliberate failure 39841674043](https://github.com/openclaw/clawrouter/actions/runs/39841674043)
+  first proved green `ec272ca8-5238-41e8-9fc8-8cc08eba276b`, deliberately failed its
+  version assertion at 0%, and automatically restored blue alone at 100%. The
+  independent recovery job confirmed restoration and created the single
+  [tracking issue](https://github.com/openclaw/clawrouter/issues/317), with no mentions.
+
+Those rehearsals exposed an observer contract bug, not a missing-token-permission
+finding: Cloudflare tail IDs are **32-character hex Identifiers**, unlike Worker
+version UUIDs. The observer now accepts that documented shape and reports fixed
+failure stage/status without raw provider diagnostics. The separate manually
+invoked **Observe Cloudflare Queue** workflow can collect five minutes of sanitized
+queue-version counts during a train without uploading, deploying, changing
+traffic, or making provider requests. It requires a reviewed full main SHA,
+stops on a different deployment owner, and deletes its ephemeral tail. It has no
+schedule and does not replace the train or its recovery owner.
