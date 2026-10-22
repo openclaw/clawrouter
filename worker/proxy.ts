@@ -1,5 +1,6 @@
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { softBudget } from "./soft-budget.ts";
+import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
@@ -40,7 +41,7 @@ import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./p
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
-  errorResponse, HttpError, randomId, readJson,
+  errorResponse, HttpError, maxAnthropicJsonBodyBytes, maxJsonBodyBytes, randomId, readJson,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
@@ -48,7 +49,7 @@ type AuthMode = "proxy_key" | "access";
 interface PreparedUpstream {
   headers: Headers;
   url: URL;
-  requestBody: string | undefined;
+  requestBody: string | ReadableStream<Uint8Array> | undefined;
   grantKey: string | null;
   grantLane: import("./types").GrantLane;
   grantRevision: string | null;
@@ -212,7 +213,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   // selection, including transports that cannot provide durable recovery.
   let envelope, prepared;
   try {
-    envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request));
+    envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined));
     prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
   } catch (error) {
     const auth = await preauthenticate(request, env, mode, provider.id);
@@ -246,7 +247,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   }
   let prepared;
   try {
-    const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
+    const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined);
     prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
   } catch (error) {
     const auth = await preauthenticate(request, env, "proxy_key", provider.id);
@@ -541,8 +542,14 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     upstream.query.forEach((value, name) => url.searchParams.set(name, value));
     for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
     for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
-    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
-    await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
+    const body = transformTransportBody(upstream.transport, selection.body);
+    // Claude's enlarged envelope must not coexist with full-document pricing,
+    // transport and retention copies in the Worker's 128 MB isolate. Keep small
+    // requests on the existing path; large unsigned Claude JSON streams out.
+    const streamBody = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages"
+      && !selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4") && jsonBodyBytes(body) > maxJsonBodyBytes;
+    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : streamBody ? jsonBodyStream(body) : JSON.stringify(body);
+    if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");

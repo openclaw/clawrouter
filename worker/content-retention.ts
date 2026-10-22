@@ -1,5 +1,6 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
-import { randomId } from "./utils.ts";
+import { maxJsonBodyBytes, randomId } from "./utils.ts";
+import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -44,7 +45,11 @@ export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, s
       ? selection.body.map(({ headers: _headers, authorization: _authorization, ...entry }) => entry)
       : selection.body,
   };
-  await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), JSON.stringify(record), {
+  const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(record) : 0;
+  // R2 requires a known-length stream. Counting uses the same serializer as
+  // delivery, including Unicode/escaping and the retention envelope.
+  const body = bytes > maxJsonBodyBytes ? jsonBodyStream(record).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(record);
+  await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), body, {
     httpMetadata: { contentType: "application/json" },
     customMetadata: { expiresAt: String(record.expiresAtMs) },
   });
