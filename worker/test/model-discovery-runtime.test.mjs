@@ -13,13 +13,15 @@ import worker, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject
 import { putGrantCredentials, revokeGrantCredentials } from './worker/grant-credentials.ts';
 import { snapshot } from './worker/providers.ts';
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject };
+const pending = [];
 export default { ...worker, async fetch(request, env, context) {
  const path = new URL(request.url).pathname;
  if (path === '/fixture/object') { const b = await request.json(); const ns = env[b.binding]; return ns.get(ns.idFromName(b.name)).fetch('https://authority'+b.path, {method:'POST',body:JSON.stringify(b.value)}); }
  if (path === '/fixture/grant') { const b = await request.json(); return Response.json(b.revoke ? await revokeGrantCredentials(env,b.key) : await putGrantCredentials(env,b.key,b.grant)); }
+ if (path === '/fixture/drain') { await Promise.all(pending.splice(0)); return new Response('ok'); }
  if (path === '/fixture/upstream') return fetch('https://upstream/fixture', {method:'POST',body:request.body});
  if (path === '/fixture/decision-only') { const model=snapshot.providers.find(p=>p.id==='openai').models.find(m=>m.id==='openai/gpt-6-luna'); if(!model.nativeCapabilities?.endpoints.decisions) return new Response('missing Decisions declaration',{status:500}); model.capabilities=['llm.decisions']; model.nativeCapabilities.endpoints={decisions:model.nativeCapabilities.endpoints.decisions}; delete model.requestParameters; return new Response('ok'); }
- return worker.fetch(request,env,context);
+ return worker.fetch(request,env,{waitUntil(promise){pending.push(promise);context.waitUntil(promise);},passThroughOnException(){context.passThroughOnException();}});
 }, async queue(batch) {
  await fetch('https://upstream/events', {method:'POST',body:JSON.stringify(batch.messages.map(m=>m.body))}); batch.ackAll();
 } };
@@ -58,7 +60,7 @@ async function fixture(t) {
  const grant=async(provider,kind='api_key',revoke=false)=>{const r=await call('/fixture/grant',{method:'POST',body:JSON.stringify({key:'oauth/fixture/'+provider,revoke,grant:{provider,kind,enabled:true,credential:'synthetic-'+provider+'-key',...(kind==='api_key'?{}:{accessToken:'synthetic-subscription-token'})}})});assert.equal(r.status,200,await r.clone().text());return r.json();};
  await grant('openai');await grant('anthropic');
  const state=async(replies)=>{const r=await call('/fixture/upstream',{method:'POST',body:JSON.stringify(replies?{replies}:{})});return r.json();};
- return {call,object,policy,credential,grant,state,reply:body=>state([{body}]),async updatePolicy(change){Object.assign(policy,change);await object('/policies/put',{policyId:'fixture',policy});},async events(count){for(let n=0;n<100;n++){const s=await state();if(s.events.length>=count)return s.events;await new Promise(r=>setTimeout(r,20));}assert.fail('usage events not collected');}};
+ return {call,object,policy,credential,grant,state,async drain(){const r=await call('/fixture/drain');assert.equal(r.status,200,await r.text());},reply:body=>state([{body}]),async updatePolicy(change){Object.assign(policy,change);await object('/policies/put',{policyId:'fixture',policy});},async events(count){for(let n=0;n<100;n++){const s=await state();if(s.events.length>=count)return s.events;await new Promise(r=>setTimeout(r,20));}assert.fail('usage events not collected');}};
 }
 
 test('native discovery and manifest envelopes use selected API-key grants, preserve metadata and settle zero',async t=>{
@@ -116,7 +118,7 @@ test('revocation, provider policy, unsupported transports, malformed input and D
  await f.updatePolicy({providers:['anthropic']});assert.equal((await f.call('/v1/native/openai/v1/models')).status,403);
  await f.updatePolicy({providers:['openai','anthropic']});
  for(const kind of ['subscription','oauth']){await f.grant('anthropic',kind);const r=await f.call('/v1/native/anthropic/v1/models');assert.equal(r.status,503,await r.clone().text());}
- await f.grant('openai','api_key',true);assert.equal((await f.call('/v1/native/openai/v1/models')).status,400,'revoked scoped grant cannot fall back to environment key');
+ await f.grant('openai','api_key',true);const unavailable=await f.call('/v1/native/openai/v1/models');assert.equal(unavailable.status,503,'revoked scoped grant cannot fall back to environment key');assert.equal((await unavailable.json()).error.code,'upstream_grant_pool_unavailable');
  await f.object('/credentials/mutate',{credentialId:'fixture',operation:'revoke',scope:'admin',actor:{auth:'admin_token',role:'admin',email:'admin@example.test'}});assert.equal((await f.call('/v1/native/anthropic/v1/models')).status,403);
  assert.equal((await f.state()).calls.length,0);
 });
@@ -146,7 +148,7 @@ test('filtered reverse pagination, terminal emptiness and bounded/cyclic scans n
  const rejected=await f.call('/v1/native/anthropic/v1/models'); assert.equal(rejected.status,404); assert.ok(!(await rejected.text()).includes('hidden-error-model'));
 });
 
-test('opaque upstream IDs, strict query validation, zero-cost budget modes and grant cooldown use production gates', async t => {
+test('opaque upstream IDs, strict query validation and zero-cost budget modes use production gates', async t => {
  const f=await fixture(t), id='ft:private/slash?hash#percent%'; await f.reply(openai(id));
  const opaque=await f.call('/v1/native/openai/v1/models/'+encodeURIComponent(id)); assert.equal(opaque.status,200); assert.equal((await opaque.json()).id,id);
  const url=new URL((await f.state()).calls.at(-1).url); assert.equal(url.pathname,'/v1/models/'+encodeURIComponent(id)); assert.equal(url.search,'');
@@ -161,13 +163,7 @@ test('opaque upstream IDs, strict query validation, zero-cost budget modes and g
   const catalog=await (await f.call('/v1/catalog')).json(); assert.ok(catalog.providers.find(p=>p.id==='openai').offers.filter(o=>o.endpoint.startsWith('models_')).every(o=>o.affordability==='exact-covered'));
  }
  await f.updatePolicy({monthlyBudgetMicros:0}); const denied=await f.call('/v1/native/openai/v1/models'); assert.equal(denied.status,402);
- await f.updatePolicy({monthlyBudgetMicros:1000});
- await f.state([{status:429,body:{error:{message:'rate limited'}},headers:{'retry-after':'60'}}]);
- const limited=await f.call('/v1/native/openai/v1/models'); assert.equal(limited.status,429); assert.equal(limited.headers.get('retry-after'),'60'); await limited.text();
- const calls=(await f.state()).calls.length; await f.events(5);
- const cooldown=await f.call('/v1/native/openai/v1/models'); assert.equal(cooldown.status,429,await cooldown.clone().text()); assert.equal((await f.state()).calls.length,calls);
- const c=await (await f.call('/v1/catalog')).json(); assert.ok(c.providers.find(p=>p.id==='openai').offers.filter(o=>o.endpoint.startsWith('models_')).every(o=>!o.eligible));
- const events=(await f.state()).events; assert.ok(events.every(e=>e.actual_cost_micros===0&&e.reserved_cost_micros===0));
+ const events=await f.events(4); assert.ok(events.every(e=>e.actual_cost_micros===0&&e.reserved_cost_micros===0));
 });
 
 
@@ -231,4 +227,44 @@ test('decision-only catalog rows never gain Chat or Responses capabilities', asy
  const models=await (await f.call('/v1/models')).json();
  assert.deepEqual(models.data.map(m=>({id:m.id,capabilities:m.capabilities})),[{id:'openai/gpt-6-luna',capabilities:['llm.decisions']}]);
  assert.equal((await f.state()).calls.length,0,'local compiled capability projection must not probe upstream');
+});
+
+
+for (const pagination of [false,true]) for (const status of [401,403,429]) {
+ test((pagination?'internal pagination':'initial')+' discovery rejection '+status+' never cools the inference grant', async t => {
+  for (const surface of ['native','manifest']) {
+   const f=await fixture(t), provider=pagination?'anthropic':'openai';
+   if(pagination) await f.updatePolicy({models:['anthropic/claude-sonnet-4-6']});
+   const rejected={status,body:{error:{message:'private model: missing api.model.read'}},headers:{'retry-after':'60'}};
+   const inference=provider==='openai'
+    ? {id:'resp_fixture',object:'response',status:'completed',output:[],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}
+    : {id:'msg_fixture',type:'message',role:'assistant',model:'claude-sonnet-4-6',content:[],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1}};
+   await f.state([...(pagination?[{body:page([anthropic('hidden-private')],true)}]:[]),rejected,{body:inference}]);
+   const path=surface==='native'?'/v1/native/'+provider+'/v1/models':'/v1/proxy/'+provider+'/models_list';
+   const discovery=await f.call(path); assert.equal(discovery.status,status); assert.equal(discovery.headers.get('retry-after'),'60');
+   if(pagination) assert.deepEqual(await discovery.json(),{error:{code:'model_discovery_rejected',message:'upstream rejected model discovery'}});
+   else assert.deepEqual(await discovery.json(),rejected.body);
+   // Drain real ExecutionContext work, including any grant-runtime write, before
+   // checking eligibility. A fast follow-up cannot race a late cooldown write.
+   await f.drain(); const before=(await f.state()).calls.length; assert.equal(before,pagination?2:1);
+   const body=provider==='openai'?{model:'openai/gpt-6-astra',input:'fixture'}:{model:'anthropic/claude-sonnet-4-6',max_tokens:1,messages:[{role:'user',content:'fixture'}]};
+   const response=await f.call(provider==='openai'?'/v1/responses':'/v1/messages',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+   assert.equal(response.status,200,await response.clone().text()); assert.deepEqual(await response.json(),inference); await f.drain();
+   const calls=(await f.state()).calls; assert.equal(calls.length,before+1,'inference must perform upstream egress on the same pool');
+   assert.equal(calls.at(-1).headers[provider==='openai'?'authorization':'x-api-key'],provider==='openai'?'Bearer synthetic-openai-key':'synthetic-anthropic-key');
+   assert.equal(calls.at(-1).method,'POST');
+   const metadataEvents=(await f.events(2)).filter(e=>e.capability==='models.list');
+   assert.equal(metadataEvents.length,1); assert.equal(metadataEvents[0].actual_cost_micros,0); assert.equal(metadataEvents[0].reserved_cost_micros,0);
+  }
+ });
+}
+
+test('existing inference cooldown still blocks discovery without upstream egress', async t => {
+ const f=await fixture(t); await f.state([{status:429,body:{error:{message:'inference rate limited'}},headers:{'retry-after':'60'}}]);
+ const response=await f.call('/v1/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'openai/gpt-6-astra',input:'fixture'})});
+ assert.equal(response.status,429); await response.text(); await f.drain();
+ const before=(await f.state()).calls.length; assert.equal(before,1);
+ const denied=await f.call('/v1/native/openai/v1/models'); assert.equal(denied.status,429); assert.ok(Number(denied.headers.get('retry-after'))>0); await denied.text();
+ assert.equal((await f.state()).calls.length,before);
+ const catalog=await (await f.call('/v1/catalog')).json(); assert.ok(catalog.providers.find(p=>p.id==='openai').offers.filter(o=>o.endpoint.startsWith('models_')).every(o=>!o.eligible));
 });

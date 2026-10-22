@@ -332,7 +332,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
   }
   catch (error) {
-    const failure = selectedFailure(continuation?.preflightError(error) ?? error);
+    let failure = selectedFailure(continuation?.preflightError(error) ?? error);
+    if (isModelDiscovery(selection.endpoint) && failure.status === 400 && failure.code === "grant_transport_unavailable")
+      failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
@@ -414,7 +416,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       context.waitUntil(soft.check);
     }
     response = await operation.wait(pending, "upstream", discard);
-    captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
+    // Metadata permissions and rate limits do not establish inference health.
+    if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (!grantFailover && !isModelDiscovery(selection.endpoint) && !background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
@@ -448,7 +451,6 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         pageUrl.searchParams.set(before ? "before_id" : "after_id", cursor);
         signal.throwIfAborted();
         const page = await operation.wait(fetch(pageUrl, { method: "GET", headers: prepared.headers, signal, redirect: "manual" }), "upstream", discard);
-        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, page);
         return page;
       });
     }

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.
+- Add grant-scoped OpenAI/Anthropic native and manifest model list/retrieve with policy-filtered metadata, bounded same-grant pagination and zero router settlement. Keep the aggregate inference catalog separate, require stored API-key grants, and never let metadata permission/rate-limit responses cool shared inference grants.
 
 - Add Claude Sonnet 5.5 and Haiku 5.5 model cards with native endpoint facts, cache pricing, and Haiku's full-request long-context rates above 100,000 input tokens.
 
