@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refuse upstream HTTP redirects on initial and alternate-grant proxy requests: cancel the response body and return a nonbillable `502 provider_unavailable` without `Location`, rather than replaying credentials or request content at a redirect-selected destination.
+- Bound alternate-grant preparation by the existing HTTP deadline and observed caller cancellation. Interrupted selection returns a nonbillable `502 provider_unavailable`; late admission cannot dispatch, while ordinary selection failure preserves the original provider rejection and `Retry-After`.
+
 - Return HTTP 429 with `Retry-After` (exposed to browser clients) from the earliest grant recovery when a configured pool is only rate-limit cooling or awaiting published quota resets; failed-credential cooldowns and other unavailable pools keep HTTP 503 and the same error body.
 
 - Reserve Claude base64 PNG/JPEG/GIF/WebP images in user content or user tool results at their documented visual-token bound from strictly parsed header dimensions instead of the full input window; image-shaped objects elsewhere, undocumented block keys, ambiguous PNG/JPEG headers and other media keep the full bound, and settlement still uses reported usage.

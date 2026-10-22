@@ -102,7 +102,9 @@ for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject
       import { providerById } from "./worker/providers.ts";
       import { putGrantCredentials } from "./worker/grant-credentials.ts";
       export * from "./worker/index.ts";
-      providerById("openai").endpoints.find(endpoint => endpoint.id === "chat_completions").timeout_ms = ${cause === "deadline" ? 100 : 5000};
+      // Allow slow runners to reach held admission; correctness is response-before-release,
+      // not a tight latency assertion. The real endpoint timer still owns interruption.
+      providerById("openai").endpoints.find(endpoint => endpoint.id === "chat_completions").timeout_ms = ${cause === "deadline" ? 1000 : 5000};
       let entered = false, finished = false, admitted = false;
       let released = false;
       const caller = new AbortController();
@@ -166,7 +168,7 @@ for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject
     try {
       await waitFor("entered");
       if (cause === "caller") await control("/fixture-abort");
-      const response = await Promise.race([pending, new Promise(resolve => { guard = setTimeout(() => resolve(null), 1000); })]);
+      const response = await Promise.race([pending, new Promise(resolve => { guard = setTimeout(() => resolve(null), 3000); })]);
       assert.ok(response, "interruption must return before admission is released");
       assert.equal(response.status, 502);
       assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed" } });

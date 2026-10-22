@@ -796,7 +796,7 @@ for (const format of ["sse", "json"]) test(`${format} rejections own reciprocal 
   }
 });
 
-test("rejection delivery retires the endpoint deadline while an earlier selection deadline remains first", async t => {
+test("selection deadline returns a nonbillable 502 while rejection delivery retires the deadline", async t => {
   const deadline = await endpointDeadline(t);
   for (const phase of ["selection", "delivery"]) {
     const f = await fixture(t, phase === "selection", { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
