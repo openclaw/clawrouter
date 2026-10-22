@@ -76,7 +76,7 @@ export class JsonBodyStructureLimit extends Error {}
 // The larger envelope is for media, not unbounded object expansion. A byte cap
 // alone lets millions of tiny arrays/objects exhaust the 128 MB isolate. Parse
 // in bounded feeds directly into the value instead of retaining a second full
-// decoded document for JSON.parse. Limits apply only to the expanded routes.
+// decoded document for JSON.parse. Limits apply only to bodies above 8 MiB.
 export function createJsonBodyParser() {
   const stack: Array<{ value: Record<string, unknown> | unknown[]; key?: string }> = [];
   let root: unknown, scalar = "", key = false, nodes = 0;

@@ -140,10 +140,10 @@ export function randomId(prefix: string): string { return `${prefix}_${crypto.ra
 export const maxJsonBodyBytes = 8 * 1024 * 1024;
 // Claude documents 32 MB for both Messages and token counting. Opt in only
 // after resolving those endpoints; admin and other provider routes stay at 8 MiB.
-export const maxAnthropicJsonBodyBytes = 32 * 1024 * 1024;
+export const maxAnthropicJsonBodyBytes = 32_000_000;
 
-export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes): Promise<T> {
-  const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes / (1024 * 1024)} MiB limit`);
+export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes, onExpand?: () => Promise<void>): Promise<T> {
+  const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     void request.body?.cancel().catch(() => undefined);
@@ -155,10 +155,15 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
   }
   const reader = request.body.getReader(), decoder = new TextDecoder();
   let size = 0, text = "";
-  const parser = maxBytes > maxJsonBodyBytes ? createJsonBodyParser() : undefined;
+  // Preserve JSON.parse semantics/cost within the existing 8 MiB envelope.
+  let parser: ReturnType<typeof createJsonBodyParser> | undefined;
+  const canceled = () => { void reader.cancel(request.signal.reason).catch(() => undefined); };
+  request.signal.addEventListener("abort", canceled, { once: true });
   try {
     while (true) {
+      if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       const { done, value } = await reader.read();
+      if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       if (done) break;
       size += value.byteLength;
       if (size > maxBytes) {
@@ -166,6 +171,13 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
         // and a hostile source cannot hold the rejection open indefinitely.
         void reader.cancel().catch(() => undefined);
         throw tooLarge();
+      }
+      if (!parser && size > maxJsonBodyBytes) {
+        // Authenticate/admit before parsing this chunk or pulling any more.
+        await onExpand?.();
+        parser = createJsonBodyParser();
+        await parser.push(text);
+        text = "";
       }
       if (parser) {
         for (let offset = 0; offset < value.byteLength; offset += 4096) await parser.push(decoder.decode(value.subarray(offset, offset + 4096), { stream: true }));
@@ -179,9 +191,10 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
   } catch (error) {
     void reader.cancel().catch(() => undefined);
     if (error instanceof JsonBodyStructureLimit) throw new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)");
-    if (error instanceof HttpError) throw error;
+    if (error instanceof HttpError || error instanceof Response) throw error;
     throw new HttpError(400, "invalid_json", "request body must be valid JSON");
   } finally {
+    request.signal.removeEventListener("abort", canceled);
     reader.releaseLock();
   }
 }

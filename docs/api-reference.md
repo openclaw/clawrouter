@@ -146,6 +146,10 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
 
+## Claude request sizes
+
+Claude Messages and token counting accept up to **32 MB (32,000,000 bytes)** through unified, native, and manifest routes (including the manifest envelope). Other JSON routes keep **8 MiB**. Bodies within 8 MiB keep the existing JSON parser; above it the Worker authenticates before expanded parsing and applies structural limits. At most **two expanded requests per isolate** remain in flight through response completion or observed cancellation. Excess authenticated requests receive a nonbillable HTTP **503**, `Retry-After: 1`, and a native-shaped `{"type":"error","error":{"type":"overloaded_error","message":"…"}}` body, before budget reservation or provider dispatch. See [Claude JSON request limits](anthropic-request-limits.md) for byte counting, structural safeguards and platform caveats.
+
 ## OpenAI Decisions
 
 Use `POST /v1/decisions` with `model: "openai/gpt-6-luna"` and an ordinary
@@ -820,7 +824,7 @@ Declared Responses JSON and SSE bodies are inspected incrementally for usage and
 
 Usage events are delivered through `USAGE_QUEUE` to tenant- and policy-sharded `USAGE_LEDGER` Durable Objects. Settlement and audit delivery retry independently, and exhausted messages move to the configured usage dead-letter queue. Ledgers keep bounded identity, route, timing, outcome, token, cost, request ID, and trace metadata; they do not store prompts or completions.
 
-Policies can retain LLM request bodies in the separate `CONTENT_ARCHIVE` R2 binding. Retention failure is fail-closed before upstream traffic. See [Request content retention](content-retention.md) for the policy and disclosure contract.
+Policies can retain LLM request bodies in the separate `CONTENT_ARCHIVE` R2 binding, including whole documents/PDFs and inline media in large Claude requests (not just extracted text). Retention failure is fail-closed before upstream traffic. See [Request content retention](content-retention.md) for the policy and disclosure contract.
 
 Every Worker-owned response returns the canonical `X-Request-ID`, and CORS exposes it to clients. Valid W3C trace and span IDs are preserved in usage metadata. Agent attribution headers, pricing fields, and reservation semantics are documented in [Agent spend control](agent-spend-control.md).
 
