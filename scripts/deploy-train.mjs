@@ -2,9 +2,7 @@ import assert from 'node:assert/strict';
 import { waitForHealth } from './smoke-readiness.mjs';
 import { createVersionFetch } from './smoke-version.mjs';
 import { spawn } from 'node:child_process';
-import { appendFileSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { appendFileSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { createApi, observeAnalytics } from './deploy-train-api.mjs';
@@ -12,7 +10,7 @@ import { analyticsDecision, LEGACY_DEPLOYMENT, deploymentMessage, deploymentStat
 import { inspectSource } from './deploy-train-source.mjs';
 import { startQueueObservation } from './deploy-queue-observation.mjs';
 import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
-import { configuredProviderSecrets } from './put-provider-secrets.mjs';
+import { assertSecretLineage, uploadMessage } from './deploy-train-secrets.mjs';
 
 export function command(args, { env = process.env, timeout = 10 * 60_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -43,26 +41,12 @@ export function command(args, { env = process.env, timeout = 10 * 60_000 } = {})
   });
 }
 export async function uploadVersion(state, env = process.env) {
-  let temporary;
-  try {
-    const args = ['exec', 'wrangler', ...(state.migration ? ['deploy'] : ['versions', 'upload']), '--config', '.wrangler.generated.toml', '--tag', state.sha, '--message', `${state.migration ? 'clawrouter-migration' : 'clawrouter-candidate'}:${state.run}:${state.sha}`];
-    if (env.CONFIGURE_PROVIDER_SECRETS === 'true') {
-      const secrets = configuredProviderSecrets(env);
-      if (!Object.keys(secrets).length) throw new Error('No configured provider transport secrets');
-      temporary = mkdtempSync(join(env.RUNNER_TEMP || tmpdir(), 'clawrouter-version-secrets-'));
-      const path = join(temporary, 'secrets.json');
-      writeFileSync(path, JSON.stringify(secrets), { mode: 0o600 });
-      // Wrangler 4.147 supports additive, version-scoped secrets in this SAME upload.
-      // Unlike `secret bulk`, this cannot deploy an unrelated/latest code version.
-      args.push('--secrets-file', path);
-    }
-    const output = await command(args, { env, timeout: 12 * 60_000 });
-    const matches = [...output.matchAll(/(?:Worker|Current) Version ID:\s*([a-f0-9-]{36})/gi)];
-    if (matches.length !== 1) throw new Error('Upload did not return one unambiguous version ID');
-    return versionId(matches[0][1]);
-  } finally {
-    if (temporary) rmSync(temporary, { recursive: true, force: true });
-  }
+  if (env.CONFIGURE_PROVIDER_SECRETS === 'true') throw new Error('Secret changes are excluded from the unattended train');
+  const args = ['exec', 'wrangler', ...(state.migration ? ['deploy'] : ['versions', 'upload']), '--config', '.wrangler.generated.toml', '--tag', state.sha, '--message', uploadMessage(state)];
+  const output = await command(args, { env, timeout: 12 * 60_000 });
+  const matches = [...output.matchAll(/(?:Worker|Current) Version ID:\s*([a-f0-9-]{36})/gi)];
+  if (matches.length !== 1) throw new Error('Upload did not return one unambiguous version ID');
+  return versionId(matches[0][1]);
 }
 export async function recoverTrain({ api, state, save = () => {} }) {
   const action = recoveryDecision(state);
@@ -91,7 +75,10 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
     if (state.migration) { state.exposed = true; save(state); }
     const beforeUpload = await api.latest();
     if (beforeUpload.id !== state.deploymentId) throw new Error('Deployment changed since preflight');
+    assertSecretLineage(await api.versions(), state.blue);
     state.green = await upload(state); save(state);
+    const uploaded = await api.versions();
+    if (assertSecretLineage(uploaded, state.blue) !== state.green) throw new Error('Latest upload changed during candidate creation');
     const version = await api.version(state.green);
     if (version.annotations?.['workers/tag'] !== state.sha) throw new Error('Uploaded version does not attest candidate SHA');
     if (state.migration) {

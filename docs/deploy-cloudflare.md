@@ -182,33 +182,28 @@ printf '%s' "$CLAWROUTER_ADMIN_TOKEN_SHA256" | pnpm exec wrangler secret put CLA
 pnpm exec wrangler secret put OPENAI_API_KEY --config .wrangler.generated.toml
 ```
 
-For a controlled provider-secret update, use existing temporary repository
-transport secrets named `CLAWROUTER_PROVIDER_<WORKER_BINDING>` and dispatch with
-`configure_provider_secrets=true`. The train writes a mode-0600 temporary JSON file
-inside a private runner directory and passes it to **`wrangler versions upload
---secrets-file`**, then deletes it in `finally`. Wrangler 4.147 supports this
-additive version-scoped upload: omitted secrets remain unchanged and nothing is
-cut over by secret publication. Values never enter argv, artifacts, or source.
-`wrangler versions secret bulk` also exists in 4.147, but clones the latest
-uploaded version; using `--secrets-file` in the code upload avoids accidentally
-selecting a different latest code version. The migration exception uses the same
-file with its explicit plain deploy.
+Provider-secret changes are intentionally **outside the unattended train**.
+Wrangler 4.147 supports `versions upload --secrets-file` and `versions secret
+bulk`, but the script-version API inherits omitted secrets from the **latest
+uploaded** version, not the deployed blue. It cannot pin that inheritance to a
+version ID. A secret-changing rollback can additionally require Cloudflare's
+`force=true` guard override. These contracts make an abandoned candidate unsafe
+to inherit automatically; the train does not bypass that guard or rotate secrets.
 
-The legacy `pnpm cf:secrets` command still performs an immediate secret operation
-for explicitly managed provisioning, including FakeCo. **Never run it during a
-production split.** `pnpm cf:secrets -- --dry-run` prints binding names only.
-Secret creation/rotation remains a separate authorized operator action; the
-weekday train defaults to preserving existing deployed secrets.
+The former `configure_provider_secrets` input and provider-secret environment
+transport are removed from the train. Before and after upload it verifies that
+every newer version back to blue is an annotated train upload that preserves
+secrets. Rehearsed/aborted code-only versions are safe ancestors. An unrelated
+upload interrupts that proof and stops before exposure; the owner of that upload
+must reconcile it rather than letting a rejected secret update leak forward.
+No secret values are read, copied into the controller, or printed.
 
-Lanseq is optional. To configure it in production, add the repository secret
-`CLAWROUTER_PROVIDER_LANSEQ_API_KEY` and dispatch `Deploy Cloudflare` on reviewed
-`main` with its full `expected_sha` and `configure_provider_secrets=true`.
-The workflow uploads it as the Worker binding `LANSEQ_API_KEY`. An absent or
-empty transport secret is skipped without affecting other providers. Without
-that Worker binding or a usable scoped grant, Lanseq has no executable offers
-and is omitted from the client catalog. Skipping an empty transport secret does
-not remove an existing Worker binding; use the provider connection kill switch
-when disabling an already configured provider.
+Perform an explicitly authorized secret operation separately while no train is
+running, then establish and smoke a stable, SHA-tagged deployment before resuming
+trains. `pnpm cf:secrets` remains an **immediate** operation for that managed
+provisioning path, including FakeCo; never use it during a split. Its dry-run
+prints binding names only. Lanseq remains optional and uses `LANSEQ_API_KEY` when
+configured; absent transport values never remove existing Worker bindings.
 
 Provider configuration values are not included in that secret bulk operation.
 In particular, `AWS_REGION` is a non-secret Worker variable rendered under
@@ -1318,7 +1313,8 @@ No parallel ledgers or duplicated credentials are provisioned.
 ### Rollout and gates
 
 Preflight, Worker check, admin check/test/build, content-storage provisioning and
-config rendering run before upload. The train uploads with `wrangler versions
+config rendering run before upload. Secret changes are excluded for the
+inheritance/rollback reasons above. The train uploads with `wrangler versions
 upload`; distribution changes use the same Cloudflare deployments API as
 `wrangler versions deploy`, explicitly passing ordered `[green, blue]` entries.
 The API adapter verifies the current deployment ID before changing it and reads
@@ -1455,8 +1451,7 @@ Shared assets remain immutable so open tabs and retained rollback versions keep
 working; storage grows only with changed content hashes. Do not delete assets
 still referenced by a deployable version or supported browser cache. Local/self-
 host operation uses normal bundled assets and does not require Cloudflare storage.
-The existing API token needs R2 object read/write, already required by content
-operations; lack of access fails before Worker upload, not midway through a split.
+The existing API token needs R2 object read/write; lack of access fails before Worker upload, not midway through a split.
 
 Each train also opens a temporary metadata-only tail and aggregates queue batch
 counts by observed `scriptVersion.id` and rollout step. Raw tail payloads, headers,
@@ -1470,6 +1465,8 @@ References checked 2026-10-22:
 [GitHub timezone schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
 [Cloudflare gradual deployments](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/),
 [Durable Object guarantees](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/with-durable-objects/),
+[secret inheritance](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/versions/methods/create/),
+[secret rollback guard](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/),
 [version affinity and assets](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/version-affinity/),
 [Queues consumer model](https://developers.cloudflare.com/queues/reference/how-queues-works/).
 

@@ -30,6 +30,7 @@ export function createApi({ env = process.env, fetchImpl = fetch } = {}) {
   return {
     github, cloudflare, workerPath,
     latest: async () => (await cloudflare(`${workerPath}/deployments`)).deployments[0],
+    versions: async () => (await cloudflare(`${workerPath}/versions?per_page=100`)).items,
     version: (id) => cloudflare(`${workerPath}/versions/${id}`),
     async deploy(versions, message, expectedId) {
       const before = await this.latest();

@@ -8,6 +8,7 @@ import { analyticsDecision, deploymentMessage, deploymentState, greenPushRun, re
 import { candidateCommits, selectCandidate, deployedSource } from '../scripts/deploy-train-select.mjs';
 import { inspectSource } from '../scripts/deploy-train-source.mjs';
 import { command, runTrain, uploadVersion } from '../scripts/deploy-train.mjs';
+import { assertSecretLineage, uploadMessage } from '../scripts/deploy-train-secrets.mjs';
 import { recoverRemote, failureIssue } from '../scripts/deploy-train-recover.mjs';
 
 const blue = '11111111-1111-1111-1111-111111111111';
@@ -15,6 +16,7 @@ const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
 function fixture({ unsafe = false, migration = false, failSmokeAt, lostPost = false, analyticsRows = [] } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
+  let versions = [{ id: blue }];
   let time = 1_000_000, smokes = 0, uploads = 0;
   const calls = [], receipts = [];
   const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration };
@@ -29,14 +31,15 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, lostPost = fa
         result = deployment;
         if (lostPost) { lostPost = false; throw new Error('Lost response after mutation'); }
       } else result = { deployments: [deployment] };
-    } else if (path.endsWith(`/versions/${green}`)) result = { id: green, annotations: { 'workers/tag': sha } };
+    } else if (path.endsWith('/versions')) result = { items: versions };
+    else if (path.endsWith(`/versions/${green}`)) result = { id: green, annotations: { 'workers/tag': sha } };
     else if (path.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: analyticsRows }] } } });
     else throw new Error(`Unexpected API path: ${path}`);
     return Response.json({ success: true, result });
   } });
   const options = {
     state, api, now: () => time, wait: async (ms) => { time += ms; }, save: (value) => receipts.push(structuredClone(value)),
-    upload: async () => { uploads++; if (migration) deployment = { id: 'migration', versions: [{ version_id: green, percentage: 100 }] }; return green; },
+    upload: async () => { uploads++; versions.unshift({ id: green, annotations: { 'workers/tag': sha, 'workers/message': uploadMessage(state) } }); if (migration) deployment = { id: 'migration', versions: [{ version_id: green, percentage: 100 }] }; return green; },
     smoke: async () => { smokes++; time += 100; if (smokes === failSmokeAt) throw new Error('Smoke HTTP 503'); },
     analytics: async (a, s, t) => a.analytics({ start: new Date(s.startedAt).toISOString(), end: new Date(t).toISOString() }),
   };
@@ -216,38 +219,21 @@ test('failure notification reopens and updates one issue without mentions or ext
   assert.equal(calls.filter((c) => c.options).length, 1);
 });
 
-for (const fail of [false, true]) {
-  test(`version-scoped secret upload ${fail ? 'failure' : 'success'} keeps values out of argv and removes private file`, async (t) => {
-    mkdirSync('.artifacts', { recursive: true });
-    const directory = mkdtempSync(join(process.cwd(), '.artifacts/train-secrets-'));
-    t.after(() => rmSync(directory, { recursive: true, force: true }));
-    const receipt = join(directory, 'receipt.json');
-    const executable = join(directory, 'pnpm');
-    writeFileSync(executable, `#!${process.execPath}
-import * as fs from 'node:fs';
-const args = process.argv.slice(2);
-const path = args[args.indexOf('--secrets-file') + 1];
-const secret = JSON.parse(fs.readFileSync(path, 'utf8'));
-if (secret.OPENAI_API_KEY !== process.env.OPENAI_API_KEY) process.exit(8);
-if ((fs.statSync(path).mode & 0o777) !== 0o600) process.exit(9);
-if (args.some(a => a.includes(process.env.OPENAI_API_KEY))) process.exit(10);
-fs.writeFileSync(process.env.TEST_RECEIPT, JSON.stringify({ args, path }));
-console.log('Worker Version ID: ${green}');
-process.exit(${fail ? 2 : 0});
-`);
-    chmodSync(executable, 0o700);
-    const promise = uploadVersion({ run: '123', sha, migration: false }, { ...process.env, PATH: `${directory}:${process.env.PATH}`, RUNNER_TEMP: directory, TEST_RECEIPT: receipt, CONFIGURE_PROVIDER_SECRETS: 'true', OPENAI_API_KEY: 'test-only-opaque-provider-value' });
-    if (fail) await assert.rejects(promise, /failed or timed out/);
-    else assert.equal(await promise, green);
-    const observed = JSON.parse(readFileSync(receipt, 'utf8'));
-    assert.deepEqual(observed.args.slice(0, 3), ['exec', 'wrangler', 'versions']);
-    assert.equal(observed.args[3], 'upload');
-    assert.ok(observed.args.includes('--secrets-file'));
-    assert.equal(existsSync(observed.path), false);
-    assert.doesNotMatch(JSON.stringify(observed.args), /test-only-opaque/);
-  });
-}
+test('secret changes are refused before any upload process', async () => {
+  await assert.rejects(uploadVersion({ blue, run: '123', sha, migration: false }, { CONFIGURE_PROVIDER_SECRETS: 'true' }), /excluded/);
+});
 
+test('rehearsed/abandoned code uploads preserve blue lineage, unrelated secret uploads cannot leak forward', () => {
+  const candidate = (id, run) => ({ id, annotations: { 'workers/tag': sha, 'workers/message': uploadMessage({ blue, sha, run }) } });
+  const previous = candidate(green, '123');
+  const next = candidate('33333333-3333-3333-3333-333333333333', '124');
+  assert.equal(assertSecretLineage([{ id: blue }], blue), blue);
+  assert.equal(assertSecretLineage([next, previous, { id: blue }], blue), next.id);
+  const external = { id: '44444444-4444-4444-4444-444444444444', annotations: { 'workers/message': 'secret bulk' } };
+  assert.throws(() => assertSecretLineage([external, previous, { id: blue }], blue), /Unproven/);
+  assert.throws(() => assertSecretLineage([next, external, previous, { id: blue }], blue), /Unproven/, 'interleaved foreign upload cannot be hidden by a later train annotation');
+  assert.throws(() => assertSecretLineage([next, previous], blue), /outside available/);
+});
 
 test('Cloudflare analytics permission denial explicitly selects smoke-only mode', async () => {
   const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture' }, fetchImpl: async () => new Response('', { status: 403 }) });

@@ -27,7 +27,8 @@ export async function publishConsoleAssets({ sha, env = process.env, directory =
   const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   if (sha) {
     if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid asset probe source SHA');
-    entries.push({ name: `train-probe-${sha.slice(0, 16)}.js`, isFile: () => true, bytes: Buffer.from('/* ClawRouter shared-asset deployment probe. */\n') });
+    const bytes = Buffer.from('/* ClawRouter shared-asset deployment probe. */\n');
+    entries.push({ name: `train-probe-${digest(bytes).slice(0, 16)}.js`, isFile: () => true, bytes });
   }
   for (const entry of entries) {
     const match = entry.name.match(pattern);
