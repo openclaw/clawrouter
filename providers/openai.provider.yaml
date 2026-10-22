@@ -111,12 +111,8 @@ capabilities:
   - {"id":"audio.realtime","endpoint":"realtime","methods":["GET"]}
   - { id: llm.responses.compact, endpoint: responses_compact, methods: [POST] }
   - { id: llm.decisions, endpoint: decisions, methods: [POST] }
-  - id: llm.responses
-    endpoint: responses
-    methods: [POST]
-  - id: llm.chat
-    endpoint: chat_completions
-    methods: [POST]
+  - { id: llm.responses, endpoint: responses, methods: [POST] }
+  - { id: llm.chat, endpoint: chat_completions, methods: [POST] }
   - {id: llm.embeddings, endpoint: embeddings, methods: [POST]}
   - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
   - {id: audio.speech, endpoint: speech, methods: [POST]}
