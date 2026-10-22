@@ -106,21 +106,21 @@ quota:
           remainingPointer: /credits/balance
 capabilities:
   - {id: llm.moderations, endpoint: moderations, methods: [POST]}
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - { id: models.retrieve, endpoint: models_retrieve, methods: [GET] }
   - {"id":"audio.realtime","endpoint":"realtime","methods":["GET"]}
   - { id: llm.responses.compact, endpoint: responses_compact, methods: [POST] }
   - { id: llm.decisions, endpoint: decisions, methods: [POST] }
-  - id: llm.responses
-    endpoint: responses
-    methods: [POST]
-  - id: llm.chat
-    endpoint: chat_completions
-    methods: [POST]
+  - { id: llm.responses, endpoint: responses, methods: [POST] }
+  - { id: llm.chat, endpoint: chat_completions, methods: [POST] }
   - {id: llm.embeddings, endpoint: embeddings, methods: [POST]}
   - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
   - {id: audio.speech, endpoint: speech, methods: [POST]}
   - {id: image.generation, endpoint: images_generations, methods: [POST]}
 endpoints:
   moderations: {path: /v1/moderations, requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
+  models_list: { method: GET, path: /v1/models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  models_retrieve: { method: GET, path: "/v1/models/${model_id}", pathParams: [model_id], pathParamStyles: { model_id: opaque_segment }, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   realtime: {"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
   decisions: { path: /v1/decisions, requestFormat: openai.decisions, responseFormat: openai.decisions, timeoutMs: 120000 }

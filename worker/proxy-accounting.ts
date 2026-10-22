@@ -1,3 +1,4 @@
+import { isModelDiscovery } from "./model-discovery.ts";
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
@@ -118,7 +119,7 @@ export function createProxyAccounting(options: AccountingContext) {
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
-    model: model ? { pricing: model.pricing } : null, fixed: auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
+    model: model ? { pricing: model.pricing } : null, fixed: isModelDiscovery(selection.endpoint) ? 0 : auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
       grant_key: options.grantKey ?? null, grant_lane: options.grantLane ?? null,
@@ -168,7 +169,7 @@ export function createProxyAccounting(options: AccountingContext) {
 }
 
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint, parentTools?: ToolKnowledge): EstimatedCost {
-  if (endpoint.request_format === "openai.moderations" || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
+  if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;

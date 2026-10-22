@@ -84,6 +84,15 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/pool") return poolResponse(request, env);
   if (request.method === "GET" && path === "/v1/usage") return userUsage(request, env);
   if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env);
+  if (request.method === "GET" && path.startsWith("/v1/models/")) {
+    const id = decodePathSegment(path.slice("/v1/models/".length));
+    const match = id.match(/^(openai|anthropic)\/(.+)$/);
+    if (!match) {
+      const auth = await authenticateProxyKey(request.headers, env);
+      return auth instanceof Response ? auth : errorResponse("model_provider_required", "retrieve requires a provider-qualified model ID; use the native provider namespace for upstream IDs", 400);
+    }
+    return proxyNative(request, env, context, `/v1/native/${match[1]}/v1/models/${encodeURIComponent(match[2])}`);
+  }
   if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env);
   if (request.method === "GET" && path === "/v1/oauth/callback") return oauthCallback(request, env);
   if (path.startsWith("/v1/pool-submissions/")) return poolSubmissionApi(request, env, path);

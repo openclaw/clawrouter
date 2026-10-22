@@ -6,7 +6,6 @@ const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } 
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
 const { listHealth, snapshot } = await import("../providers.ts");
-
 test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);
@@ -31,7 +30,6 @@ test("Worker catalog reads known health in one bulk request without a KV listing
   assert.equal(catalog.providers.find(({ id }) => id === "openai").readiness.verified, true);
   assert.deepEqual(calls, [{ method: "get", key: keys, type: "json" }]);
 });
-
 test("Worker catalog uses one admission before independent health and config reads", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const get = fixture.env.POLICY_KV.get, started = [];
@@ -52,7 +50,6 @@ test("Worker catalog uses one admission before independent health and config rea
     assert.equal(started.length, 0, `${state}: no discovery KV reads before authorization`);
   }
 });
-
 test("provider health bulk reads stay within the 100-key KV limit and ignore missing keys", async (t) => {
   const original = [...snapshot.providers];
   snapshot.providers.push(...Array.from({ length: 205 - original.length }, (_, index) => ({ id: `fixture-${index}` })));
@@ -71,7 +68,6 @@ test("provider health bulk reads stay within the 100-key KV limit and ignore mis
   assert.deepEqual(calls.flat(), snapshot.providers.map(({ id }) => `health/providers/${id}`));
   assert.deepEqual([...health], [["openai", record]]);
 });
-
 test("missing optional Lanseq credentials preserve health and other providers without advertising Lanseq", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.policy.providers.push("lanseq");
@@ -397,8 +393,11 @@ test("catalog and session preserve saved provider health independently of operat
         ]);
         assert.equal(view.readiness.executable, executable);
         assert.equal(view.offers.some(({ eligible }) => eligible), executable);
+        // Environment auth cannot expose scoped metadata; inference fees do not own its blocker.
+        const metadata = view.offers.filter(offer => ["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(metadata.length > 0);
+        assert.ok(metadata.every(offer => !offer.eligible && offer.reasonCode === (enabled ? "grant_transport_unavailable" : "provider_disabled")));
         if (reasonCode) {
-          assert.ok(view.offers.filter(offer => offer.endpoint !== "realtime").every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
+          const inference = view.offers.filter(offer => offer.endpoint !== "realtime" && !["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(inference.length > 0); assert.ok(inference.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
           assert.ok(view.offers.filter(offer => offer.endpoint === "realtime").every(offer => !offer.eligible));
         }
         if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);

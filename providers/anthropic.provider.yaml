@@ -183,6 +183,8 @@ quota:
           subscriptionStatus: /organization/subscription_status
           extraUsageEnabled: /organization/has_extra_usage_enabled
 capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - { id: models.retrieve, endpoint: models_retrieve, methods: [GET] }
   - id: llm.messages
     endpoint: messages
     methods: [POST]
@@ -190,6 +192,8 @@ capabilities:
     endpoint: count_tokens
     methods: [POST]
 endpoints:
+  models_list: { method: GET, path: /v1/models, requestFormat: anthropic.models, responseFormat: anthropic.models, timeoutMs: 30000, requestHeaders: [anthropic-workspace-id] }
+  models_retrieve: { method: GET, path: "/v1/models/${model_id}", pathParams: [model_id], pathParamStyles: { model_id: opaque_segment }, requestFormat: anthropic.models, responseFormat: anthropic.models, timeoutMs: 30000, requestHeaders: [anthropic-workspace-id] }
   messages:
     modelPassthrough: {}
     path: /v1/messages
