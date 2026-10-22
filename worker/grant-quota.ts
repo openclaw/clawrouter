@@ -1,4 +1,4 @@
-export { grantQuotaRatio, windowApplies, grantQuotaExhausted, grantRuntimeFresh, grantCoolingDown } from "../shared/grant-quota.ts";
+export { grantQuotaRatio, windowApplies, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh, grantCoolingDown } from "../shared/grant-quota.ts";
 import type {
   CompiledQuotaConfig, CompiledQuotaProbe, CompiledQuotaProbeWindow, CompiledQuotaWindow,
   GrantQuotaWindow, GrantRuntimeState, GrantAccount, GrantExtraUsage,

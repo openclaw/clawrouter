@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Return HTTP 429 with `Retry-After` (exposed to browser clients) from the earliest grant recovery when a configured pool is only rate-limit cooling or awaiting published quota resets; failed-credential cooldowns and other unavailable pools keep HTTP 503 and the same error body.
+
+- Reserve Claude base64 PNG/JPEG/GIF/WebP images in user content or user tool results at their documented visual-token bound from strictly parsed header dimensions instead of the full input window; image-shaped objects elsewhere, undocumented block keys, ambiguous PNG/JPEG headers and other media keep the full bound, and settlement still uses reported usage.
+
 - Add opt-in soft HTTP budgets with parallel fail-open checks, asynchronous idempotent charges and retry delivery, request timing headers, administrator-managed member caps, and GitHub team provisioning; keep reserve behavior as the default and preserve durable recovery ownership.
 
 - Enforce independent ISO-week policy/principal budgets, show configured allowance windows, and provision members with $5,000/week by default; add a dry-run, field-preserving Ultrafast patch for existing team and Stable policies on GPT-6.1 Sol only.

@@ -1,6 +1,6 @@
 import { HttpError } from "./utils.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
-import { grantCoolingDown, grantQuotaExhausted, grantRuntimeFresh } from "./grant-quota.ts";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh } from "./grant-quota.ts";
 import type { Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 const DEFAULT_GRANT_PRIORITY = 100;
@@ -52,6 +52,8 @@ export interface SelectedGrant {
 export interface GrantSelectionResult {
   selected: SelectedGrant | null;
   hasConfiguredGrant: boolean;
+  // Earliest time a cooling or quota-exhausted pooled grant can serve again.
+  retryAt?: string;
 }
 export type PinnedGrant = { key: string | null; revision: string | null } | { key: string; lineage: string };
 
@@ -69,34 +71,57 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
 }
 
-export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean }
+export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; recovering?: Array<{ entry: SelectedGrant; atMs: number }> }
 
 export function activeOperationCandidates(available: SelectedGrant[], env: Env, requirement?: GrantRequirement): SelectedGrant[] {
   // Qualification follows policy choice. Preserve the original pool-presence
   // fact so an unusable configured pool cannot fall back to environment auth.
-  const configured = requirement ? available.filter(({ grant }) => {
-    try { assertOperationConfiguration(requirement, grant, env); return true; }
-    catch (error) { if (error instanceof HttpError) return false; throw error; }
-  }) : available;
+  const configured = available.filter(({ grant }) => operationConfigured(grant, env, requirement));
   const priority = configured.length ? Math.min(...configured.map(({ grant }) => grantPriority(grant))) : null;
   return configured.filter(({ grant }) => grantPriority(grant) === priority);
+}
+
+// Only grants that this operation could use bound the retry time. Selection
+// re-runs on retry, so this is a hint, never a reservation of that grant.
+export function poolRetryAt(candidates: GrantCandidates, env: Env, requirement?: GrantRequirement): string | undefined {
+  const times = (candidates.recovering ?? []).filter(({ entry }) => operationConfigured(entry.grant, env, requirement)).map(({ atMs }) => atMs);
+  return times.length ? new Date(Math.min(...times)).toISOString() : undefined;
+}
+
+function operationConfigured(grant: UpstreamGrant, env: Env, requirement?: GrantRequirement): boolean {
+  if (!requirement) return true;
+  try { assertOperationConfiguration(requirement, grant, env); return true; }
+  catch (error) { if (error instanceof HttpError) return false; throw error; }
 }
 
 export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number): GrantCandidates {
   const configured = candidates.filter((entry): entry is SelectedGrant => !!entry.grant && entry.grant.enabled !== false && (!entry.grant.provider || entry.grant.provider === providerId) && grantUsable(entry.grant));
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
   const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
+  const recovering: Array<{ entry: SelectedGrant; atMs: number }> = [];
   const available = configured.filter((entry) => {
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
-    if (excludedKeys.has(entry.key) || grantCoolingDown(entry.runtimeState, nowMs)) return false;
-    if (grantQuotaExhausted(entry.runtimeState, requirement?.model, entry.grant.kind === "subscription" ? routing.includedQuotaReservePercent : 0, entry.grant.kind === "subscription")) return false;
+    if (excludedKeys.has(entry.key)) return false;
     const scope = parseGrantScope(entry.key);
     if (eligibilityRestricted && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
-    return routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model);
+    // Stale-deny needs a fresh observation, not elapsed time, to readmit a grant.
+    if (routing.staleState === "deny" && !grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model)) return false;
+    const subscription = entry.grant.kind === "subscription", reserve = subscription ? routing.includedQuotaReservePercent : 0;
+    const cooling = grantCoolingDown(entry.runtimeState, nowMs);
+    const exhausted = grantQuotaExhausted(entry.runtimeState, requirement?.model, reserve, subscription, nowMs);
+    if (!cooling && !exhausted) return true;
+    // Only time-limited exclusions remain. Record when the last one lifts;
+    // an exhausted window without a published reset has no known recovery.
+    // A failed credential (401/403) is not repaired by waiting out its cooldown.
+    if (cooling && entry.runtimeState!.lastSignal === "authentication") return false;
+    const resetAt = exhausted ? grantQuotaResetAt(entry.runtimeState, requirement?.model, reserve, subscription, nowMs) : 0;
+    const atMs = resetAt == null ? null : Math.max(resetAt, cooling ? Date.parse(entry.runtimeState!.cooldownUntil!) : 0);
+    if (atMs != null && (routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, atMs, requirement?.model))) recovering.push({ entry, atMs });
+    return false;
   });
   // Transport filtering must not reopen environment auth for a configured pool.
-  return { available, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
+  return { available, recovering, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
 }
 
 function finitePercent(value: unknown, fallback: number): number {

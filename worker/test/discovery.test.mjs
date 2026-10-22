@@ -813,14 +813,17 @@ test("catalog and HTTP select only configured grants inside the already chosen p
     return Response.json({ usage: { input_tokens: 1, output_tokens: 1 } });
   });
   const { default: worker } = await import("../index.ts");
-  async function compare(expected) {
+  async function compare(expected, status = 503) {
     const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
     const offer = catalog.providers.find(({ id }) => id === "openai").offers.find(({ modelId, routeKind, transport, endpoint }) => modelId === "openai/gpt-6-astra" && routeKind === "unified" && transport === "http" && endpoint === "responses");
     assert.equal(offer.eligible, expected);
     const response = await worker.fetch(new Request("https://router.example/v1/responses", { method: "POST", headers: fixture.request("key").headers, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture" }) }), fixture.env, { waitUntil: (promise) => pending.push(promise) });
     const body = await response.json(); await Promise.all(pending.splice(0));
-    assert.equal(response.status, expected ? 200 : 503, JSON.stringify(body));
+    assert.equal(response.status, expected ? 200 : status, JSON.stringify(body));
     if (!expected) assert.equal(body.error.code, "upstream_grant_pool_unavailable");
+    // Only a pool waiting on a known cooldown is a timed rate limit.
+    if (!expected && status !== 429) assert.equal(response.headers.get("retry-after"), null);
+    if (!expected && status === 429) assert.ok(["59", "60"].includes(response.headers.get("retry-after")), response.headers.get("retry-after"));
   }
   await compare(true);
   assert.deepEqual(fixture.calls.find(({ path }) => path === "/grant-pools/select").body.candidates.map(({ key }) => key), [validKey]);
@@ -829,7 +832,7 @@ test("catalog and HTTP select only configured grants inside the already chosen p
   fixture.records.get(validKey).priority = 100;
   await compare(true);
   fixture.states[validKey] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
-  await compare(false);
+  await compare(false, 429);
   delete fixture.states[validKey];
   fixture.records.get(validKey).enabled = false;
   await compare(false);

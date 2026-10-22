@@ -4,7 +4,7 @@ import type { AccessControlUser, AccessPolicyEntry, Env, ProviderConnection, Pro
 import type { AdmissionPool, AdmissionRequest, AdmissionResult } from "./authority-admission.ts";
 import type { GrantAttachmentSnapshot } from "./authority.ts";
 import { routingProjection } from "./grant-projection.ts";
-import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantRoutingPolicy, grantWeight } from "./grant-eligibility.ts";
+import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantRoutingPolicy, grantWeight, poolRetryAt } from "./grant-eligibility.ts";
 import { grantQuotaRatio } from "./grant-quota.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { normalizeEmail, safeEqual, sha256Hex } from "./utils.ts";
@@ -74,11 +74,13 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     }
     const routing = grantRoutingPolicy(policy.policy.grantRouting), now = Date.now();
     const requirement = { provider, endpoint, mode: request.mode, model: request.model };
-    const { available, hasConfiguredGrant } = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, undefined, requirement, now);
+    const filtered = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, undefined, requirement, now);
+    const { available, hasConfiguredGrant } = filtered;
     const active = activeOperationCandidates(available, env, requirement);
     const stickyHash = routing.stickiness === "identity" ? identityHash : routing.stickiness === "session" ? request.sessionHash ?? fallbackSessionHash : null;
     const choice = active.length ? store.selectGrant({ poolKey: `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(poolInput.tenantId)}`, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) })) }) : null;
     const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
-    return { ...fresh, selection: { selected: selected ? { ...selected, authorityRevision: store.grantAttachment(selected.key).revision } : null, hasConfiguredGrant } };
+    const retryAt = selected ? undefined : poolRetryAt(filtered, env, requirement);
+    return { ...fresh, selection: { selected: selected ? { ...selected, authorityRevision: store.grantAttachment(selected.key).revision } : null, hasConfiguredGrant, ...(retryAt ? { retryAt } : {}) } };
   });
 }

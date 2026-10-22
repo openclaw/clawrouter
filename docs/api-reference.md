@@ -556,7 +556,7 @@ strategy, stickiness, failover, priority and stale-state settings:
 | Field | Default | Contract |
 | --- | --- | --- |
 | `includedQuotaReservePercent` | `0` | Integer 0–50. A subscription is ineligible when any applicable, unexpired window has this percentage or less remaining. |
-| `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain HTTP 503. |
+| `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain the pool-unavailable error. |
 
 Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
 `models: ["fable"]` (lowercase family tokens) and per-window `observedAt` timestamps. A scope applies when its token
@@ -574,6 +574,24 @@ Grant responses also expose optional sanitized `account` fields (`email`,
 Only manifest-declared scalar fields are retained. Tokens and raw provider
 payloads are excluded. A probe HTTP 429 keeps the last reading and honors
 `Retry-After` independently per endpoint; HTTP 401 marks reauthorization required.
+
+When a configured pool has no eligible grant, HTTP requests fail with
+`upstream_grant_pool_unavailable`. If every grant that could serve the operation
+is excluded only by an active rate-limit or quota cooldown or by quota windows
+with published resets, the status is HTTP 429 with `Retry-After` set to the
+whole seconds until the earliest such grant becomes eligible. Otherwise (for
+example eligibility restrictions, unsupported transports, exhausted windows
+without a reset, stale observations under `staleState: "deny"`, or grants whose
+credentials failed with HTTP 401/403) it remains HTTP 503 without
+`Retry-After`. The JSON error body is the same in both cases.
+
+`Retry-After` is ClawRouter's own re-admission time, not a provider promise.
+A provider 429 without timing cools a grant for ClawRouter's 60-second
+default, observed cooldowns are capped at 24 hours, and published quota resets
+are used as reported without a cap. Clients should apply their own maximum
+wait and fail over beyond it. An authentication cooldown never yields a
+`Retry-After`, because waiting does not repair a credential. CORS responses
+expose `Retry-After` to browser clients.
 
 Proxied HTTP responses carry `x-clawrouter-grant-lane`: `subscription` for
 subscription/OAuth grants, `api_key` for scoped API-key grants, and `environment`

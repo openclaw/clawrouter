@@ -839,8 +839,12 @@ try {
   const callsBeforeUnavailablePool = upstreamCalls.length;
   const revokedBackup = await fetch(`${base}/v1/admin/upstream-grants/policies/failover/local-b-backup/revoke`, { method: "POST", headers: adminHeaders });
   assert.equal(revokedBackup.status, 200);
+  // The only remaining grant is cooling from the upstream 429 (retry-after: 120),
+  // so the pool answers 429 with ClawRouter's own re-admission time.
   const unavailablePool = await failoverRequest();
-  assert.equal(unavailablePool.status, 503);
+  assert.equal(unavailablePool.status, 429);
+  const poolRetryAfter = Number(unavailablePool.headers.get("retry-after"));
+  assert.ok(Number.isInteger(poolRetryAfter) && poolRetryAfter >= 1 && poolRetryAfter <= 120, `cooling pool Retry-After ${unavailablePool.headers.get("retry-after")}`);
   assert.equal((await unavailablePool.json()).error.code, "upstream_grant_pool_unavailable");
   assert.equal(upstreamCalls.length, callsBeforeUnavailablePool, "cooled scoped grants never fall through to an unscoped provider credential");
   const budgetedConnectionUrl = `${base}/v1/admin/connections/local-openai`;

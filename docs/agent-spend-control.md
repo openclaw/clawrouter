@@ -184,6 +184,35 @@ response, and stored-item inputs reserve the model's full declared input window
 because their billable token count cannot be inferred from the small serialized
 reference. Chat Completions output bounds are multiplied by `n`.
 
+One exception is qualified: on the Anthropic Messages wire, an inline `image`
+block with a `base64` PNG, JPEG, GIF or WebP source whose header matches its
+`media_type` reserves `ceil(width / 28) × ceil(height / 28)` visual tokens in
+place of its encoded bytes. Claude bills images by those 28-pixel patches and
+only downsizes them, so the original dimensions bound every model tier; the rest
+of the request still counts as serialized bytes. The exception is deliberately
+narrow:
+
+- Position: only a block that is a direct element of a `user` message's
+  `content`, or of the `content` array of a `tool_result` block in that message,
+  qualifies. Claude bills image-shaped objects anywhere else, such as
+  `tool_use.input`, as text, so they keep the full input window.
+- Block keys: only `type`, `source`, `cache_control`, and `transformations` with
+  `oversized_image` set to `downsize` or `error`; any other key keeps the full
+  window.
+- Strict headers: a PNG needs exactly one 13-byte `IHDR` before its first
+  `IDAT`. A JPEG marker walk must reach the start of scan through known
+  segments with exactly one frame header; stuffed `FF00`, reserved or
+  unsupported markers, stray bytes, or a second frame header keep the full
+  window, because real decoders may read a different frame from such streams.
+
+URL, Files API, malformed, mismatched or larger-than-8000-pixel images,
+documents, and images on other wires keep the full input window. For example, a
+1920×1080 screenshot adds 2,691 visual tokens instead of reserving the
+1,000,000-token Claude Opus 5.5 window. Settlement still uses the provider's
+reported usage. Ordinary soft-mode HTTP requests do not reserve before
+dispatch, so this bound changes admission for reserve-mode budgets and for the
+soft-mode paths that still reserve (background recovery and fusion synthesis).
+
 Input reservation includes the declared generic cache-write rate; duration-specific
 cache controls also select their declared write rates. After the response completes, ClawRouter settles reported input,
 cached-input, cache-write, and output tokens at the manifest rates and releases

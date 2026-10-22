@@ -20,9 +20,20 @@ export function windowApplies(window: QuotaWindow, model?: string | null): boole
 
 export function grantQuotaExhausted(state: QuotaState | null | undefined, model: string | null | undefined, reserve = 0, includeUnscoped = true, now = Date.now()): boolean {
   // The admission check cannot prevent one already in-flight request crossing the reserve.
-  return state?.windows.some(window => (includeUnscoped || !!window.models?.length) && windowApplies(window, model)
+  return exhaustingWindows(state, model, reserve, includeUnscoped, now).length > 0;
+}
+
+// When every exhausting window lifts. Null when one has no published reset.
+export function grantQuotaResetAt(state: QuotaState | null | undefined, model: string | null | undefined, reserve = 0, includeUnscoped = true, now = Date.now()): number | null {
+  const windows = exhaustingWindows(state, model, reserve, includeUnscoped, now);
+  if (!windows.length || windows.some(window => !window.resetAt)) return null;
+  return Math.max(...windows.map(window => Date.parse(window.resetAt!)));
+}
+
+function exhaustingWindows(state: QuotaState | null | undefined, model: string | null | undefined, reserve: number, includeUnscoped: boolean, now: number): QuotaWindow[] {
+  return state?.windows.filter(window => (includeUnscoped || !!window.models?.length) && windowApplies(window, model)
     && (!window.resetAt || Date.parse(window.resetAt) > now)
-    && (window.remaining === 0 || !!window.limit && window.remaining !== null && window.remaining / window.limit * 100 <= reserve)) ?? false;
+    && (window.remaining === 0 || !!window.limit && window.remaining !== null && window.remaining / window.limit * 100 <= reserve)) ?? [];
 }
 
 export function grantRuntimeFresh(state: QuotaState | null | undefined, staleAfterMs: number, nowMs = Date.now(), model?: string | null): boolean {

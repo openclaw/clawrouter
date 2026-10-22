@@ -219,7 +219,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) {
-    const unavailable = () => new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
+    const unavailable = () => grantPoolUnavailable(provider, resolution.retryAt);
     if (!auth.policy.grantRouting?.environmentFallback || pinned?.key != null) throw unavailable();
     try { if (requirement) assertOperationConfiguration(requirement, null, env); configuredUpstream(provider, null, env); }
     catch { throw unavailable(); }
@@ -350,12 +350,21 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
+// A pool whose grants are only cooling down or awaiting a quota reset is a rate
+// limit: answer like a native provider, with the earliest recovery as Retry-After.
+function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | undefined): HttpError {
+  const message = `provider ${provider.id} has no available scoped upstream grant`;
+  const waitMs = retryAt ? Date.parse(retryAt) - Date.now() : NaN;
+  if (!Number.isFinite(waitMs)) return new HttpError(503, "upstream_grant_pool_unavailable", message);
+  return new HttpError(429, "upstream_grant_pool_unavailable", message, { "retry-after": String(Math.max(1, Math.ceil(waitMs / 1_000))) });
+}
+
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const admitted = recordSelection && !pinned && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys) : undefined;
   if (!admitted && excludedKeys.size && auth.authType === "proxy_key") stickyHash = await grantStickyInput(auth, proxySessionHash(auth));
   const resolution = admitted ?? await resolveGrantSelection(provider.id, auth.policyId, auth.policy.tenantId ?? "default", tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
-  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
+  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {

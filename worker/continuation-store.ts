@@ -1,3 +1,4 @@
+import { CompactionWitnessStore, type CompactionWitness, type WitnessInput } from "./compaction-witness-store.ts";
 import { HttpError, json } from "./utils.ts";
 import { isToolKnowledge, type ToolKnowledge } from "./responses-tool-evidence.ts";
 
@@ -13,7 +14,7 @@ export const continuationRetentionMs = 30 * 24 * 60 * 60_000;
 export const continuationCapacity = 1_000_000;
 export type PricingEvidence = { version: 1; producerId: string } & ({ state: "pending" } | { state: "final"; knowledge: ToolKnowledge });
 export type EvidenceFinalization = { outcome: "qualified" | "producer_conflict" | "conflict" | "unavailable" };
-export type ContinuationInput = { action: "resolve" | "register" | "qualify"; keys: string[]; owner?: ContinuationOwner; responseClaim?: { key: string; producerId: string }; knowledge?: ToolKnowledge; backgroundJobId?: string; backgroundResponseId?: string };
+export type ContinuationInput = { action: "resolve" | "register" | "qualify" | "witness_register" | "witness_resolve"; witnesses?: CompactionWitness[]; keys: string[]; owner?: ContinuationOwner; responseClaim?: { key: string; producerId: string }; knowledge?: ToolKnowledge; backgroundJobId?: string; backgroundResponseId?: string };
 type Row = { owner_json: string; pricing_evidence_json: string | null; background_job_id: string | null; background_closed: number; background_stream: number };
 
 // Each instance lives in an authorization-scoped ACCESS_CONTROL object. Only
@@ -21,8 +22,10 @@ type Row = { owner_json: string; pricing_evidence_json: string | null; backgroun
 // upstream state stays on wire.
 export class HttpContinuationStore {
   private readonly storage: DurableObjectStorage;
+  private readonly witnesses: CompactionWitnessStore;
   constructor(storage: DurableObjectStorage) {
     this.storage = storage;
+    this.witnesses = new CompactionWitnessStore(storage);
     storage.sql.exec("CREATE TABLE IF NOT EXISTS http_continuations (binding_key TEXT PRIMARY KEY, owner_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL, pricing_evidence_json TEXT)");
     if (![...storage.sql.exec<{ name: string }>("PRAGMA table_info(http_continuations)")].some(column => column.name === "pricing_evidence_json")) storage.sql.exec("ALTER TABLE http_continuations ADD COLUMN pricing_evidence_json TEXT");
     const columns = new Set([...storage.sql.exec<{ name: string }>("PRAGMA table_info(http_continuations)")].map(column => column.name));
@@ -36,6 +39,7 @@ export class HttpContinuationStore {
   }
 
   handle(input: ContinuationInput, backgroundClosed = false, backgroundRetired = false, backgroundStream = false, registered?: () => void): Response {
+    if (input.action === "witness_register" || input.action === "witness_resolve") return this.witnesses.handle(input as WitnessInput);
     if (!Array.isArray(input.keys) || input.keys.length < 1 || input.keys.length > 2 || input.keys.some(key => !digest(key))) invalid();
     const keys = [...new Set(input.keys)], now = Date.now();
     if (input.action === "resolve") {
@@ -96,12 +100,14 @@ export class HttpContinuationStore {
   }
 
   expire(now: number): void {
+    this.witnesses.expire(now);
     const deleted = [...this.storage.sql.exec("DELETE FROM http_continuations WHERE binding_key IN (SELECT binding_key FROM http_continuations WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 256) RETURNING binding_key", now)].length;
     if (deleted) this.storage.sql.exec("UPDATE http_continuation_count SET count = count - ? WHERE id = 1", deleted);
   }
 
   nextDeadline(): number | undefined {
-    return [...this.storage.sql.exec<{ expires_at_ms: number }>("SELECT expires_at_ms FROM http_continuations ORDER BY expires_at_ms LIMIT 1")][0]?.expires_at_ms;
+    const deadlines = [this.witnesses.nextDeadline(), [...this.storage.sql.exec<{ expires_at_ms: number }>("SELECT expires_at_ms FROM http_continuations ORDER BY expires_at_ms LIMIT 1")][0]?.expires_at_ms].filter((value): value is number => value !== undefined);
+    return deadlines.length ? Math.min(...deadlines) : undefined;
   }
 }
 

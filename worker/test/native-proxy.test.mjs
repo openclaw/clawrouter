@@ -279,7 +279,7 @@ test("opaque OpenAI models route through the requested unified and native operat
     return Response.json({ usage: { prompt_tokens: 1, total_tokens: 1 } });
   });
   for (const [path, model, input] of [
-    ["/v1/embeddings", "text-embedding-3-small", { input: "fixture" }],
+    ["/v1/embeddings", "fixture-embedding", { input: "fixture" }],
     ["/v1/chat/completions", "fixture-chat", { messages: [] }],
     ["/v1/responses", "fixture-responses", { input: "fixture" }],
   ]) {
@@ -292,7 +292,7 @@ test("opaque OpenAI models route through the requested unified and native operat
     }
   }
   fixture.policy.monthlyBudgetMicros = 1_000_000;
-  const denied = await fixture.call("/v1/embeddings", { model: "openai/text-embedding-3-small", input: "fixture" }, true);
+  const denied = await fixture.call("/v1/embeddings", { model: "openai/fixture-embedding", input: "fixture" }, true);
   assert.equal(denied.status, 400);
   assert.equal((await denied.json()).error.code, "pricing_required");
   await fixture.drain();
