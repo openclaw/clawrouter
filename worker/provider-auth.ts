@@ -11,6 +11,7 @@ export interface GrantRequirement { provider: CompiledProvider; endpoint: Compil
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
   if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
+  if (requirement.endpoint.request_format === "openai.moderations" && grant && grant.kind !== "api_key") return false;
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
   if (requirement.responsesLifecycle) {

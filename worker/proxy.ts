@@ -79,6 +79,9 @@ export async function proxyOpenAi(request: Request, env: Env, context: Execution
     if (auth instanceof Response) return auth;
     throw error;
   }
+  // Moderations has an optional model in the native API. Resolve the documented
+  // default before both admission and model-policy checks, including bare IDs.
+  if (path === "/v1/moderations" && (body.model === undefined || typeof body.model === "string" && !body.model.includes("/"))) body.model = `openai/${body.model ?? "omni-moderation-latest"}`;
   const modelId = typeof body.model === "string" ? body.model : "";
   const earlySelection = concreteOpenAiSelection(path, body, env);
   const preauthenticated = await preauthenticate(request, env, mode, mode === "proxy_key" ? modelRoute(modelId, capabilityForPath(path) ?? undefined)?.provider.id : undefined, undefined, isSelectionFailure(earlySelection) ? undefined : earlySelection);

@@ -82,6 +82,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
     return { model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
   }
   const body = requestObject(inputBody);
+  if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
   const modelId = typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
   const resolve = (value: string | null) => {
