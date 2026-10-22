@@ -15,14 +15,14 @@ import { recoverRemote, failureIssue } from '../scripts/deploy-train-recover.mjs
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
-function fixture({ unsafe = false, migration = false, failSmokeAt, lostPost = false, analyticsRows = [] } = {}) {
+function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [] } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
   let versions = [{ id: blue }];
   let time = 1_000_000, smokes = 0, uploads = 0;
-  const calls = [], receipts = [];
+  const calls = [], receipts = [], smokeObservations = [];
   const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration };
   const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture-token', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' }, fetchImpl: async (url, init) => {
-    calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body) });
+    calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body), time });
     const path = new URL(url).pathname;
     let result;
     if (path.endsWith('/deployments')) {
@@ -41,18 +41,34 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, lostPost = fa
   const options = {
     state, api, now: () => time, wait: async (ms) => { time += ms; }, save: (value) => receipts.push(structuredClone(value)),
     upload: async () => { uploads++; versions.unshift({ id: green, annotations: { 'workers/tag': sha, 'workers/message': uploadMessage(state) } }); if (migration) deployment = { id: 'migration', versions: [{ version_id: green, percentage: 100 }] }; return green; },
-    smoke: async () => { smokes++; time += 100; if (smokes === failSmokeAt) throw new Error('Smoke HTTP 503'); },
+    smoke: async () => {
+      smokes++;
+      smokeObservations.push({ percentage: state.percentage, time });
+      time += 100;
+      if (smokes === failSmokeAt || (failSmokePercentage !== undefined && state.percentage === failSmokePercentage)) throw new Error('Smoke HTTP 503');
+    },
     analytics: async (a, s, t) => a.analytics({ start: new Date(s.startedAt).toISOString(), end: new Date(t).toISOString() }),
   };
-  return { options, api, state, calls, receipts, get deployment() { return deployment; }, get smokes() { return smokes; }, get uploads() { return uploads; } };
+  return { options, api, state, calls, receipts, smokeObservations, get deployment() { return deployment; }, get smokes() { return smokes; }, get uploads() { return uploads; } };
 }
 const posts = (f) => f.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/deployments')).map((c) => c.body);
 
-test('train holds 10% and 50%, continuously smokes, keeps DO order, finishes green100', async () => {
+test('train observes a five-minute canary with frequent smoke, keeps DO order, finishes green100', async () => {
   const f = fixture();
   await runTrain(f.options);
   assert.deepEqual(posts(f).map((p) => p.versions.map((v) => [v.version_id, v.percentage])), [0, 10, 50, 100, 100].map((n) => [[green, n], [blue, 100 - n]]));
-  assert.ok(f.smokes >= 17, 'both holds repeatedly exercise live smoke rather than just sleeping');
+  const deployments = f.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/deployments'));
+  const tenPercentMs = deployments[2].time - deployments[1].time;
+  const fiftyPercentMs = deployments[3].time - deployments[2].time;
+  assert.ok(tenPercentMs >= 120_000 && tenPercentMs < 121_000, '10% holds for two minutes plus bounded fixture smoke overhead');
+  assert.ok(fiftyPercentMs >= 180_000 && fiftyPercentMs < 181_000, '50% holds for three minutes plus bounded fixture smoke overhead');
+  for (const percentage of [10, 50]) {
+    const observations = f.smokeObservations.filter((s) => s.percentage === percentage);
+    assert.ok(observations.length >= 5, 'each hold repeatedly exercises live smoke rather than just sleeping');
+    for (let i = 1; i < observations.length; i++) {
+      assert.ok(observations[i].time - observations[i - 1].time <= 30_100, 'no more than 30 seconds between completed smoke and the next check');
+    }
+  }
   assert.equal(f.state.status, 'done');
   assert.equal(deploymentState(f.deployment).status, 'done');
   assert.equal(f.receipts.find((r) => r.percentage === 0).exposed, true, 'exposure journal precedes the first smoke');
@@ -67,9 +83,9 @@ test('zero-only success removes candidate and leaves exactly blue100', async () 
   assert.deepEqual(f.deployment.versions, [{ version_id: blue, percentage: 100 }]);
 });
 
-for (const [name, at] of [['initial override', 1], ['10 percent', 3], ['50 percent', 10], ['final full cutover', 19]]) {
+for (const [name, percentage] of [['initial override', 0], ['10 percent', 10], ['50 percent', 50], ['final full cutover', 100]]) {
   test(`smoke breach at ${name} restores blue and throws`, async () => {
-    const f = fixture({ failSmokeAt: at });
+    const f = fixture({ failSmokePercentage: percentage });
     await assert.rejects(runTrain(f.options), /Smoke HTTP 503/);
     assert.equal(f.state.status, 'rolled-back');
     assert.equal(f.state.deploymentId, f.deployment.id);

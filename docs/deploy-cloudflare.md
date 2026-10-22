@@ -1325,17 +1325,23 @@ readback, never by blindly repeating the write.
    `Cloudflare-Workers-Version-Overrides: clawrouter-edge="<green UUID>"`.
    `/v1/health.versionId` and Worker response headers must identify green; a
    silently ignored override is not a successful smoke.
-2. Green 10% for at least 15 minutes, then green 50% for at least 30 minutes.
-   Full override smoke runs immediately and every three minutes through each
-   hold. It includes a paid golden-provider request and durable usage visibility:
+2. Green 10% for at least two minutes, then green 50% for at least three minutes.
+   Full override smoke runs immediately and waits at most 30 seconds between
+   checks through each hold. It includes a paid golden-provider request and
+   durable usage visibility:
    low production volume never eliminates synthetic coverage.
 3. Green 100%, final override smoke, then a remote completion receipt. Blue stays
    in the version history and at 0% as the rollback target. Stable version order
    preserves Cloudflare's forward-only DO reassignment guarantee during increases.
 
-The 15/30-minute holds supply several independent synthetic observations without
-requiring statistically significant organic traffic. The default single provider
-keeps the synthetic cost bounded; expanding `live_providers` increases it. Each
+The two/three-minute holds target five minutes of canary observation, not five
+minutes for the entire CI job. Preflight, build, upload, initial/final smoke,
+Cloudflare API calls, and slow checks add elapsed time. Smoke duration counts
+inside each hold, but a check must finish successfully before promotion; it is
+never skipped to meet the timing target. The 30-second interval supplies repeated
+synthetic observations without requiring statistically significant organic traffic.
+The default single provider keeps the synthetic cost bounded; expanding
+`live_providers` increases it. Each
 smoke process has a five-minute wall-clock bound, upload twelve minutes, rollout
 step 75 minutes, and deploy job 100 minutes. These are failure limits, not proof
 that provider requests finish faster.

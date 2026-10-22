@@ -1,11 +1,11 @@
 // Deployment policy is independent of the network and workflow expression language.
 export const TRAIN_STEPS = Object.freeze([
   { percentage: 0, holdMs: 0 },
-  { percentage: 10, holdMs: 15 * 60_000 },
-  { percentage: 50, holdMs: 30 * 60_000 },
+  { percentage: 10, holdMs: 2 * 60_000 },
+  { percentage: 50, holdMs: 3 * 60_000 },
   { percentage: 100, holdMs: 0 },
 ]);
-export const POLL_MS = 3 * 60_000;
+export const POLL_MS = 30_000;
 export const LEGACY_DEPLOYMENT = Object.freeze({
   version: 'd06cab69-8847-46da-b6b6-cc1585b42371',
   sha: '478974c17edab8da283f4637ae706a4d63885a2e',
