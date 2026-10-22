@@ -53,7 +53,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.providers.find((provider) => provider.id === "azure-openai").endpoints.find((endpoint) => endpoint.id === "responses").websocket, undefined);
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
-  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact"]);
+  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"]);
   assert.deepEqual(astra.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index[astra.id], { provider: "openai", ...Object.fromEntries(Object.entries(astra).filter(([key]) => key !== "id")) });
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
@@ -68,7 +68,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
     assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(model.upstream));
     assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   }
-  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat", "llm.count_tokens"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
   const gpt55 = openai.models.find((model) => model.id === "openai/gpt-5.5");

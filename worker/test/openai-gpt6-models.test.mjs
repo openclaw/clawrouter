@@ -22,7 +22,7 @@ for (const { name, costs, reservation } of contracts) {
     const model = snapshot.model_index[id];
     assert.ok(model);
     assert.equal(model.upstream, upstream);
-    assert.deepEqual(model.capabilities, ["llm.responses", "llm.chat", ...(name === "luna" ? ["llm.decisions"] : [])]);
+    assert.deepEqual(model.capabilities, ["llm.responses", "llm.chat", ...(name === "luna" ? ["llm.decisions"] : []), "llm.count_tokens"]);
     assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
     for (const capability of ["llm.responses", "llm.chat"]) {
       assert.equal(modelRoute(id, capability).model.pricing, provider.models.find((entry) => entry.id === id).pricing);

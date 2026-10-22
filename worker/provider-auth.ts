@@ -14,6 +14,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
   if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
   if (requirement.endpoint.request_format === "openai.moderations" && grant && grant.kind !== "api_key") return false;
+  if (requirement.endpoint.request_format === "openai.responses_input_tokens" && grant && grant.kind !== "api_key") return false;
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
   if (requirement.responsesLifecycle) {

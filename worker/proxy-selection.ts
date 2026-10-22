@@ -1,4 +1,5 @@
 import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
+import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
 import { validateImageGeneration } from "./image-generation.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
@@ -17,6 +18,11 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.endpoint.request_format === "openai.responses_input_tokens") {
+    validateResponsesInputTokens(requestObject(selection.body));
+    if (!selection.model) throw new HttpError(400, "model_required", "a registered Responses model is required for input token counting");
+    return;
+  }
   if (selection.endpoint.request_format === "openai.responses_compact") {
     const body = requestObject(selection.body), pricing = selection.model?.pricing;
     if (!selection.model || !pricing || pricing.unit != null || !Number.isSafeInteger(pricing.defaultMaxOutputTokens) || pricing.defaultMaxOutputTokens <= 0) throw new HttpError(400, "compact_model_unqualified", "a registered token-priced compaction model with an authoritative output bound is required");
