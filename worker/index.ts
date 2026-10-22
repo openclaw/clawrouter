@@ -53,6 +53,8 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     }
     response = withNativeLocalError(response, path, correlated.requestId);
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
+    // The correlation wrapper makes a mutable copy without buffering streams.
+    if (env.CF_VERSION_METADATA?.id) response.headers.set("x-clawrouter-version-id", env.CF_VERSION_METADATA.id);
     return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
@@ -187,6 +189,7 @@ function healthStatus(env: Env) {
     ok: true,
     service: "clawrouter-edge",
     version: packageMetadata.version,
+    versionId: env.CF_VERSION_METADATA?.id || null,
     runtime: "typescript",
     environment: env.CLAWROUTER_DEPLOY_ENV?.trim() || "production",
     observability: {
