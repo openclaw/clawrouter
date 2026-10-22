@@ -1,3 +1,4 @@
+import { isModelDiscovery } from "./model-discovery.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
 import { HttpError } from "./utils.ts";
@@ -10,6 +11,7 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
 export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
   if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
   if (requirement.endpoint.request_format === "openai.moderations" && grant && grant.kind !== "api_key") return false;
   const transport = transportForGrant(requirement.provider, grant);

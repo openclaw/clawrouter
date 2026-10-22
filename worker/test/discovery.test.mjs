@@ -397,8 +397,11 @@ test("catalog and session preserve saved provider health independently of operat
         ]);
         assert.equal(view.readiness.executable, executable);
         assert.equal(view.offers.some(({ eligible }) => eligible), executable);
+        // Environment auth cannot expose scoped metadata; inference fees do not own its blocker.
+        const metadata = view.offers.filter(offer => ["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(metadata.length > 0);
+        assert.ok(metadata.every(offer => !offer.eligible && offer.reasonCode === (enabled ? "grant_transport_unavailable" : "provider_disabled")));
         if (reasonCode) {
-          assert.ok(view.offers.filter(offer => offer.endpoint !== "realtime").every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
+          const inference = view.offers.filter(offer => offer.endpoint !== "realtime" && !["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(inference.length > 0); assert.ok(inference.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
           assert.ok(view.offers.filter(offer => offer.endpoint === "realtime").every(offer => !offer.eligible));
         }
         if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);

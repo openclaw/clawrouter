@@ -1,3 +1,4 @@
+import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
 import { validateImageGeneration } from "./image-generation.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
@@ -83,6 +84,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   }
   const body = requestObject(inputBody);
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
+  if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
   const modelId = typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
   const resolve = (value: string | null) => {
@@ -118,7 +120,7 @@ export function prepareNativeRequest(provider: CompiledProvider, endpoint: Compi
   return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env, true);
 }
 
-export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: URLSearchParams; body: Record<string, unknown> } {
+export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: URLSearchParams | Record<string, unknown>; body: Record<string, unknown> } {
   const query = new URL(request.url).searchParams;
   const pathParams: Record<string, string> = {};
   for (const name of endpoint.path_params) {
@@ -126,7 +128,7 @@ export function directManifestEnvelope(request: Request, endpoint: CompiledEndpo
     if (value != null) pathParams[name] = value;
     query.delete(name);
   }
-  return { method: request.method, pathParams, query, body: {} };
+  return { method: request.method, pathParams, query: isModelDiscovery(endpoint) ? discoveryQuery(query) : query, body: {} };
 }
 
 export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {

@@ -1,3 +1,4 @@
+import { isModelDiscovery } from "./model-discovery.ts";
 import { validateBudgetReservation } from "./accounting";
 import { modelForEndpoint } from "./model-pricing.ts";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
@@ -20,7 +21,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
   const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, auth.policy.requestCostMicros ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, auth.policy.requestCostMicros, capability, endpoint);
   try {
-    if (auth.policy.budgetMode === "soft") {
+    if (auth.policy.budgetMode === "soft" && !isModelDiscovery(endpoint)) {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };
     } else if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };
   } catch (error) {
@@ -30,9 +31,9 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (auth.policy.budgetScope === "principal" && !auth.principalId && !auth.credentialId)
     return { status: "exact-blocked", reasonCode: "principal_required" };
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
-  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" ? cost.reserveMicros : bounds?.zero ? 0 : null;
+  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || isModelDiscovery(endpoint) ? cost.reserveMicros : bounds?.zero ? 0 : null;
   const minimum = exact ?? bounds?.minimumMicros ?? 0;
-  if (exact === 0 && auth.policy.budgetMode !== "soft") return { status: "exact-covered" };
+  if (exact === 0 && (auth.policy.budgetMode !== "soft" || isModelDiscovery(endpoint))) return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };
   for (const [limit, remaining, reasonCode] of [
     [auth.policy.monthlyBudgetMicros, observation.policyRemaining, "budget_exhausted"],

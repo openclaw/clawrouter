@@ -1,4 +1,5 @@
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
+import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { softBudget } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
@@ -296,7 +297,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
     if (preauthenticated instanceof Response) return preauthenticated;
-    return await proxySelected(request, env, context, "proxy_key", selection, new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
+    return await proxySelected(request, env, context, "proxy_key", selection, isModelDiscovery(endpoint) ? discoveryQuery(new URL(request.url).searchParams) : new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
   } finally { admission?.finish(context); }
 }
 
@@ -337,7 +338,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const { cost, requestId } = accounting;
-  const useSoft = auth.policy.budgetMode === "soft" && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
+  const useSoft = !isModelDiscovery(selection.endpoint) && auth.policy.budgetMode === "soft" && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
   let soft: ReturnType<typeof softBudget> | undefined;
   let budgetMs = 0;
   let upstreamMs = 0;
@@ -414,7 +415,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     response = await operation.wait(pending, "upstream", discard);
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!grantFailover && !background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!grantFailover && !isModelDiscovery(selection.endpoint) && !background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -441,6 +442,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
     if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
+    if (isModelDiscovery(selection.endpoint)) {
+      response = await modelDiscoveryResponse(response, selection.provider, selection.endpoint, auth.policy, discoveryQuery(queryInput), operation, async (cursor, before) => {
+        const pageUrl = new URL(prepared.url);
+        pageUrl.searchParams.set(before ? "before_id" : "after_id", cursor);
+        signal.throwIfAborted();
+        const page = await operation.wait(fetch(pageUrl, { method: "GET", headers: prepared.headers, signal, redirect: "manual" }), "upstream", discard);
+        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, page);
+        return page;
+      });
+    }
     upstreamMs = performance.now() - upstreamStart;
     if (soft) {
       budgetMs = await soft.beforeDelivery();
@@ -466,7 +477,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (background) {
       if (!dispatched || response?.ok === false) context.waitUntil(background.unsent(response?.status ?? 502, operation.status ?? "provider_error", content));
       // Unknown dispatched delivery remains collectible; it is not a terminal.
-    } else accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
@@ -526,7 +538,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
 }
 
 function selectionUpstreamModel(selection: ProxySelection): string | null {
-  return !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : selection.pathParams.model ?? selection.pathParams.deployment ?? null;
+  return !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : selection.pathParams.model ?? selection.pathParams.deployment ?? selection.pathParams.model_id ?? null;
 }
 
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
@@ -551,6 +563,10 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
 
 async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
+  if (isModelDiscovery(selection.endpoint)) {
+    queryInput = discoveryQuery(queryInput);
+    validateDiscoveryQuery(selection.provider, selection.endpoint, auth.policy, queryInput);
+  }
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
   const compact = selection.endpoint.request_format === "openai.responses_compact";
