@@ -44,6 +44,12 @@ socket-local authority and soft-budget observations for at most 100ms, measured
 from observation start, not completion. Config changes, new response/input
 funders and the independent 5-second periodic guard always recheck authority;
 funded units are owned and rechecked after the funding await before egress.
+The first ASR byte is therefore serial authority, funded soft admission and
+authority; its budget lease starts when that funding observation starts. ASR
+cadence is qualified with 40ms authority and 30ms ledger RPCs; at 50/30ms the
+blocking re-observations can exceed the shared 16-event queue and close the
+session with `queue_limit` (fail closed; no unadmitted media is sent). Media
+without ASR tolerates authority RPCs below the 100ms lease (tested at 90ms).
 Per-item child receipts inherit the admitted media attribution and budget
 windows, with unique once-only charge IDs.
 These are soft reporting receipts, not new post-execution hard reservations.

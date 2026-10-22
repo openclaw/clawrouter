@@ -96,10 +96,13 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
       mediaStarted = true;
     },
     async fundInput(unitId, signal) {
-      const started = performance.now();
       const current = await check(true); signal.throwIfAborted();
+      // The soft-budget observation inside funding starts here, after authority.
+      // Stamping the earlier authority start would age the lease by that RPC and
+      // force an immediate re-observation right after the first ASR byte.
+      const started = performance.now();
       const unit = await fundRealtimeUnit({ request, env, context, auth: current.auth, selection: inputSelection!, connection: current.upstream.connection!, grantKey: pin.key!, grantLane: current.upstream.grantLane!, signal, unitId, outputCap: 0, input: true });
-      budgetAt = started;
+      budgetAt = Math.max(budgetAt, started);
       const wrap = (owner: typeof unit): FundedInput => ({
         settle: (terminal, sent, itemId) => owner.settle(terminal, sent, false, itemId),
         fork: () => wrap(owner.forkInput()),

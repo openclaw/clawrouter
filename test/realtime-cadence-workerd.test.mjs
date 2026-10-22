@@ -84,7 +84,8 @@ async function fixture(t) {
   const temporary = await mkdtemp(join(tmpdir(), 'clawrouter-cadence-'));
   let mf;
   t.after(async () => { try { await mf?.dispose(); } finally { await rm(temporary, { recursive: true, force: true }); } });
-  mf = await startWorkerdFixture(temporary, router, upstream);
+  // Idle Durable Object eviction is a local co-scheduling stall, not router latency.
+  mf = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true });
   const kv = await mf.getKVNamespace('POLICY_KV', 'router'), ns = await mf.getDurableObjectNamespace('ACCESS_CONTROL', 'router');
   const authority = ns.get(ns.idFromName('policy-bindings')), svc = await mf.getWorker('upstream');
   const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret };
@@ -102,27 +103,34 @@ async function fixture(t) {
     return { ws, q };
   } };
 }
-for (const asr of [false, true]) test('native 20ms duplex cadence for 10s, ASR=' + asr, { timeout: 30_000 }, async t => {
-  const f = await fixture(t), c = await f.open(asr), offeredAt = [], scheduleLag = [], start = Date.now();
-  for (let i = 0; i < 500; i++) {
+async function cadence(t, asr, frames, rpc) {
+  const f = await fixture(t);
+  if (rpc) assert.equal((await f.control('/fixture-delay', JSON.stringify(rpc))).status, 200);
+  const c = await f.open(asr), offeredAt = [], scheduleLag = [], start = Date.now();
+  for (let i = 0; i < frames; i++) {
     await sleep(Math.max(0, start + i * 20 - Date.now())); const now = Date.now(); scheduleLag.push(now - start - i * 20); offeredAt.push(now);
     if (!c.q.closed) c.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', event_id: 'cad_' + i, audio: Buffer.alloc(160, 255).toString('base64') }));
   }
-  await sleep(Math.max(0, start + 10_000 - Date.now()));
-  for (let i = 0; i < 100 && c.q.acks.length < 500 && !c.q.closed; i++) await sleep(5);
+  await sleep(Math.max(0, start + frames * 20 - Date.now()));
+  for (let i = 0; i < 100 && c.q.acks.length < frames && !c.q.closed; i++) await sleep(5);
   const stats = await (await f.svc.fetch('https://upstream/fixture-stats')).json(), calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
   const delay = stats.appends.map(x => x.at - offeredAt[x.index]);
-  const result = { asr, durationMs: Date.now() - start, offered: 500, nativeChunkMs: 20, bytesPerChunk: 160, injectedAuthorityRpcMs: 15, injectedLedgerStatusRpcMs: 30,
+  const result = { asr, durationMs: Date.now() - start, offered: frames, nativeChunkMs: 20, bytesPerChunk: 160, injectedAuthorityRpcMs: rpc?.authority ?? 15, injectedLedgerStatusRpcMs: rpc?.ledger ?? 30,
     egress: stats.appends.length, acknowledgments: c.q.acks.length, upstreamAudioFrames: stats.outputs, receivedAudioFrames: c.q.outputDelay.length, maxUpstreamTickGapMs: stats.maxTickGapMs,
     maxEgressMs: Math.max(-1, ...delay), maxDownstreamMs: Math.max(-1, ...c.q.outputDelay), maxSenderScheduleLagMs: Math.max(...scheduleLag), errors: c.q.errors, closed: c.q.closed, calls,
     limits: 'Production shared16-event/256KiB queue, aggregate/idle limits and4096 bidirectional event cap unchanged. Synthetic workerd/SQL only; no physical/provider acceptance.' };
   t.diagnostic(JSON.stringify(result));
-  if (process.env.REALTIME_CADENCE_REPORT_PREFIX) await writeFile(process.env.REALTIME_CADENCE_REPORT_PREFIX + '-' + (asr ? 'asr' : 'no-asr') + '.json', JSON.stringify({ ...result, delayRows: stats.appends.map((x, i) => ({ index: x.index, at: x.at, offeredAt: offeredAt[x.index], delayMs: delay[i] })), downstreamDelays: c.q.outputDelay }, null, 2) + String.fromCharCode(10));
+  if (process.env.REALTIME_CADENCE_REPORT_PREFIX) await writeFile(process.env.REALTIME_CADENCE_REPORT_PREFIX + '-' + (asr ? 'asr' : 'no-asr') + (rpc ? '-a' + rpc.authority + '-l' + rpc.ledger : '') + '.json', JSON.stringify({ ...result, delayRows: stats.appends.map((x, i) => ({ index: x.index, at: x.at, offeredAt: offeredAt[x.index], delayMs: delay[i] })), downstreamDelays: c.q.outputDelay }, null, 2) + String.fromCharCode(10));
   if (!c.q.closed) c.ws.close(1000);
-  assert.deepEqual(result.errors, []); assert.equal(result.closed, false); assert.equal(result.egress, 500); assert.equal(result.acknowledgments, 500);
-  assert.ok(result.receivedAudioFrames >= 450, JSON.stringify(result)); assert.ok(result.maxEgressMs <= 250, JSON.stringify(result)); assert.ok(result.maxDownstreamMs <= 250, JSON.stringify(result));
+  assert.deepEqual(result.errors, []); assert.equal(result.closed, false); assert.equal(result.egress, frames); assert.equal(result.acknowledgments, frames);
+  assert.ok(result.receivedAudioFrames >= frames * 0.9, JSON.stringify(result)); assert.ok(result.maxEgressMs <= 250, JSON.stringify(result)); assert.ok(result.maxDownstreamMs <= 250, JSON.stringify(result));
   assert.ok(result.maxSenderScheduleLagMs <= 100, 'host did not sustain native cadence: ' + JSON.stringify(result));
-});
+}
+for (const asr of [false, true]) test('native 20ms duplex cadence for 10s, ASR=' + asr, { timeout: 30_000 }, t => cadence(t, asr, 500));
+// First ASR byte is serial authority -> funded soft admission -> authority. Its
+// budget lease starts when the funding observation starts, so slower (40/30ms)
+// RPCs neither re-observe immediately nor overflow the shared 16-event queue.
+test('ASR first-byte admission keeps native cadence with 40ms authority / 30ms ledger RPCs', { timeout: 15_000 }, t => cadence(t, true, 100, { authority: 40, ledger: 30 }));
 
 const append = (c, index) => c.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', event_id: 'cad_' + index, audio: Buffer.alloc(160, 255).toString('base64') }));
 async function until(check) { const end = Date.now() + 3000; for (;;) { const value = await check(); if (value) return value; if (Date.now() >= end) assert.fail('condition deadline exceeded'); await sleep(5); } }
