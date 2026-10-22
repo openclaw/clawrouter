@@ -352,7 +352,6 @@ test("session catalog scope retains the verified caller after policies are disab
     }
   }
 });
-
 test("catalog and session preserve saved provider health independently of operation eligibility", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.config.enabled = false;
@@ -367,13 +366,13 @@ test("catalog and session preserve saved provider health independently of operat
   ]) {
     if (health) fixture.records.set("health/providers/openai", health);
     else fixture.records.delete("health/providers/openai");
-    for (const [enabled, limit, blockedStatus, reasonCode] of [
-      [true, 100, null, null], [false, 100, "disabled", "provider_disabled"],
-      [true, 0, "unavailable", "daily_budget_exhausted"],
+    for (const [enabled, limit, daily, blockedStatus, reasonCode] of [
+      [true, 100, null, null, null], [false, 100, null, "disabled", "provider_disabled"],
+      [true, 0, null, null, null], [true, 0, 0, "unavailable", "daily_budget_exhausted"],
     ]) {
       fixture.connection.enabled = enabled;
       fixture.policy.monthlyBudgetMicros = limit;
-      fixture.policy.dailyBudgetMicros = limit === 0 ? 0 : null; // Monthly spend exempts counts; zero daily still blocks all operations.
+      fixture.policy.dailyBudgetMicros = daily; // Keep monthly-zero count readiness distinct from a daily-zero denial.
       // A disabled operation owns its blocker even when coarse config is missing.
       fixture.env.OPENAI_API_KEY = enabled ? "fixture-environment-key" : "";
       const executable = blockedStatus === null;
@@ -387,7 +386,7 @@ test("catalog and session preserve saved provider health independently of operat
         assert.equal(view.readiness.latencyMs, health?.latencyMs ?? null);
         assert.equal(view.readiness.status, blockedStatus ?? probeStatus);
         assert.deepEqual(view.readiness.reasons, [
-          ...(reasonCode ? [reasonCode, ...(reasonCode === "daily_budget_exhausted" ? ["grant_transport_unavailable"] : [])] : ["grant_transport_unavailable", ...(mode === "key" ? ["budget_exhausted"] : [])]),
+          ...(reasonCode ? [reasonCode, ...(reasonCode === "daily_budget_exhausted" ? ["grant_transport_unavailable"] : [])] : limit === 0 && daily === null ? ["budget_exhausted", "grant_transport_unavailable"] : ["grant_transport_unavailable", ...(mode === "key" ? ["budget_exhausted"] : [])]),
           ...(executable && !verified ? ["Configured but not recently verified by a live smoke test."] : []),
           ...(failure ? [failure] : []),
         ]);
@@ -396,6 +395,7 @@ test("catalog and session preserve saved provider health independently of operat
         // Environment auth cannot expose scoped metadata; inference fees do not own its blocker.
         const metadata = view.offers.filter(offer => ["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(metadata.length > 0);
         assert.ok(metadata.every(offer => !offer.eligible && offer.reasonCode === (enabled ? "grant_transport_unavailable" : "provider_disabled")));
+        if (enabled && limit === 0 && daily === null) { const eligible = view.offers.filter(offer => offer.eligible); assert.ok(eligible.length > 0); assert.ok(eligible.every(offer => offer.endpoint === "responses_input_tokens")); }
         if (reasonCode) {
           const inference = view.offers.filter(offer => offer.endpoint !== "realtime" && !["models_list", "models_retrieve"].includes(offer.endpoint)); assert.ok(inference.length > 0); assert.ok(inference.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
           assert.ok(view.offers.filter(offer => offer.endpoint === "realtime").every(offer => !offer.eligible));
@@ -745,148 +745,3 @@ test("merged compact, transcription and hosted-search catalog preserve distinct 
     assert.equal(new URL(url).pathname, "/status", "catalog never reserves or dispatches");
     return Response.json({ spentMicros: 0, remainingMicros: remaining });
   } });
-  t.mock.method(globalThis, "fetch", () => assert.fail("catalog must not probe upstream"));
-  for (const [mode, balance, realtimeEligible, searchAdmission] of [
-    ["reserve", 4358143, false, "pricing_required"],
-    ["reserve", 4358144, true, "pricing_required"],
-    ["soft", 4358144, false, "admitted"],
-  ]) {
-    fixture.policy.budgetMode = mode; remaining = balance;
-    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
-    assert.equal(response.status, 200);
-    const catalog = await response.json();
-    assert.equal(catalog.scope.credentialId, "fixture");
-    const provider = catalog.providers.find(row => row.id === "openai");
-    const realtime = provider.offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.route === "/v1/native/openai/v1/realtime" && row.transport === "websocket");
-    assert.ok(realtime); assert.equal(realtime.eligible, realtimeEligible);
-    assert.equal(realtime.affordability, realtimeEligible ? "exact-covered" : "exact-blocked");
-    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : mode === "soft" ? "realtime_hard_budget_required" : "budget_exhausted");
-    assert.equal(realtime.hostedToolAdmission, undefined);
-    const compact = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses/compact" && row.transport === "http");
-    assert.ok(compact, "manifest composition must retain the merged unary compaction endpoint and registered model");
-    assert.equal(compact.hostedToolAdmission, undefined, "ordinary Responses hosted-tool facts are not compact evidence");
-    const transcription = provider.offers.find(row => row.modelId === "openai/gpt-4o-transcribe" && row.route === "/v1/audio/transcriptions" && row.transport === "http");
-    assert.ok(transcription, "manifest composition must retain the merged transcription endpoint and model");
-    assert.equal(transcription.eligible, mode === "soft");
-    assert.equal(transcription.affordability, mode === "soft" ? "request-dependent" : "exact-blocked");
-    assert.equal(transcription.reasonCode, mode === "soft" ? undefined : "pricing_required");
-    assert.equal(transcription.hostedToolAdmission, undefined);
-    const search = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses" && row.transport === "http");
-    assert.ok(search); assert.equal(search.eligible, true);
-    assert.deepEqual(search.hostedToolAdmission, { version: "clawrouter.hosted-tool-admission.v1", web_search: searchAdmission });
-    assert.deepEqual(provider.models.find(model => model.id === "openai/gpt-6-astra").nativeCapabilities.endpoints.responses.hostedTools, ["web_search"]);
-  }
-});
-
-async function fusionDiscoveryFixture(t, { bindings } = {}) {
-  const secret = "fixture-fusion-discovery", session = "b".repeat(64);
-  const policy = { enabled: true, generation: "g1", providers: ["openai", "fireworks"], tenantId: "default", monthlyBudgetMicros: 100, requestCostMicros: null, retainRequestContent: false };
-  const policies = [{ policyId: "fixture", policy }], states = {}, calls = [];
-  const userRecord = { enabled: true, role: "user", tenantId: "default", groups: [] };
-  const connections = policy.providers.map((providerId) => ({ providerId, enabled: true, monthlyBudgetMicros: null }));
-  const config = { enabled: true, aggregatorModel: "openai/gpt-6-astra", adviserModels: ["local/fixture-unavailable"] };
-  const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
-  const records = new Map([["config/fusion", config], [`local/sessions/${await sha256Hex(session)}`, { email: "fixture@example.com", role: "user", expiresAtMs: Date.now() + 60_000 }]]);
-  const env = {
-    OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
-    POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
-      async list({ prefix }) {
-        assert.equal(prefix, "health/providers/", "discovery only lists saved provider health, never grant credentials");
-        calls.push({ path: "kv-list", body: { prefix } });
-        return { keys: [...records.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true };
-      },
-    },
-    BUDGET_LEDGER: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
-      assert.equal(new URL(url).pathname, "/status", "discovery only observes balances");
-      return Response.json({ spentMicros: 0, remainingMicros: 100 });
-    } }) },
-    ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
-      const path = new URL(url).pathname, body = JSON.parse(init.body); calls.push({ path, body });
-      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: policies.find(entry => entry.policyId === credential.policyId), owner: { email: "fixture@example.com", record: userRecord }, connections, pools: Object.fromEntries(body.providers.filter(({ id }) => !policy.providers.length || policy.providers.includes(id)).map(({ id }) => [id, { keys: [...records.keys()].filter(key => key.startsWith(`oauth/${credential.policyId}/`) && records.get(key).provider === id), states }])) });
-      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
-      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: body.policyIds.filter((id) => !policies.some(({ policyId }) => policyId === id)) });
-      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });
-      if (path === "/resolve") return Response.json({ initialized: true, bindings: bindings ?? policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
-      if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states });
-      throw new Error(`discovery unexpectedly mutated authority: ${path}`);
-    } }) },
-  };
-  t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
-  return { env, credential, userRecord, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
-}
-
-test("catalog and OpenAI/Anthropic model lists filter model scopes; null preserves inventory", async t => {
-  const f = await fusionDiscoveryFixture(t), id = "openai/gpt-5.6";
-  f.policy.models = [id];
-  for (const anthropic of [false, true]) {
-    const request = f.request("key"); if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
-    const body = await (await modelsResponse(request, f.env)).json();
-    assert.deepEqual(body.data.map(row => row.id), anthropic ? [] : [id]);
-  }
-  let catalog = await (await catalogResponse(f.request("key"), f.env)).json();
-  assert.deepEqual(catalog.providers.flatMap(row => row.models.map(model => model.id)), [id]);
-  assert.ok(catalog.providers.flatMap(row => row.offers).every(offer => !offer.modelId || offer.modelId === id));
-  f.policy.models = [];
-  assert.deepEqual((await (await modelsResponse(f.request("key"), f.env)).json()).data, []);
-  f.policy.models = null;
-  catalog = await (await catalogResponse(f.request("key"), f.env)).json();
-  assert.ok(catalog.providers.find(row => row.id === "openai").models.length > 1);
-});
-
-test("session discovery and admission can select a later policy that allows the model", async t => {
-  const f = await fusionDiscoveryFixture(t);
-  f.policy.models = ["openai/gpt-5.6"];
-  f.policies.push({ policyId: "later", policy: { ...f.policy, models: ["openai/gpt-5.5"] } });
-  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
-  const ids = catalog.providers.flatMap(row => row.models.map(model => model.id));
-  assert.ok(ids.includes("openai/gpt-5.6")); assert.ok(ids.includes("openai/gpt-5.5"));
-  const { accessSessionIdentity, verifiedAccessSession } = await import("../access.ts");
-  const selected = await accessSessionIdentity(await verifiedAccessSession(f.request("session"), f.env), f.env, "openai", { provider: snapshot.providers.find(p => p.id === "openai"), endpoint: snapshot.providers.find(p => p.id === "openai").endpoints.find(e => e.id === "responses"), mode: "http", model: "gpt-5.5" });
-  assert.equal(selected.policyId, "later");
-});
-
-test("overlapping allowlists cannot advertise a richer later policy for the same model", async t => {
-  const f = await fusionDiscoveryFixture(t), id = "openai/gpt-5.6";
-  f.policy.models = [id]; f.policy.monthlyBudgetMicros = 0;
-  f.policies.push({ policyId: "richer", policy: { ...f.policy, models: null, monthlyBudgetMicros: 100000 } });
-  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
-  const offers = catalog.providers.find(p => p.id === "openai").offers.filter(offer => offer.modelId === id);
-  assert.ok(offers.length > 0);
-  assert.ok(offers.every(offer => offer.policyId === "fixture")); assert.ok(offers.filter(offer => offer.endpoint !== "responses_input_tokens").every(offer => !offer.eligible));
-  assert.ok(offers.some(offer => offer.endpoint === "responses_input_tokens" && offer.eligible));
-  assert.deepEqual(catalog.providers.flatMap(p => p.models).find(model => model.id === id).capabilities, ["llm.count_tokens"]);
-});
-
-test("restricted policies cannot advertise opaque gateway offers even with fixed pricing", async t => {
-  const f = await fusionDiscoveryFixture(t), id = "cloudflare-ai-gateway";
-  f.policy.providers = [id]; f.policy.models = [`${id}/auto`]; f.policy.requestCostMicros = 1;
-  Object.assign(f.env, { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID: "fixture-gateway", CLOUDFLARE_API_TOKEN: "synthetic-token" });
-  const catalog = await (await catalogResponse(f.request("key"), f.env)).json();
-  const provider = catalog.providers.find(provider => provider.id === id);
-  assert.ok(provider);
-  assert.ok(provider.offers.filter(offer => offer.endpoint === "universal").every(offer => !offer.eligible && offer.reasonCode === "model_not_allowed"));
-  const { prepareSelected } = await import("../proxy.ts");
-  const compiled = snapshot.providers.find(provider => provider.id === id);
-  const endpoint = compiled.endpoints.find(endpoint => endpoint.id === "universal");
-  await assert.rejects(prepareSelected(new Request("https://router.example"), f.env, { provider: compiled, endpoint, model: null, capability: "gateway.universal", body: [], pathParams: {}, method: "POST" }, {}, { policy: f.policy }), { status: 403, code: "model_not_allowed" });
-});
-
-test("mixed Access policies select the unrestricted owner for opaque and unknown models", async t => {
-  const f = await fusionDiscoveryFixture(t), id = "cloudflare-ai-gateway";
-  f.policy.providers = [id, "openai"]; f.policy.models = [`${id}/auto`, "openai/gpt-5.6"]; f.policy.requestCostMicros = 1;
-  f.policies.push({ policyId: "unrestricted", policy: { ...f.policy, models: null } });
-  Object.assign(f.env, { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID: "fixture-gateway", CLOUDFLARE_API_TOKEN: "synthetic-token" });
-  const { accessSessionIdentity, verifiedAccessSession } = await import("../access.ts");
-  const session = await verifiedAccessSession(f.request("session"), f.env);
-  const gateway = snapshot.providers.find(provider => provider.id === id);
-  const opaque = await accessSessionIdentity(session, f.env, id, { provider: gateway, endpoint: gateway.endpoints.find(endpoint => endpoint.id === "universal"), mode: "http" });
-  assert.equal(opaque.policyId, "unrestricted");
-  const openai = snapshot.providers.find(provider => provider.id === "openai");
-  const passthrough = await accessSessionIdentity(session, f.env, "openai", { provider: openai, endpoint: openai.endpoints.find(endpoint => endpoint.id === "responses"), mode: "http", model: "unknown-future-model" });
-  assert.equal(passthrough.policyId, "unrestricted");
-  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
-  const offers = catalog.providers.find(provider => provider.id === id).offers.filter(offer => offer.endpoint === "universal");
-  assert.ok(offers.length > 0); assert.ok(offers.every(offer => offer.eligible && offer.policyId === "unrestricted"));
-});

@@ -43,7 +43,16 @@ for (const route of routes) for (const pooled of [false, true]) test("input coun
   assert.equal(f.events[0].grant_key, pooled ? grantKeys[0] : null); assert.equal(f.events[0].status, "success");
   noMoney(f);
 });
-for (const route of routes) test("Luna input count does not inherit Decisions endpoint pricing: " + route, async t => {
+for (const route of routes) for (const [context, mode] of [["auto", "standard"], ["current_turn", "pro"], ["all_turns", "custom-mode"]]) test("input count forwards stateless reasoning context and mode: " + route + ": " + context + "/" + mode, async t => {
+  const f = await setup(t), reasoning = { effort: "low", context, mode };
+  const response = await f.send(route, { reasoning });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await f.consume(response), wire);
+  assert.equal(f.sent.length, 1);
+  assert.deepEqual(f.sent[0].body, { model: "gpt-6-astra", input: "synthetic text", reasoning });
+  assert.equal(f.events.length, 1); noMoney(f);
+});
+for (const route of routes) test("Luna input count uses count endpoint and zero receipt: " + route, async t => {
   const f = await setup(t, { fixedCost: 99 });
   const model = route.includes("/native/") ? "gpt-6-luna" : "openai/gpt-6-luna";
   const result = { object: "response.input_tokens", input_tokens: 500000 };
@@ -94,6 +103,7 @@ const stateful = {
   reasoning: { input: [{ type: "reasoning", encrypted_content: "synthetic-reasoning" }] },
   tool_file: { tools: [{ type: "file_search", vector_store_ids: ["vs_foreign"] }] },
   tool_container: { tools: [{ type: "code_interpreter", container: "cntr_foreign" }] },
+  hosted_search: { tools: [{ type: "web_search" }] }, reasoning_selector: { reasoning: { context: "auto", previous_response_id: "resp_foreign" } },
   tool_output: { input: [{ type: "function_call_output", call_id: "local", output: [{ type: "input_file", file_id: "file_foreign" }] }] },
   tool_choice: { tool_choice: { type: "file_search" } }, future_selector: { future_account_object: "obj_foreign" },
   future_input: { input: [{ type: "future_reference", id: "obj_foreign" }] },

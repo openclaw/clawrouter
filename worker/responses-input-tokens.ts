@@ -96,7 +96,7 @@ export function validateResponsesInputTokens(body: Record<string, unknown>): voi
     body.tools.forEach(entry => tool(entry));
   }
   choice(body.tool_choice);
-  if (body.reasoning != null) keys(object(body.reasoning), ["effort", "summary", "generate_summary"]);
+  if (body.reasoning != null) keys(object(body.reasoning), ["effort", "summary", "generate_summary", "context", "mode"]);
   if (body.text != null) {
     const text = object(body.text);
     keys(text, ["format", "verbosity"]);
