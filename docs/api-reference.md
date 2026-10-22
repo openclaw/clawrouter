@@ -181,10 +181,10 @@ alias: no SSE, WebSocket, background lifecycle, or subscription/Codex transport
 is advertised. Only the declared Luna model is accepted.
 
 Decisions uses its own endpoint-specific price card: $0.10 per million input
-tokens, doubled for the entire request above 272,000 input tokens. Cache-read,
-cache-write, and output-token rates are zero. Ordinary Luna Chat/Responses
-pricing is unchanged. Reservations include the questions and conservatively
-bound opaque image input; completed JSON settles from upstream usage. Missing,
+tokens, including cached and cache-written input, doubled for the entire request
+above 272,000 input tokens. There is no output charge. Ordinary Luna
+Chat/Responses pricing is unchanged. Reservations include the questions and
+conservatively bound opaque image input; completed JSON settles from upstream usage. Missing,
 oversized, malformed, or interrupted usage retains the reservation. Policy-fixed
 tariffs retain precedence. Existing authentication, revocation, model allowlists,
 budgets, and request-retention policy apply. The bundled route uses OpenAI's

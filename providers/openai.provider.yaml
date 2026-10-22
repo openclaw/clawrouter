@@ -548,21 +548,17 @@ models:
           responses: { checkedAt: "2026-10-20", input: [text, image], contextWindow: 1050000, contextTokens: 272000, maxOutputTokens: 128000, supportedServiceTiers: [default, priority, flex], inference: {chat: true}, sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing, https://developers.openai.com/api/docs/models/gpt-6-luna], hostedTools: [web_search] }
       endpointPricing:
         decisions:
-          pricingRef: openai-gpt-6-luna-decisions-2026-10-20
+          pricingRef: openai-gpt-6-luna-decisions-2026-10-21
           pricing:
             effectiveAt: "2026-10-20"
             source: https://developers.openai.com/api/docs/guides/decisions
             inputMicrosPerMillion: 100000
-            cachedInputMicrosPerMillion: 0
-            cacheWriteInputMicrosPerMillion: 0
             outputMicrosPerMillion: 0
             maxInputTokens: 922000
             defaultMaxOutputTokens: 0
             longContext:
               thresholdInputTokens: 272000
               inputMicrosPerMillion: 200000
-              cachedInputMicrosPerMillion: 0
-              cacheWriteInputMicrosPerMillion: 0
               outputMicrosPerMillion: 0
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:

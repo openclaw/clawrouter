@@ -5,7 +5,8 @@
 - Return HTTP 429 with `Retry-After` (exposed to browser clients) from the earliest grant recovery when a configured pool is only rate-limit cooling or awaiting published quota resets; failed-credential cooldowns and other unavailable pools keep HTTP 503 and the same error body.
 
 - Reserve Claude base64 PNG/JPEG/GIF/WebP images in user content or user tool results at their documented visual-token bound from strictly parsed header dimensions instead of the full input window; image-shaped objects elsewhere, undocumented block keys, ambiguous PNG/JPEG headers and other media keep the full bound, and settlement still uses reported usage.
-- Add OpenAI Decisions for GPT-6 Luna through unified, native, and manifest routes, with input-only endpoint pricing, normal policy/budget enforcement, and unchanged typed answers. Keep Chat/Responses prices and subscription transport limits unchanged.
+
+- Add OpenAI Decisions for GPT-6 Luna through unified, native, and manifest routes. Bill all input tokens, including cached and cache-written input, at the Decisions input rate with no output charge; preserve normal policy/budget enforcement and unchanged typed answers. Keep Chat/Responses prices and subscription transport limits unchanged.
 
 - Add opt-in soft HTTP budgets with parallel fail-open checks, asynchronous idempotent charges and retry delivery, request timing headers, administrator-managed member caps, and GitHub team provisioning; keep reserve behavior as the default and preserve durable recovery ownership.
 

@@ -39,7 +39,7 @@ test("real Decisions Worker preserves protocol-complete responses, 400 questions
     await until(async () => (await f.read("/v1/usage")).usage.events.length === 3 && (await f.ledgerFacts()).every(({ rows }) => rows.length === 3 && rows.every(row => row.settled === 1)));
     for (const event of (await f.read("/v1/usage")).usage.events) {
       assert.equal(event.capability, "llm.decisions"); assert.equal(event.actual_cost_micros, 100);
-      assert.equal(event.pricing_ref, "openai-gpt-6-luna-decisions-2026-10-20");
+      assert.equal(event.pricing_ref, "openai-gpt-6-luna-decisions-2026-10-21");
       assert.equal(event.reserved_output_tokens, 0); assert.equal(event.reserved_cost_micros, 184400);
       assert.equal(event.content_retained, false);
     }
@@ -53,4 +53,44 @@ test("real Decisions Worker preserves protocol-complete responses, 400 questions
     assert.equal(denied.status, 403);
     assert.equal((await f.read("/fixture-state")).requests.length, 4);
   } finally { await f.close(); }
+});
+
+test("canceling a real Decisions response aborts ingress and upstream and settles the dispatched reservation", async () => {
+  const f = await startDecisionsFixture(), caller = new AbortController();
+  const safety = AbortSignal.timeout(15_000);
+  let response;
+  try {
+    const pending = fetch(f.origin + "/v1/decisions", {
+      method: "POST", headers: f.headers, signal: AbortSignal.any([caller.signal, safety]),
+      body: JSON.stringify({ model: "openai/gpt-6-luna", input: "cancel", questions: [{ type: "predicate", name: "damage", instructions: "Damaged?" }] }),
+    }).then(async value => { response = value; assert.equal(value.status, 200); return value.text(); });
+    const canceled = assert.rejects(pending, error => error === caller.signal.reason || error.name === "AbortError");
+    await until(async () => (await f.read("/fixture-state")).requests.length === 1);
+    caller.abort(new Error("fixture Decisions caller stopped"));
+    await canceled;
+    await until(async () => {
+      const { requests } = await f.read("/fixture-state");
+      return requests.length === 1 && (requests[0].aborted || requests[0].canceled)
+        && (await f.read("/v1/usage")).usage.events.length === 1
+        && (await f.ledgerFacts()).every(({ rows }) => rows.length === 1 && rows[0].settled === 1);
+    });
+    assert.equal(safety.aborted, false, "caller cancellation, not safety timeout, owns completion");
+    assert.match(caller.signal.reason.message, /fixture Decisions caller stopped/);
+    assert.deepEqual(await f.read("/fixture-ingress"), [{ path: "/v1/decisions", routerAuth: true, aborted: true }]);
+    const [event] = (await f.read("/v1/usage")).usage.events;
+    assert.equal(event.status, "client_error");
+    assert.equal(event.cost_basis, "manifest_reservation");
+    assert.ok(event.reserved_cost_micros > 0);
+    assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
+    assert.equal(event.input_tokens, null, "interrupted JSON cannot invent usage");
+    assert.equal(event.reserved_output_tokens, 0);
+    for (const { rows } of await f.ledgerFacts()) {
+      assert.equal(rows[0].dispatch_started, 1);
+      assert.equal(rows[0].reserved_micros, event.reserved_cost_micros);
+    }
+  } finally {
+    caller.abort();
+    await response?.body?.cancel().catch(() => undefined);
+    await f.close();
+  }
 });

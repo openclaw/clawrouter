@@ -196,9 +196,7 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, req
   const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false, requestFormat === "google.generate_content");
   if (!rates) return null;
   if (tokens.output == null && rates.output > 0) return null;
-  // A zero-priced write bucket cannot add a charge. Its omitted counter must
-  // not discard authoritative input-only usage (for example, Decisions).
-  if (rates.cacheWriteInput != null && rates.cacheWriteInput > 0 && tokens.cacheWrite == null) return null;
+  if (rates.cacheWriteInput != null && tokens.cacheWrite == null) return null;
   const cached = Math.min(tokens.input, tokens.cached ?? 0);
   let remaining = Math.max(0, tokens.input - cached);
   const write5m = Math.min(remaining, tokens.cacheWrite5m ?? 0); remaining -= write5m;

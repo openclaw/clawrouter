@@ -52,7 +52,7 @@ test("Decisions capability and endpoint pricing do not alter Luna Chat/Responses
   const selected = modelRoute(luna.id, "llm.decisions").model;
   assert.notEqual(selected, luna);
   assert.equal(selected.pricing, luna.endpointPricing.decisions.pricing);
-  assert.equal(selected.pricing_ref, "openai-gpt-6-luna-decisions-2026-10-20");
+  assert.equal(selected.pricing_ref, "openai-gpt-6-luna-decisions-2026-10-21");
   assert.equal(providerModel(provider, "gpt-6-luna", endpoint, true).pricing, selected.pricing);
   for (const capability of ["llm.chat", "llm.responses"]) assert.equal(modelRoute(luna.id, capability).model, luna);
   assert.equal(luna.pricing.outputMicrosPerMillion, 500_000);
@@ -71,7 +71,7 @@ test("Decisions reserves and settles its input-only tariff including long contex
   const tokens = { input: 272_000, output: 0, cached: 0, cacheWrite: 0, cacheWrite5m: null, cacheWrite1h: null };
   assert.equal(actualModelCost(pricing, tokens), 27_200);
   assert.equal(actualModelCost(pricing, { ...tokens, input: 272_001 }), 54_401);
-  assert.equal(actualModelCost(pricing, { ...tokens, input: 1000, cached: 100, cacheWrite: 200, output: 500 }), 70);
+  assert.equal(actualModelCost(pricing, { ...tokens, input: 1000, cached: 100, cacheWrite: 200, output: 500 }), 100);
   assert.equal(actualModelCost(pricing, { ...tokens, input: null }), null);
   const inputOnly = extractUsageTokens({ usage: { input_tokens: 1000 } });
   assert.equal(actualModelCost(pricing, inputOnly), 100);
@@ -118,7 +118,7 @@ for (const route of routes) test(`Decisions ${route} forwards typed answers and 
   const event = f.events[0];
   assert.equal(event.capability, "llm.decisions");
   assert.equal(event.model, luna.id);
-  assert.equal(event.pricing_ref, "openai-gpt-6-luna-decisions-2026-10-20");
+  assert.equal(event.pricing_ref, "openai-gpt-6-luna-decisions-2026-10-21");
   assert.equal(event.input_tokens, 1000);
   assert.equal(event.output_tokens, 0);
   assert.equal(event.reserved_output_tokens, 0);
@@ -135,6 +135,34 @@ for (const route of routes) test(`Decisions ${route} forwards typed answers and 
   }
 });
 
+for (const input of [100_000, 272_000, 272_001]) for (const bucket of ["cached_tokens", "cache_write_tokens"]) {
+  test(`Decisions bills all ${input} ${bucket} at the input tariff in both SQL budgets`, async t => {
+    const f = fixture(t);
+    const expected = input === 272_001 ? 54_401 : input / 10;
+    const metered = usage(input);
+    metered.input_tokens_details[bucket] = input;
+    const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({ model: "gpt-6-luna", answers, usage: metered }));
+    const response = await f.call(routes[0], { input: "x".repeat(input) });
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).usage, metered);
+    await Promise.all(f.pending);
+    assert.equal(upstream.mock.callCount(), 1);
+    assert.equal(f.events.length, 1);
+    const [event] = f.events;
+    assert.equal(event.actual_cost_micros, expected);
+    assert.equal(event.cost_basis, "manifest_pricing");
+    assert.equal(event.input_tokens, input);
+    assert.equal(event[bucket === "cached_tokens" ? "cached_input_tokens" : "cache_write_input_tokens"], input);
+    assert.ok(event.reserved_cost_micros >= expected);
+    for (const owner of owners) {
+      const rows = f.ledger.get(owner).reservations();
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].settled, 1);
+      assert.equal(rows[0].reserved_micros, expected);
+    }
+  });
+}
+
 for (const scenario of ["missing-usage", "invalid-json", "rejection", "fetch-error", "budget", "unauthorized", "wrong-model", "unknown-model", "fixed-zero"]) {
   test(`Decisions lifecycle ${scenario}`, async t => {
     const f = fixture(t, { ...(scenario === "budget" ? { limit: 1 } : {}), ...(scenario === "fixed-zero" ? { fixedCost: 0 } : {}) });
@@ -146,12 +174,17 @@ for (const scenario of ["missing-usage", "invalid-json", "rejection", "fetch-err
     });
     const body = { input: "The product is damaged.", ...(scenario === "wrong-model" ? { model: "openai/gpt-6-sol" } : {}), ...(scenario === "unknown-model" ? { model: "openai/unknown" } : {}) };
     const response = await f.call(routes[0], body, scenario === "unauthorized" ? "invalid" : proxyKey());
-    await response.text();
+    const text = await response.text();
     await Promise.all(f.pending);
+    for (const owner of owners) assert.ok(f.ledger.get(owner).reservations().every(row => row.settled === 1), "no open reservation after terminal accounting");
     if (["budget", "unauthorized", "wrong-model", "unknown-model"].includes(scenario)) {
-      assert.ok(response.status >= 400);
+      const [status, code] = { budget: [402, "budget_exhausted"], unauthorized: [401, "invalid_proxy_key"], "wrong-model": [400, "model_capability_unsupported"], "unknown-model": [404, "model_not_found"] }[scenario];
+      assert.equal(response.status, status);
+      assert.equal(JSON.parse(text).error.code, code);
       assert.equal(upstream.mock.callCount(), 0);
     } else {
+      assert.equal(response.status, scenario === "fetch-error" ? 502 : scenario === "rejection" ? 400 : 200);
+      if (scenario === "fetch-error" || scenario === "rejection") assert.equal(JSON.parse(text).error.code, scenario === "fetch-error" ? "provider_unavailable" : "invalid_request_error");
       assert.equal(upstream.mock.callCount(), 1);
       const [event] = f.events;
       assert.ok(event);
