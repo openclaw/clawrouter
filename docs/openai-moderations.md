@@ -31,6 +31,14 @@ still record attribution and outcomes. Configured budget blocks retain existing
 semantics; free does not disable policy or quota controls. No model token-context
 ceiling is invented to represent the free endpoint: the model has a source-tagged
 pricing reference and operation-owned zero pricing, not a token-generation card.
+The compiler reserves the `openai.moderations` request format for provider
+`openai`; wire-compatible third parties do not inherit this free tariff.
+
+**Operator note:** policies permitting OpenAI with `models: null` (no model
+allowlist) also permit these moderation models. Use an explicit model allowlist
+to exclude them when needed. Free requests still consume the selected account's
+moderation rate limits; a positive monetary budget does not cap their count.
+Configured zero-budget blocks and upstream quota/cooldown controls still apply.
 
 ## Verified upstream sources (2026-10-21)
 

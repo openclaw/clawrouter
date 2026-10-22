@@ -51,7 +51,11 @@ for (const mode of ["reserve", "soft"]) test("free moderation remains zero under
   const response = await f.call(routes[0], { model, input: "fixture" }); assert.equal(response.status, 200); await f.consume(response);
   assert.equal(f.events[0].actual_cost_micros, 0); assert.equal(f.events[0].cost_basis, "none");
 });
-for (const [kind, status] of [["missing_auth", 401], ["revoked", 403], ["provider_policy", 403], ["model_policy", 403], ["wrong_model", 400], ["unknown_model", 400]]) test("moderation rejects " + kind + " without egress", async t => {
+for (const [kind, status, code] of [
+  ["missing_auth", 401, "invalid_proxy_key"], ["revoked", 403, "proxy_key_revoked"],
+  ["provider_policy", 403, "provider_not_allowed"], ["model_policy", 403, "model_not_allowed"],
+  ["wrong_model", 400, "model_capability_unsupported"], ["unknown_model", 400, "model_capability_unsupported"],
+]) test("moderation rejects " + kind + " without egress", async t => {
   const f = await fixture(t), headers = {}, payload = { model, input: "fixture" };
   if (kind === "missing_auth") headers.authorization = "";
   if (kind === "revoked") await f.mutateCredential({ operation: "update", credentialId: "fixture", credential: { ...f.credential, enabled: false } });
@@ -59,7 +63,8 @@ for (const [kind, status] of [["missing_auth", 401], ["revoked", 403], ["provide
   if (kind === "wrong_model") payload.model = "openai/gpt-6-astra";
   if (kind === "unknown_model") payload.model = "openai/not-a-moderation-model";
   const response = await f.call(routes[1], payload, headers);
-  assert.equal(response.status, status, await response.clone().text()); await f.consume(response); assert.equal(f.sent.length, 0);
+  assert.equal(response.status, status, await response.clone().text());
+  assert.equal(JSON.parse(await f.consume(response)).error.code, code); assert.equal(f.sent.length, 0);
 });
 for (const status of [400, 429, 500]) test("moderation preserves upstream rejection and zero settlement: " + status, async t => {
   const f = await fixture(t), body = JSON.stringify({ error: { code: "synthetic_upstream_error" } });

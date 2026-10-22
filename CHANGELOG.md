@@ -6,6 +6,8 @@
 
 - Settle Claude server web search from authoritative JSON/SSE usage at $0.01 per search plus tokens on soft-budget and unmetered keys; web fetch costs tokens only. Hard-budget keys still need an explicit fixed policy request price because `max_uses` does not bound cumulative server-loop token costs. Preserve OpenAI hosted-search accounting and report missing or invalid search usage as incomplete.
 
+- Add free OpenAI omni moderation through unified, native and manifest routes with API-key-only grants and normal auth/policy/quota enforcement. Policies allowing OpenAI without a model allowlist also allow moderation; these zero-cost requests consume the selected account's rate limits but are not count-limited by a positive monetary budget. Use explicit model allowlists to exclude them. Reserve the free moderation request format for OpenAI in the manifest compiler.
+
 - Refuse upstream HTTP redirects on initial and alternate-grant proxy requests: cancel the response body and return a nonbillable `502 provider_unavailable` without `Location`, rather than replaying credentials or request content at a redirect-selected destination.
 - Bound alternate-grant preparation by the existing HTTP deadline and observed caller cancellation. Interrupted selection returns a nonbillable `502 provider_unavailable`; late admission cannot dispatch, while ordinary selection failure preserves the original provider rejection and `Retry-After`.
 

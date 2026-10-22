@@ -523,3 +523,35 @@ test("image tariffs round-trip without chat rates and reject unqualified generat
     ]){const manifest=structuredClone(valid);mutate(manifest);writeFileSync(path,JSON.stringify(manifest));assert.throws(()=>compile(path),/invalid manifest|image pricing|image generation requires/,name);}
   });
 });
+
+test("free moderation request format belongs only to the OpenAI provider", () => {
+  const endpoint = parse(readFileSync("providers/openai.provider.yaml", "utf8")).endpoints.moderations;
+  const manifest = {
+    schema: "clawrouter.service-provider.v1", id: "openai", displayName: "Fixture provider",
+    auth: { schemes: [{ type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key" }] },
+    baseUrls: { default: "https://provider.example" },
+    capabilities: [{ id: "llm.moderations", endpoint: "moderations", methods: ["POST"] }],
+    endpoints: { moderations: endpoint },
+  };
+  withManifest(path => {
+    writeFileSync(path, JSON.stringify(manifest));
+    const allowed = JSON.parse(compile(path)).providers[0];
+    assert.equal(allowed.id, "openai");
+    assert.equal(allowed.endpoints[0].request_format, "openai.moderations");
+    manifest.id = "fixture-paid-moderation";
+    writeFileSync(path, JSON.stringify(manifest));
+    assert.throws(() => compile(path), error => {
+      assert.equal(error.stdout, "", "invalid providers cannot emit a usable snapshot");
+      assert.match(error.stderr, /openai\.moderations requires provider openai/);
+      return true;
+    });
+    // Other providers retain their own contracts; a compatible response alone
+    // does not opt into OpenAI's free request tariff or grant restrictions.
+    manifest.endpoints.moderations.requestFormat = "fixture.moderations";
+    writeFileSync(path, JSON.stringify(manifest));
+    const distinct = JSON.parse(compile(path)).providers[0];
+    assert.equal(distinct.id, "fixture-paid-moderation");
+    assert.equal(distinct.endpoints[0].request_format, "fixture.moderations");
+    assert.equal(distinct.endpoints[0].response_format, "openai.moderations");
+  });
+});

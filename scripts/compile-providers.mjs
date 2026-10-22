@@ -309,6 +309,9 @@ function validateManifest(manifest) {
   }
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    // This request format owns OpenAI's free tariff and API-key-only transport.
+    // Wire compatibility alone cannot qualify another provider's billing.
+    if (endpoint.requestFormat === "openai.moderations" && manifest.id !== "openai") throw new Error(`provider ${manifest.id} endpoint ${id} openai.moderations requires provider openai`);
     if (endpoint.responsesLifecycle) {
       const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} responsesLifecycle requires distinct bodyless Responses retrieve/cancel endpoints`); };
       if ((endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses") fail();
