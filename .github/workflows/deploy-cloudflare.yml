@@ -1,87 +1,55 @@
 name: Deploy Cloudflare
 
 on:
+  schedule:
+    - cron: "7 10 * * 1-5"
+      timezone: America/Edmonton
   workflow_dispatch:
     inputs:
       expected_sha:
         description: "Reviewed full 40-character commit SHA; must match the dispatch commit"
         required: true
         type: string
-      worker_url:
-        description: "Deployed Worker URL used for mandatory post-deploy smoke"
-        required: true
-        default: "https://clawrouter.openclaw.ai"
-        type: string
       live_providers:
-        description: "Comma-separated golden provider ids for mandatory live upstream smoke"
+        description: "Golden provider ids for mandatory live upstream smoke"
         required: true
-        default: "openai"
+        default: openai
         type: string
       openai_smoke_model:
-        description: "Optional OpenAI smoke model; empty uses the first eligible catalog model"
-        required: false
-        default: ""
-        type: string
-      provision_access:
-        description: "Provision/update the Cloudflare Access console app before deploy"
-        required: false
-        default: false
-        type: boolean
-      access_domain:
-        description: "Hostname for the Cloudflare Access console app"
-        required: false
-        default: "clawrouter.openclaw.ai"
-        type: string
-      access_allowed_emails:
-        description: "Comma-separated emails allowed through Cloudflare Access"
-        required: false
-        default: ""
-        type: string
-      access_allowed_domains:
-        description: "Comma-separated email domains allowed through Cloudflare Access"
-        required: false
-        default: ""
-        type: string
-      access_github_orgs:
-        description: "Comma-separated GitHub organizations or org/team selectors allowed through Access"
-        required: false
-        default: "openclaw"
-        type: string
-      access_admin_emails:
-        description: "Comma-separated emails treated as ClawRouter admins"
-        required: false
-        default: ""
-        type: string
-      access_admin_domains:
-        description: "Comma-separated email domains treated as ClawRouter admins"
-        required: false
-        default: ""
-        type: string
-      access_idp_ids:
-        description: "Optional comma-separated Cloudflare Access identity provider ids"
+        description: "Optional OpenAI smoke model"
         required: false
         default: ""
         type: string
       configure_provider_secrets:
-        description: "Upload configured provider transport secrets before deployment"
+        description: "Include existing provider transport secrets in the candidate version only"
         required: false
         default: false
         type: boolean
-      skip_kv_write_preflight:
-        description: "Deprecated: ignored for real deploys because Wrangler requires KV write permission for KV bindings"
-        required: false
-        default: false
-        type: boolean
+      mode:
+        description: "Normal rollout or no-user-traffic rehearsal (zero-failure deliberately fails)"
+        default: rollout
+        type: choice
+        options: [rollout, zero-smoke, zero-failure]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: read
+  actions: read
+
+# Includes failure recovery, never cancels an in-progress rollout.
+concurrency:
+  group: clawrouter-production-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 100
+    defaults:
+      run:
+        working-directory: candidate
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -97,69 +65,99 @@ jobs:
       CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ vars.CLAWROUTER_ACCESS_ADMIN_EMAILS }}
       CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ vars.CLAWROUTER_ACCESS_ADMIN_DOMAINS }}
       CLAWROUTER_ACCESS_DEFAULT_TENANT: ${{ vars.CLAWROUTER_ACCESS_DEFAULT_TENANT }}
-      CLAWROUTER_ACCESS_ALLOWED_EMAILS: ${{ inputs.access_allowed_emails }}
-      CLAWROUTER_ACCESS_ALLOWED_DOMAINS: ${{ inputs.access_allowed_domains }}
-      CLAWROUTER_ACCESS_GITHUB_ORGS: ${{ inputs.access_github_orgs }}
-      CLAWROUTER_ACCESS_IDP_IDS: ${{ inputs.access_idp_ids }}
-      CLAWROUTER_BASE_URL: ${{ inputs.worker_url }}
+      CLAWROUTER_BASE_URL: https://clawrouter.openclaw.ai
       AWS_REGION: ${{ vars.CLAWROUTER_PROVIDER_AWS_REGION || secrets.CLAWROUTER_PROVIDER_AWS_REGION }}
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
-      CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+      CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers || 'openai' }}
       CLAWROUTER_SMOKE_MODEL_OPENAI: ${{ inputs.openai_smoke_model }}
       CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK: ${{ vars.CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK }}
       CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: ${{ vars.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK }}
       CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: ${{ vars.CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI }}
       CLAWROUTER_PREFLIGHT_DEPLOY: "1"
-      CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE: ${{ inputs.skip_kv_write_preflight && '1' || '0' }}
       CLAWROUTER_OMIT_ROUTES: "1"
+      GH_TOKEN: ${{ github.token }}
+      TRAIN_PLAN_PATH: ${{ runner.temp }}/clawrouter-train-plan.json
+      TRAIN_STATE_PATH: ${{ runner.temp }}/clawrouter-train-state.json
     steps:
       - name: Verify dispatched deployment source
+        working-directory: ${{ github.workspace }}
         shell: bash
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
-          if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::Production train must run from main."
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then exit 0; fi
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo "::error::expected_sha must be a full 40-character hexadecimal commit SHA."
             exit 1
           fi
           EXPECTED_SHA="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f')"
           if [[ "$EXPECTED_SHA" != "$GITHUB_SHA" ]]; then
-            echo "::error::Dispatched source differs from expected_sha; review the selected ref before dispatching again."
+            echo "::error::Dispatched source differs from expected_sha; review the selected ref."
             exit 1
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify checked-out deployment source
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-        run: |
-          EXPECTED_SHA="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f')"
-          actual_sha="$(git rev-parse HEAD)"
-          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
-            echo "::error::Checkout differs from expected_sha; refusing deployment."
-            exit 1
-          fi
+        with:
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.22.1
+      - name: Select newest exact-SHA green main candidate
+        id: select
+        working-directory: control
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: node scripts/deploy-train-select.mjs
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.select.outputs.noop == 'false'
+        with:
+          ref: ${{ steps.select.outputs.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify checked-out deployment source
+        if: steps.select.outputs.noop == 'false'
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.select.outputs.sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout differs from selected candidate; refusing deployment."
+            exit 1
+          fi
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm cf:preflight
-      - run: pnpm worker:check
-      - run: pnpm --dir admin check
-      - run: pnpm --dir admin test
-      - run: pnpm --dir admin build
-      - run: pnpm cf:content:provision
-      - if: ${{ inputs.provision_access }}
+        if: steps.select.outputs.noop == 'false'
+        with:
+          version: 11.28.4
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm install --frozen-lockfile
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm cf:preflight
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm worker:check
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm --dir admin check
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm --dir admin test
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm --dir admin build
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm cf:content:provision
+      - if: steps.select.outputs.noop == 'false'
+        run: pnpm cf:config
+      - name: Upload, smoke, hold, and promote version
+        if: steps.select.outputs.noop == 'false'
+        timeout-minutes: 75
         env:
-          CLAWROUTER_ACCESS_DOMAIN: ${{ inputs.access_domain }}
-          CLAWROUTER_BASE_URL: ""
-          CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ inputs.access_admin_emails || vars.CLAWROUTER_ACCESS_ADMIN_EMAILS }}
-          CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ inputs.access_admin_domains || vars.CLAWROUTER_ACCESS_ADMIN_DOMAINS }}
-        run: pnpm cf:access -- --write-github-env
-      - run: pnpm cf:config
-      - if: ${{ inputs.configure_provider_secrets }}
-        env:
+          TRAIN_MODE: ${{ inputs.mode || 'rollout' }}
+          CONFIGURE_PROVIDER_SECRETS: ${{ inputs.configure_provider_secrets && 'true' || 'false' }}
+          CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_ANTHROPIC_API_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.CLAWROUTER_PROVIDER_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.CLAWROUTER_PROVIDER_AWS_SECRET_ACCESS_KEY }}
@@ -189,8 +187,39 @@ jobs:
           TAVILY_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_TAVILY_API_KEY }}
           TOGETHER_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_TOGETHER_API_KEY }}
           XAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_XAI_API_KEY }}
-        run: pnpm cf:secrets
-      - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
-      - env:
-          CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
-        run: pnpm cf:smoke
+        run: node ../control/scripts/deploy-train.mjs
+      - name: Read back deployed version distribution
+        if: always() && steps.select.outputs.noop == 'false'
+        run: pnpm exec wrangler deployments list --config .wrangler.generated.toml
+      - name: Keep non-secret rollout receipt
+        if: always() && steps.select.outputs.noop == 'false'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: production-train-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/clawrouter-train-plan.json
+            ${{ runner.temp }}/clawrouter-train-state.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  recover-and-alert:
+    needs: deploy
+    if: always() && (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.22.1
+      - name: Recover from remote journal and update the single failure issue
+        run: node scripts/deploy-train-recover.mjs

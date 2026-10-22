@@ -140,28 +140,18 @@ CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
 CLAWROUTER_PROVIDER_AWS_REGION        # non-secret Bedrock Region, for example us-east-1
 ```
 
-The `Deploy Cloudflare` workflow can provision Access and deploy in one run
-when `CLOUDFLARE_API_TOKEN` has Zero Trust Access application/policy
-permissions. Both deployment workflows require `expected_sha`, the reviewed
-full 40-character commit SHA. Existing UI, CLI, and API dispatch callers must
-supply this new field. Select the branch or tag pointing to that exact commit;
-the first step refuses a different event SHA before checkout, setup, install,
-or preflight. A second check verifies actual checkout `HEAD` before dependency
-execution. The input does not select a custom checkout ref or fall back to the
-latest commit. If the selected ref advances, review the new source before
-dispatching again with its SHA.
+Production uses the **Deploy Cloudflare** weekday train described below. Manual
+production dispatches require a reviewed full `expected_sha` matching the `main`
+event SHA; scheduled runs choose a green commit without a manual input. FakeCo
+remains explicitly dispatched with its existing full-SHA guard.
 
-Only refs containing the revised workflows carry these checks; older workflow
-refs retain their earlier behavior. Controlled deployments use guarded `main`
-with a frozen, reviewed `expected_sha`.
-
-Dispatch production with `provision_access=true` to provision Access; the repository default
-uses `access_github_orgs=openclaw` and no email-domain exception. Set
-`access_domain` if the console
-host is not `clawrouter.openclaw.ai`, and optionally set `access_admin_emails`
-or `access_admin_domains`. The workflow runs
-`pnpm cf:access -- --write-github-env` before rendering the Wrangler config, so
-the newly created Access audience tag is included in the deployed Worker.
+The production train does not provision Access apps, domains, or new environments.
+Do Access provisioning separately with explicit operator authorization. Its old
+`provision_access`, `access_*`, `worker_url`, and ignored KV-preflight-skip inputs
+are removed; the train is locked to `clawrouter-edge` on
+`https://clawrouter.openclaw.ai`. The first guard runs before checkout. Candidate
+checkout is verified again before dependency execution. Old workflow refs retain
+old behavior; do not dispatch historical workflows for a controlled deployment.
 
 Check the deploy surface without printing secret values:
 
@@ -192,13 +182,23 @@ printf '%s' "$CLAWROUTER_ADMIN_TOKEN_SHA256" | pnpm exec wrangler secret put CLA
 pnpm exec wrangler secret put OPENAI_API_KEY --config .wrangler.generated.toml
 ```
 
-For a controlled bulk rotation, the deploy workflow can stream temporary
-repository secrets to `wrangler secret bulk` without writing values to disk.
-Store each temporary transport secret as
-`CLAWROUTER_PROVIDER_<WORKER_BINDING>`, dispatch with
-`configure_provider_secrets=true`, verify the live provider smoke, then delete
-the temporary GitHub secrets. `pnpm cf:secrets -- --dry-run` prints binding
-names only; the live command sends a JSON object to Wrangler over stdin.
+For a controlled provider-secret update, use existing temporary repository
+transport secrets named `CLAWROUTER_PROVIDER_<WORKER_BINDING>` and dispatch with
+`configure_provider_secrets=true`. The train writes a mode-0600 temporary JSON file
+inside a private runner directory and passes it to **`wrangler versions upload
+--secrets-file`**, then deletes it in `finally`. Wrangler 4.147 supports this
+additive version-scoped upload: omitted secrets remain unchanged and nothing is
+cut over by secret publication. Values never enter argv, artifacts, or source.
+`wrangler versions secret bulk` also exists in 4.147, but clones the latest
+uploaded version; using `--secrets-file` in the code upload avoids accidentally
+selecting a different latest code version. The migration exception uses the same
+file with its explicit plain deploy.
+
+The legacy `pnpm cf:secrets` command still performs an immediate secret operation
+for explicitly managed provisioning, including FakeCo. **Never run it during a
+production split.** `pnpm cf:secrets -- --dry-run` prints binding names only.
+Secret creation/rotation remains a separate authorized operator action; the
+weekday train defaults to preserving existing deployed secrets.
 
 Lanseq is optional. To configure it in production, add the repository secret
 `CLAWROUTER_PROVIDER_LANSEQ_API_KEY` and dispatch `Deploy Cloudflare` on reviewed
@@ -276,11 +276,14 @@ GitHub deploys render Wrangler config with `CLAWROUTER_OMIT_ROUTES=1` so normal
 script updates do not require zone-level Worker route permissions after the
 custom domain route has already been provisioned.
 
-Deploy:
+For an explicitly authorized initial install or manual lifecycle operation only:
 
 ```sh
 pnpm cf:deploy
 ```
+
+Normal production updates use the automated train, not this immediate-cutover
+command.
 
 ## Smoke
 
@@ -337,8 +340,8 @@ pnpm cf:smoke
 See [Amazon Bedrock](aws-bedrock.md) before selecting another model: request
 bodies are model-specific and the smoke operation is raw `InvokeModel`.
 
-For GitHub Actions deploys, `worker_url`, `live_providers`, and the smoke key
-are mandatory. When the current Worker exposes key inspection, preflight blocks
+For GitHub Actions deploys, the configured production URL, `live_providers`,
+and the smoke key are mandatory. When the current Worker exposes key inspection, preflight blocks
 deployment if the smoke credential is invalid or its policy denies a selected
 live provider. An unavailable current Worker only warns so first and recovery
 deploys remain possible. `all` runs every provider smoke target and requires a
@@ -1277,3 +1280,189 @@ paths, empty segments, `.`, `..`, query strings, and fragments are rejected.
 
 The live Worker rejects manifest endpoints that still need unresolved deployment
 templates that are not declared in `service.configKeys`.
+
+## Automated production train
+
+Blue and green are **versions of the existing `clawrouter-edge` script**, not
+separate Workers. BudgetLedger, UsageLedger, PolicyBindingIndex, GrantCredential
+and ContentArchiveCleanup keep their existing script-scoped authoritative state.
+No parallel ledgers or duplicated credentials are provisioned.
+
+### Trigger and source custody
+
+- `deploy-cloudflare.yml` runs at **10:07 America/Edmonton, Monday–Friday**.
+  GitHub's documented `schedule.timezone` field handles DST; the seven-minute
+  offset avoids top-of-hour congestion. Scheduled Actions can still be delayed
+  or dropped by GitHub. There is no merge or release-tag trigger.
+- A manual urgent run uses `--ref main -f expected_sha=<full SHA>` and defaults
+  to `mode=rollout`. The SHA must match the event before checkout; source is
+  verified again after candidate checkout, before installation.
+- Scheduled selection freezes the event's `main` snapshot, walks first-parent
+  commits newer than deployed, and chooses the newest exact-SHA `CI` **push on
+  main** whose latest run and every job succeeded. PR merge-ref checks, skipped
+  jobs, and a green older attempt followed by a red attempt do not qualify.
+  Missing/failed CI merely skips that scheduled candidate. Already deployed and
+  no newer green candidate are successful no-ops with no alert.
+- The deployed commit comes from the live Cloudflare version's SHA tag. The
+  only legacy exception is exact version
+  `d06cab69-8847-46da-b6b6-cc1585b42371`, mapped to
+  `478974c17edab8da283f4637ae706a4d63885a2e` after checking successful historical
+  run [39813164865](https://github.com/openclaw/clawrouter/actions/runs/39813164865).
+  That run's Wrangler log prints the version ID. Unknown lineage stops rather
+  than guessing. Every new upload is tagged and messaged with the candidate SHA.
+- Workflow control code stays in a separate frozen checkout, so selecting a
+  slightly older green source cannot replace the train controller. Both source
+  checkouts disable persisted checkout credentials. Concurrency covers deploy
+  **and recovery**, never cancelling an in-progress train.
+
+### Rollout and gates
+
+Preflight, Worker check, admin check/test/build, content-storage provisioning and
+config rendering run before upload. The train uploads with `wrangler versions
+upload`; distribution changes use the same Cloudflare deployments API as
+`wrangler versions deploy`, explicitly passing ordered `[green, blue]` entries.
+The API adapter verifies the current deployment ID before changing it and reads
+back the exact distribution afterwards. An ambiguous response is reconciled by
+readback, never by blindly repeating the write.
+
+1. Green 0%, blue 100%. Mandatory smoke supplies
+   `Cloudflare-Workers-Version-Overrides: clawrouter-edge="<green UUID>"`.
+   `/v1/health.versionId` and Worker response headers must identify green; a
+   silently ignored override is not a successful smoke.
+2. Green 10% for at least 15 minutes, then green 50% for at least 30 minutes.
+   Full override smoke runs immediately and every three minutes through each
+   hold. It includes a paid golden-provider request and durable usage visibility:
+   low production volume never eliminates synthetic coverage.
+3. Green 100%, final override smoke, then a remote completion receipt. Blue stays
+   in the version history and at 0% as the rollback target. Stable version order
+   preserves Cloudflare's forward-only DO reassignment guarantee during increases.
+
+The 15/30-minute holds supply several independent synthetic observations without
+requiring statistically significant organic traffic. The default single provider
+keeps the synthetic cost bounded; expanding `live_providers` increases it. Each
+smoke process has a five-minute wall-clock bound, upload twelve minutes, rollout
+step 75 minutes, and deploy job 100 minutes. These are failure limits, not proof
+that provider requests finish faster.
+
+When permitted, `workersInvocationsAdaptive` groups invocation counts and runtime
+errors by `scriptVersion`. The most recent minute is excluded for ingestion lag.
+A green window with at least three errors and more than 5% errors breaches; when
+both versions have at least 20 observations it must also exceed blue by more than
+2 percentage points. Counts below that minimum are explicitly **not a statistical
+comparison**. This measures Worker runtime errors, not every application-returned
+HTTP 5xx; synthetic HTTP checks remain mandatory.
+
+A missing **Account Analytics Read** permission or unavailable per-version dataset
+is reported as **analytics disabled / smoke-only gating** in the job summary.
+It does not fail every deployment or pretend analytics ran. Other malformed or
+persistent analytics failures stop the rollout. No new token is created. To enable
+that optional gate, the existing token owner can grant Account Analytics Read for
+the current Cloudflare account; retain existing Workers Scripts Edit and storage
+permissions for deployment.
+
+### Automatic failure recovery and notification
+
+For safe changes, any smoke/error-rate breach restores **only blue at 100%**,
+removing green from the deployment, and fails the run. A non-secret journal is
+written before every exposure and encoded into Cloudflare deployment annotations.
+A second job on a fresh runner reconstructs that journal and recovers if the
+rollout process timed out or its runner disappeared. It refuses to overwrite an
+unrelated newer deployment. A Cloudflare/GitHub outage can prevent recovery or
+notification; the run then reports an explicit recovery failure rather than
+claiming blue was restored. No system hosted solely by those services can promise
+recovery while both control planes are unavailable.
+
+Only failures, rollbacks, and freezes open/update **one** issue titled
+`Production deployment train failures`. It is reopened and its latest receipt
+updated, not duplicated each run. No assignee, mention, comment ping, or chat
+notification is sent. Successful runs and no-ops only write the job summary.
+Receipts include SHA, blue/green IDs, rollout result and analytics availability;
+raw secrets and provider bodies are not artifacts.
+
+### Lifecycle migrations and rollback-unsafe formats
+
+`deploy-train-source.mjs` parses `wrangler.toml` at deployed and candidate commits
+and compares `migrations` and declarative `exports`. Formatting/comments do not
+cause a migration. A lifecycle change takes the explicit **plain `wrangler deploy`**
+path, then mandatory version-asserting smoke. It never automatically rolls back
+past that operation, even after an ambiguous timeout. Failure freezes and alerts.
+**Ship class lifecycle changes in tiny migration-only PRs**, independently of
+behavioral changes; Cloudflare cannot split an atomic class creation/deletion.
+
+For a forward-only data/format change, add this trailer to the commit that lands
+on `main` (preserve it in the squash-merge message):
+
+```text
+ClawRouter-Rollback-Unsafe: explain the irreversible storage or wire-format change
+```
+
+The train scans **every commit in deployed..candidate**, not merely the tip. A
+trailer is used rather than a mutable flag because it cannot be accidentally reset
+by a later unrelated PR. The pre-existing attachment-status boundary
+`032b0dfa9aa963d4cd18dce48a6d1e9e48c4e7c3` is explicitly recognized for older
+installations. Its forward-only storage contract above remains binding.
+
+Once an unsafe green is included in a deployment, failure freezes the observed
+split and requires a forward fix. Exposure is recorded **before green 0%**, not
+only at 10%: synthetic requests can write shared state, and non-HTTP handlers
+must not be assumed to obey an HTTP canary percentage. No-impact rehearsal modes
+refuse migration and rollback-unsafe ranges.
+
+Expand/contract rules apply even without a marker:
+
+- DO method arguments/results and persisted SQLite/serialized records must be
+  readable by both versions during the split. Expand readers first, write new
+  optional fields next, and contract only in a later rollout after the rollback
+  window closes. Never delete/reinterpret authority data under an old reader.
+- KV records and R2 metadata need compatible optional additions or explicit format
+  versions. Do not overwrite a value with an incompatible shape while blue reads it.
+- Usage-queue messages can outlive the producing deployment and be retried. Both
+  consumers must understand messages from either producer and retained older
+  messages; preserve idempotency, settlement identity, and old schema readers.
+  New message kinds require reader support shipped before any producer emits them.
+- A marker does not make an incompatible mixed-version rollout safe. If coexistence
+  cannot be made safe, redesign into expand/contract phases before merging.
+
+### Queue and console version skew
+
+`USAGE_QUEUE` has one consumer **script** (`clawrouter-edge`), not one separately
+provisioned consumer per color. Cloudflare's current public Queues documentation
+specifies the single active consumer but does not establish a version-selection
+contract for a split. Do not infer queue-consumer selection from the producer's
+HTTP override or its percentage. The gate conservatively treats green's inclusion
+as possible non-HTTP exposure; the provider smoke proves durable event visibility,
+not which version consumed that event. Queue code must be compatible in both
+directions. No new queue or consumer script is created for a train.
+
+Cloudflare documents that content-hashed assets can 404 when HTML and asset
+requests hit different versions. `run_worker_first` alone does **not** provide
+version affinity. A zone request-header Transform Rule setting
+`Cloudflare-Workers-Version-Key` from a stable identity/cookie is Cloudflare's
+native solution; setting that header after entering this Worker is too late.
+No Transform Rule, Access app or domain is provisioned by the train. Asset skew
+must be resolved by the runtime/asset delivery integration before deploying
+admin changes with different asset inventories; do not claim the public Access
+challenge smoke covers an authenticated dashboard's JavaScript/CSS loads.
+
+References checked 2026-10-22:
+[GitHub timezone schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),
+[Cloudflare gradual deployments](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/),
+[Durable Object guarantees](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/with-durable-objects/),
+[version affinity and assets](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/version-affinity/),
+[Queues consumer model](https://developers.cloudflare.com/queues/reference/how-queues-works/).
+
+### Rehearsals
+
+Use `mode=zero-smoke` to upload, deploy green 0%, assert the full green smoke and
+restore blue 100%. Use `mode=zero-failure` to inject a failing green health-version
+assertion at 0%; this deliberately fails the run, exercises rollback and updates
+the same failure issue. Read `wrangler deployments list` in the run log to verify
+that green was removed and blue is the sole 100% entry. Neither mode progresses
+to 10%. They still make synthetic requests and are not a promise of zero writes
+inside the shared service.
+
+The FakeCo workflow had no runs and its GitHub environment lookup returned 404 on
+2026-10-22; no FakeCo repository secret or variable names were present. This does
+not prove that no stray Cloudflare resource exists, but it means FakeCo is not a
+configured deployment rehearsal target. Do not provision it solely for this proof.
+Use the authorized production 0% rehearsals, then one normal manual train.

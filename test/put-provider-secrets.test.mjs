@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parse } from "yaml";
 
 import {
   configuredProviderSecrets,
-  providerSecretNames,
 } from "../scripts/put-provider-secrets.mjs";
 
 test("provider secret selection keeps only the declared non-empty bindings", () => {
@@ -30,16 +27,9 @@ test("provider secret selection keeps only the declared non-empty bindings", () 
       CLOUDFLARE_API_TOKEN: "gateway-token",
     },
   );
-  assert.equal(providerSecretNames.includes("COHERE_API_KEY"), true);
-  assert.equal(providerSecretNames.includes("REPLICATE_API_TOKEN"), true);
-  assert.equal(providerSecretNames.includes("TAVILY_API_KEY"), true);
-  assert.equal(providerSecretNames.includes("AWS_REGION"), false);
 });
 
-test("production deploy uploads Lanseq only when its transport secret is configured", () => {
-  const workflow = parse(readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8"));
-  const upload = workflow.jobs.deploy.steps.find((step) => step.run === "pnpm cf:secrets");
-  assert.equal(upload.env.LANSEQ_API_KEY, "${{ secrets.CLAWROUTER_PROVIDER_LANSEQ_API_KEY }}");
+test("provider transport selection includes Lanseq only when configured", () => {
   for (const value of [undefined, "", "fixture-lanseq-secret"]) {
     assert.deepEqual(
       configuredProviderSecrets({ OPENAI_API_KEY: "fixture-openai-secret", LANSEQ_API_KEY: value }),

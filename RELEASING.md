@@ -52,7 +52,15 @@ checksums and tag commit after completion. Leave `main` current and clean.
 
 ## Deployment boundary
 
-Cloudflare production and FakeCo deployments remain in their existing explicit
-`workflow_dispatch` workflows with their `expected_sha` checks. The release proof
-renders a local config and uses Wrangler `--dry-run` only; it sends no deployment.
-Docker/self-hosting remains source-based, with no new image registry publication.
+Cloudflare production deploys are independent of release tags and individual
+merges. The **Deploy Cloudflare** workflow runs weekdays at **10:07
+America/Edmonton**, selecting the newest `main` commit with successful exact-SHA
+push CI. An urgent manual dispatch on `main` requires its full `expected_sha` and
+uses the same 0% → 10% → 50% → 100% staged path. Success only writes a job summary;
+failures recover automatically when safe and update one tracking issue without
+mentions. See [production train](docs/deploy-cloudflare.md#automated-production-train).
+
+FakeCo remains its separate explicitly dispatched workflow and retains its
+full-SHA check. The release proof renders a local config and uses Wrangler
+`--dry-run` only; it sends no deployment. Docker/self-hosting remains source-based,
+with no new image registry publication.
