@@ -19,6 +19,10 @@ export async function recoverRemote(api, run) {
     return 'no owned deployment to recover';
   }
   const action = recoveryDecision(state);
+  if (state.status === 'rolled-back') {
+    if (latest.versions.length !== 1 || latest.versions[0].version_id !== state.blue || latest.versions[0].percentage !== 100) throw new Error('Rollback receipt differs from live distribution');
+    return 'rollback: blue restored to 100%';
+  }
   if (action !== 'rollback') return action;
   await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage({ ...state, status: 'rolled-back' }), latest.id);
   return 'rollback: blue restored to 100%';

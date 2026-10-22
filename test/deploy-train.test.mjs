@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createApi, observeAnalytics } from '../scripts/deploy-train-api.mjs';
 import { analyticsDecision, deploymentMessage, deploymentState, greenPushRun, recoveryDecision, splitVersions, verifyDispatch } from '../scripts/deploy-train-policy.mjs';
 import { candidateCommits, selectCandidate, deployedSource } from '../scripts/deploy-train-select.mjs';
@@ -146,7 +147,7 @@ test('independent recovery job reconstructs an interrupted rollout from Cloudfla
   await f.api.deploy(splitVersions(blue, green, 50), deploymentMessage(s), 'd0');
   assert.match(await recoverRemote(f.api, '123'), /^rollback/);
   assert.deepEqual(f.deployment.versions, [{ version_id: blue, percentage: 100 }]);
-  assert.equal(await recoverRemote(f.api, '123'), 'none');
+  assert.equal(await recoverRemote(f.api, '123'), 'rollback: blue restored to 100%');
   assert.equal(posts(f).length, 2, 'terminal recovery is idempotent without another write');
 });
 
@@ -199,13 +200,15 @@ test('real git range detects TOML lifecycle changes and rollback-unsafe commit t
   const commit = (text, message) => { writeFileSync(join(directory, 'wrangler.toml'), text); git('add', '.'); git('commit', '-qm', message); return git('rev-parse', 'HEAD'); };
   git('init', '-q');
   const a = commit('name="fixture"\n[[migrations]]\ntag="v1"\nnew_sqlite_classes=["Ledger"]\n', 'first');
-  const b = commit('# formatting only\nname = "fixture"\n[[migrations]]\ntag = "v1"\nnew_sqlite_classes = ["Ledger"]\n', 'format');
+  const b = commit('# formatting and reordered fields only\nname = "fixture"\n[[migrations]]\nnew_sqlite_classes = ["Ledger"]\ntag = "v1"\n', 'format');
   assert.deepEqual(inspectSource({ blueSha: a, greenSha: b, cwd: directory }), { migration: false, unsafe: false });
   const c = commit('name="fixture"\n[[migrations]]\ntag="v2"\nnew_sqlite_classes=["SecondLedger"]\n', 'new class\n\nClawRouter-Rollback-Unsafe: forward-only fixture format');
   assert.deepEqual(inspectSource({ blueSha: a, greenSha: c, cwd: directory }), { migration: true, unsafe: true });
   assert.throws(() => inspectSource({ blueSha: a, greenSha: b, cwd: directory }), /checkout differs/);
   assert.deepEqual(candidateCommits(c, a, git), [], 'queued old event cannot downgrade a newer deployment');
   assert.deepEqual(candidateCommits(a, c, git), [c, b]);
+  const d = commit('name="fixture"\n[[migrations]]\ntag="v2"\nnew_sqlite_classes=["SecondLedger"]\n[observability]\nenabled=false\n', 'non-versioned change');
+  assert.throws(() => inspectSource({ blueSha: c, greenSha: d, cwd: directory }), /Non-versioned Worker settings/);
 });
 
 test('failure notification reopens and updates one issue without mentions or extra comments', async () => {
@@ -265,5 +268,17 @@ setInterval(() => {}, 1000);
   const pid = Number(readFileSync(receipt, 'utf8'));
   // close is emitted after inherited pipes close; the forced process-group kill
   // has happened before command() rejects, not later during rollback.
-  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  const terminal = () => {
+    try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+    // Linux may retain a killed, reparented zombie until init reaps it. A PID
+    // still existing is not evidence that it can execute or mutate a deployment.
+    if (process.platform === 'linux') {
+      try { return /^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
+      catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+    }
+    return false;
+  };
+  const deadline = Date.now() + 1_000;
+  while (!terminal() && Date.now() < deadline) await delay(20);
+  assert.equal(terminal(), true, 'descendant must have exited, not merely received a signal');
 });

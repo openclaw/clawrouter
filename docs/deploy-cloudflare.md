@@ -1378,12 +1378,19 @@ raw secrets and provider bodies are not artifacts.
 ### Lifecycle migrations and rollback-unsafe formats
 
 `deploy-train-source.mjs` parses `wrangler.toml` at deployed and candidate commits
-and compares `migrations` and declarative `exports`. Formatting/comments do not
-cause a migration. A lifecycle change takes the explicit **plain `wrangler deploy`**
+and compares `migrations` and declarative `exports` semantically. Comments,
+whitespace and table-field order do not cause a migration; migration sequence
+order remains significant. A lifecycle change takes the explicit **plain `wrangler deploy`**
 path, then mandatory version-asserting smoke. It never automatically rolls back
 past that operation, even after an ambiguous timeout. Failure freezes and alerts.
 **Ship class lifecycle changes in tiny migration-only PRs**, independently of
 behavioral changes; Cloudflare cannot split an atomic class creation/deletion.
+
+Changes to non-versioned observability/logpush/tail settings, queue consumers,
+cron triggers, routes, workers.dev or preview routing are rejected before upload.
+`versions upload` plus distribution changes cannot apply these settings. Use a
+separately authorized configuration deployment and establish a stable SHA-tagged
+base; do not silently leave a requested logging/privacy setting unapplied.
 
 For a forward-only data/format change, add this trailer to the commit that lands
 on `main` (preserve it in the squash-merge message):
