@@ -14,17 +14,18 @@ const router = [
   'export * from "./worker/index.ts";',
   'import { copyRequestHeaders, providerById } from "./worker/providers.ts";',
   'import { putGrantCredentials } from "./worker/grant-credentials.ts";',
+  'import { ingestUsage } from "./worker/ledgers.ts";',
   'export default { queue: handler.queue, async fetch(request, env, ctx) {',
   ' if (new URL(request.url).pathname === "/fixture/openai-grant") { await putGrantCredentials(env, "oauth/fixture/openai", { enabled: true, provider: "openai", kind: "api_key", credential: "fixture-openai-pool" }); return new Response("ok"); }',
   ' if (new URL(request.url).pathname === "/fixture/header-copy") {',
   '  const provider = structuredClone(providerById("anthropic"));',
   // A future manifest must not accidentally make a tenancy/replay header safe.
-  '  provider.adapter.passthroughHeaders.push("Anthropic-Workspace-ID", "Idempotency-Key");',
-  '  const endpoint = structuredClone(provider.endpoints[0]); endpoint.request_headers.push("IDEMPOTENCY-KEY", "anthropic-workspace-id");',
+  '  provider.adapter.passthroughHeaders.push("Anthropic-Workspace-ID", "Anthropic-User-Profile-ID", "Idempotency-Key");',
+  '  const endpoint = structuredClone(provider.endpoints[0]); endpoint.request_headers.push("IDEMPOTENCY-KEY", "anthropic-workspace-id", "anthropic-user-profile-id");',
   '  const target = new Headers(); copyRequestHeaders(request.headers, provider, endpoint, target, env);',
   '  return Response.json(Object.fromEntries(target));',
   ' }',
-  ' return handler.fetch(request, { ...env, ANTHROPIC_API_KEY: "fixture-anthropic-environment" }, ctx);',
+  ' return handler.fetch(request, { ...env, ANTHROPIC_API_KEY: "fixture-anthropic-environment", USAGE_QUEUE: { send: event => ingestUsage(env, event) } }, ctx);',
   '} };',
 ].join("\n");
 const upstream = [
@@ -54,7 +55,7 @@ const upstream = [
   '} };',
 ].join("\n");
 
-test("native attribution and correlation headers cross the actual Worker egress boundary safely", { timeout: 60_000 }, async t => {
+test("native identity selection and correlation headers cross the actual Worker egress boundary safely", { timeout: 60_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-request-headers-"));
   let mf;
   try {
@@ -70,16 +71,16 @@ test("native attribution and correlation headers cross the actual Worker egress 
     const origin = await mf.ready;
     const send = (path, body, headers = {}, method = "POST") => fetch(new URL(path, origin), { method, headers: { authorization, "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(10_000) });
 
-    await t.test("workspace selectors fail closed after auth, including empty/foreign/claimed-own values and both grant lanes", async () => {
+    await t.test("workspace and user-profile selectors fail closed after auth in both grant lanes", async () => {
       const before = (await calls()).length;
       for (const path of ["/v1/messages", "/v1/native/anthropic/v1/messages/count_tokens", "/v1/proxy/anthropic/messages"]) {
         for (const policy of ["fixture", "environment"]) {
-          for (const workspace of ["wrkspc_foreign", "wrkspc_claimed_own", ""]) {
+          for (const [selector, kind, values] of [["anthropic-workspace-id", "workspace", ["wrkspc_foreign", "wrkspc_claimed_own", ""]], ["anthropic-user-profile-id", "user-profile", ["uprof_foreign", "uprof_claimed_own", ""]]]) for (const value of values) {
             const body = path.includes("/proxy/") ? { body: anthropicBody } : anthropicBody;
-            const response = await send(path, body, { authorization: "Bearer clawrouter-live-" + policy + "-" + secret, "Anthropic-Workspace-ID": workspace });
+            const response = await send(path, body, { authorization: "Bearer clawrouter-live-" + policy + "-" + secret, [selector]: value });
             assert.equal(response.status, 403, await response.clone().text());
             const error = await response.json();
-            assert.deepEqual(error, { type: "error", error: { type: "permission_error", message: "anthropic-workspace-id requires an explicitly authorized workspace binding; ClawRouter does not yet support workspace selection" }, request_id: response.headers.get("request-id") });
+            assert.deepEqual(error, { type: "error", error: { type: "permission_error", message: `${selector} requires an explicitly authorized ${kind} binding; ClawRouter does not yet support ${kind} selection` }, request_id: response.headers.get("request-id") });
             assert.ok(error.request_id);
           }
         }
@@ -89,14 +90,29 @@ test("native attribution and correlation headers cross the actual Worker egress 
       assert.equal((await calls()).length, before, "no denied request may reach any upstream grant");
     });
 
-    await t.test("profile attribution, beta and explicit API version survive without changing JSON bytes or credential ownership", async () => {
+    await t.test("denied upstream identities leave a zero-charge metadata-only audit receipt", async () => {
+      const response = await send("/v1/messages", anthropicBody, { "anthropic-user-profile-id": "uprof_foreign", "x-request-id": "fixture-denied-profile" });
+      assert.equal(response.status, 403); await response.text();
+      let event;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const usage = await (await fetch(new URL("/v1/usage", origin), {headers:{authorization}})).json();
+        event = usage.usage.events.find(item=>item.request_id==="fixture-denied-profile");
+        if (event) break;
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      assert.ok(event); assert.equal(event.status,"denied"); assert.equal(event.status_code,403);
+      assert.equal(event.actual_cost_micros,0); assert.equal(event.content_ref,null);
+      assert.doesNotMatch(JSON.stringify(event),/uprof_foreign|synthetic attribution/);
+    });
+
+    await t.test("beta and explicit API version survive without changing JSON bytes or credential ownership", async () => {
       for (const path of ["/v1/messages", "/v1/native/anthropic/v1/messages/count_tokens", "/v1/proxy/anthropic/messages"]) {
         const body = path.includes("/proxy/") ? { body: anthropicBody } : anthropicBody;
-        const response = await send(path, body, { "Anthropic-User-Profile-ID": "user_prof_fixture", "anthropic-version": "2023-06-01", "anthropic-beta": "fixture-beta-2026-10-21", "Idempotency-Key": "fixture-replay-key", "x-api-key": "fixture-client-key-not-upstream" });
+        const response = await send(path, body, { "anthropic-version": "2023-06-01", "anthropic-beta": "fixture-beta-2026-10-21", "Idempotency-Key": "fixture-replay-key", "x-api-key": "fixture-client-key-not-upstream" });
         assert.equal(response.status, 200, await response.clone().text());
         await response.arrayBuffer();
         const call = (await calls()).at(-1);
-        assert.equal(call.headers["anthropic-user-profile-id"], "user_prof_fixture");
+        assert.equal(call.headers["anthropic-user-profile-id"], undefined);
         assert.equal(call.headers["anthropic-version"], "2023-06-01");
         assert.equal(call.headers["anthropic-beta"], "fixture-beta-2026-10-21");
         assert.equal(call.headers["x-api-key"], "fixture-anthropic-pool");
@@ -190,8 +206,8 @@ test("native attribution and correlation headers cross the actual Worker egress 
       }
     });
 
-    await t.test("manifest allowlists cannot opt caller workspace selectors or unbound idempotency into egress", async () => {
-      const response = await send("/fixture/header-copy", {}, { "Anthropic-Workspace-ID": "wrkspc_foreign", "Idempotency-Key": "fixture-replay-key", "anthropic-beta": "fixture-beta" });
+    await t.test("manifest allowlists cannot opt caller identity selectors or unbound idempotency into egress", async () => {
+      const response = await send("/fixture/header-copy", {}, { "Anthropic-Workspace-ID": "wrkspc_foreign", "Anthropic-User-Profile-ID": "uprof_foreign", "Idempotency-Key": "fixture-replay-key", "anthropic-beta": "fixture-beta" });
       assert.equal(response.status, 200);
       assert.deepEqual(await response.json(), { "anthropic-beta": "fixture-beta", "content-type": "application/json" });
     });

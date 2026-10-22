@@ -62,7 +62,7 @@ adapter:
   response: anthropic
   stream: anthropic_sse
   error: anthropic_error
-  passthroughHeaders: [anthropic-beta, anthropic-version, anthropic-user-profile-id]
+  passthroughHeaders: [anthropic-beta, anthropic-version]
   injectHeaders:
     anthropic-version: "2023-06-01"
 quota:

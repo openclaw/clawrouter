@@ -1,17 +1,20 @@
 import { correlationMetadata } from "./correlation.ts";
 
-// There is no authorized workspace binding on a policy, connection or grant.
-// Silently dropping this selector would execute in an unintended workspace;
-// forwarding it would let callers select tenancy on pooled credentials.
-export function workspaceSelectionDenied(request: Request, providerId: string): Response | null {
-  if (providerId !== "anthropic" || !request.headers.has("anthropic-workspace-id")) return null;
+// Neither workspace tenancy nor profile trust grants/abuse attribution may be
+// selected by a caller using shared operator credentials. Both require a future
+// operator-authorized policy/principal binding, not a passthrough allowlist.
+export function identitySelectionDenied(request: Request, providerId: string): Response | null {
+  if (providerId !== "anthropic") return null;
+  const selector = ["anthropic-workspace-id", "anthropic-user-profile-id"].find(name => request.headers.has(name));
+  if (!selector) return null;
+  const kind = selector === "anthropic-workspace-id" ? "workspace" : "user-profile";
   const requestId = correlationMetadata(request).requestId;
   // Already native-shaped: outer native-error boundaries must preserve it.
   return Response.json({
     type: "error",
     error: {
       type: "permission_error",
-      message: "anthropic-workspace-id requires an explicitly authorized workspace binding; ClawRouter does not yet support workspace selection",
+      message: `${selector} requires an explicitly authorized ${kind} binding; ClawRouter does not yet support ${kind} selection`,
     },
     request_id: requestId,
   }, { status: 403, headers: { "request-id": requestId } });
