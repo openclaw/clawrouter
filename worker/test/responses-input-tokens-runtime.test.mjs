@@ -42,6 +42,12 @@ const upstream = [
   'export default {fetch(request,env){return env.UPSTREAM.get(env.UPSTREAM.idFromName("fixture")).fetch(request);}};',
 ].join("\n");
 
+function nativeRefusal(response, body, code) {
+  assert.equal(response.headers.get("x-clawrouter-error-code"), code);
+  assert.equal(typeof body.error.message, "string");
+  assert.deepEqual(body, { error: { message: body.error.message, type: response.status >= 500 ? "server_error" : response.status === 429 ? "rate_limit_error" : "invalid_request_error", param: null, code } });
+}
+
 test("real workerd count wire, zero settlement, rejections and revocation", { timeout: 60000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-input-tokens-")); let worker;
   try {
@@ -60,7 +66,7 @@ test("real workerd count wire, zero settlement, rejections and revocation", { ti
     for (const path of ["/v1/responses/input_tokens", "/v1/native/openai/v1/responses/input_tokens", "/v1/proxy/openai/responses_input_tokens"]) {
       const response = await send(path + "?trace=a&trace=b&empty=");
       assert.equal(response.status, 400);
-      assert.equal((await response.json()).error.code, "input_tokens_stateless_required");
+      nativeRefusal(response, await response.json(), "input_tokens_stateless_required");
     }
     assert.equal((await (await get("/fixture/upstream/calls")).json()).length, 3, "all query refusals are known-unsent");
     await control("config", "malformed");
@@ -69,9 +75,9 @@ test("real workerd count wire, zero settlement, rejections and revocation", { ti
     const rejected = await send(); assert.equal(rejected.status, 429); assert.equal(rejected.headers.get("retry-after"), "11");
     assert.deepEqual(await rejected.json(), { error: { message: "synthetic rate limit" } });
     const stateful = await send(undefined, { previous_response_id: "resp_foreign" });
-    assert.equal(stateful.status, 400); assert.equal((await stateful.json()).error.code, "input_tokens_stateless_required");
+    assert.equal(stateful.status, 400); nativeRefusal(stateful, await stateful.json(), "input_tokens_stateless_required");
     const revoked = await get("/fixture/revoke"); assert.equal((await revoked.json()).outcome, "updated");
-    const denied = await send(); assert.equal(denied.status, 403); assert.equal((await denied.json()).error.code, "proxy_key_revoked");
+    const denied = await send(); assert.equal(denied.status, 403); nativeRefusal(denied, await denied.json(), "proxy_key_revoked");
     const calls = await (await get("/fixture/upstream/calls")).json();
     assert.equal(calls.length, 5, "neither custody rejection nor revoked auth may reach upstream");
     assert.ok(calls.every(call => call.url === "https://api.openai.com/v1/responses/input_tokens" && call.method === "POST" && call.body.model === "gpt-6-astra"));

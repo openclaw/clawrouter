@@ -24,6 +24,11 @@ async function setup(t, { pooled = false, mode = "reserve", fixedCost = null } =
   f.drain = async () => { while (f.pending.length) await Promise.all(f.pending.splice(0)); await drain(); };
   return f;
 }
+function nativeRefusal(response, body, code) {
+  assert.equal(response.headers.get("x-clawrouter-error-code"), code);
+  assert.equal(typeof body.error.message, "string");
+  assert.deepEqual(body, { error: { message: body.error.message, type: response.status >= 500 ? "server_error" : response.status === 429 ? "rate_limit_error" : "invalid_request_error", param: null, code } });
+}
 function noMoney(f) {
   for (const name of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(name).reservations().length, 0);
   assert.ok(f.events.every(e => e.actual_cost_micros === 0 && e.reserved_cost_micros === 0 && e.cost_basis === "none"));
@@ -111,7 +116,7 @@ const stateful = {
 };
 for (const route of routes) for (const [name, body] of Object.entries(stateful)) test("stateless count rejects " + name + " before egress: " + route, async t => {
   const f = await setup(t), response = await f.send(route, body);
-  assert.equal(response.status, 400); assert.equal(JSON.parse(await f.consume(response)).error.code, "input_tokens_stateless_required");
+  assert.equal(response.status, 400); nativeRefusal(response, JSON.parse(await f.consume(response)), "input_tokens_stateless_required");
   assert.equal(f.sent.length, 0); noMoney(f);
 });
 for (const route of routes) for (const [name, body, headers] of [
@@ -120,13 +125,13 @@ for (const route of routes) for (const [name, body, headers] of [
 ]) test("input count rejects " + name + ": " + route, async t => {
   const f = await setup(t), response = await f.send(route, body, headers);
   assert.equal(response.status, 400);
-  assert.equal(JSON.parse(await f.consume(response)).error.code, ["null model", "missing model"].includes(name) ? "model_required" : "input_tokens_stateless_required");
+  nativeRefusal(response, JSON.parse(await f.consume(response)), ["null model", "missing model"].includes(name) ? "model_required" : "input_tokens_stateless_required");
   assert.equal(f.sent.length, 0); noMoney(f);
 });
 for (const route of routes) for (const query of ["previous_response_id=resp_foreign", "trace=a&trace=b&empty=", "=blank-name"]) test("input count query is refused before egress: " + route + "?" + query, async t => {
   const f = await setup(t), response = await f.send(route + "?" + query);
   assert.equal(response.status, 400);
-  assert.equal(JSON.parse(await f.consume(response)).error.code, "input_tokens_stateless_required");
+  nativeRefusal(response, JSON.parse(await f.consume(response)), "input_tokens_stateless_required");
   assert.equal(f.sent.length, 0); noMoney(f);
 });
 for (const query of ["trace=a&trace=b", "empty=", "=blank-name"]) test("count guard refuses ordered query independently of request URL: " + query, () => {
@@ -143,7 +148,8 @@ for (const denial of ["missing", "invalid", "revoked", "model", "provider", "dis
   if (denial === "disabled") await f.authority("/connections/put", { providerId: "openai", enabled: false });
   const response = await f.send(routes[0], {}, headers);
   assert.equal(response.status, ["missing", "invalid"].includes(denial) ? 401 : denial === "disabled" ? 503 : 403, await response.clone().text());
-  await f.consume(response); assert.equal(f.sent.length, 0); noMoney(f);
+  const codes = { missing: "invalid_proxy_key", invalid: "invalid_proxy_key", revoked: "proxy_key_revoked", model: "model_not_allowed", provider: "provider_not_allowed", disabled: "provider_disabled" };
+  nativeRefusal(response, JSON.parse(await f.consume(response)), codes[denial]); assert.equal(f.sent.length, 0); noMoney(f);
 });
 for (const kind of ["subscription", "oauth"]) test("input count refuses " + kind + " grants and catalog offers", async t => {
   const f = await setup(t);
@@ -192,6 +198,6 @@ test("free count respects API grant rate-limit cooldown with Retry-After", async
   const revision = f.values.get(grantKeys[0]).updatedAt;
   await f.authority("/grant-pools/feedback", { key: grantKeys[0], state: { status: "cooldown", observedAt: new Date(now).toISOString(), source: "provider_response", cooldownUntil: new Date(now + 60000).toISOString(), lastSignal: "rate_limited", grantRevision: revision, windows: [] } });
   const response = await f.send(); assert.equal(response.status, 429, await response.clone().text());
-  assert.ok(Number(response.headers.get("retry-after")) > 0); assert.equal(JSON.parse(await f.consume(response)).error.code, "upstream_grant_pool_unavailable");
+  assert.ok(Number(response.headers.get("retry-after")) > 0); nativeRefusal(response, JSON.parse(await f.consume(response)), "upstream_grant_pool_unavailable");
   assert.equal(f.sent.length, 0); noMoney(f);
 });
