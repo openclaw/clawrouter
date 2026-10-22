@@ -1,4 +1,5 @@
 import { GrantRefreshHealth } from "../grant-health";
+import { GrantExpiry } from "../grant-expiry";
 import { credentialExpiryLabel, KeyTierControls } from "../member-key-controls";
 import React, { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
@@ -302,6 +303,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
           {!ready ? <InlineNote>Upstream accounts have not loaded. Wait for the refresh, or retry it, before saving.</InlineNote> : null}
           {error ? <InlineError message={error} /> : null}
           {selectedProvider?.id === "openai" && !authorizationKind ? <InlineNote><strong>OpenAI subscription Connect is unavailable in the bundled provider.</strong> Use an OpenAI Platform API key for ClawRouter, or sign in to Codex directly for subscription access. Saving a subscription token does not establish provider approval or upstream compatibility. <a href="https://github.com/openclaw/clawrouter/blob/main/docs/openai-subscriptions.md" target="_blank" rel="noreferrer">OpenAI setup and subscription limits</a></InlineNote> : null}
+          {selected ? <GrantExpiry grant={selected} /> : null}
           <div className="formGrid compact">
             <label><span>scope</span><select value={form.scope} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, scope: event.target.value as UpstreamGrantForm["scope"], scopeId: event.target.value === "policies" ? policies[0]?.policyId ?? "" : "default" })}><option value="policies">policy</option><option value="tenants">tenant</option></select></label>
             <label><span>scope id</span>{form.scope === "policies" ? <select value={form.scopeId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, scopeId: event.target.value })}>{!policies.some((policy) => policy.policyId === form.scopeId) ? <option value={form.scopeId}>{form.scopeId ? `${form.scopeId} (unavailable)` : "Select a policy"}</option> : null}{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select> : <input value={form.scopeId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, scopeId: event.target.value })} />}</label>

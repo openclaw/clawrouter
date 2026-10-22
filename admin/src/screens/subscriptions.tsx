@@ -1,4 +1,5 @@
 import { GrantRefreshHealth } from "../grant-health";
+import { GrantExpiry } from "../grant-expiry";
 import { Status } from "../components";
 import { canProbeGrant, modelHeadroom, planLabel, policyGrants, quotaFree, resetLabel, subscriptionFamilies } from "../subscriptions-data";
 import type { useSubscriptions } from "../hooks/use-subscriptions";
@@ -49,6 +50,7 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
         <header><div><h2>{grant.label || grant.tokenRef}</h2><p>{grant.account?.email ?? "Account not observed"}</p></div><Status label={grant.credentialStatus === "reauth_required" ? "reauth required" : grant.usable ? "active" : "unavailable"} tone={grant.usable ? "active" : "revoked"} /></header>
         <GrantRefreshHealth grant={grant} />
         <p>{planLabel(grant.account?.rateLimitTier)} · {grant.provider} · {grant.account?.subscriptionStatus ?? "Status unknown"} · {grant.enabled ? "enabled" : "disabled"} · {grant.kind === "api_key" ? "api_key" : "subscription"} lane</p>
+        <GrantExpiry grant={grant} />
         <div className="subscriptionQuota">{grant.quotaWindows.filter(window => window.kind === "subscription").map(window => {
           const free = quotaFree(window);
           const label = window.models?.length ? `${window.models.map(familyLabel).join(" / ")} weekly` : window.window === "five_hour" ? "5-hour" : "Weekly";

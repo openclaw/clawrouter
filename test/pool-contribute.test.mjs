@@ -27,9 +27,11 @@ test("pool contribution reads an op reference without putting its value in argv 
     writeFileSync(ticketFile, JSON.stringify({ version: 1, ticketToken: "ticket-fixture", submissionUrl: url }), { mode: 0o600 });
     writeFileSync(opBin, `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.ARGV_FILE, JSON.stringify(process.argv.slice(2))); process.stdout.write("credential-fixture");\n`, { mode: 0o700 });
     chmodSync(opBin, 0o700);
-    const { stdout } = await execFileAsync(process.execPath, ["scripts/pool-contribute.mjs", "--ticket-file", ticketFile, "--access-token-ref", "op://Private/ClawRouter/access_token", "--op-bin", opBin, "--account-id", "account-fixture"], { cwd: process.cwd(), env: { ...process.env, ARGV_FILE: argvFile }, encoding: "utf8" });
+    const { stdout } = await execFileAsync(process.execPath, ["scripts/pool-contribute.mjs", "--ticket-file", ticketFile, "--access-token-ref", "op://Private/ClawRouter/access_token", "--op-bin", opBin, "--account-id", "account-fixture", "--refresh-token-expires-at", "2030-01-02T00:00:00Z", "--last-manual-authorization-at", "2029-12-05T00:00:00Z"], { cwd: process.cwd(), env: { ...process.env, ARGV_FILE: argvFile }, encoding: "utf8" });
     assert.equal(authorization, "Bearer ticket-fixture");
     assert.equal(submitted.accessToken, "credential-fixture");
+    assert.equal(submitted.refreshTokenExpiresAt, "2030-01-02T00:00:00Z");
+    assert.equal(submitted.lastManualAuthorizationAt, "2029-12-05T00:00:00Z");
     assert.deepEqual(JSON.parse(readFileSync(argvFile, "utf8")), ["read", "op://Private/ClawRouter/access_token"]);
     assert.equal(stdout.includes("credential-fixture"), false);
     assert.equal(stdout.includes("ticket-fixture"), false);

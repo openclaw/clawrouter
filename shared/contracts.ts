@@ -207,6 +207,9 @@ export interface UpstreamGrant {
   label?: string | null;
   tokenType: string;
   expiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  lastManualAuthorizationAt?: string | null;
+  refreshExpiryWarning?: import("./refresh-expiry").RefreshExpiryWarning;
   scopes: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;

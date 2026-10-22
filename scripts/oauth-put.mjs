@@ -31,6 +31,8 @@ setOptional(grant, "credential", credential);
 setOptional(grant, "credentials", credentials);
 setOptional(grant, "refreshToken", refreshToken);
 setOptional(grant, "expiresAt", parseTimestamp(optionalValue(args, "expires-at"), "--expires-at"));
+setOptional(grant, "refreshTokenExpiresAt", parseTimestamp(optionalValue(args, "refresh-token-expires-at"), "--refresh-token-expires-at"));
+setOptional(grant, "lastManualAuthorizationAt", parseTimestamp(optionalValue(args, "last-manual-authorization-at"), "--last-manual-authorization-at"));
 setOptional(grant, "accountId", optionalValue(args, "account-id"));
 setOptional(grant, "subscription", subscriptionMetadata(args));
 setOptional(grant, "refresh", refreshMetadata(args));

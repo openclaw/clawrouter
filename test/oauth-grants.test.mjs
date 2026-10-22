@@ -51,10 +51,12 @@ test("actual CLI imports, rotates and revokes the credential used by Worker rout
   const refreshFile = join(fixture.dir, "refresh-token");
   writeFileSync(refreshFile, "refresh-fixture\n", { mode: 0o600 });
   const args = ["--kid", "policy", "--provider", "anthropic", "--kind", "subscription", "--access-token-env", "TEST_ACCESS_TOKEN"];
-  const imported = await fixture.run("oauth-put.mjs", [...args, "--refresh-token-file", refreshFile, "--expires-at", new Date(Date.now() + 3_600_000).toISOString(), "--account-id", "account-fixture", "--subscription-plan", "max", "--scopes", "inference,profile,inference"]);
+  const imported = await fixture.run("oauth-put.mjs", [...args, "--refresh-token-file", refreshFile, "--expires-at", new Date(Date.now() + 3_600_000).toISOString(), "--account-id", "account-fixture", "--subscription-plan", "max", "--scopes", "inference,profile,inference", "--refresh-token-expires-at", "2030-01-02T00:00:00Z", "--last-manual-authorization-at", "2029-12-05T00:00:00Z"]);
   assertSuccess(imported);
   const owner = fixture.env.GRANT_CREDENTIALS.objects.get(key);
   assert.equal(owner.values.get("credential").refreshToken, "refresh-fixture");
+  assert.equal(owner.values.get("credential").refreshTokenExpiresAt, "2030-01-02T00:00:00.000Z");
+  assert.equal(fixture.values.get(key).lastManualAuthorizationAt, "2029-12-05T00:00:00.000Z");
   assert.equal(owner.values.get("credential").accountId, "account-fixture");
   assert.deepEqual(fixture.values.get(key).scopes, ["inference", "profile"]);
   assert.ok(owner.alarm() > Date.now());
@@ -72,6 +74,8 @@ test("actual CLI imports, rotates and revokes the credential used by Worker rout
   const replacement = owner.values.get("credential");
   assert.equal(replacement.accessToken, expectedToken);
   assert.equal(replacement.refreshToken, undefined);
+  assert.equal(replacement.refreshTokenExpiresAt, null);
+  assert.equal(replacement.lastManualAuthorizationAt, null);
   assert.equal(replacement.accountId, undefined);
   assert.equal(replacement.subscription, undefined);
   assert.equal(replacement.refresh, undefined);

@@ -1,4 +1,5 @@
-import { credentialProjection, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
+import { authorizationTimestamp, refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
+import { credentialProjection, materializedGrant, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
 export type { CredentialProjection } from "./grant-credential-record.ts";
 import { claimRefreshOwnership, reserveRefreshOwnership, OWNERSHIP_CLAIM, OWNERSHIP_CURRENT } from "./refresh-ownership.ts";
 import { normalizedScopes, validTimestamp, envValue, boundedSecret, optionalSecret, boundedRefreshJson, boundedResponseJson, MAX_REFRESH_RESPONSE_BYTES, permanentRefreshFailure, safeOAuthError, refreshRetryAt } from "./grant-refresh-diagnosis.ts";
@@ -384,6 +385,9 @@ export class GrantCredentialObject implements DurableObject {
       expiresAt: typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) && payload.expires_in > 0
         ? new Date(Date.now() + payload.expires_in * 1_000).toISOString()
         : record.expiresAt,
+      // Claude Code preserves the known absolute deadline when a rotation
+      // omits it. Missing/invalid metadata must not invent a new lifetime.
+      refreshTokenExpiresAt: refreshExpiryFromSeconds(payload.refresh_token_expires_in) ?? record.refreshTokenExpiresAt ?? null,
       nextRefreshAttemptAt: null,
       refreshDiagnosis: { lastSuccessfulRefreshAt: new Date().toISOString(), failure: null },
       updatedAt: new Date().toISOString(),
@@ -656,6 +660,7 @@ function revokedRecord(key: string, metadata: UpstreamGrant | null, generation =
   return {
     version: 1, generation: generation + 1, lineage: crypto.randomUUID(), enabled: false, status: "active", poolSyncPending: true,
     grantKey: key, providerId: metadata?.provider, kind: metadata?.kind,
+    refreshTokenExpiresAt: metadata?.refreshTokenExpiresAt, lastManualAuthorizationAt: metadata?.lastManualAuthorizationAt,
     tokenType: metadata?.tokenType, expiresAt: metadata?.expiresAt, scopes: metadata?.scopes,
     accountId: metadata?.accountId, subscription: metadata?.subscription, refresh: metadata?.refresh,
     maintenance: { keepWarm: metadata?.maintenance?.keepWarm === true },
@@ -857,6 +862,8 @@ function credentialRecord(grant: UpstreamGrant, generation: number): CredentialR
     refreshToken: optionalSecret(grant.refreshToken, "refresh token"),
     tokenType: grant.tokenType,
     expiresAt: validTimestamp(grant.expiresAt),
+    refreshTokenExpiresAt: validAuthorizationTimestamp(grant.refreshTokenExpiresAt),
+    lastManualAuthorizationAt: validAuthorizationTimestamp(grant.lastManualAuthorizationAt),
     scopes: normalizedScopes(grant.scopes),
     accountId: grant.accountId,
     subscription: grant.subscription,
@@ -880,6 +887,8 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
     refreshToken: grant.refreshToken === undefined ? current.refreshToken : optionalSecret(grant.refreshToken, "refresh token"),
     tokenType: grant.tokenType ?? current.tokenType,
     expiresAt: grant.expiresAt === undefined ? current.expiresAt : validTimestamp(grant.expiresAt),
+    refreshTokenExpiresAt: grant.refreshTokenExpiresAt === undefined ? current.refreshTokenExpiresAt : validAuthorizationTimestamp(grant.refreshTokenExpiresAt),
+    lastManualAuthorizationAt: grant.lastManualAuthorizationAt === undefined ? current.lastManualAuthorizationAt : validAuthorizationTimestamp(grant.lastManualAuthorizationAt),
     scopes: grant.scopes === undefined ? current.scopes : normalizedScopes(grant.scopes),
     accountId: grant.accountId === undefined ? current.accountId : grant.accountId,
     subscription: grant.subscription === undefined ? current.subscription : grant.subscription,
@@ -900,30 +909,16 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
     || updated.subscription?.subject !== current.subscription?.subject
     || JSON.stringify(updated.refresh) !== JSON.stringify(current.refresh)
     || grant.provider !== undefined && grant.provider !== current.providerId || grant.kind !== undefined && grant.kind !== current.kind) updated.lineage = crypto.randomUUID();
+  if (updated.refreshToken !== current.refreshToken) {
+    // Replacing refresh authority cannot inherit dates from the old login.
+    // Access-only edits retain the existing refresh token and its deadline.
+    updated.refreshTokenExpiresAt = validAuthorizationTimestamp(grant.refreshTokenExpiresAt);
+    updated.lastManualAuthorizationAt = validAuthorizationTimestamp(grant.lastManualAuthorizationAt);
+  }
   return updated;
 }
 
 
-function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
-  return {
-    ...metadata,
-    credential: record.credential,
-    credentials: record.credentials,
-    accessToken: record.accessToken,
-    refreshToken: record.refreshToken,
-    tokenType: record.tokenType,
-    expiresAt: record.expiresAt,
-    scopes: record.scopes,
-    accountId: record.accountId,
-    subscription: record.subscription,
-    refresh: record.refresh,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-    credentialGeneration: record.generation,
-    credentialLineage: record.lineage,
-    credentialStatus: record.status,
-  };
-}
 
 async function ownerCall<T>(env: Env, key: string, path: string, body: unknown): Promise<T> {
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
@@ -993,4 +988,10 @@ function normalizedCredentials(value: Record<string, string>): Record<string, st
 
 function sameRefreshAttempt(current: CredentialRecord | undefined, attempted: CredentialRecord): boolean {
   return !!current && current.generation === attempted.generation && current.refreshAttempt?.id === attempted.refreshAttempt?.id;
+}
+
+function validAuthorizationTimestamp(value: unknown): string | null {
+  const timestamp = authorizationTimestamp(value);
+  if (value != null && timestamp === null) throw new HttpError(400, "invalid_upstream_grant", "authorization timestamp must be ISO-8601 or epoch milliseconds");
+  return timestamp;
 }

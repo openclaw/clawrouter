@@ -15,6 +15,8 @@ setOptional(payload, "accessToken", readSecret(args, "access-token"));
 setOptional(payload, "refreshToken", readSecret(args, "refresh-token"));
 setOptional(payload, "tokenType", optionalValue(args, "token-type"));
 setOptional(payload, "expiresAt", optionalValue(args, "expires-at"));
+setOptional(payload, "refreshTokenExpiresAt", optionalValue(args, "refresh-token-expires-at"));
+setOptional(payload, "lastManualAuthorizationAt", optionalValue(args, "last-manual-authorization-at"));
 setOptional(payload, "accountId", optionalValue(args, "account-id"));
 const scopes = optionalValue(args, "scopes");
 if (scopes) payload.scopes = [...new Set(scopes.split(",").map((value) => value.trim()).filter(Boolean))];

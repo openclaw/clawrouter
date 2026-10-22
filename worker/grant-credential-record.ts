@@ -15,6 +15,8 @@ export interface CredentialRecord {
   refreshToken?: string | null;
   tokenType?: string;
   expiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  lastManualAuthorizationAt?: string | null;
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
@@ -51,6 +53,8 @@ export interface CredentialProjection {
   hasRefreshToken: boolean;
   tokenType?: string;
   expiresAt?: string | null;
+  refreshTokenExpiresAt?: string | null;
+  lastManualAuthorizationAt?: string | null;
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
@@ -98,6 +102,8 @@ export function credentialProjection(record: CredentialRecord): CredentialProjec
     hasRefreshToken: !!record.refreshToken,
     tokenType: record.tokenType,
     expiresAt: record.expiresAt,
+    refreshTokenExpiresAt: record.refreshTokenExpiresAt ?? null,
+    lastManualAuthorizationAt: record.lastManualAuthorizationAt ?? null,
     scopes: record.scopes,
     accountId: record.accountId,
     subscription: record.subscription,
@@ -111,4 +117,27 @@ export function hasFreshPrimaryCredentials(previous: CredentialRecord, replaceme
   const oldValues = new Set([previous.credential, previous.accessToken, ...Object.values(previous.credentials ?? {})]);
   return [replacement.credential, replacement.accessToken, ...Object.values(replacement.credentials ?? {})]
     .some(value => typeof value === "string" && !oldValues.has(value));
+}
+
+export function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
+  return {
+    ...metadata,
+    credential: record.credential,
+    credentials: record.credentials,
+    accessToken: record.accessToken,
+    refreshToken: record.refreshToken,
+    tokenType: record.tokenType,
+    expiresAt: record.expiresAt,
+    refreshTokenExpiresAt: record.refreshTokenExpiresAt ?? null,
+    lastManualAuthorizationAt: record.lastManualAuthorizationAt ?? null,
+    scopes: record.scopes,
+    accountId: record.accountId,
+    subscription: record.subscription,
+    refresh: record.refresh,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    credentialGeneration: record.generation,
+    credentialLineage: record.lineage,
+    credentialStatus: record.status,
+  };
 }

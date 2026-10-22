@@ -1,3 +1,4 @@
+import { GrantExpiryPools } from "./grant-expiry";
 import { SubscriptionsScreen } from "./screens/subscriptions";
 import React from "react";
 import { Route } from "lucide-react";
@@ -104,6 +105,7 @@ export function AppShell() {
 
         {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{shell.refreshing ? "Refreshing console data" : status}</span>{refreshError ? <><span>{refreshError} Displayed data may be out of date.</span><button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button></> : null}{demoMode ? <em>demo</em> : null}</div> : null}
 
+        {view === "home" && session.role === "admin" ? <GrantExpiryPools policies={keys} grants={upstreamGrants} ready={upstream.ready} error={shell.refreshError} onOpenGrant={grant => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }} /> : null}
         {view === "home" ? (
           <DashboardScreen
             session={session}

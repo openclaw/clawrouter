@@ -1,3 +1,4 @@
+import { refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorizeAdmin, verifiedAccessSession } from "./access";
 import { authorityCall } from "./authority";
@@ -65,6 +66,8 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
     label: existing?.label ?? `${provider.display_name} OAuth`, accessToken: payload.access_token as string,
     refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : existing?.refreshToken,
     tokenType: typeof payload.token_type === "string" ? payload.token_type : "Bearer", expiresAt: expires,
+    refreshTokenExpiresAt: refreshExpiryFromSeconds(payload.refresh_token_expires_in),
+    lastManualAuthorizationAt: new Date(Date.now()).toISOString(),
     scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean) : config.scopes,
     accountId: jsonPointer(idPayload, config.accountIdJsonPointer) ?? existing?.accountId,
     subscription: { ...existing?.subscription, plan: jsonPointer(idPayload, config.subscriptionPlanJsonPointer) ?? existing?.subscription?.plan },

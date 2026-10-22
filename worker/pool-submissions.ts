@@ -1,10 +1,11 @@
+import { authorizationTimestamp } from "../shared/refresh-expiry.ts";
 import { authorityCall, type PoolSubmissionTicketView, type SubmissionReceipt, type SubmissionTicketClaimResult } from "./authority.ts";
 import { putGrantCredentials } from "./grant-credentials.ts";
 import { validCredentialBundle, validGrantSegment } from "./grant-selection.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
 import { decodePathSegment, caughtResponse, errorResponse, HttpError, parseBearer, privateJson, readJson, sha256Hex } from "./utils.ts";
 
-const ALLOWED_FIELDS = new Set(["credential", "credentials", "accessToken", "refreshToken", "tokenType", "expiresAt", "scopes", "accountId", "subscription"]);
+const ALLOWED_FIELDS = new Set(["credential", "credentials", "accessToken", "refreshToken", "tokenType", "expiresAt", "refreshTokenExpiresAt", "lastManualAuthorizationAt", "scopes", "accountId", "subscription"]);
 
 export async function poolSubmissionApi(request: Request, env: Env, path: string): Promise<Response> {
   const match = path.match(/^\/v1\/pool-submissions\/([^/]+)\/consume$/);
@@ -80,6 +81,8 @@ function normalizeSubmission(ticket: PoolSubmissionTicketView, value: unknown): 
     refreshToken,
     tokenType,
     expiresAt,
+    refreshTokenExpiresAt: optionalAuthorizationTimestamp(body.refreshTokenExpiresAt, "refreshTokenExpiresAt"),
+    lastManualAuthorizationAt: optionalAuthorizationTimestamp(body.lastManualAuthorizationAt, "lastManualAuthorizationAt"),
     scopes,
     accountId,
     subscription,
@@ -126,4 +129,10 @@ function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+}
+
+function optionalAuthorizationTimestamp(value: unknown, field: string): string | null {
+  const timestamp = authorizationTimestamp(value);
+  if (value != null && timestamp === null) throw new HttpError(400, "invalid_pool_submission", `${field} must be ISO-8601 or epoch milliseconds`);
+  return timestamp;
 }

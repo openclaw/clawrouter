@@ -1,3 +1,4 @@
+import { authorizationTimestamp, refreshExpiryWarning } from "../shared/refresh-expiry.ts";
 import { budgetCapsCall } from "./authority-budgets.ts";
 import { effectiveBudgetPolicy, normalizeBudgetOverride } from "./budget-overrides.ts";
 import { normalizePolicyTiers } from "./service-tiers.ts";
@@ -680,6 +681,13 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   const weight = body.weight ?? existing?.weight ?? 1;
   if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
   const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, weight, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
+  for (const field of ["refreshTokenExpiresAt", "lastManualAuthorizationAt"] as const) {
+    if (body[field] === undefined) delete grant[field];
+    else {
+      grant[field] = authorizationTimestamp(body[field]);
+      if (body[field] !== null && grant[field] === null) throw new HttpError(400, "invalid_upstream_grant", `${field} must be ISO-8601 or epoch milliseconds`);
+    }
+  }
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
   const provider = snapshot.providers.find((candidate) => candidate.id === grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
@@ -705,7 +713,9 @@ function userResponse(user: AccessControlUser) { return { ...(user.record.budget
 function grantResponse(key: string, grant: UpstreamGrant) {
   const parts = key.split("/"), tenant = parts[1] === "tenants";
   const refresh = grant.refresh ?? snapshot.providers.find((provider) => provider.id === grant.provider)?.auth.refresh;
-  return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
+  const refreshTokenExpiresAt = authorizationTimestamp(grant.refreshTokenExpiresAt);
+  const lastManualAuthorizationAt = authorizationTimestamp(grant.lastManualAuthorizationAt);
+  return { refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
 }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
