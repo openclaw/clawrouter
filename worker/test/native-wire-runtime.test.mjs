@@ -37,6 +37,7 @@ const followup = (kind, mode) => mode === "marker" || mode === "marker-usage"
   ? (kind === "anthropic" ? dataEvent({ type: "message_stop" }) : "data: [DONE]\r\n\r\n") + (mode === "marker-usage" ? continued[kind] : "")
   : mode === "empty" ? ": keepalive\r\n\r\ndata: \r\n\r\n"
   : mode === "usage" ? continued[kind]
+  : mode === "unterminated" ? dataEvent(kind === "anthropic" ? { type: "content_block_delta", delta: { type: "text_delta", text: "real output" } } : kind === "responses" ? { type: "response.output_text.delta", delta: "real output" } : { object: "chat.completion.chunk", choices: [{ delta: { content: "real output" } }] }).trimEnd()
   : mode === "null-error" ? continued[kind].replaceAll('data: {', 'data: {"error":null,')
   : mode === "truncated" ? dataEvent(kind === "anthropic" ? { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 0 } } } : kind === "responses" ? { type: "response.output_text.delta", delta: "real output" } : { object: "chat.completion.chunk", choices: [{ delta: { content: "real output" } }] })
   : mode === "oversized" ? dataEvent({ type: "future_event", output: "x".repeat(2 * 1024 * 1024 + 100) })
@@ -251,7 +252,7 @@ test("first native SSE errors release both real SQL budgets, including durable b
 // A provider may violate its terminal-error contract. Preserve its bytes, but
 // observable later work must withdraw the initial no-charge evidence.
 for (const [kind, path, background] of [["openai", "/v1/chat/completions", false], ["responses", "/v1/responses", false], ["anthropic", "/v1/messages", false], ["responses", "/v1/responses", true]]) {
-  for (const mode of ["marker", "marker-usage", "empty", "usage", "null-error", "truncated", "errors-only", "invalid", "oversized"]) test(`first SSE error followed by ${mode}: ${kind}, background=${background}`, { timeout: 60000 }, async () => {
+  for (const mode of ["marker", "marker-usage", "empty", "usage", "null-error", "truncated", "unterminated", "errors-only", "invalid", "oversized"]) test(`first SSE error followed by ${mode}: ${kind}, background=${background}`, { timeout: 60000 }, async () => {
     const provider = kind === "anthropic" ? kind : "openai", id = `continued-${kind}-${background}-${mode}`;
     const owners = ["tenant:fixture", "provider:" + provider];
     const rows = async name => (await (await runtime.dispatchFetch("https://router.example/fixture/rows?name=" + encodeURIComponent(name))).json());

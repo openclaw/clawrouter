@@ -119,22 +119,30 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
 
 export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error" } | { kind: "invalid" } | { kind: "unavailable" };
 
+function rejectionOnlyEvidence(evidence: SseUsageEvidence): boolean {
+  const root = evidence.kind === "data" ? record(evidence.value) : null;
+  return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
+}
+
 export function createSseUsageInspector(revokeRejection?: () => void) {
   const accumulator = createSseUsageAccumulator(revokeRejection);
-  function inspect(frame: string | null) {
-    if (frame === null) { accumulator.accept({ kind: "unavailable" }); return; }
+  function evidence(frame: string | null): SseUsageEvidence | null {
+    if (frame === null) return { kind: "unavailable" };
     const lines = frame.split("\n");
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
-    if (lines.some(line => /^event:\s*error\s*$/.test(line))) { accumulator.accept({ kind: "error" }); return; }
-    if (!data) return;
-    if (data === "[DONE]") { accumulator.accept({ kind: "done" }); return; }
-    try { accumulator.accept({ kind: "data", value: JSON.parse(data) }); }
-    catch { accumulator.accept({ kind: "invalid" }); }
+    if (lines.some(line => /^event:\s*error\s*$/.test(line))) return { kind: "error" };
+    if (!data) return null;
+    if (data === "[DONE]") return { kind: "done" };
+    try { return { kind: "data", value: JSON.parse(data) }; }
+    catch { return { kind: "invalid" }; }
   }
-  const frames = sseFrames(inspect);
+  const frames = sseFrames(frame => { const next = evidence(frame); if (next) accumulator.accept(next); });
   return {
     push: frames.push,
-    result: (ended = true): UsageInspection => accumulator.result(ended, frames.overflowed()),
+    result(ended = true): UsageInspection {
+      if (revokeRejection) accumulator.unfinished(evidence(frames.pending()));
+      return accumulator.result(ended, frames.overflowed());
+    },
   };
 }
 
@@ -156,11 +164,8 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
   function accept(evidence: SseUsageEvidence) {
     const root = evidence.kind === "data" ? record(evidence.value) : null;
-    const error = evidence.kind === "error" || responseOutcome(root) === "provider_error";
-    // End markers carry no content or usage; keep a genuine rejection free.
-    // Later work must still revoke it, even if it follows one of these markers.
-    const terminalMarker = evidence.kind === "done" || root?.type === "message_stop";
-    if (provisionalRejection && !error && !terminalMarker) continuedWork();
+    // End markers carry no content or usage; later work still revokes rejection.
+    if (provisionalRejection && !rejectionOnlyEvidence(evidence)) continuedWork();
     if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.
@@ -218,6 +223,13 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   }
   return {
     accept,
+    unfinished(evidence: SseUsageEvidence | null) {
+      // EOF/cancellation cannot certify unfinished nonempty data as error-only.
+      // Never accept its usage or terminal facts without an SSE boundary.
+      if (provisionalRejection && evidence && !rejectionOnlyEvidence(evidence)) {
+        continuedWork(); uncertain = true; found = null; messageUsage = null;
+      }
+    },
     result(ended = true, overflowed = false): UsageInspection {
       // An oversized trailing frame cannot certify that delivered bytes were
       // error-only; retain conservative billing when bounded inspection fails.
@@ -241,6 +253,7 @@ function sseFrames(consume: (frame: string | null) => void) {
   }
   return {
     overflowed: () => overflow,
+    pending: () => overflow ? null : decoder.decode(buffer.subarray(0, length)),
     push(bytes: Uint8Array) {
       let start = 0;
       for (let index = 0; index < bytes.length; index++) {

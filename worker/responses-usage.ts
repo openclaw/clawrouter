@@ -124,6 +124,9 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
         : { tokens: null, outcome: evidence.kind === "invalid" ? "provider_error" : null };
     },
     result(ended: boolean): UsageInspection {
+      if (sse && revokeRejection && hasData && hasContent) {
+        accumulator.unfinished(eventError ? { kind: "error" } : done.matches() ? { kind: "done" } : document.pending());
+      }
       return sse ? accumulator.result(ended, document.unavailable()) : ended ? json : empty();
     },
     hostedUsage: (ended: boolean) => hosted.result(ended),
@@ -178,6 +181,7 @@ function metadataParser(inspectIdentity: boolean, encrypted: boolean) {
       return failure ? { kind: failure } : { kind: "data", value: projection.value() };
     },
     unavailable: () => failure === "unavailable",
+    pending: (): MetadataEvidence => failure ? { kind: failure } : projection.complete() ? { kind: "data", value: projection.value() } : { kind: "unavailable" },
     tools: () => failure ? undefined : tools?.value(),
     witnesses: () => failure ? undefined : witnesses?.value(),
     stop() { consume = undefined; projection.clear(); tools?.clear(); witnesses?.clear(); },
@@ -193,6 +197,7 @@ const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_inp
 
 function metadataProjection(inspectIdentity: boolean) {
   const frames: Frame[] = [];
+  let complete = false;
   let value: unknown, capture: "key" | "text" | "identity" | "number" | "error" | null = null, scalar = "";
   const current = () => frames[frames.length - 1];
   function field(): Field {
@@ -214,12 +219,13 @@ function metadataProjection(inspectIdentity: boolean) {
     return (frame.context === "details" ? detailCounters : creationCounters).has(key) ? "number" : null;
   }
   function assign(next: unknown) {
-    if (!frames.length) value = next;
+    if (!frames.length) { value = next; complete = false; }
     else if (field()) current().value![current().key!] = next;
   }
   return {
     value: () => value,
-    clear() { value = undefined; frames.length = 0; scalar = ""; capture = null; },
+    complete: () => complete,
+    clear() { value = undefined; complete = false; frames.length = 0; scalar = ""; capture = null; },
     accept(token: Token) {
       const selected = field();
       switch (token.name) {
@@ -236,7 +242,7 @@ function metadataProjection(inspectIdentity: boolean) {
           break;
         }
         case "endObject":
-        case "endArray": frames.pop(); break;
+        case "endArray": frames.pop(); if (!frames.length) complete = true; break;
         case "startKey": current().key = null; scalar = ""; capture = current().context ? "key" : null; break;
         case "endKey": if (capture === "key") current().key = scalar; scalar = ""; capture = null; break;
         case "startString":
