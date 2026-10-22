@@ -117,43 +117,75 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
   return inspector.result().tokens;
 }
 
-export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error" } | { kind: "invalid" } | { kind: "unavailable" };
+export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error"; value?: unknown } | { kind: "invalid" } | { kind: "unavailable" };
 
-export function createSseUsageInspector() {
-  const accumulator = createSseUsageAccumulator();
-  function inspect(frame: string | null) {
-    if (frame === null) { accumulator.accept({ kind: "unavailable" }); return; }
+function rejectionOnlyEvidence(evidence: SseUsageEvidence): boolean {
+  const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
+  // A failure is not necessarily a rejection before generation. Usage and
+  // nonempty output take precedence over its error/terminal classification.
+  const outputs = [root?.output, record(root?.response)?.output];
+  if (root && (extractUsageTokens(root) || outputs.some(output => Array.isArray(output) ? output.length > 0 : output != null))) return false;
+  return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
+}
+
+export function createSseUsageInspector(revokeRejection?: () => void) {
+  const accumulator = createSseUsageAccumulator(revokeRejection);
+  function evidence(frame: string | null): SseUsageEvidence | null {
+    if (frame === null) return { kind: "unavailable" };
     const lines = frame.split("\n");
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
-    if (lines.some(line => /^event:\s*error\s*$/.test(line))) { accumulator.accept({ kind: "error" }); return; }
-    if (!data) return;
-    if (data === "[DONE]") { accumulator.accept({ kind: "done" }); return; }
-    try { accumulator.accept({ kind: "data", value: JSON.parse(data) }); }
-    catch { accumulator.accept({ kind: "invalid" }); }
+    const error = lines.some(line => /^event:\s*error\s*$/.test(line));
+    if (error) {
+      try { return { kind: "error", value: JSON.parse(data) }; }
+      catch { return { kind: "error" }; }
+    }
+    if (!data) return null;
+    if (data === "[DONE]") return { kind: "done" };
+    try { return { kind: "data", value: JSON.parse(data) }; }
+    catch { return { kind: "invalid" }; }
   }
-  const frames = sseFrames(inspect);
+  const frames = sseFrames(frame => { const next = evidence(frame); if (next) accumulator.accept(next); });
   return {
     push: frames.push,
-    result: (ended = true): UsageInspection => accumulator.result(ended, frames.overflowed()),
+    result(ended = true): UsageInspection {
+      if (revokeRejection) accumulator.unfinished(evidence(frames.pending()));
+      return accumulator.result(ended, frames.overflowed());
+    },
   };
 }
 
 // Both bounded frame parsing and the Responses scalar projection feed one
 // accounting state owner; parser limits cannot invent a terminal provider error.
-export function createSseUsageAccumulator() {
+export function createSseUsageAccumulator(revokeRejection?: () => void) {
+  let provisionalRejection = !!revokeRejection;
+  function continuedWork() {
+    if (!provisionalRejection) return;
+    provisionalRejection = false; revokeRejection?.();
+    // The original operation retains its error status. Resume usage collection
+    // only for this first-event rejection; normal terminal semantics stay fixed.
+    outcome = null; terminalTokens = null;
+  }
   let found: UsageTokens | null = null, terminalTokens: UsageTokens | null = null;
   let message: Record<string, unknown> | null = null, messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false, uncertain = false;
   let protocol: "message" | "response" | "chat" | null = null;
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
   function accept(evidence: SseUsageEvidence) {
+    const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
+    // End markers carry no content or usage; later work still revokes rejection.
+    if (provisionalRejection && !rejectionOnlyEvidence(evidence)) continuedWork();
     if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.
       uncertain = true; found = null; messageUsage = null;
       return;
     }
-    if (evidence.kind === "error") { outcome = "provider_error"; return; }
+    if (evidence.kind === "error") {
+      // Preserve the normal event:error precedence. Only the provisional
+      // rejection path can resume accounting from a usage-bearing error event.
+      if (revokeRejection && !provisionalRejection && outcome === null) terminalTokens = extractUsageTokens(root);
+      outcome = "provider_error"; return;
+    }
     if (outcome !== null) return;
     if (evidence.kind === "done") {
       if (protocol === "message" || protocol === "response") { outcome = "provider_error"; return; }
@@ -162,7 +194,6 @@ export function createSseUsageAccumulator() {
       return;
     }
     if (evidence.kind === "invalid") { if (protocol) outcome = "provider_error"; found = null; return; }
-    const root = record(evidence.value);
     if (!root) { if (protocol) outcome = "provider_error"; found = null; return; }
     const terminal = responseOutcome(root);
     if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root); return; }
@@ -205,7 +236,17 @@ export function createSseUsageAccumulator() {
   }
   return {
     accept,
+    unfinished(evidence: SseUsageEvidence | null) {
+      // EOF/cancellation cannot certify unfinished nonempty data as error-only.
+      // Never accept its usage or terminal facts without an SSE boundary.
+      if (provisionalRejection && evidence && !rejectionOnlyEvidence(evidence)) {
+        continuedWork(); uncertain = true; found = null; messageUsage = null;
+      }
+    },
     result(ended = true, overflowed = false): UsageInspection {
+      // An oversized trailing frame cannot certify that delivered bytes were
+      // error-only; retain conservative billing when bounded inspection fails.
+      if (overflowed) continuedWork();
       return { tokens: outcome ? terminalTokens : protocol || !ended ? null : found, outcome: outcome ?? (ended && protocol && !uncertain && !overflowed ? "provider_error" : null) };
     },
   };
@@ -225,6 +266,7 @@ function sseFrames(consume: (frame: string | null) => void) {
   }
   return {
     overflowed: () => overflow,
+    pending: () => overflow ? null : decoder.decode(buffer.subarray(0, length)),
     push(bytes: Uint8Array) {
       let start = 0;
       for (let index = 0; index < bytes.length; index++) {

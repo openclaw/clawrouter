@@ -37,8 +37,29 @@ an upstream provider are not branded as router-generated errors.
   SSE events, UTF-8, and line endings remain byte-identical.
 - First-event inspection remains bounded and owns the endpoint deadline. Stream
   delivery, cancellation, and accounting keep their existing owners. A first
-  error event before generation starts is a received rejection: both budget
-  reservations release to zero, including background creates and cancellations.
+  error event before generation starts is a provisional received rejection:
+  both budget reservations release to zero only while subsequent events remain
+  empty or errors, including background creates and cancellations. Terminal-only
+  `[DONE]` and Anthropic `message_stop` markers carry no content or usage and do
+  not withdraw that zero-charge evidence. If a provider continues with actual
+  content or usage, even after such a marker, authoritative later usage settles
+  the request. A failed Responses terminal may still carry billed usage or
+  generated output: those facts take precedence over its error label. Output is
+  observed through a bounded nonempty witness, not retained or counted as tokens;
+  missing or uninspectable usage retains the conservative reservation.
+  Nonempty unfinished SSE data at EOF or cancellation, including undecoded UTF-8
+  payload bytes, is also uninspectable work, never authoritative usage or a new
+  terminal fact. Recognizable terminal-only
+  markers, errors and empty/comment tails do not by themselves revoke rejection.
+  Delivery bytes and the original error outcome stay unchanged. Background
+  rejection settlement waits for delivery rather than freezing a free receipt
+  before later work can be observed. Response identities after an initial error
+  are not published as continuations.
+  Claude hard-budget responses still pass through the
+  [response pricing guard](anthropic-price-modifiers.md): an oversized frame may
+  be withheld and replaced with its native pricing error. That guard retains the
+  reservation and records a `502` pricing failure even if SSE headers were already
+  delivered as `200`; an error followed only by a terminal marker remains free.
   Errors after `response.created` or `message_start` retain actual or conservative
   charges; HTTP 200 alone is not billing evidence.
 

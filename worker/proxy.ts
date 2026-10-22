@@ -522,7 +522,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format);
   if (admission) admission.completion = observed.result;
   if (background) {
-    if (!response.ok || operation.receivedRejection) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
+    if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
+    else if (operation.receivedRejection) {
+      // Native HTTP-200 rejection evidence remains provisional until delivery:
+      // a misbehaving upstream may send billable work after its error event.
+      const job = background, statusCode = response.status;
+      context.waitUntil(observed.result.then(result => job.finishRejectedDelivery({
+        statusCode, status: operation.status ?? "provider_error", billable: !result.nonbillable, tokens: result.tokens, contentRef: content,
+      })));
+    }
   } else context.waitUntil(observed.result.then(result => {
     const failure = priceGuard?.failure();
     // Replacing an unpriced response doesn't undo the dispatched work. Retain

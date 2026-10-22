@@ -16,7 +16,47 @@ const errors = {
   anthropic: { type: "error", error: { type: "overloaded_error", message: "busy 🦞" }, request_id: "anthropic-body-id" },
 };
 const event = value => `: heartbeat\r\n\r\nevent: error\r\ndata: ${JSON.stringify(value)}\r\n\r\n`;
+const dataEvent = value => `data: ${JSON.stringify(value)}\r\n\r\n`;
+const continued = {
+  openai: [
+    { object: "chat.completion.chunk", choices: [{ delta: { content: "real output 🦞" } }] },
+    { object: "chat.completion.chunk", choices: [], service_tier: "default", usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } },
+  ].map(dataEvent).join("") + "data: [DONE]\r\n\r\n",
+  responses: [
+    { type: "response.output_text.delta", delta: "real output 🦞" },
+    { type: "response.completed", response: { id: "resp_after_error", status: "completed", service_tier: "default", usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } } },
+  ].map(dataEvent).join(""),
+  anthropic: [
+    { type: "message_start", message: { type: "message", usage: { input_tokens: 10, output_tokens: 0, inference_geo: "global" } } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "real output 🦞" } },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+    { type: "message_stop" },
+  ].map(dataEvent).join(""),
+};
+const failedResponse = mode => ({ type: "response.failed", response: {
+  id: "resp_after_error", object: "response", status: "failed", service_tier: "default",
+  error: { code: "server_error", message: "failure after work" },
+  output: mode === "failed-empty" || mode === "failed-usage-only" ? [] : [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "paid output" }] }],
+  ...(mode.includes("usage") ? { usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } } : {}),
+} });
+const utf8Tails = {
+  data: "data: ", comment: ": keepalive ", empty: "data: \r\n: keepalive ",
+  error: dataEvent(errors.openai).trimEnd() + "\r\n: keepalive ",
+  marker: "data: [DONE]\r\n: keepalive ", event: 'event: error\r\ndata: {"partial":"',
+};
+const followup = (kind, mode) => mode.startsWith("failed-") ? (mode.includes("event") ? "event: error\r\n" : "") + dataEvent(failedResponse(mode))
+  : mode === "marker" || mode === "marker-usage"
+  ? (kind === "anthropic" ? dataEvent({ type: "message_stop" }) : "data: [DONE]\r\n\r\n") + (mode === "marker-usage" ? continued[kind] : "")
+  : mode === "empty" ? ": keepalive\r\n\r\ndata: \r\n\r\n"
+  : mode === "usage" ? continued[kind]
+  : mode === "unterminated" ? dataEvent(kind === "anthropic" ? { type: "content_block_delta", delta: { type: "text_delta", text: "real output" } } : kind === "responses" ? { type: "response.output_text.delta", delta: "real output" } : { object: "chat.completion.chunk", choices: [{ delta: { content: "real output" } }] }).trimEnd()
+  : mode === "null-error" ? continued[kind].replaceAll('data: {', 'data: {"error":null,')
+  : mode === "truncated" ? dataEvent(kind === "anthropic" ? { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 0 } } } : kind === "responses" ? { type: "response.output_text.delta", delta: "real output" } : { object: "chat.completion.chunk", choices: [{ delta: { content: "real output" } }] })
+  : mode === "oversized" ? dataEvent({ type: "future_event", output: "x".repeat(2 * 1024 * 1024 + 100) })
+  : mode === "invalid" ? "data: not-json\r\n\r\n"
+  : ": keepalive\r\n\r\ndata: \r\n\r\n" + event(errors[kind === "anthropic" ? kind : "openai"]);
 const router = `
+const cancellations = new Map();
 import worker, { BudgetLedgerObject as Budget } from "./worker/index.ts";
 export * from "./worker/index.ts";
 import { sha256Hex } from "./worker/utils.ts";
@@ -27,6 +67,12 @@ export class BudgetLedgerObject extends Budget {
 }
 export default { ...worker, async fetch(request, env, context) {
   const url = new URL(request.url);
+  if (url.pathname === "/fixture/cancel") {
+    const controller = cancellations.get(url.searchParams.get("id"));
+    if (!controller) return new Response("missing ingress", { status: 404 });
+    controller.abort("fixture ingress cancellation"); cancellations.delete(url.searchParams.get("id"));
+    return Response.json({ ok: true });
+  }
   if (url.pathname === "/fixture/events") return usageStub(env, "tenant", "fixture").fetch("https://usage/snapshot?events=admin");
   if (url.pathname === "/fixture/rows") return env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(url.searchParams.get("name"))).fetch("https://budget/rows");
   if (url.pathname === "/fixture/setup") {
@@ -43,17 +89,35 @@ export default { ...worker, async fetch(request, env, context) {
     }
     return Response.json({ ok: true });
   }
+  if (request.headers.has("x-fixture-cancel")) {
+    const controller = new AbortController(); cancellations.set(request.headers.get("x-fixture-cancel"), controller);
+    request = new Request(request, { signal: controller.signal });
+  }
   return worker.fetch(request, { ...env, ANTHROPIC_API_KEY: "fixture-anthropic-key", USAGE_QUEUE: { send: event => ingestUsage(env, event) } }, context);
 } };
 `;
 const upstream = `
 const errors = ${JSON.stringify(errors)}, ids = ${JSON.stringify(upstreamIds)}, rates = ${JSON.stringify(rateHeaders)};
+const continued = ${JSON.stringify(continued)};
+const failedResponse = ${failedResponse.toString()};
+const utf8Tails = ${JSON.stringify(utf8Tails)};
+const dataEvent = ${dataEvent.toString()}, event = ${event.toString()}, followup = ${followup.toString()};
 export default { async fetch(request) {
   const body = await request.json();
   const provider = new URL(request.url).hostname === "api.anthropic.com" ? "anthropic" : "openai";
   const scenario = body.metadata?.fixture;
   const headers = { ...ids, ...rates, "x-clawrouter-request-id": "untrusted-upstream-correlation", "x-clawrouter-error-code": "untrusted-upstream-code", "x-fixture-private": "not-browser-exposed", "openai-organization": "fixture-org", "openai-project": "fixture-project", "anthropic-organization-id": "fixture-anthropic-org", "anthropic-workspace-id": "fixture-workspace" };
   if (scenario === "json-error") return new Response("  " + JSON.stringify(errors[provider]) + "\\n", { status: 400, headers: { ...headers, "content-type": "application/json" } });
+  if (scenario.startsWith("after-error:")) {
+    const [, kind, mode] = scenario.split(":");
+    const bytes = mode.startsWith("cancel-utf8-") ? new Uint8Array([...new TextEncoder().encode(event(errors[provider]) + utf8Tails[mode.slice(12)]), 0xf0, 0x9f])
+      : new TextEncoder().encode(event(errors[provider]) + followup(kind, mode)); let offset = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (offset === bytes.length) { if (!mode.startsWith("cancel-utf8-")) controller.close(); return; }
+      const end = Math.min(bytes.length, offset + (mode === "oversized" ? 4093 : mode.startsWith("cancel-utf8-") ? 1 : 7));
+      controller.enqueue(bytes.subarray(offset, end)); offset = end;
+    } }, { highWaterMark: 0 }), { headers: { ...headers, "content-type": "text/event-stream" } });
+  }
   if (scenario === "sse-error" || scenario === "sse-rejection") {
     const text = ": heartbeat\\r\\n\\r\\nevent: error\\r\\ndata: " + JSON.stringify(errors[provider]) + "\\r\\n\\r\\n";
     const bytes = new TextEncoder().encode(text); let offset = 0;
@@ -208,5 +272,85 @@ test("first native SSE errors release both real SQL budgets, including durable b
       const added = (await rows(owners[index])).slice(before[index].length);
       assert.equal(added.length, 1); assert.equal(added[0].settled, 1); assert.equal(added[0].reserved_micros, 0);
     }
+  }
+});
+
+// A provider may violate its terminal-error contract. Preserve its bytes, but
+// observable later work must withdraw the initial no-charge evidence.
+for (const [kind, path, background] of [["openai", "/v1/chat/completions", false], ["responses", "/v1/responses", false], ["anthropic", "/v1/messages", false], ["responses", "/v1/responses", true]]) {
+  for (const mode of ["marker", "marker-usage", "empty", "usage", "null-error", "truncated", "unterminated", "errors-only", "invalid", "oversized", ...(kind === "responses" ? ["failed-usage", "failed-usage-only", "failed-output", "failed-empty", "failed-event-usage", "failed-event-output"] : [])]) test(`first SSE error followed by ${mode}: ${kind}, background=${background}`, { timeout: 60000 }, async () => {
+    const provider = kind === "anthropic" ? kind : "openai", id = `continued-${kind}-${background}-${mode}`;
+    const owners = ["tenant:fixture", "provider:" + provider];
+    const rows = async name => (await (await runtime.dispatchFetch("https://router.example/fixture/rows?name=" + encodeURIComponent(name))).json());
+    const before = await Promise.all(owners.map(rows));
+    const raw = JSON.stringify({ model: provider === "anthropic" ? "claude-sonnet-4-6" : "openai/gpt-6-astra", input: "synthetic", messages: [{ role: "user", content: "synthetic" }], max_tokens: 16, max_output_tokens: 16, stream: true, ...(background ? { background: true } : {}), metadata: { fixture: `after-error:${kind}:${mode}` } });
+    const response = await call(provider, "", { path, raw, headers: { "x-request-id": id } });
+    assert.equal(response.status, 200);
+    // Main's Claude hard-budget price guard refuses oversized frames before the
+    // usage observer. Preserve its exact native error, not the withheld payload.
+    const priceGuarded = kind === "anthropic" && mode === "oversized";
+    const delivered = priceGuarded ? "event: error\ndata: " + JSON.stringify({ type: "error", error: { type: "api_error", message: "Anthropic response pricing could not be verified: unsupported usage modifiers or an exceeded inspection limit. Contact the router operator; for oversized responses, reduce max_tokens or response size. The reservation is retained; do not blindly retry paid work." }, request_id: id }) + "\n\n" : followup(kind, mode);
+    assert.equal(await response.text(), event(errors[provider]) + delivered);
+    let receipt;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const snapshot = await (await runtime.dispatchFetch("https://router.example/fixture/events")).json();
+      const matches = snapshot.events.filter(value => value.request_id === id);
+      if (matches.length) { assert.equal(matches.length, 1); receipt = matches[0]; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(receipt, "one durable receipt must be visible");
+    assert.equal(receipt.status_code, priceGuarded ? 502 : 200); assert.equal(receipt.status, "provider_error");
+    if (mode === "errors-only" || mode === "marker" || mode === "empty" || mode === "failed-empty") { assert.equal(receipt.actual_cost_micros, 0); assert.equal(receipt.cost_basis, "none"); }
+    else {
+      assert.ok(receipt.actual_cost_micros > 0, "delivered work cannot be free");
+      if (mode === "usage" || mode === "null-error" || mode === "marker-usage" || mode === "failed-usage" || mode === "failed-usage-only" || mode === "failed-event-usage") {
+        assert.deepEqual([receipt.input_tokens, receipt.output_tokens, receipt.total_tokens], [10, 2, 12]);
+        assert.equal(receipt.cost_basis, "manifest_pricing");
+        assert.equal(receipt.actual_cost_micros, provider === "anthropic" ? 60 : 200);
+        assert.ok(receipt.actual_cost_micros < receipt.reserved_cost_micros, "authoritative usage replaces the reservation");
+      } else { assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros); assert.equal(receipt.cost_basis, priceGuarded ? "unpriced_usage" : "manifest_reservation"); }
+    }
+    for (let index = 0; index < owners.length; index++) {
+      const added = (await rows(owners[index])).slice(before[index].length);
+      assert.equal(added.length, 1); assert.equal(added[0].settled, 1); assert.equal(added[0].reserved_micros, receipt.actual_cost_micros);
+    }
+    if (kind === "responses" && (mode === "usage" || mode === "marker-usage" || mode.startsWith("failed-"))) {
+      const follow = await call("openai", "", { path: "/v1/responses", raw: JSON.stringify({ model: "openai/gpt-6-astra", input: "x", previous_response_id: "resp_after_error", max_output_tokens: 1, stream: true }), headers: { "x-request-id": "unpublished-" + background + "-" + mode } });
+      assert.equal(follow.status, 409); assert.equal((await follow.json()).error.code, "continuation_restart_required");
+    }
+  });
+}
+
+// Reviewer R2-B2: raw incomplete UTF-8, not a TextEncoder replacement character.
+for (const background of [false, true]) for (const kind of Object.keys(utf8Tails)) test(`raw UTF-8 cancellation accounts for ${kind}, background=${background}`, async () => {
+  const id = `utf8-cancel-${background}-${kind}`, owners = ["tenant:fixture", "provider:openai"];
+  const rows = async name => (await (await runtime.dispatchFetch("https://router.example/fixture/rows?name=" + encodeURIComponent(name))).json());
+  const before = await Promise.all(owners.map(rows));
+  const response = await call("openai", "", { path: "/v1/responses", headers: { "x-request-id": id, "x-fixture-cancel": id },
+    raw: JSON.stringify({ model: "openai/gpt-6-astra", input: "synthetic", max_output_tokens: 16, stream: true, ...(background ? { background: true } : {}), metadata: { fixture: "after-error:responses:cancel-utf8-" + kind } }) });
+  assert.equal(response.status, 200);
+  const expected = new Uint8Array([...new TextEncoder().encode(event(errors.openai) + utf8Tails[kind]), 0xf0, 0x9f]);
+  const reader = response.body.getReader(), chunks = []; let size = 0;
+  while (size < expected.length) {
+    const next = await reader.read(); assert.equal(next.done, false); chunks.push(next.value); size += next.value.length;
+  }
+  assert.deepEqual(Buffer.concat(chunks), Buffer.from(expected));
+  assert.equal((await runtime.dispatchFetch("https://router.example/fixture/cancel?id=" + id)).status, 200);
+  await reader.cancel().catch(() => {}); reader.releaseLock();
+  let receipt;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const snapshot = await (await runtime.dispatchFetch("https://router.example/fixture/events")).json();
+    const matches = snapshot.events.filter(value => value.request_id === id);
+    if (matches.length) { assert.equal(matches.length, 1); receipt = matches[0]; break; }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.ok(receipt); assert.equal(receipt.status, "provider_error"); assert.equal(receipt.status_code, 200);
+  assert.ok(receipt.reserved_cost_micros > 0);
+  assert.equal(receipt.actual_cost_micros, kind === "data" ? receipt.reserved_cost_micros : 0, "only undecoded payload bytes revoke no-work evidence");
+  assert.equal(receipt.cost_basis, kind === "data" ? "manifest_reservation" : "none");
+  assert.deepEqual([receipt.input_tokens, receipt.output_tokens, receipt.total_tokens], [null, null, null]);
+  for (let index = 0; index < owners.length; index++) {
+    const added = (await rows(owners[index])).slice(before[index].length);
+    assert.equal(added.length, 1); assert.equal(added[0].settled, 1); assert.equal(added[0].reserved_micros, receipt.actual_cost_micros);
   }
 });

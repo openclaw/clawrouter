@@ -35,8 +35,9 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const eventStream = !speech && contentType.includes("text/event-stream"), json = !speech && contentType.includes("json");
   const images = responseFormat === "openai.images_generations";
   const compact = responseFormat === "openai.responses_compact";
-  const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe) : null;
-  const sse = !compact && !images && !responses && eventStream ? createSseUsageInspector() : null;
+  const revokeRejection = response.ok && operation.receivedRejection ? () => operation.revokeRejection() : undefined;
+  const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe, undefined, revokeRejection) : null;
+  const sse = !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection) : null;
   let inspect = !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
