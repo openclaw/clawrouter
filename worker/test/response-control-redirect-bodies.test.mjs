@@ -53,7 +53,7 @@ for (const pooled of [false, true]) for (const action of ["retrieve", "cancel"])
     const response = await call("/v1/responses/response-fixture" + (action === "cancel" ? "/cancel" : ""), undefined, action === "cancel" ? "POST" : "GET");
     assert.equal(response.status, 502); assert.equal(response.headers.get("location"), null);
     assert.equal(response.headers.get("retry-after"), null);
-    assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed" } });
+    assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed", type: "server_error", param: null } });
     assert.equal(cancelled, 1); assert.equal(requests.length, 2);
     assert.equal(requests[1].redirect, "manual"); assert.equal(requests[1].body, null);
     assert.equal(requests[1].headers.get("authorization"), "Bearer " + (pooled ? "fixture-grant" : "fixture-environment"));

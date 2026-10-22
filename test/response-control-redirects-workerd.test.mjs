@@ -113,7 +113,7 @@ for (const pooled of [false, true]) test(`workerd public controls refuse every r
       await f.configure(config);
       const response = await f.call(path, body, method);
       assert.equal(response.status, 502, path + ": " + await response.clone().text()); assert.equal(response.headers.get("location"), null); assert.equal(response.headers.get("retry-after"), null);
-      assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed" } });
+      assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed", type: "server_error", param: null } });
       const calls = await f.calls(); assert.equal(calls.length, 1, "redirect target receives zero traffic or secrets");
       assert.equal(new URL(calls[0].url).hostname, "api.openai.com");
       assert.equal(calls[0].headers.authorization, "Bearer " + (pooled ? "fixture-grant-key" : "fixture-upstream-key"));
