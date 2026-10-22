@@ -21,11 +21,22 @@ Nested objects/arrays and null array items are rejected with `invalid_request_bo
 before dispatch. JSON objects cannot represent interleaving between different
 keys; use the native URL or direct manifest GET URL when that order matters.
 
-Precedence remains configured upstream query, endpoint query, then caller query.
-Each caller key with values replaces all configured values of that key, without
-collapsing its repeated caller values. Query data never selects an arbitrary
-upstream URL, changes the proxy-key policy, substitutes upstream credentials, or
-satisfies missing mandatory operator configuration.
+Caller keys that collide with credential or operator `upstream.query` keys are
+rejected with `protected_query_parameter` before egress, including query API keys.
+Other caller keys replace endpoint defaults without collapsing repeated values.
+Query data never selects an arbitrary upstream URL, changes the proxy-key policy,
+substitutes upstream credentials, or satisfies missing operator configuration.
+
+Responses ownership hashes the configured create URL before caller query is
+applied. A query-bearing create can be continued, retrieved or canceled without
+repeating that query; credential/configuration changes still invalidate its owner.
+Previously created native continuations whose owner included caller query need
+one full-input restart after deployment.
+
+Queries are forwarded to the selected subscription transport too. They do not
+select another grant or endpoint; the upstream validates their meaning. This is
+transport preservation, not a guarantee that every query is supported by a
+subscription service.
 
 Existing query restrictions remain authoritative: image generation, Responses
 compaction and qualified durable background creation reject caller query. Closed

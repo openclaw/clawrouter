@@ -581,7 +581,10 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
     upstream.query.forEach((value, name) => url.searchParams.set(name, value));
     for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
-    applyProxyQuery(url.searchParams, queryInput);
+    // Continuations and controls reconstruct the configured route, not the
+    // incidental query of one create call. Credential/config changes still pin.
+    const configuredOwnerUrl = new URL(url);
+    applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
     const body = transformTransportBody(upstream.transport, selection.body);
     // Claude's enlarged envelope must not coexist with full-document pricing,
     // transport and retention copies in the Worker's 128 MB isolate. Keep small
@@ -596,7 +599,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
       if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
-      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : url;
+      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : configuredOwnerUrl;
       if (compact) upstream.query.forEach((value, name) => ownerUrl.searchParams.set(name, value));
       continuation = {
         providerId: selection.provider.id, endpointId: create.id, grantKey: upstream.grantKey,

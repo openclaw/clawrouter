@@ -6,9 +6,10 @@ export function hasProxyQuery(query: ProxyQuery): boolean {
   return query instanceof URLSearchParams ? query.size > 0 : Object.keys(query).length > 0;
 }
 
-export function applyProxyQuery(target: URLSearchParams, input: ProxyQuery): void {
+export function applyProxyQuery(target: URLSearchParams, input: ProxyQuery, protectedKeys: Iterable<string> = []): void {
   const query = input instanceof URLSearchParams ? input : manifestQuery(input);
-  // Caller keys replace configured defaults, as before. Delete once, then append
+  for (const name of protectedKeys) if (query.has(name)) throw new HttpError(400, "protected_query_parameter", "caller query cannot replace credential or operator upstream query parameters");
+  // Caller keys replace unprotected endpoint defaults, as before. Delete once, then append
   // the entire ordered sequence: set() would collapse repeats and interleaving.
   query.forEach((_value, name) => target.delete(name));
   query.forEach((value, name) => target.append(name, value));

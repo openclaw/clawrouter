@@ -11,10 +11,12 @@ const router = `
  import worker from "./worker/index.ts";
  export * from "./worker/index.ts";
  import { sha256Hex } from "./worker/utils.ts";
+ import { providerById } from "./worker/providers.ts";
  export default { ...worker, async fetch(request, env, context) {
   const url = new URL(request.url);
   if (url.pathname === "/fixture/setup") {
    const options = await request.json();
+   if (options.queryCredential) { const provider = providerById("openai"); provider.auth.schemes = [{type:"query_api_key",param:"api_key",secretKind:"api_key"}]; provider.adapter.injectQuery.region = "operator-region"; }
    const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
    for (const [path, body] of [
     ["/policies/initialize-all", [{policyId:"fixture",policy:{enabled:true,generation:"g1",providers:options.providers ?? ["openai","replicate","azure-openai","anthropic"],tenantId:"tenant",monthlyBudgetMicros:null,retainRequestContent:false}}]],
@@ -24,8 +26,9 @@ const router = `
    if (options.fusion) await env.POLICY_KV.put("config/fusion",JSON.stringify({enabled:true,adviserModels:["openai/gpt-4.1-mini"],aggregatorModel:"openai/gpt-4.1-mini"}));
    return Response.json({ok:true});
   }
+  if (url.pathname === "/fixture/config") { providerById("openai").endpoints.find(endpoint=>endpoint.id==="responses").query.fixture_config = (await request.json()).version; return Response.json({ok:true}); }
   if (url.pathname === "/fixture/calls") return fetch("https://fixture.example/calls");
-  const configured = {...env, REPLICATE_API_TOKEN:"fixture-replicate-key", ANTHROPIC_API_KEY:"fixture-anthropic-key", AZURE_OPENAI_API_KEY:"fixture-azure-key", AZURE_OPENAI_ENDPOINT:"https://fixture.openai.azure.com", ...(request.headers.has("x-fixture-missing-config") ? {} : {AZURE_OPENAI_API_VERSION:"configured-version"})};
+  const configured = {...env, ...(request.headers.has("x-fixture-rotate") ? {OPENAI_API_KEY:"fixture-rotated-key"} : {}), REPLICATE_API_TOKEN:"fixture-replicate-key", ANTHROPIC_API_KEY:"fixture-anthropic-key", AZURE_OPENAI_API_KEY:"fixture-azure-key", AZURE_OPENAI_ENDPOINT:"https://fixture.openai.azure.com", ...(request.headers.has("x-fixture-missing-config") ? {} : {AZURE_OPENAI_API_VERSION:"configured-version"})};
   return worker.fetch(request, configured, context);
  }};
 `;
@@ -37,7 +40,9 @@ const upstream = `
    if (request.url === "https://fixture.example/calls") return Response.json(calls);
    const call = {url:request.url,method:request.method,body:await request.text(),authorization:request.headers.get("authorization"),apiKey:request.headers.get("api-key")};
    calls.push(call); await this.storage.put("calls",calls);
-   return Response.json({...call, choices:[{message:{content:"synthetic adviser output"}}], usage:{input_tokens:1,output_tokens:1,total_tokens:2}});
+   const path = new URL(request.url).pathname;
+   const response = path.startsWith("/v1/responses") ? {object:"response",id:path==="/v1/responses" ? "resp_"+calls.length : path.split("/")[3],status:"completed",output:[]} : {};
+   return Response.json({...call, ...response, choices:[{message:{content:"synthetic adviser output"}}], usage:{input_tokens:1,output_tokens:1,total_tokens:2}});
   }
  }
  export default {fetch(request,env) {return env.WIRE.get(env.WIRE.idFromName("wire")).fetch(request);}};
@@ -51,7 +56,7 @@ async function fixture(t, setup = {}) {
  const call = (path, body, headers = {}) => worker.dispatchFetch("https://router.example"+path, {headers:{authorization,...headers},...(body === undefined ? {} : {method:"POST",body:JSON.stringify(body)})});
  const initialized = await call("/fixture/setup", setup);
  assert.equal(initialized.status, 200, await initialized.text());
- return {call, calls:async () => (await call("/fixture/calls")).json()};
+ return {call, control:(path, options={})=>worker.dispatchFetch("https://router.example"+path,{...options,headers:{authorization,"content-type":"application/json",...options.headers}}), calls:async () => (await call("/fixture/calls")).json()};
 }
 async function wire(response) {
  assert.equal(response.status,200,response.ok ? "" : await response.clone().text());
@@ -165,4 +170,40 @@ test("workerd queries cannot override credential or provider authorization", {ti
   assert.equal((await response.json()).error.code,code);
   assert.equal((await f.calls()).length,0);
  }
+});
+
+for (const createPath of ["/v1/responses", "/v1/native/openai/v1/responses"]) test("query-bearing Responses creation retains its owner for continuation and controls: " + createPath, {timeout:60000}, async t => {
+ const f = await fixture(t);
+ const body = {model:"openai/gpt-6-astra",input:"fixture"};
+ const created = await wire(await f.call(createPath+"?trace=1&trace=2",body));
+ assert.equal(created.url,"https://api.openai.com/v1/responses?trace=1&trace=2");
+ const continued = await wire(await f.call("/v1/responses",{...body,previous_response_id:created.id}));
+ assert.equal(JSON.parse(continued.body).previous_response_id,created.id);
+ for (const [path,options] of [[`/v1/responses/${created.id}`,{}],[`/v1/responses/${created.id}/cancel`,{method:"POST"}]]) {
+  const response = await f.control(path, options); assert.equal(response.status,200,await response.clone().text()); await response.text();
+ }
+ const sent = await f.calls(); assert.equal(sent.length,4);
+ assert.ok(sent.slice(1).every(call=>!new URL(call.url).search && call.authorization==="Bearer fixture-upstream-key"));
+ for (const [path,options] of [["/v1/responses",{method:"POST",body:JSON.stringify({...body,previous_response_id:created.id})}],[`/v1/responses/${created.id}`,{}]]) {
+  const changed = await f.control(path,{...options,headers:{"x-fixture-rotate":"1"}});
+  assert.equal(changed.status,409); await changed.text();
+ }
+ await f.call("/fixture/config",{version:"changed"});
+ const changedRoute = await f.call(`/v1/responses/${created.id}`);
+ assert.equal(changedRoute.status,409); assert.equal((await changedRoute.json()).error.code,"response_owner_unavailable");
+ assert.equal((await f.calls()).length,4,"credential and configured route changes still reject before egress");
+});
+
+test("caller queries cannot replace credential or operator upstream query keys",{timeout:60000},async t=>{
+ const f=await fixture(t,{queryCredential:true});
+ for(const name of ["api_key","region"]) for(const carrier of ["native","unified","manifest"]){
+  const body={model:"openai/text-embedding-3-small",input:"fixture"};
+  const path=carrier==="manifest"?"/v1/proxy/openai/embeddings":(carrier==="native"?"/v1/native/openai":"")+"/v1/embeddings";
+  const response=await f.call(path+(carrier==="manifest"?"":"?"+name+"=caller&"+name+"=other"),carrier==="manifest"?{body,query:{[name]:["caller","other"]}}:body);
+  assert.equal(response.status,400);assert.equal((await response.json()).error.code,"protected_query_parameter");
+ }
+ assert.equal((await f.calls()).length,0);
+ const allowed=await wire(await f.call("/v1/embeddings?trace=1",{model:"openai/text-embedding-3-small",input:"fixture"}));
+ assert.equal(allowed.url,"https://api.openai.com/v1/embeddings?api_key=fixture-upstream-key&region=operator-region&trace=1");
+ assert.equal(allowed.authorization,null);
 });
