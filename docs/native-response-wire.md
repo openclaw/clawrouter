@@ -48,6 +48,11 @@ an upstream provider are not branded as router-generated errors.
   rejection settlement waits for delivery rather than freezing a free receipt
   before later work can be observed. Response identities after an initial error
   are not published as continuations.
+  Claude hard-budget responses still pass through the
+  [response pricing guard](anthropic-price-modifiers.md): an oversized frame may
+  be withheld and replaced with its native pricing error. That guard retains the
+  reservation and records a `502` pricing failure even if SSE headers were already
+  delivered as `200`; an error followed only by a terminal marker remains free.
   Errors after `response.created` or `message_start` retain actual or conservative
   charges; HTTP 200 alone is not billing evidence.
 

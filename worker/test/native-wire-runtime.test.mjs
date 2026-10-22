@@ -27,7 +27,7 @@ const continued = {
     { type: "response.completed", response: { id: "resp_after_error", status: "completed", service_tier: "default", usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } } },
   ].map(dataEvent).join(""),
   anthropic: [
-    { type: "message_start", message: { type: "message", usage: { input_tokens: 10, output_tokens: 0 } } },
+    { type: "message_start", message: { type: "message", usage: { input_tokens: 10, output_tokens: 0, inference_geo: "global" } } },
     { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "real output 🦞" } },
     { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
     { type: "message_stop" },
@@ -259,7 +259,11 @@ for (const [kind, path, background] of [["openai", "/v1/chat/completions", false
     const raw = JSON.stringify({ model: provider === "anthropic" ? "claude-sonnet-4-6" : "openai/gpt-6-astra", input: "synthetic", messages: [{ role: "user", content: "synthetic" }], max_tokens: 16, max_output_tokens: 16, stream: true, ...(background ? { background: true } : {}), metadata: { fixture: `after-error:${kind}:${mode}` } });
     const response = await call(provider, "", { path, raw, headers: { "x-request-id": id } });
     assert.equal(response.status, 200);
-    assert.equal(await response.text(), event(errors[provider]) + followup(kind, mode));
+    // Main's Claude hard-budget price guard refuses oversized frames before the
+    // usage observer. Preserve its exact native error, not the withheld payload.
+    const priceGuarded = kind === "anthropic" && mode === "oversized";
+    const delivered = priceGuarded ? "event: error\ndata: " + JSON.stringify({ type: "error", error: { type: "api_error", message: "Anthropic response pricing could not be verified: unsupported usage modifiers or an exceeded inspection limit. Contact the router operator; for oversized responses, reduce max_tokens or response size. The reservation is retained; do not blindly retry paid work." }, request_id: id }) + "\n\n" : followup(kind, mode);
+    assert.equal(await response.text(), event(errors[provider]) + delivered);
     let receipt;
     for (let attempt = 0; attempt < 100; attempt++) {
       const snapshot = await (await runtime.dispatchFetch("https://router.example/fixture/events")).json();
@@ -268,7 +272,7 @@ for (const [kind, path, background] of [["openai", "/v1/chat/completions", false
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.ok(receipt, "one durable receipt must be visible");
-    assert.equal(receipt.status_code, 200); assert.equal(receipt.status, "provider_error");
+    assert.equal(receipt.status_code, priceGuarded ? 502 : 200); assert.equal(receipt.status, "provider_error");
     if (mode === "errors-only" || mode === "marker" || mode === "empty") { assert.equal(receipt.actual_cost_micros, 0); assert.equal(receipt.cost_basis, "none"); }
     else {
       assert.ok(receipt.actual_cost_micros > 0, "delivered work cannot be free");
@@ -277,7 +281,7 @@ for (const [kind, path, background] of [["openai", "/v1/chat/completions", false
         assert.equal(receipt.cost_basis, "manifest_pricing");
         assert.equal(receipt.actual_cost_micros, provider === "anthropic" ? 60 : 200);
         assert.ok(receipt.actual_cost_micros < receipt.reserved_cost_micros, "authoritative usage replaces the reservation");
-      } else { assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros); assert.equal(receipt.cost_basis, "manifest_reservation"); }
+      } else { assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros); assert.equal(receipt.cost_basis, priceGuarded ? "unpriced_usage" : "manifest_reservation"); }
     }
     for (let index = 0; index < owners.length; index++) {
       const added = (await rows(owners[index])).slice(before[index].length);
