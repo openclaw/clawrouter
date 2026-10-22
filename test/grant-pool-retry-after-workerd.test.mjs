@@ -36,23 +36,26 @@ test("workerd answers a cooling grant pool with 429 and Retry-After, and exhaust
     assert.equal((await feedback("oauth/exhausted/anthropic", { status: "cooldown", cooldownUntil: null, lastSignal: "quota", windows: [{ id: "week-sonnet", kind: "requests", remaining: 0, limit: 100, resetAt: null, models: ["sonnet"] }] })).status, 200);
     assert.equal((await feedback("oauth/unauthorized/anthropic", { status: "cooldown", cooldownUntil: new Date(Date.now() + 300_000).toISOString(), lastSignal: "authentication", windows: [] })).status, 200);
     const send = (id) => fetch(new URL("/v1/messages", origin), { method: "POST", headers: { authorization: `Bearer clawrouter-live-${id}-${secret}`, "content-type": "application/json" }, body: JSON.stringify({ model: "anthropic/claude-sonnet-5", max_tokens: 16, messages: [{ role: "user", content: "hello" }] }), signal: AbortSignal.timeout(10_000) });
-    const body = { error: { code: "upstream_grant_pool_unavailable", message: "provider anthropic has no available scoped upstream grant" } };
+    const body = (type, requestId) => ({ type: "error", error: { type, message: "provider anthropic has no available scoped upstream grant" }, request_id: requestId });
 
     const cooling = await send("cooling");
     assert.equal(cooling.status, 429);
     assert.ok(["59", "60"].includes(cooling.headers.get("retry-after")), cooling.headers.get("retry-after"));
     assert.ok(cooling.headers.get("access-control-expose-headers").split(",").includes("retry-after"));
-    assert.deepEqual(await cooling.json(), body);
+    assert.deepEqual(await cooling.json(), body("rate_limit_error", cooling.headers.get("request-id")));
+    assert.equal(cooling.headers.get("x-clawrouter-error-code"), "upstream_grant_pool_unavailable");
 
     const exhausted = await send("exhausted");
     assert.equal(exhausted.status, 503);
     assert.equal(exhausted.headers.get("retry-after"), null);
-    assert.deepEqual(await exhausted.json(), body);
+    assert.deepEqual(await exhausted.json(), body("api_error", exhausted.headers.get("request-id")));
+    assert.equal(exhausted.headers.get("x-clawrouter-error-code"), "upstream_grant_pool_unavailable");
 
     const unauthorized = await send("unauthorized");
     assert.equal(unauthorized.status, 503);
     assert.equal(unauthorized.headers.get("retry-after"), null);
-    assert.deepEqual(await unauthorized.json(), body);
+    assert.deepEqual(await unauthorized.json(), body("api_error", unauthorized.headers.get("request-id")));
+    assert.equal(unauthorized.headers.get("x-clawrouter-error-code"), "upstream_grant_pool_unavailable");
   } finally {
     await mf?.dispose();
     await rm(temporary, { recursive: true, force: true });

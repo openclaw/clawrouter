@@ -87,7 +87,8 @@ test("actual CLI imports, rotates and revokes the credential used by Worker rout
   await owner.object.alarm();
   const denied = await fixture.proxy();
   assert.equal(denied.status, 503);
-  assert.equal((await denied.json()).error.code, "provider_not_configured");
+  assert.equal(denied.headers.get("x-clawrouter-error-code"), "provider_not_configured");
+  assert.equal((await denied.json()).error.type, "api_error");
   assert.equal(calls, 2, "revoke and maintenance never dispatch another provider request");
   assert.equal(owner.alarm(), null);
   assert.equal(owner.values.get("credential").enabled, false);
