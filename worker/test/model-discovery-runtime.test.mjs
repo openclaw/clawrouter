@@ -37,7 +37,7 @@ export class Upstream {
  calls.push({url:request.url,method:request.method,headers:Object.fromEntries(request.headers),body:await request.text()}); await this.storage.put('calls',calls);
  const replies=await this.storage.get('replies')??[], reply=replies.length>1?replies.shift():replies[0]; await this.storage.put('replies',replies);
  if(reply?.disconnect) throw new Error('synthetic upstream failure');
- return new Response(reply?.wire??JSON.stringify(reply?.body??{}),{status:reply?.status??200,headers:{'content-type':'application/json','x-request-id':'upstream-fixture',...reply?.headers}});
+ return new Response(reply?.status===304?null:reply?.wire??JSON.stringify(reply?.body??{}),{status:reply?.status??200,headers:{'content-type':'application/json','x-request-id':'upstream-fixture',...reply?.headers}});
  }
 }
 export default {fetch(request,env){return env.UPSTREAM.get(env.UPSTREAM.idFromName('fixture')).fetch(request);}};
@@ -46,6 +46,25 @@ const openai = id => ({ id, object:'model', created:123, owned_by:'fixture-org' 
 const anthropic = id => ({ id, type:'model', display_name:id, created_at:'2026-01-01T00:00:00Z', capabilities:{batch:{supported:true}}, max_input_tokens:100, max_tokens:20 });
 const page = (data, has_more=false) => ({data,first_id:data[0]?.id??null,last_id:data.at(-1)?.id??null,has_more});
 const authorization='Bearer clawrouter-live-fixture-fixture-key';
+async function assertNativeError(response, provider, status, code, message, type) {
+ assert.equal(response.status,status,await response.clone().text());
+ assert.equal(response.headers.get('x-clawrouter-error-code'),code);
+ const requestId=response.headers.get('x-clawrouter-request-id'); assert.ok(requestId);
+ if(provider==='anthropic') assert.equal(response.headers.get('request-id'),requestId);
+ else assert.equal(response.headers.get('x-request-id'),requestId);
+ assert.deepEqual(await response.json(),provider==='anthropic'
+  ? {type:'error',error:{type,message},request_id:requestId}
+  : {error:{message,type,param:null,code}});
+ for(const name of ['x-clawrouter-grant-lane','x-clawrouter-upstream-provider','server-timing']) assert.equal(response.headers.get(name),null,name);
+}
+const inferenceReply=provider=>provider==='openai'
+ ? {id:'resp_fixture',object:'response',status:'completed',output:[],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}
+ : {id:'msg_fixture',type:'message',role:'assistant',model:'claude-sonnet-4-6',content:[],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1}};
+async function assertNoCooldown(f,provider) {
+ await f.drain();
+ const state=JSON.parse(await f.object('/grant-pools/states',{keys:['oauth/fixture/'+provider]}));
+ assert.deepEqual(state.states,{},'discovery must not write any inference grant runtime or cooldown');
+}
 async function fixture(t) {
  const temporary=await mkdtemp(join(tmpdir(),'cr-model-discovery-'));
  const mf=await startWorkerdFixture(temporary,router,upstream,{upstreamDurableObjects:{UPSTREAM:{className:'Upstream',useSQLite:true}}});
@@ -59,7 +78,7 @@ async function fixture(t) {
  await object('/connections/initialize-all',[{providerId:'openai',enabled:true},{providerId:'anthropic',enabled:true}]);
  const grant=async(provider,kind='api_key',revoke=false)=>{const r=await call('/fixture/grant',{method:'POST',body:JSON.stringify({key:'oauth/fixture/'+provider,revoke,grant:{provider,kind,enabled:true,credential:'synthetic-'+provider+'-key',...(kind==='api_key'?{}:{accessToken:'synthetic-subscription-token'})}})});assert.equal(r.status,200,await r.clone().text());return r.json();};
  await grant('openai');await grant('anthropic');
- const state=async(replies)=>{const r=await call('/fixture/upstream',{method:'POST',body:JSON.stringify(replies?{replies}:{})});return r.json();};
+ const state=async(replies)=>{const r=await call('/fixture/upstream',{method:'POST',body:JSON.stringify(replies?{replies}:{})}); const wire=await r.text(); assert.equal(r.status,200,wire); assert.ok(wire,'upstream state inspector must return JSON'); return JSON.parse(wire);};
  return {call,object,policy,credential,grant,state,async drain(){const r=await call('/fixture/drain');assert.equal(r.status,200,await r.text());},reply:body=>state([{body}]),async updatePolicy(change){Object.assign(policy,change);await object('/policies/put',{policyId:'fixture',policy});},async events(count){for(let n=0;n<100;n++){const s=await state();if(s.events.length>=count)return s.events;await new Promise(r=>setTimeout(r,20));}assert.fail('usage events not collected');}};
 }
 
@@ -232,21 +251,19 @@ test('decision-only catalog rows never gain Chat or Responses capabilities', asy
 
 for (const pagination of [false,true]) for (const status of [401,403,429]) {
  test((pagination?'internal pagination':'initial')+' discovery rejection '+status+' never cools the inference grant', async t => {
-  for (const surface of ['native','manifest']) {
-   const f=await fixture(t), provider=pagination?'anthropic':'openai';
-   if(pagination) await f.updatePolicy({models:['anthropic/claude-sonnet-4-6']});
+  for (const surface of ['native','manifest']) for (const provider of pagination?['anthropic']:['openai','anthropic']) for (const restricted of pagination?[true]:[false,true]) {
+   const f=await fixture(t);
+   if(restricted) await f.updatePolicy({models:[provider==='openai'?'openai/gpt-6-astra':'anthropic/claude-sonnet-4-6']});
    const rejected={status,body:{error:{message:'private model: missing api.model.read'}},headers:{'retry-after':'60'}};
-   const inference=provider==='openai'
-    ? {id:'resp_fixture',object:'response',status:'completed',output:[],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}
-    : {id:'msg_fixture',type:'message',role:'assistant',model:'claude-sonnet-4-6',content:[],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1}};
+   const inference=inferenceReply(provider);
    await f.state([...(pagination?[{body:page([anthropic('hidden-private')],true)}]:[]),rejected,{body:inference}]);
    const path=surface==='native'?'/v1/native/'+provider+'/v1/models':'/v1/proxy/'+provider+'/models_list';
    const discovery=await f.call(path); assert.equal(discovery.status,status); assert.equal(discovery.headers.get('retry-after'),'60');
-   if(pagination) assert.deepEqual(await discovery.json(),{error:{code:'model_discovery_rejected',message:'upstream rejected model discovery'}});
+   if(restricted) await assertNativeError(discovery,provider,status,'model_discovery_rejected','upstream rejected model discovery',provider==='anthropic'?{401:'authentication_error',403:'permission_error',429:'rate_limit_error'}[status]:status===429?'rate_limit_error':'invalid_request_error');
    else assert.deepEqual(await discovery.json(),rejected.body);
    // Drain real ExecutionContext work, including any grant-runtime write, before
    // checking eligibility. A fast follow-up cannot race a late cooldown write.
-   await f.drain(); const before=(await f.state()).calls.length; assert.equal(before,pagination?2:1);
+   await assertNoCooldown(f,provider); const before=(await f.state()).calls.length; assert.equal(before,pagination?2:1);
    const body=provider==='openai'?{model:'openai/gpt-6-astra',input:'fixture'}:{model:'anthropic/claude-sonnet-4-6',max_tokens:1,messages:[{role:'user',content:'fixture'}]};
    const response=await f.call(provider==='openai'?'/v1/responses':'/v1/messages',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
    assert.equal(response.status,200,await response.clone().text()); assert.deepEqual(await response.json(),inference); await f.drain();
@@ -297,4 +314,43 @@ test('OpenAI discovery forwards per-call diagnostic IDs without replay keys', as
   assert.equal(call.method,'GET'); assert.equal(call.body,'');
  }
  assert.equal((await f.state()).calls.length,before+4,'exactly one upstream request per discovery call');
+});
+
+for (const provider of ['openai','anthropic']) for (const pagination of provider==='anthropic'?[false,true]:[false]) for (const surface of ['native','manifest']) test(provider+' '+surface+' '+(pagination?'internal':'initial')+' discovery redirects fail closed as provider unavailable', async t => {
+ const f=await fixture(t); await f.updatePolicy({models:[provider==='openai'?'openai/gpt-6-astra':'anthropic/claude-sonnet-4-6']});
+ const path=surface==='native'?'/v1/native/'+provider+'/v1/models':'/v1/proxy/'+provider+'/models_list';
+ const redirects=[301,302,303,307,308].flatMap(status=>[false,true].map(crossOrigin=>({status,crossOrigin})));
+ redirects.push(...[300,304,399].map(status=>({status,noLocation:true})));
+ let expected=0;
+ for (const config of redirects) await t.test(JSON.stringify(config), async () => {
+  const before=(await f.state()).calls.length;
+  const requestId='redirect-'+provider+'-'+surface+'-'+pagination+'-'+config.status+'-'+!!config.crossOrigin;
+  const accepted={...inferenceReply(provider),id:(provider==='openai'?'resp_':'msg_')+requestId};
+  await f.state([
+   ...(pagination?[{body:page([anthropic('hidden-private')],true)}]:[]),
+   {status:config.status,body:{private:'hidden-redirect-body'},headers:{'retry-after':'900',...(config.noLocation?{}:{location:config.crossOrigin?'https://redirect.example/redirect-target?secret=hidden-location':'/redirect-target?secret=hidden-location'})}},
+   {body:accepted},
+  ]);
+  const response=await f.call(path,{headers:{'x-request-id':requestId}});
+  assert.equal(response.status,502,await response.clone().text());
+  assert.equal(response.headers.get('location'),null); assert.equal(response.headers.get('retry-after'),null);
+  assert.equal(response.headers.get('x-clawrouter-request-id'),requestId);
+  await assertNativeError(response,provider,502,'provider_unavailable','upstream request to provider '+provider+' failed',provider==='anthropic'?'api_error':'server_error');
+  await assertNoCooldown(f,provider);
+  const calls=(await f.state()).calls.slice(before);
+  assert.equal(calls.length,pagination?2:1,'only the initial and internal page may receive traffic; no redirect follow/replay');
+  for (const call of calls) {
+   const url=new URL(call.url); assert.equal(url.origin,'https://api.'+provider+'.com'); assert.equal(url.pathname,'/v1/models');
+   assert.equal(call.method,'GET'); assert.equal(call.body,''); assert.equal(call.headers[provider==='anthropic'?'x-api-key':'authorization'],provider==='anthropic'?'synthetic-anthropic-key':'Bearer synthetic-openai-key');
+  }
+  assert.equal(new URL(calls[0].url).search,''); if(pagination) assert.equal(new URL(calls[1].url).searchParams.get('after_id'),'hidden-private');
+  const inference=await f.call(provider==='anthropic'?'/v1/messages':'/v1/responses',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(provider==='anthropic'?{model:'anthropic/claude-sonnet-4-6',max_tokens:1,messages:[{role:'user',content:'fixture'}]}:{model:'openai/gpt-6-astra',input:'fixture'})});
+  assert.equal(inference.status,200,await inference.clone().text()); const wire=await inference.text(); assert.ok(wire,'inference must return a complete JSON reply'); assert.deepEqual(JSON.parse(wire),accepted); await f.drain();
+  const after=(await f.state()).calls.slice(before); assert.equal(after.length,calls.length+1);
+  assert.equal(after.at(-1).method,'POST'); assert.equal(new URL(after.at(-1).url).pathname,provider==='anthropic'?'/v1/messages':'/v1/responses');
+  assert.equal(after.at(-1).headers[provider==='anthropic'?'x-api-key':'authorization'],provider==='anthropic'?'synthetic-anthropic-key':'Bearer synthetic-openai-key');
+  expected+=2; const events=(await f.events(expected)).filter(event=>event.request_id===requestId); assert.equal(events.length,1); const event=events[0];
+  assert.equal(event.capability,'models.list'); assert.equal(event.status_code,502); assert.equal(event.status,'provider_error');
+  assert.equal(event.actual_cost_micros,0); assert.equal(event.reserved_cost_micros,0);
+ });
 });
