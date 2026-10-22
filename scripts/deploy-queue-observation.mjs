@@ -7,7 +7,7 @@ export function queueObservation(record, queue, versions) {
   return { version, messages: count };
 }
 export async function startQueueObservation({ api, state, save, queue = 'clawrouter-usage', WebSocketImpl = WebSocket }) {
-  let tail, socket;
+  let tail, socket, stage = 'create';
   const stop = async () => {
     socket?.close();
     if (tail) {
@@ -18,7 +18,10 @@ export async function startQueueObservation({ api, state, save, queue = 'clawrou
   };
   try {
     tail = await api.cloudflare(`${api.workerPath}/tails`, { method: 'POST', body: { filters: [] } });
-    if (!/^[a-f0-9-]{36}$/i.test(tail?.id ?? '') || new URL(tail.url).protocol !== 'wss:') throw new Error('invalid tail response');
+    stage = 'validate';
+    // Tail IDs are Cloudflare's 32-hex Identifier, NOT Worker version UUIDs.
+    if (!/^[a-f0-9]{32}$/i.test(tail?.id ?? '') || new URL(tail.url).protocol !== 'wss:') throw new Error('invalid tail response');
+    stage = 'connect';
     socket = new WebSocketImpl(tail.url, 'trace-v1');
     socket.addEventListener('message', async (event) => {
       try {
@@ -41,8 +44,9 @@ export async function startQueueObservation({ api, state, save, queue = 'clawrou
     });
     state.queueObservationStatus = 'connected; samples are observations, not a platform guarantee'; save(state);
     return stop;
-  } catch {
-    state.queueObservationStatus = 'unavailable; consumer version unobserved'; save(state);
+  } catch (error) {
+    const status = Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? ` HTTP ${error.status}` : '';
+    state.queueObservationStatus = `unavailable at ${stage}${status}; consumer version unobserved`; save(state);
     await stop(); return async () => {};
   }
 }

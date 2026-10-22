@@ -63,6 +63,7 @@ test('zero-only success removes candidate and leaves exactly blue100', async () 
   await runTrain({ ...f.options, mode: 'zero-smoke' });
   assert.equal(f.smokes, 1);
   assert.equal(f.state.status, 'rehearsed');
+  assert.equal(f.state.deploymentId, f.deployment.id);
   assert.deepEqual(f.deployment.versions, [{ version_id: blue, percentage: 100 }]);
 });
 
@@ -71,6 +72,7 @@ for (const [name, at] of [['initial override', 1], ['10 percent', 3], ['50 perce
     const f = fixture({ failSmokeAt: at });
     await assert.rejects(runTrain(f.options), /Smoke HTTP 503/);
     assert.equal(f.state.status, 'rolled-back');
+    assert.equal(f.state.deploymentId, f.deployment.id);
     assert.deepEqual(f.deployment.versions, [{ version_id: blue, percentage: 100 }]);
   });
 }
