@@ -39,11 +39,11 @@ const upstream = `
     async fetch(request) {
     const calls = await this.storage.get("calls") ?? [];
     if (request.url === "https://fixture.example/trace") return Response.json(calls);
-    if (request.url !== "https://api.openai.com/v1/moderations" || request.method !== "POST") throw Error("unexpected moderation URL/method");
     const credential = request.headers.get("authorization");
-    if (!["Bearer fixture-upstream-key", "Bearer synthetic-stored-api-key"].includes(credential)) throw Error("wrong selected credential");
-    calls.push({ method: request.method, path: new URL(request.url).pathname, credentialKind: credential === "Bearer synthetic-stored-api-key" ? "stored_api_key" : "environment_api_key" });
+    calls.push({ method: request.method, path: new URL(request.url).pathname, credentialKind: credential === "Bearer synthetic-stored-api-key" ? "stored_api_key" : credential === "Bearer fixture-upstream-key" ? "environment_api_key" : "unrecognized" });
     await this.storage.put("calls", calls);
+    if (request.url !== "https://api.openai.com/v1/moderations" || request.method !== "POST") throw Error("unexpected moderation URL/method");
+    if (!["Bearer fixture-upstream-key", "Bearer synthetic-stored-api-key"].includes(credential)) throw Error("wrong selected credential");
     const body = await request.json();
     if (body.model !== "omni-moderation-latest" || Object.keys(body).sort().join(",") !== "input,model") throw Error("wrong native body");
     if (body.input === "reject") return Response.json({ error: { code: "synthetic_rate_limit" } }, { status: 429, headers: { "retry-after": "10" } });
