@@ -26,6 +26,13 @@ export default { async fetch(request) {
   if (new URL(request.url).pathname !== "/v1/messages" || request.headers.get("x-api-key") !== "fixture-pool-anthropic-key" || body.model !== "claude-opus-5-5") throw new Error("unexpected synthetic request");
   const search = body.tools.some(tool => tool.name === "web_search");
   const usage = { input_tokens: 1000, output_tokens: 20, cache_read_input_tokens: 100, cache_creation_input_tokens: 30, cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 20 }, server_tool_use: search ? { web_search_requests: mode === "invalid" ? -1 : mode === "zero" ? 0 : 2 } : { web_fetch_requests: 3 } };
+  Object.assign(usage, { speed: "standard", inference_geo: "global", service_tier: "standard" });
+  if (mode === "fast-us" || mode === "fast-us-unreported") Object.assign(usage, {
+    input_tokens: 1000, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+    speed: mode === "fast-us" ? "fast" : null,
+    inference_geo: mode === "fast-us" ? "us" : "not_available", service_tier: mode === "fast-us" ? "standard" : null });
+  if (mode === "priority") usage.service_tier = "priority";
   if (mode === "missing") delete usage.server_tool_use;
   const message = { type: "message", content: [{ type: "server_tool_use", name: search ? "web_search" : "web_fetch", id: "srvtoolu_fixture", input: { query: "synthetic private query" } }], stop_reason: "end_turn", usage };
   if (mode === "reject") return Response.json({ type: "error", error: { type: "invalid_request_error", message: "synthetic rejection" } }, { status: 400 });
@@ -52,12 +59,12 @@ async function fixture(t, providerLimit = null) {
   await kv.put("connections/anthropic", JSON.stringify({ providerId: "anthropic", enabled: true, monthlyBudgetMicros: providerLimit }));
   const origin = await mf.ready;
   const headers = id => ({ authorization: "Bearer clawrouter-live-" + id + "-" + secret, "content-type": "application/json" });
-  const send = (id, { stream = false, fetchOnly = false, mode = "normal", maxUses = 3, route = "/v1/messages" } = {}) => fetch(new URL(route, origin), { method: "POST", headers: { ...headers(id), "x-request-id": id + "-" + mode + "-" + stream }, body: JSON.stringify({ model: route.startsWith("/v1/native/") ? "claude-opus-5-5" : "anthropic/claude-opus-5-5", max_tokens: 32, messages: [{ role: "user", content: mode }], stream, tools: [{ type: fetchOnly ? "web_fetch_20250910" : "web_search_20250305", name: fetchOnly ? "web_fetch" : "web_search", ...(maxUses === null ? {} : { max_uses: maxUses }) }] }), signal: AbortSignal.timeout(10_000) });
+  const send = (id, { stream = false, fetchOnly = false, mode = "normal", maxUses = 3, route = "/v1/messages", modifiers = {} } = {}) => fetch(new URL(route, origin), { method: "POST", headers: { ...headers(id), "x-request-id": id + "-" + mode + "-" + stream }, body: JSON.stringify({ model: route.startsWith("/v1/native/") ? "claude-opus-5-5" : "anthropic/claude-opus-5-5", max_tokens: 32, ...modifiers, messages: [{ role: "user", content: mode }], stream, tools: [{ type: fetchOnly ? "web_fetch_20250910" : "web_search_20250305", name: fetchOnly ? "web_fetch" : "web_search", ...(maxUses === null ? {} : { max_uses: maxUses }) }] }), signal: AbortSignal.timeout(10_000) });
   const usage = async (id, count) => {
     const deadline = Date.now() + 5000; let value;
     do {
       value = await (await fetch(new URL("/v1/usage", origin), { headers: headers(id), signal: AbortSignal.timeout(5000) })).json();
-      if (value.usage.events.length === count) return value;
+      if (value.usage.events.length === count && (!value.budget.configured || value.budget.spentMicros === value.usage.events.reduce((sum, event) => sum + event.actual_cost_micros, 0))) return value;
       await new Promise(resolve => setTimeout(resolve, 20));
     } while (Date.now() < deadline);
     assert.fail("usage event count not observed: " + JSON.stringify(value));
@@ -89,6 +96,32 @@ test("Claude web search bills authoritative cumulative JSON/SSE usage once, incl
     else assert.equal(report.budget.spentMicros, null);
   }
   assert.equal(await f.count(), 4);
+});
+
+test("fast + US multiply only Claude tokens, never the search fee, on soft and unmetered JSON/SSE", { timeout: 60_000 }, async t => {
+  const f = await fixture(t);
+  // 1,000 input + 20 output = 4,400 micros; token rates x2x1.1, plus two $0.01 searches.
+  const actual = 29680;
+  for (const id of ["soft", "unmetered"]) {
+    let count = 0;
+    for (const mode of ["fast-us", "fast-us-unreported"]) for (const stream of [false, true]) {
+      const response = await f.send(id, { mode, stream, modifiers: { speed: "fast", inference_geo: "us" }, route: stream ? "/v1/native/anthropic/v1/messages" : "/v1/messages" });
+      assert.equal(response.status, 200, await response.clone().text());
+      const wire = await response.text(); assert.doesNotMatch(wire, /pricing_required/);
+      if (stream) assert.match(wire, /message_stop/);
+      const report = await f.usage(id, ++count);
+      const event = report.usage.events.find(row => row.request_id === id + "-" + mode + "-" + stream);
+      assert.ok(event); assert.equal(event.input_tokens, 1000); assert.equal(event.output_tokens, 20);
+      assert.equal(event.actual_cost_micros, actual); assert.equal(event.cost_basis, "manifest_pricing");
+      assert.deepEqual(event.hosted_tool_calls, { web_search: 2 }); assert.equal(event.hosted_tool_calls_complete, true);
+      assert.equal(event.hosted_tool_cost_micros, 20000, "the fixed per-search fee must not receive token multipliers");
+      if (id === "soft") {
+        assert.equal(report.budget.spentMicros, count * actual);
+        assert.deepEqual(await f.ledger(id), Array.from({ length: count }, () => ({ settled: 1, reserved_micros: actual })));
+      } else assert.equal(report.budget.spentMicros, null);
+    }
+  }
+  assert.equal(await f.count(), 8);
 });
 
 test("Claude fetch has token costs only; missing search counters keep measured tokens without inventing a fee", { timeout: 60_000 }, async t => {
@@ -132,4 +165,23 @@ test("a provider-only hard budget also rejects an unqualified Claude server loop
     assert.equal(response.status, 400); assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required"); await response.text();
   }
   assert.equal(await f.count(), 0); assert.deepEqual(await f.ledger("unmetered"), []);
+});
+
+// Hard-budget search has no reserved hosted-tool envelope: it is denied unless
+// the caller has a fixed tariff, which must not gain measured search fees.
+test("hard fast-US search cannot reach unpriced-response settlement; fixed tariffs never add search fees", { timeout: 60_000 }, async t => {
+  const f = await fixture(t);
+  for (const stream of [false, true]) {
+    const options = { stream, mode: "priority", modifiers: { speed: "fast", inference_geo: "us" } };
+    const before = await f.count(), denied = await f.send("reserve", options);
+    assert.equal(denied.status, 400); assert.equal((await denied.json()).error.code, "pricing_required");
+    assert.equal(await f.count(), before); assert.deepEqual(await f.ledger("reserve"), []);
+    const fixed = await f.send("fixed", options);
+    assert.equal(fixed.status, 200); assert.match(await fixed.text(), /priority/);
+    const report = await f.usage("fixed", stream ? 2 : 1);
+    const event = report.usage.events.find(row => row.request_id === "fixed-priority-" + stream);
+    assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed");
+    assert.equal(event.hosted_tool_cost_micros, null); assert.equal(report.budget.spentMicros, stream ? 14 : 7);
+  }
+  assert.equal(await f.count(), 2);
 });

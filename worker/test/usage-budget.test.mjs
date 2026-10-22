@@ -144,7 +144,6 @@ test(`${contentType} accounting preserves backpressure and settles on completion
 });
 }
 
-
 const messageUsage = { input_tokens: 10, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 3_000, cache_creation: { ephemeral_5m_input_tokens: 2_000, ephemeral_1h_input_tokens: 1_000 }, output_tokens: 20 };
 const messageStart = { type: "message_start", message: { type: "message", usage: { ...messageUsage, output_tokens: 1 } } };
 const messageDelta = { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 20 } };
@@ -661,7 +660,8 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const denied = fixedCost == null && (limit != null || providerLimit != null);
-    const usage = tool.compaction ? { input_tokens: 0, output_tokens: 0, iterations: [{ type: "compaction", input_tokens: 144, output_tokens: 276 }] } : messageUsage;
+    const usage = { ...(tool.compaction ? { input_tokens: 0, output_tokens: 0, iterations: [{ type: "compaction", input_tokens: 144, output_tokens: 276 }] } : messageUsage),
+      ...(provider === "anthropic" ? { speed: "standard", inference_geo: model === "claude-haiku-4-5" ? "not_available" : "global", service_tier: "standard" } : {}) };
     const stop_reason = tool.compaction ? "compaction" : "end_turn";
     const result = provider === "anthropic" ? { type: "message", stop_reason, usage } : { status: "completed", service_tier: servedTier, usage: astraUsage };
     const wire = !stream ? JSON.stringify(result) : provider === "anthropic" ? sse({ type: "message_start", message: result }, { type: "message_delta", delta: { stop_reason }, usage }, messageStop) : route.endsWith("chat/completions") ? sse({ object: "chat.completion.chunk", ...result }, "[DONE]") : sse({ type: "response.completed", response: result });
@@ -670,7 +670,7 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
       for (const [key, value] of Object.entries(tool)) assert.deepEqual(sent[key], value);
       return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
     });
-    const requestBody = { model, input: "fixture", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream, service_tier: "priority", ...tool };
+    const requestBody = { model, input: "fixture", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream, service_tier: provider === "anthropic" ? "auto" : "priority", ...tool };
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify(route.startsWith("/v1/proxy/") ? { body: requestBody } : requestBody),

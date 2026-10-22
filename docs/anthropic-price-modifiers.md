@@ -10,7 +10,10 @@ first-party Anthropic Messages API, not Bedrock/Vertex/Foundry billing.
   `speed: "fast"` costs **2×** across the full context window, including over
   200k input tokens. Opus 5.5: $8 input / $40 output per million tokens versus
   $4 / $20 standard. Opus 5 and Opus 4.8: $10 / $50 versus $5 / $25.
-  Cache multipliers and inference geography compose with this price.
+  Cache multipliers and inference geography compose with this price. These
+  multipliers affect token categories only, not the separate $0.01 web-search
+  fee: 1,000 input / 20 output Opus 5.5 fast+US tokens plus two searches cost
+  29,680 microUSD (4,400 × 2.2 + 20,000) on soft/unmetered keys.
   Opus 5/4.8 require the `fast-mode-2026-02-01` beta header and upstream access;
   Opus 5.5 does not. Fast mode is not available with Batch or Priority Tier.
   `usage.speed` reports `fast` or `standard`. Opus 4.6 has a documented
@@ -91,8 +94,10 @@ endings. A response/event exceeding that inspection bound fails safe as
 base price. Unmetered/soft/fixed-price transport is unchanged. Partial delivery
 without terminal usage still follows the existing conservative reservation path.
 
-This does not qualify negotiated discounts, subscription entitlement, hosted
-fees, compaction iterations, model fallback, async Batches, new model cards, or
+The separate [web-tool accounting contract](api-reference.md#budgets-usage-and-retention) owns
+published search fees and hosted-loop budget limits. This modifier adapter does
+not qualify negotiated discounts, subscription entitlement, other hosted fees,
+compaction iterations, model fallback, async Batches, new model cards, or
 end-to-end data residency. No deployment or paid Anthropic call is part of the
 fixture verification. See `test/anthropic-price-modifiers-workerd.test.mjs` for
 real Worker/queue/SQL-ledger JSON and fragmented SSE tests.
