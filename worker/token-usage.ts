@@ -156,7 +156,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
   function accept(evidence: SseUsageEvidence) {
     const root = evidence.kind === "data" ? record(evidence.value) : null;
-    const error = evidence.kind === "error" || root && (Object.hasOwn(root, "error") || responseOutcome(root) === "provider_error");
+    const error = evidence.kind === "error" || responseOutcome(root) === "provider_error";
     if (provisionalRejection && !error) continuedWork();
     if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later

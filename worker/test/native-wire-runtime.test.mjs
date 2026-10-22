@@ -34,6 +34,7 @@ const continued = {
   ].map(dataEvent).join(""),
 };
 const followup = (kind, mode) => mode === "usage" ? continued[kind]
+  : mode === "null-error" ? continued[kind].replaceAll('data: {', 'data: {"error":null,')
   : mode === "truncated" ? dataEvent(kind === "anthropic" ? { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 0 } } } : kind === "responses" ? { type: "response.output_text.delta", delta: "real output" } : { object: "chat.completion.chunk", choices: [{ delta: { content: "real output" } }] })
   : mode === "oversized" ? dataEvent({ type: "future_event", output: "x".repeat(2 * 1024 * 1024 + 100) })
   : mode === "invalid" ? "data: not-json\r\n\r\n"
@@ -247,7 +248,7 @@ test("first native SSE errors release both real SQL budgets, including durable b
 // A provider may violate its terminal-error contract. Preserve its bytes, but
 // observable later work must withdraw the initial no-charge evidence.
 for (const [kind, path, background] of [["openai", "/v1/chat/completions", false], ["responses", "/v1/responses", false], ["anthropic", "/v1/messages", false], ["responses", "/v1/responses", true]]) {
-  for (const mode of ["usage", "truncated", "errors-only", "invalid", "oversized"]) test(`first SSE error followed by ${mode}: ${kind}, background=${background}`, { timeout: 60000 }, async () => {
+  for (const mode of ["usage", "null-error", "truncated", "errors-only", "invalid", "oversized"]) test(`first SSE error followed by ${mode}: ${kind}, background=${background}`, { timeout: 60000 }, async () => {
     const provider = kind === "anthropic" ? kind : "openai", id = `continued-${kind}-${background}-${mode}`;
     const owners = ["tenant:fixture", "provider:" + provider];
     const rows = async name => (await (await runtime.dispatchFetch("https://router.example/fixture/rows?name=" + encodeURIComponent(name))).json());
@@ -268,7 +269,7 @@ for (const [kind, path, background] of [["openai", "/v1/chat/completions", false
     if (mode === "errors-only") { assert.equal(receipt.actual_cost_micros, 0); assert.equal(receipt.cost_basis, "none"); }
     else {
       assert.ok(receipt.actual_cost_micros > 0, "delivered work cannot be free");
-      if (mode === "usage") {
+      if (mode === "usage" || mode === "null-error") {
         assert.deepEqual([receipt.input_tokens, receipt.output_tokens, receipt.total_tokens], [10, 2, 12]);
         assert.equal(receipt.cost_basis, "manifest_pricing");
         assert.equal(receipt.actual_cost_micros, provider === "anthropic" ? 60 : 200);
