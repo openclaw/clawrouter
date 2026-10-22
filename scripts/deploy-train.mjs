@@ -1,3 +1,6 @@
+import assert from 'node:assert/strict';
+import { waitForHealth } from './smoke-readiness.mjs';
+import { createVersionFetch } from './smoke-version.mjs';
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,8 +8,10 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { createApi, observeAnalytics } from './deploy-train-api.mjs';
-import { analyticsDecision, deploymentMessage, deploymentState, POLL_MS, recoveryDecision, splitVersions, stableVersion, TRAIN_STEPS, versionId } from './deploy-train-policy.mjs';
+import { analyticsDecision, LEGACY_DEPLOYMENT, deploymentMessage, deploymentState, POLL_MS, recoveryDecision, splitVersions, stableVersion, TRAIN_STEPS, versionId } from './deploy-train-policy.mjs';
 import { inspectSource } from './deploy-train-source.mjs';
+import { startQueueObservation } from './deploy-queue-observation.mjs';
+import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
 import { configuredProviderSecrets } from './put-provider-secrets.mjs';
 
 export function command(args, { env = process.env, timeout = 10 * 60_000 } = {}) {
@@ -149,24 +154,37 @@ export async function main(env = process.env) {
   const state = JSON.parse(readFileSync(env.TRAIN_PLAN_PATH, 'utf8'));
   if (state.noop) return;
   Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha }));
+  assertAssetBootstrap(state.deployedSha);
   const save = (value) => saveState(env.TRAIN_STATE_PATH, value);
   save(state);
   const api = createApi({ env });
   appendFileSync(env.GITHUB_OUTPUT, `migration=${state.migration}\n`);
+  const ready = (green) => waitForHealth({
+    baseUrl: env.CLAWROUTER_BASE_URL,
+    fetchImpl: createVersionFetch({ baseUrl: env.CLAWROUTER_BASE_URL, versionId: green, workerName: 'clawrouter-edge' }),
+    probeImpl: (health) => assert.equal(health.versionId, green, 'selected green runtime'),
+  });
+  let stopObservation = async () => {};
   try {
+    state.assets = await publishConsoleAssets({ sha: state.sha, env }); save(state);
+    stopObservation = await startQueueObservation({ api, state, save, queue: env.CLAWROUTER_USAGE_QUEUE || 'clawrouter-usage' });
     await runTrain({ state, api, save, upload: (s) => uploadVersion(s, env), mode: env.TRAIN_MODE || 'rollout',
-      smoke: (green) => command(['cf:smoke'], { env: { ...env, CLAWROUTER_SMOKE_VERSION_ID: green }, timeout: 5 * 60_000 }),
+      smoke: async (green) => {
+        await ready(green);
+        await verifyConsoleAssets({ assets: state.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: green });
+        if (!state.migration) await verifyConsoleAssets({ assets: state.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: state.blue, legacy: state.blue === LEGACY_DEPLOYMENT.version });
+        await command(['cf:smoke'], { env: { ...env, CLAWROUTER_SMOKE_VERSION_ID: green }, timeout: 5 * 60_000 });
+      },
       negativeSmoke: async (green) => {
-        const response = await fetch(`${env.CLAWROUTER_BASE_URL}/v1/health`, { headers: { 'Cloudflare-Workers-Version-Overrides': `clawrouter-edge="${green}"` }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
-        const health = await response.json();
-        if (!response.ok || health.versionId !== green || response.headers.get('x-clawrouter-version-id') !== green) throw new Error('Negative rehearsal override did not reach green');
+        const health = await ready(green);
         console.log(`negative rehearsal reached green ${green}; asserting deliberately incorrect version`);
         if (health.versionId !== '00000000-0000-0000-0000-000000000000') throw new Error('Deliberate green 0% version-assertion breach');
         throw new Error('Negative rehearsal unexpectedly matched impossible version');
       },
     });
   } finally {
-    const summary = `## Production train\n- Candidate: \`${state.sha}\`\n- Blue: \`${state.blue}\`\n- Green: \`${state.green || 'not uploaded'}\`\n- Result: ${state.status || 'preflight'}; recovery: ${state.recovery || 'not needed'}\n- Lifecycle migration: ${state.migration}; rollback-unsafe range: ${state.unsafe}\n- Analytics: ${state.analyticsDisabled ? `DISABLED — ${state.analyticsDisabled}; mandatory smoke-only gating` : state.analytics ? JSON.stringify(state.analytics) : 'no comparison sample'}\n- Mode: ${env.TRAIN_MODE || 'rollout'}\n`;
+    await stopObservation();
+    const summary = `## Production train\n- Candidate: \`${state.sha}\`\n- Blue: \`${state.blue}\`\n- Green: \`${state.green || 'not uploaded'}\`\n- Result: ${state.status || 'preflight'}; recovery: ${state.recovery || 'not needed'}\n- Lifecycle migration: ${state.migration}; rollback-unsafe range: ${state.unsafe}\n- Analytics: ${state.analyticsDisabled ? `DISABLED — ${state.analyticsDisabled}; mandatory smoke-only gating` : state.analytics ? JSON.stringify(state.analytics) : 'no comparison sample'}\n- Queue observation: ${state.queueObservationStatus || 'not started'}; ${JSON.stringify(state.queueObservations || [])}\n- Mode: ${env.TRAIN_MODE || 'rollout'}\n`;
     appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   }
 }

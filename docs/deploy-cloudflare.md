@@ -1435,14 +1435,36 @@ not which version consumed that event. Queue code must be compatible in both
 directions. No new queue or consumer script is created for a train.
 
 Cloudflare documents that content-hashed assets can 404 when HTML and asset
-requests hit different versions. `run_worker_first` alone does **not** provide
-version affinity. A zone request-header Transform Rule setting
-`Cloudflare-Workers-Version-Key` from a stable identity/cookie is Cloudflare's
-native solution; setting that header after entering this Worker is too late.
-No Transform Rule, Access app or domain is provisioned by the train. Asset skew
-must be resolved by the runtime/asset delivery integration before deploying
-admin changes with different asset inventories; do not claim the public Access
-challenge smoke covers an authenticated dashboard's JavaScript/CSS loads.
+requests hit different versions. `run_worker_first` alone does not provide
+affinity. Rather than adding a zone Transform Rule or another Worker, the train
+publishes public hashed JS/CSS/font/image assets into the **existing** R2 bucket
+under `console-assets/v1/assets/`. Both colors first use their own `ASSETS`; a
+404 for an allowlisted hashed asset falls back to the shared immutable bytes.
+This resolves cross-color asset loads without pinning authenticated requests to
+one version. API/data contracts still require expand/contract compatibility.
+
+Publication verifies SHA-256 bytes, refuses collisions/overwrites, and completes
+before any green exposure. Every smoke checks candidate asset bytes through both
+colors and a harmless R2-only probe through green (both colors after bootstrap).
+The first train refuses admin/shared/lockfile changes when legacy blue lacks the
+fallback. This bootstraps the shared delivery protocol with unchanged assets.
+The existing `v1/` request-content lifecycle/cleanup cannot read or delete this
+separate prefix; no retained prompts are exposed. Only allowlisted public build
+artifacts are published—never HTML, source maps, arbitrary R2 paths, or secrets.
+Shared assets remain immutable so open tabs and retained rollback versions keep
+working; storage grows only with changed content hashes. Do not delete assets
+still referenced by a deployable version or supported browser cache. Local/self-
+host operation uses normal bundled assets and does not require Cloudflare storage.
+The existing API token needs R2 object read/write, already required by content
+operations; lack of access fails before Worker upload, not midway through a split.
+
+Each train also opens a temporary metadata-only tail and aggregates queue batch
+counts by observed `scriptVersion.id` and rollout step. Raw tail payloads, headers,
+logs and message bodies are never logged or retained. The tail is deleted in
+`finally`; permission/connection failures are explicitly reported as unobserved,
+not a guessed consumer version. Samples prove what happened in that run, not an
+undocumented platform routing guarantee. Inspect the job summary/receipt for
+actual queue-version observations before drawing deployment-specific conclusions.
 
 References checked 2026-10-22:
 [GitHub timezone schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule),

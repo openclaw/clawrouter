@@ -1,3 +1,4 @@
+import { consoleAsset } from "./console-assets.ts";
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
 import { withNativeLocalError } from "./native-errors.ts";
 import { poolResponse } from "./pool";
@@ -69,7 +70,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && rawPath === "/") return redirect(`/dashboard${url.search}`);
   if (request.method === "GET" && rawPath === "/dashboard") return redirect(`/dashboard/home${url.search}`);
   if (request.method === "GET") { const target = legacyRedirect(rawPath); if (target) return redirect(`${target}${url.search}`); }
-  if (request.method === "GET" && rawPath.startsWith("/assets/")) return env.ASSETS.fetch(request);
+  if (request.method === "GET" && rawPath.startsWith("/assets/")) return consoleAsset(request, env);
   if (request.method === "GET" && rawPath.startsWith("/dashboard/")) return dashboardShell(request, env);
   if (request.method === "GET" && ["/favicon.ico", "/favicon.svg"].includes(rawPath)) return env.ASSETS.fetch(request);
 
