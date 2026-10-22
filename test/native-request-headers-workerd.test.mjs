@@ -9,6 +9,7 @@ import { startWorkerdFixture } from "./helpers/workerd.mjs";
 const secret = "request-headers-fixture-secret";
 const authorization = "Bearer clawrouter-live-fixture-" + secret;
 const anthropicBody = { model: "claude-sonnet-5", max_tokens: 8, messages: [{ role: "user", content: "synthetic attribution é" }] };
+const moderationReply = { id: "modr_fixture", model: "omni-moderation-latest", results: [{ flagged: false, categories: { violence: false }, category_scores: { violence: 0.01 } }] };
 const router = [
   'import handler from "./worker/index.ts";',
   'export * from "./worker/index.ts";',
@@ -47,6 +48,7 @@ const upstream = [
   '  call.fields = Object.fromEntries([...form].filter(([name]) => name !== "file"));',
   '  return Response.json({ text: "synthetic transcript", usage: { type: "tokens", input_tokens: 4, output_tokens: 2, total_tokens: 6 } });',
   ' }',
+  ` if (url.pathname === "/v1/moderations") return Response.json(${JSON.stringify(moderationReply)});`,
   ' if (url.pathname === "/v1/audio/speech") return new Response(new Uint8Array([0,255,128,42]), { headers: { "content-type": "audio/mpeg" } });',
   ' if (url.pathname === "/v1/messages/count_tokens") return Response.json({ input_tokens: 4 });',
   ' if (url.pathname === "/v1/messages") return Response.json({ id: "msg_fixture", type: "message", role: "assistant", model: "claude-sonnet-5", content: [], usage: { input_tokens: 4, output_tokens: 2 } });',
@@ -165,6 +167,28 @@ test("native identity selection and correlation headers cross the actual Worker 
         assert.equal(call.headers["idempotency-key"], undefined);
         assert.deepEqual(call.bytes, []);
       }
+    });
+
+    await t.test("Moderations forwards diagnostic IDs on unified, native and manifest routes in both grant lanes", async () => {
+      const before = (await calls()).length;
+      const nativeBody = { model: "omni-moderation-latest", input: "synthetic é" };
+      for (const policy of ["fixture", "environment"]) for (const path of ["/v1/moderations", "/v1/native/openai/v1/moderations", "/v1/proxy/openai/moderations"]) {
+        const id = "fixture-moderation-" + policy + "-" + path.replaceAll("/", "-");
+        const input = { ...nativeBody, model: path.includes("/native/") ? nativeBody.model : "openai/" + nativeBody.model };
+        const response = await send(path, path.includes("/proxy/") ? { body: input } : input, {
+          authorization: "Bearer clawrouter-live-" + policy + "-" + secret,
+          "X-Client-Request-Id": id, "Idempotency-Key": "fixture-unbound-replay",
+        });
+        assert.equal(response.status, 200, await response.clone().text());
+        assert.equal(await response.text(), JSON.stringify(moderationReply));
+        const call = (await calls()).at(-1);
+        assert.equal(call.path, "/v1/moderations"); assert.equal(call.method, "POST");
+        assert.equal(call.headers["x-client-request-id"], id);
+        assert.equal(call.headers["idempotency-key"], undefined);
+        assert.equal(call.headers.authorization, policy === "fixture" ? "Bearer fixture-openai-pool" : "Bearer fixture-upstream-key");
+        assert.deepEqual(call.bytes, [...Buffer.from(JSON.stringify(nativeBody))]);
+      }
+      assert.equal((await calls()).length, before + 6, "one upstream request per accepted moderation call");
     });
 
     await t.test("multipart transcription preserves diagnostic ID, file bytes and fields on all public aliases", async () => {

@@ -118,7 +118,7 @@ capabilities:
   - {id: audio.speech, endpoint: speech, methods: [POST]}
   - {id: image.generation, endpoint: images_generations, methods: [POST]}
 endpoints:
-  moderations: {path: /v1/moderations, requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
+  moderations: {path: /v1/moderations, requestHeaders: [X-Client-Request-Id], requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
   models_list: { method: GET, path: /v1/models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   models_retrieve: { method: GET, path: "/v1/models/${model_id}", pathParams: [model_id], pathParamStyles: { model_id: opaque_segment }, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   realtime: {"requestHeaders":["X-Client-Request-Id"],"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
