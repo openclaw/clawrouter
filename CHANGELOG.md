@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.
+
 - Add Claude Sonnet 5.5 and Haiku 5.5 model cards with native endpoint facts, cache pricing, and Haiku's full-request long-context rates above 100,000 input tokens.
 
 - Accept Claude Messages/count_tokens bodies up to 32 MB (32,000,000 bytes), preserving the existing JSON parser through 8 MiB and applying bounded structural parsing only above it. Authenticate before expanded parsing; admit at most two expanded requests per isolate through response completion, with nonbillable `503 overloaded_error` and `Retry-After` for excess requests. Stream large upstream/R2 bodies with known lengths, preserve image/PDF budget bounds, and disclose full-document retention when enabled.
