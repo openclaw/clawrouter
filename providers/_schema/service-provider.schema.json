@@ -916,7 +916,7 @@
             "maxQuestions": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 200
+              "maximum": 400
             },
             "image": {
               "type": "object",

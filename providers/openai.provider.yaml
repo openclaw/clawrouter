@@ -107,9 +107,7 @@ quota:
 capabilities:
   - {"id":"audio.realtime","endpoint":"realtime","methods":["GET"]}
   - { id: llm.responses.compact, endpoint: responses_compact, methods: [POST] }
-  - id: llm.decisions
-    endpoint: decisions
-    methods: [POST]
+  - { id: llm.decisions, endpoint: decisions, methods: [POST] }
   - id: llm.responses
     endpoint: responses
     methods: [POST]
@@ -123,11 +121,7 @@ capabilities:
 endpoints:
   realtime: {"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
-  decisions:
-    path: /v1/decisions
-    requestFormat: openai.decisions
-    responseFormat: openai.decisions
-    timeoutMs: 120000
+  decisions: { path: /v1/decisions, requestFormat: openai.decisions, responseFormat: openai.decisions, timeoutMs: 120000 }
   responses:
     modelPassthrough: {}
     path: /v1/responses
@@ -527,6 +521,21 @@ models:
       nativeCapabilities:
         version: clawrouter.native-capabilities.v1
         endpoints:
+          decisions:
+            sources: [https://developers.openai.com/api/reference/typescript/resources/decisions, https://developers.openai.com/api/docs/guides/decisions]
+            checkedAt: "2026-10-21"
+            input: [text, image]
+            maxOutputTokens: 0
+            inference:
+              chat: false
+              decision:
+                protocol: openai-decisions
+                questions:
+                  boolean: { probabilities: boolean, abstention: false }
+                  choice: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 255 }
+                  score: { probabilities: categorical, abstention: false }
+                confidence: provider-specific
+                limits: { maxQuestions: 400 }
           chat_completions:
             sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing]
             checkedAt: "2026-10-20"

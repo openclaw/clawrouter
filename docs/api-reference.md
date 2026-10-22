@@ -170,8 +170,13 @@ the usual `body` envelope.
 
 The [upstream Decisions API](https://developers.openai.com/api/docs/guides/decisions)
 is a public beta for text/image input and named `predicate`, `choice`, or `score`
-questions. Answers, probabilities, confidence values, and per-question refusals
-pass through unchanged. It is a non-streaming JSON contract, not a Responses
+questions (1–400 per request; choice questions accept 2–255 typed options).
+The full response, including `model`, usage, probabilities, confidence values,
+and per-question refusals, passes through unchanged. Inline PNG/JPEG/WebP and
+remote image URLs use the upstream input format; prompt-cache controls and
+`safety_identifier` also pass through. Upstream owns input validation and its
+error response. Catalog native facts describe the Decisions endpoint separately
+from Luna's conversational limits. It is a non-streaming JSON contract, not a Responses
 alias: no SSE, WebSocket, background lifecycle, or subscription/Codex transport
 is advertised. Only the declared Luna model is accepted.
 

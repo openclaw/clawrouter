@@ -35,8 +35,9 @@ test("all provider sources validate and generate the shipped snapshot with optio
     assert.deepEqual(entry.nativeCapabilities.endpoints.responses.input, ["text", "image"]);
     assert.equal(entry.nativeCapabilities.endpoints.responses.contextWindow, 1050000);
     assert.equal(entry.nativeCapabilities.endpoints.responses.maxOutputTokens, 128000);
-    assert.ok(!entry.capabilities.includes("llm.decisions"));
-    assert.equal(entry.nativeCapabilities.endpoints.decisions, undefined, "a pending Decisions route is not advertised");
+    assert.equal(entry.capabilities.includes("llm.decisions"), id === "openai/gpt-6-luna");
+    if (id === "openai/gpt-6-luna") assert.equal(entry.nativeCapabilities.endpoints.decisions.inference.decision.limits.maxQuestions, 400);
+    else assert.equal(entry.nativeCapabilities.endpoints.decisions, undefined, "only Luna supports Decisions");
   }
   assert.equal(compiled.model_index["openai/gpt-4.1-mini"].nativeCapabilities, undefined);
   assert.deepEqual(compiled.model_index["openai/tts-1"].nativeCapabilities.endpoints.speech.input, ["text"]);
@@ -92,7 +93,7 @@ test("typed decision schema is endpoint-specific and cannot replace a conversati
   manifest.endpoints.decisions = { path: "/v1/decisions", requestFormat: "openai.decisions", responseFormat: "openai.decisions" };
   entry.capabilities.push("llm.decisions");
   entry.nativeCapabilities.endpoints.decisions = { sources: ["https://example.com/synthetic-contract"], checkedAt: "2026-10-20", input: ["text", "image", "json"], maxOutputTokens: 0,
-    inference: { chat: false, decision: { protocol: "openai-decisions", reasoning: { modes: ["auto"] }, questions: { boolean: { probabilities: "boolean", abstention: false }, choice: { probabilities: "categorical", abstention: false, minOptions: 2, maxOptions: 255 }, score: { probabilities: "categorical", abstention: false } }, confidence: "provider-specific", limits: { maxQuestions: 200, image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg", "image/webp"], remoteUrls: false } } } } };
+    inference: { chat: false, decision: { protocol: "openai-decisions", reasoning: { modes: ["auto"] }, questions: { boolean: { probabilities: "boolean", abstention: false }, choice: { probabilities: "categorical", abstention: false, minOptions: 2, maxOptions: 255 }, score: { probabilities: "categorical", abstention: false } }, confidence: "provider-specific", limits: { maxQuestions: 400, image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg", "image/webp"], remoteUrls: false } } } } };
   const result = compile(manifest);
   assert.equal(result.status, 0, result.stderr);
   const output = JSON.parse(result.stdout).model_index[sol];
@@ -102,7 +103,7 @@ test("typed decision schema is endpoint-specific and cannot replace a conversati
   assert.equal(output.pricing.defaultMaxOutputTokens, 128000);
   assert.equal(output.pricing.maxInputTokens, 922000);
   assert.equal(output.nativeCapabilities.endpoints.responses.inference.decision, undefined);
-  for (const [field, value] of [["protocol", "unknown-protocol"], ["limits", { maxQuestions: 201 }], ["questions", { arbitrary: {} }]]) {
+  for (const [field, value] of [["protocol", "unknown-protocol"], ["limits", { maxQuestions: 401 }], ["questions", { arbitrary: {} }]]) {
     const bad = structuredClone(manifest);
     model(bad).nativeCapabilities.endpoints.decisions.inference.decision[field] = value;
     assert.match(compile(bad).stderr, /invalid manifest/);

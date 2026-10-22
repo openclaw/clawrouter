@@ -533,8 +533,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.ok(transcriptionOffers.length > 0);
     assert.ok(transcriptionOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     const decisionOffers = view.offers.filter(({ endpoint, modelId }) => endpoint === "decisions" && modelId);
-    assert.ok(decisionOffers.length > 0);
-    assert.ok(decisionOffers.every(({ modelId, eligible, policyId }) => modelId === "openai/gpt-6-luna" && eligible && policyId === "api"));
+    assert.ok(decisionOffers.length > 0 && decisionOffers.every(({ modelId, eligible, policyId }) => modelId === "openai/gpt-6-luna" && eligible && policyId === "api"));
     assert.equal(view.models.find(({ id }) => id === "openai/gpt-6-luna").endpointPricing.decisions.pricing.outputMicrosPerMillion, 0);
     const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
     assert.ok(speechOffers.length > 0);

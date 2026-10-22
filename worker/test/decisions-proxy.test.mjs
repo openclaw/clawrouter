@@ -107,11 +107,11 @@ for (const route of routes) test(`Decisions ${route} forwards typed answers and 
     assert.equal(String(url), "https://api.openai.com/v1/decisions");
     assert.equal(options.headers.get("authorization"), "Bearer fixture-upstream-key");
     assert.deepEqual(JSON.parse(options.body), { model: "gpt-6-luna", input: "The product is damaged.", questions });
-    return Response.json({ answers, usage: usage() });
+    return Response.json({ model: "gpt-6-luna", answers, usage: usage() });
   });
   const response = await f.call(route, { input: "The product is damaged." });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { answers, usage: usage() });
+  assert.deepEqual(await response.json(), { model: "gpt-6-luna", answers, usage: usage() });
   await Promise.all(f.pending);
   assert.equal(upstream.mock.callCount(), 1);
   assert.equal(f.events.length, 1);
