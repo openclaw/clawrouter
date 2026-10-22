@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-10-22
+
 - Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.
 - Add grant-scoped OpenAI/Anthropic native and manifest model list/retrieve with policy-filtered metadata, bounded same-grant pagination and zero router settlement. Keep the aggregate inference catalog separate, require stored API-key grants, and never let metadata permission/rate-limit responses cool shared inference grants.
 
