@@ -488,7 +488,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       if (!dispatched || response?.ok === false) context.waitUntil(background.unsent(response?.status ?? 502, operation.status ?? "provider_error", content));
       // Unknown dispatched delivery remains collectible; it is not a terminal.
     } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
-    if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
+    if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
