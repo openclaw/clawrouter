@@ -1,3 +1,4 @@
+import { runDeployCli } from './deploy-cli.mjs';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
@@ -31,4 +32,4 @@ export async function main(env = process.env) {
   appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   console.log(JSON.stringify(state));
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runDeployCli(() => main());

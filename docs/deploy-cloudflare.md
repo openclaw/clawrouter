@@ -1517,3 +1517,19 @@ queue-version counts during a train without uploading, deploying, changing
 traffic, or making provider requests. It requires a reviewed full main SHA,
 stops on a different deployment owner, and deletes its ephemeral tail. It has no
 schedule and does not replace the train or its recovery owner.
+
+During real train [39842254378](https://github.com/openclaw/clawrouter/actions/runs/39842254378),
+[observer 39844089630](https://github.com/openclaw/clawrouter/actions/runs/39844089630)
+recorded **both consumer versions at the 10% split**: blue
+`d06cab69-8847-46da-b6b6-cc1585b42371` handled 14 batches/28 messages and green
+`e6de8adf-5c99-494f-b5dd-a24a96a8d8f5` handled 4 batches/7 messages. This disproves
+an assumption that all batches necessarily stay on blue or always use the latest
+upload; it does not establish an exact percentage or a permanent platform guarantee.
+
+That observer wrote its complete five-minute receipt and deleted its tail, but
+its CLI retained a native WebSocket handle awaiting the peer's close handshake;
+the job subsequently timed out. Deployment/observer entrypoints now exit only
+after all awaited work, cleanup and receipt writes finish, with a bounded stdout/
+stderr drain. A real WebSocket regression deliberately withholds the close reply
+and checks both successful and failed CLI exit codes. The running production train
+was unaffected because its frozen controller had not opened that optional stream.
