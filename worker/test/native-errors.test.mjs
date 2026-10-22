@@ -19,7 +19,7 @@ for (const [status, type] of [
 });
 
 test("encoded native providers and playground aliases use the same error contract", async () => {
-  for (const [path, anthropic] of [["/v1/native/%61nthropic/v1/messages", true], ["/v1/proxy/%6fpenai/responses", false], ["/v1/playground/v1/chat/completions", false], ["/v1/playground/proxy/anthropic/messages", true]]) {
+  for (const [path, anthropic] of [["/v1/decisions", false], ["/v1/native/%61nthropic/v1/messages", true], ["/v1/proxy/%6fpenai/responses", false], ["/v1/playground/v1/chat/completions", false], ["/v1/playground/proxy/anthropic/messages", true]]) {
     const response = withNativeLocalError(errorResponse("invalid_proxy_key", "fixture", 401), path, "req_fixture");
     assert.deepEqual(await response.json(), anthropic ? { type: "error", error: { type: "authentication_error", message: "fixture" }, request_id: "req_fixture" } : { error: { message: "fixture", type: "invalid_request_error", param: null, code: "invalid_proxy_key" } });
   }

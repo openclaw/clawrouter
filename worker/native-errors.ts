@@ -24,7 +24,7 @@ export function nativeErrorFormat(path: string): NativeErrorFormat | undefined {
   if (/^\/v1\/messages(?:\/|$)/.test(path)) return "anthropic";
   // Unified routes speak OpenAI's protocol even when the backend is compatible.
   const unified = path.replace(/^\/v1\/playground/, "");
-  if (/^\/v1\/(?:chat\/completions|responses|embeddings|audio\/(?:speech|transcriptions)|images\/generations|realtime)(?:\/|$)/.test(unified)) return "openai";
+  if (/^\/v1\/(?:chat\/completions|responses|decisions|embeddings|audio\/(?:speech|transcriptions)|images\/generations|realtime)(?:\/|$)/.test(unified)) return "openai";
   return undefined;
 }
 

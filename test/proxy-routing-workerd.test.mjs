@@ -63,7 +63,8 @@ for (const alternate of [false, true]) test(`workerd refuses ${alternate ? "alte
         const response = await send({ ...input, fixture_redirect: status, fixture_cross_origin: crossOrigin });
         assert.equal(response.status, 502, path + " must reject " + status);
         assert.equal(response.headers.has("location"), false);
-        assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed" } });
+        assert.deepEqual(await response.json(), { error: { message: "upstream request to provider openai failed", type: "server_error", param: null, code: "provider_unavailable" } });
+        assert.equal(response.headers.get("x-clawrouter-error-code"), "provider_unavailable");
         const after = await state();
         assert.equal(after.calls.length, before.calls.length + (alternate ? 2 : 1), "only the selected attempt(s), never a redirect replay");
         t.diagnostic(JSON.stringify({ route: path, dispatch: alternate ? "alternate" : "initial", upstreamStatus: status, target: crossOrigin ? "cross-origin" : "same-origin", status: response.status, location: null, selectedRequests: after.calls.length - before.calls.length, redirectTargetRequests: after.calls.filter(call => call.path === "/redirect-target").length }));
@@ -171,7 +172,8 @@ for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject
       const response = await Promise.race([pending, new Promise(resolve => { guard = setTimeout(() => resolve(null), 3000); })]);
       assert.ok(response, "interruption must return before admission is released");
       assert.equal(response.status, 502);
-      assert.deepEqual(await response.json(), { error: { code: "provider_unavailable", message: "upstream request to provider openai failed" } });
+      assert.deepEqual(await response.json(), { error: { message: "upstream request to provider openai failed", type: "server_error", param: null, code: "provider_unavailable" } });
+        assert.equal(response.headers.get("x-clawrouter-error-code"), "provider_unavailable");
       assert.deepEqual(await state(), { entered: true, finished: false, admitted: false });
       t.diagnostic(JSON.stringify({ cause, late, status: response.status, admissionFinishedAtResponse: false }));
     } finally {

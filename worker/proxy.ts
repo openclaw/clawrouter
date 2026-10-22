@@ -488,7 +488,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
   // Retire only the timer; the caller and first cause still own delivery through EOF.
   operation.retireDeadline();
-  if (continuation && response.ok && selection.capability !== "llm.responses.compact") {
+  if (continuation && response.ok && !operation.receivedRejection && selection.capability !== "llm.responses.compact") {
     try { await operation.wait(continuation.headers(response), "publication"); }
     catch (error) {
       operation.stop("publication", error);
@@ -498,7 +498,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const inspection = response.ok ? continuation?.inspect(response, selection.capability === "llm.responses.compact") : undefined;
+  const inspection = response.ok && !operation.receivedRejection ? continuation?.inspect(response, selection.capability === "llm.responses.compact") : undefined;
   if (inspection && background) {
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
@@ -506,7 +506,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format);
   if (admission) admission.completion = observed.result;
   if (background) {
-    if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
+    if (!response.ok || operation.receivedRejection) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
   } else context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation!, content, operation.status)));
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);

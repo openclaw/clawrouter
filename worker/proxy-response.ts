@@ -7,7 +7,7 @@ import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails }
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
-export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; hostedSearch?: HostedSearchUsage }
+export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; nonbillable?: true; hostedSearch?: HostedSearchUsage }
 export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
   tools?: ResponsesInspectionTools;
@@ -17,7 +17,7 @@ export interface ResponseBodyInspection {
 
 export function proxyResponseHeaders(response: Response, providerId: string): Headers {
   const headers = new Headers(response.headers);
-  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade", "x-clawrouter-grant-failover", "x-clawrouter-error-code"]) headers.delete(name);
+  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade", "x-clawrouter-grant-failover", "x-clawrouter-error-code", "openai-organization", "openai-project", "anthropic-organization-id", "anthropic-workspace-id"]) headers.delete(name);
   headers.set("x-clawrouter-upstream-provider", providerId);
   return headers;
 }
@@ -64,7 +64,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     const binaryComplete = speech && response.ok && delivery === "complete" && audio && nonempty;
     if (speech && !binaryComplete) inspection.outcome = "provider_error";
     const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
-    resolve({ ...inspection, delivery, ...(binaryComplete ? { binaryComplete: true as const } : {}),
+    resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
       ...(hostedSearch ? { hostedSearch } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
@@ -168,11 +168,13 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
         if (event.kind === "empty") continue;
         // A native HTTP-200 error event is still SSE, even when it is the
         // first event. Retain the sniff/deadline but never invent an HTTP 502.
-        if (errorStatus !== null || !native && event.kind === "error") {
+        if (errorStatus !== null || event.kind === "error") {
           const upstream = event.upstream;
           const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
+          // Preserve the pre-output rejection's zero charge independently of
+          // native HTTP-200 SSE delivery, including later client cancellation.
           operation.acceptRejection(status);
-          return mappedUpstreamError(response, upstream, status, native);
+          if (errorStatus !== null || !native) return mappedUpstreamError(response, upstream, status, native);
         }
         transferred = true;
         return replayResponse(response, reader, chunks, done);

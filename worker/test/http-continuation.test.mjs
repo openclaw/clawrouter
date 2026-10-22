@@ -776,23 +776,26 @@ for (const format of ["json", "sse"]) for (const origin of ["caller", "deadline"
   }
 });
 
-for (const format of ["sse", "json"]) test(`${format} rejections own reciprocal cleanup without replacing their selected status`, async t => {
+for (const format of ["sse", "json", "native-sse"]) test(`${format} rejections own reciprocal cleanup without replacing their selected status`, async t => {
   const deadline = await endpointDeadline(t);
   for (const status of [400, 429, 503]) for (const cleanup of ["none", "caller", "deadline"]) {
     const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
     let cancels = 0;
-    const text = format === "sse" ? `data: ${JSON.stringify({ error: { message: "fixture rejection", code: status } })}\n\n` : JSON.stringify({ error: { message: "x".repeat(70_000) } });
+    const text = format !== "json" ? `data: ${JSON.stringify({ error: { message: "fixture rejection", code: status } })}\n\n` : JSON.stringify({ error: { message: "x".repeat(70_000) } });
     f.response = () => new Response(new ReadableStream({
       pull(controller) { controller.enqueue(new TextEncoder().encode(text)); },
       cancel() { cancels++; if (cleanup === "caller") caller.abort(new Error("fixture reciprocal cancellation")); else if (cleanup === "deadline") deadline(); },
-    }, { highWaterMark: 0 }), { status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json" } });
+    }, { highWaterMark: 0 }), { status: format === "native-sse" ? 200 : status, headers: { "content-type": format !== "json" ? "text/event-stream" : "application/json" } });
     const response = await f.request({ stream: true }, {}, "/v1/responses", caller.signal);
-    assert.equal(response.status, status, "cleanup must not replace the accepted rejection with a generic502");
-    if (cleanup === "none") assert.equal(JSON.parse(await f.consume(response)).error.code, status);
+    assert.equal(response.status, format === "native-sse" ? 200 : status, "cleanup must not replace the accepted rejection status");
+    if (format === "native-sse") {
+      const reader = response.body.getReader(); assert.equal(new TextDecoder().decode((await reader.read()).value), text);
+      await reader.cancel(); await f.drain();
+    } else if (cleanup === "none") assert.equal(JSON.parse(await f.consume(response)).error.code, status);
     else { await assert.rejects(response.text(), cleanup === "caller" ? /reciprocal cancellation/ : /deadline/); await f.drain(); }
     assert.equal(cancels, 1); assert.equal(f.events.length, 1);
     assert.equal(f.events[0].status, status < 500 ? "client_error" : "provider_error");
-    assert.equal(f.events[0].status_code, status); assert.equal(f.events[0].actual_cost_micros, 0);
+    assert.equal(f.events[0].status_code, format === "native-sse" ? 200 : status); assert.equal(f.events[0].actual_cost_micros, 0);
     await assertBudgets(f, [0]);
   }
 });

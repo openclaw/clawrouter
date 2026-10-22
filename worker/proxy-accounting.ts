@@ -158,12 +158,13 @@ export function createProxyAccounting(options: AccountingContext) {
       if (google) responseTier = googleResponseServiceTier(googleRequestServiceTier(selection.body), observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
       const tokens = google && observed.tokens ? { ...observed.tokens, serviceTier: responseTier } : observed.tokens;
       const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
-      // Protocol/delivery failure does not undo dispatched billable work. Keep
-      // the actual HTTP status and any authoritative terminal usage separately.
+      // Errors after generation starts do not undo dispatched billable work.
+      // A received pre-output rejection is known-free even with HTTP-200 SSE.
+      // Keep actual wire status and authoritative terminal usage separately.
       const characterEstimate = observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination
         && selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary" && !Array.isArray(selection.body)
         ? actualCharacterCost(model?.pricing, selection.body.input) : null;
-      return settle(response.status, status, response.ok, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch);
+      return settle(response.status, status, response.ok && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch);
     },
   };
 }

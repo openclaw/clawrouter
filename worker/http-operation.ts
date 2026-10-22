@@ -12,6 +12,7 @@ export class HttpOperation {
   readonly signal = this.controller.signal;
   private cause?: Cause | "client_rejection" | "provider_rejection";
   private ending?: Cause;
+  private rejectionReceived = false;
   private timer?: ReturnType<typeof setTimeout>;
   private readonly caller?: AbortSignal;
   private readonly canceled = () => this.cancel(this.caller?.reason);
@@ -35,7 +36,11 @@ export class HttpOperation {
 
   // Accept only the final selected rejection. Recording its receipt cause must
   // neither dispose its readable error body nor retire the endpoint deadline.
-  acceptRejection(status: number): void { this.cause ??= status < 500 ? "client_rejection" : "provider_rejection"; }
+  acceptRejection(status: number): void { this.rejectionReceived = true; this.cause ??= status < 500 ? "client_rejection" : "provider_rejection"; }
+
+  // Billing evidence is independent of the HTTP status delivered to the client:
+  // a first native SSE error stays HTTP 200 but is a known pre-output rejection.
+  get receivedRejection(): boolean { return this.rejectionReceived; }
 
   retireDeadline(): void { clearTimeout(this.timer); this.timer = undefined; }
 

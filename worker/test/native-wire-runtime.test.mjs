@@ -17,25 +17,33 @@ const errors = {
 };
 const event = value => `: heartbeat\r\n\r\nevent: error\r\ndata: ${JSON.stringify(value)}\r\n\r\n`;
 const router = `
-import worker from "./worker/index.ts";
+import worker, { BudgetLedgerObject as Budget } from "./worker/index.ts";
 export * from "./worker/index.ts";
 import { sha256Hex } from "./worker/utils.ts";
+import { ingestUsage, usageStub } from "./worker/ledgers.ts";
+export class BudgetLedgerObject extends Budget {
+  constructor(state) { super(state); this.sql = state.storage.sql; }
+  async fetch(request) { if (new URL(request.url).pathname === "/rows") return Response.json([...this.sql.exec("SELECT * FROM budget_reservations")]); return super.fetch(request); }
+}
 export default { ...worker, async fetch(request, env, context) {
-  if (new URL(request.url).pathname === "/fixture/setup") {
+  const url = new URL(request.url);
+  if (url.pathname === "/fixture/events") return usageStub(env, "tenant", "fixture").fetch("https://usage/snapshot?events=admin");
+  if (url.pathname === "/fixture/rows") return env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(url.searchParams.get("name"))).fetch("https://budget/rows");
+  if (url.pathname === "/fixture/setup") {
     const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
-    const policy = { enabled: true, generation: "g1", providers: ["openai", "anthropic"], tenantId: "tenant", monthlyBudgetMicros: null, retainRequestContent: false };
+    const policy = { enabled: true, generation: "g1", providers: ["openai", "anthropic"], tenantId: "tenant", monthlyBudgetMicros: 10_000_000, retainRequestContent: false };
     const credential = { enabled: true, secretSha256: await sha256Hex("fixture-key"), policyId: "fixture", policyGeneration: "g1" };
     for (const [path, body] of [
       ["/policies/initialize-all", [{ policyId: "fixture", policy }]],
       ["/credentials/initialize-all", [{ credentialId: "fixture", credential }, { credentialId: "expired", credential: { ...credential, expiresAt: "2020-01-01T00:00:00.000Z" } }]],
-      ["/connections/initialize-all", ["openai", "anthropic"].map(providerId => ({ providerId, enabled: true, monthlyBudgetMicros: null }))],
+      ["/connections/initialize-all", ["openai", "anthropic"].map(providerId => ({ providerId, enabled: true, monthlyBudgetMicros: 10_000_000 }))],
     ]) {
       const response = await stub.fetch("https://owner" + path, { method: "POST", body: JSON.stringify(body) });
       if (!response.ok) return response;
     }
     return Response.json({ ok: true });
   }
-  return worker.fetch(request, { ...env, ANTHROPIC_API_KEY: "fixture-anthropic-key" }, context);
+  return worker.fetch(request, { ...env, ANTHROPIC_API_KEY: "fixture-anthropic-key", USAGE_QUEUE: { send: event => ingestUsage(env, event) } }, context);
 } };
 `;
 const upstream = `
@@ -44,7 +52,7 @@ export default { async fetch(request) {
   const body = await request.json();
   const provider = new URL(request.url).hostname === "api.anthropic.com" ? "anthropic" : "openai";
   const scenario = body.metadata?.fixture;
-  const headers = { ...ids, ...rates, "x-clawrouter-request-id": "untrusted-upstream-correlation", "x-clawrouter-error-code": "untrusted-upstream-code", "x-fixture-private": "not-browser-exposed" };
+  const headers = { ...ids, ...rates, "x-clawrouter-request-id": "untrusted-upstream-correlation", "x-clawrouter-error-code": "untrusted-upstream-code", "x-fixture-private": "not-browser-exposed", "openai-organization": "fixture-org", "openai-project": "fixture-project", "anthropic-organization-id": "fixture-anthropic-org", "anthropic-workspace-id": "fixture-workspace" };
   if (scenario === "json-error") return new Response("  " + JSON.stringify(errors[provider]) + "\\n", { status: 400, headers: { ...headers, "content-type": "application/json" } });
   if (scenario === "sse-error" || scenario === "sse-rejection") {
     const text = ": heartbeat\\r\\n\\r\\nevent: error\\r\\ndata: " + JSON.stringify(errors[provider]) + "\\r\\n\\r\\n";
@@ -148,6 +156,7 @@ test("native IDs and rate limits survive and are browser-readable; router ID can
     }
     assert.equal(response.headers.get("x-clawrouter-request-id"), requestId);
     assert.equal(response.headers.get("x-clawrouter-error-code"), null);
+    for (const name of ["openai-organization", "openai-project", "anthropic-organization-id", "anthropic-workspace-id"]) assert.equal(response.headers.get(name), null, name);
     assert.ok(exposed.has("x-clawrouter-request-id"));
     assert.ok(!exposed.has("x-fixture-private"));
   }
@@ -174,4 +183,30 @@ test("router management errors retain their existing shape outside native interf
   const expired = await runtime.dispatchFetch("https://router.example/v1/key/inspect", { headers: { authorization: "Bearer clawrouter-live-expired-fixture-key" } });
   assert.equal(expired.status, 401);
   assert.equal((await expired.json()).expired, true);
+});
+
+test("first native SSE errors release both real SQL budgets, including durable background creation", async () => {
+  const rows = async name => (await (await runtime.dispatchFetch("https://router.example/fixture/rows?name=" + encodeURIComponent(name))).json());
+  for (const [path, provider, background] of [["/v1/chat/completions", "openai", false], ["/v1/responses", "openai", false], ["/v1/messages", "anthropic", false], ["/v1/responses", "openai", true]]) {
+    const id = `free-${provider}-${background}-${path.replaceAll("/", "-")}`;
+    const owners = ["tenant:fixture", "provider:" + provider], before = await Promise.all(owners.map(rows));
+    const raw = JSON.stringify({ model: provider === "anthropic" ? "claude-sonnet-4-6" : "openai/gpt-6-astra", input: "synthetic", messages: [{ role: "user", content: "synthetic" }], max_tokens: 16, max_output_tokens: 16, stream: true, ...(background ? { background: true } : {}), metadata: { fixture: "sse-error" } });
+    const response = await call(provider, "sse-error", { path, raw, headers: { "x-request-id": id } });
+    assert.equal(response.status, 200); assert.equal(await response.text(), event(errors[provider]));
+    let receipt;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const snapshot = await (await runtime.dispatchFetch("https://router.example/fixture/events")).json();
+      receipt = snapshot.events.find(value => value.request_id === id);
+      if (receipt) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(receipt, "one durable usage receipt must be visible");
+    assert.equal(receipt.status_code, 200); assert.equal(receipt.status, "provider_error");
+    assert.equal(receipt.actual_cost_micros, 0); assert.equal(receipt.cost_basis, "none");
+    assert.ok(receipt.reserved_cost_micros > 0, "a real reservation was released");
+    for (let index = 0; index < owners.length; index++) {
+      const added = (await rows(owners[index])).slice(before[index].length);
+      assert.equal(added.length, 1); assert.equal(added[0].settled, 1); assert.equal(added[0].reserved_micros, 0);
+    }
+  }
 });

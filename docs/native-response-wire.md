@@ -18,7 +18,9 @@ HTTP status remains the router's actual decision (including budget `402` and
 unavailable-pool `503`). Claude error types follow the native status contract;
 `402` is `billing_error`. Router-specific diagnostics are also available in
 `x-clawrouter-error-code`, without inserting a non-native `code` into Claude's
-error object. Management APIs retain their existing error bodies. Errors from
+error object. Native expired-key errors use only the native envelope; `expiresAt`,
+`expired` and `active` remain available on the management `/v1/key/inspect` path.
+Management APIs retain their existing error bodies. Errors from
 an upstream provider are not branded as router-generated errors.
 
 ## Streaming errors
@@ -34,9 +36,11 @@ an upstream provider are not branded as router-generated errors.
   event**. No synthetic HTTP 502 or guessed status is substituted. Unknown native
   SSE events, UTF-8, and line endings remain byte-identical.
 - First-event inspection remains bounded and owns the endpoint deadline. Stream
-  delivery, cancellation, and accounting keep their existing owners. A protocol
-  error after HTTP 200 does not prove that dispatched work was free: absent
-  authoritative usage, existing conservative settlement still applies.
+  delivery, cancellation, and accounting keep their existing owners. A first
+  error event before generation starts is a received rejection: both budget
+  reservations release to zero, including background creates and cancellations.
+  Errors after `response.created` or `message_start` retain actual or conservative
+  charges; HTTP 200 alone is not billing evidence.
 
 ## Correlation and browsers
 
@@ -48,7 +52,9 @@ Claude errors use this router ID in both `request_id` and `request-id`. The lega
 
 Browser responses expose both native ID headers, router correlation/diagnostic
 headers, `Retry-After`, and actual `x-ratelimit-*` / `anthropic-ratelimit-*`
-headers. Arbitrary provider headers are not automatically exposed.
+headers. Arbitrary provider headers are not automatically exposed. Upstream organization,
+project and workspace response IDs are stripped from all clients so pooled
+operator tenancy identifiers are not disclosed.
 
 CORS permits `X-Client-Request-Id`, `anthropic-user-profile-id`, and
 `anthropic-workspace-id`; this is **not** authorization to forward a workspace
