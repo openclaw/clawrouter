@@ -39,7 +39,7 @@ for (const operation of ["refresh", "quota", "keep-warm"]) test(`${operation} ca
     accessToken: "fixture-access", refreshToken: "fixture-refresh", accountId: "fixture-account",
     expiresAt: new Date(Date.now() + 3600000).toISOString(), maintenance: { keepWarm: operation === "keep-warm" },
   });
-  if (operation === "refresh") await assert.rejects(() => materializeGrantCredentials(env, key, grant, "openai", { tokenUrl: "https://token.example/token" }, true), error => error.code === "grant_refresh_failed");
+  if (operation === "refresh") await assert.rejects(() => materializeGrantCredentials(env, key, grant, "openai", { tokenUrl: "https://token.example/token" }, true), error => error.code === "grant_refresh_failed" && error.message === "provider openai rejected the refresh request (HTTP 307 redirect)");
   else if (operation === "quota") await assert.rejects(() => refreshGrantQuota(env, key), error => error.code === "grant_quota_probe_failed");
   else {
     const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
@@ -55,6 +55,6 @@ for (const operation of ["refresh", "quota", "keep-warm"]) test(`${operation} ca
 test("OAuth callback cancels a non-terminating redirect body without waiting for EOF", { timeout: 2000 }, async t => {
   const cancelled = redirectBody(t);
   const response = await oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=fixture-code"), {});
-  assert.equal(response.status, 400); assert.match(await response.text(), /Provider token exchange failed/);
+  assert.equal(response.status, 400); assert.match(await response.text(), /Provider token exchange failed \(HTTP 307 redirect\)\./);
   cancelled();
 });

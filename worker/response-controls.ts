@@ -56,6 +56,11 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
       route: retainedResponseRoute({}, request.headers),
       authorization: publicControlAuthorization(binding.auth),
     }, operation.signal), "upstream", late => { void late.body?.cancel().catch(() => undefined); });
+    // Controls must not hand a redirect destination to the client either. The
+    // original generation remains collectible; rejected controls add no charge.
+    if (response.status >= 300 && response.status < 400) {
+      throw new HttpError(502, "provider_unavailable", `upstream request to provider ${provider.id} failed`);
+    }
     operation.retireDeadline();
     // A control response observes the existing generation only. Closed/evicted
     // summaries never mint new accounting, reservations, or response bindings.
