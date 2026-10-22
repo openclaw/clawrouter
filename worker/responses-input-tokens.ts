@@ -1,4 +1,5 @@
 import { HttpError } from "./utils.ts";
+import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 
 // Counts share a pool, not custody. Only self-contained input is safe to send to
 // any API-key account. Extend these structural allowlists with source evidence;
@@ -104,6 +105,6 @@ export function validateResponsesInputTokens(body: Record<string, unknown>): voi
   }
 }
 
-export function assertInputTokensRequest(request: Request, query: Record<string, unknown>): void {
-  if (request.headers.has("x-codex-turn-state") || Object.keys(query).length || new URL(request.url).search) stateless();
+export function assertInputTokensRequest(request: Request, query: ProxyQuery): void {
+  if (request.headers.has("x-codex-turn-state") || hasProxyQuery(query) || new URL(request.url).search) stateless();
 }

@@ -57,6 +57,12 @@ test("real workerd count wire, zero settlement, rejections and revocation", { ti
       const response = await send(path); assert.equal(response.status, 200, await response.clone().text());
       assert.equal(await response.text(), '{ "object": "response.input_tokens", "input_tokens": 37 }\n');
     }
+    for (const path of ["/v1/responses/input_tokens", "/v1/native/openai/v1/responses/input_tokens", "/v1/proxy/openai/responses_input_tokens"]) {
+      const response = await send(path + "?trace=a&trace=b&empty=");
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.code, "input_tokens_stateless_required");
+    }
+    assert.equal((await (await get("/fixture/upstream/calls")).json()).length, 3, "all query refusals are known-unsent");
     await control("config", "malformed");
     assert.equal(await (await send()).text(), "{ truncated");
     await control("config", "429");
@@ -70,8 +76,10 @@ test("real workerd count wire, zero settlement, rejections and revocation", { ti
     assert.equal(calls.length, 5, "neither custody rejection nor revoked auth may reach upstream");
     assert.ok(calls.every(call => call.url === "https://api.openai.com/v1/responses/input_tokens" && call.method === "POST" && call.body.model === "gpt-6-astra"));
     const snapshot = await (await get("/fixture/usage")).json();
-    assert.equal(snapshot.summary.requestCount, 5); assert.equal(snapshot.summary.actualCostMicros, 0);
-    assert.equal(snapshot.events.length, 5);
+    assert.equal(snapshot.summary.requestCount, 8); assert.equal(snapshot.summary.actualCostMicros, 0);
+    assert.equal(snapshot.events.length, 8);
+    assert.equal(snapshot.events.filter(event => event.status === "client_error" && event.status_code === 400).length, 3, "query refusals own one zero audit receipt each");
+    assert.equal(snapshot.events.filter(event => event.status_code !== 400).length, 5, "only the five sent calls have upstream outcomes");
     for (const event of snapshot.events) { assert.equal(event.capability, "llm.count_tokens"); assert.equal(event.actual_cost_micros, 0); assert.equal(event.reserved_cost_micros, 0); assert.equal(event.cost_basis, "none"); assert.equal(event.pricing_ref, null); }
     for (const name of ["tenant:fixture", "provider:openai"]) assert.deepEqual(await (await get("/fixture/rows?name=" + name)).json(), []);
   } finally { await worker?.dispose(); await rm(temporary, { recursive: true, force: true }); }

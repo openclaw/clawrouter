@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
 import { putGrantCredentials } from "../grant-credentials.ts";
+import { assertInputTokensRequest } from "../responses-input-tokens.ts";
 const { default: worker } = await import("../index.ts");
 
 const routes = ["/v1/responses/input_tokens", "/v1/native/openai/v1/responses/input_tokens", "/v1/proxy/openai/responses_input_tokens"];
@@ -122,9 +123,16 @@ for (const route of routes) for (const [name, body, headers] of [
   assert.equal(JSON.parse(await f.consume(response)).error.code, ["null model", "missing model"].includes(name) ? "model_required" : "input_tokens_stateless_required");
   assert.equal(f.sent.length, 0); noMoney(f);
 });
-for (const route of routes) test("input count query cannot smuggle account selectors: " + route, async t => {
-  const f = await setup(t), response = await f.send(route + "?previous_response_id=resp_foreign");
-  assert.equal(response.status, 400); await f.consume(response); assert.equal(f.sent.length, 0); noMoney(f);
+for (const route of routes) for (const query of ["previous_response_id=resp_foreign", "trace=a&trace=b&empty=", "=blank-name"]) test("input count query is refused before egress: " + route + "?" + query, async t => {
+  const f = await setup(t), response = await f.send(route + "?" + query);
+  assert.equal(response.status, 400);
+  assert.equal(JSON.parse(await f.consume(response)).error.code, "input_tokens_stateless_required");
+  assert.equal(f.sent.length, 0); noMoney(f);
+});
+for (const query of ["trace=a&trace=b", "empty=", "=blank-name"]) test("count guard refuses ordered query independently of request URL: " + query, () => {
+  const request = new Request("https://router.example/v1/responses/input_tokens");
+  assert.throws(() => assertInputTokensRequest(request, new URLSearchParams(query)), error => error.status === 400 && error.code === "input_tokens_stateless_required");
+  assert.doesNotThrow(() => assertInputTokensRequest(request, new URLSearchParams()));
 });
 for (const denial of ["missing", "invalid", "revoked", "model", "provider", "disabled"]) test("free count retains " + denial + " enforcement", async t => {
   const f = await setup(t), headers = {};
