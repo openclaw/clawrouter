@@ -186,7 +186,7 @@ export function createSseUsageAccumulator() {
       if (delta) {
         // Cumulative deltas omit unchanged counters. Merge before normalizing
         // so disjoint cache input is added once, never once per frame.
-        const updates = Object.fromEntries(Object.entries(delta).filter(([key, value]) => value != null || ["speed", "inference_geo", "service_tier"].includes(key)));
+        const updates = Object.fromEntries(Object.entries(delta).filter(([key, value]) => value != null && !(key === "inference_geo" && value === "not_available")));
         const creation = record(updates.cache_creation);
         if (creation) updates.cache_creation = { ...record(messageUsage.cache_creation), ...creation };
         Object.assign(messageUsage, updates);
@@ -251,7 +251,7 @@ function messageCounters(usage: Record<string, unknown> | null): Record<string, 
   if (Object.hasOwn(usage, "server_tool_use") && (!serverTools || Object.hasOwn(serverTools, "web_search_requests"))) {
     counters.server_tool_use = { web_search_requests: searchRequests(serverTools?.web_search_requests) };
   }
-  for (const key of ["speed", "inference_geo", "service_tier"]) if (Object.hasOwn(usage, key)) counters[key] = typeof usage[key] === "string" && usage[key].length <= 64 ? usage[key] : null;
+  for (const key of ["speed", "inference_geo", "service_tier"]) if (Object.hasOwn(usage, key)) counters[key] = usage[key] === null ? null : typeof usage[key] === "string" && usage[key].length <= 64 ? usage[key] : "invalid";
   const creation = record(usage.cache_creation);
   if (creation) counters.cache_creation = Object.fromEntries(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"].filter(key => numeric(creation[key]) != null).map(key => [key, creation[key]]));
   return counters;

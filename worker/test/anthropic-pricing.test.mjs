@@ -22,12 +22,15 @@ test("modifiers compose with a context tariff after inclusive cache input choose
 });
 
 test("invalid modifier evidence stays distinct from omitted fields", () => {
-  for (const value of [null, 1, {}, [], "x".repeat(65)]) {
-    assert.deepEqual(anthropicModifiers({ speed: value }), { speed: null });
+  for (const value of [1, {}, [], "x".repeat(65)]) {
+    assert.deepEqual(anthropicModifiers({ speed: value }), { speed: "invalid" });
     assert.equal(anthropicPricing(model.pricing, model.upstream, request, anthropicModifiers({ speed: value, inference_geo: "us", service_tier: "standard" })), null);
   }
   assert.equal(anthropicPricing(model.pricing, "claude-future", request), null);
-  assert.equal(anthropicPricing(model.pricing, model.upstream, { serviceTier: "standard_only" }, { serviceTier: "standard" }), null, "unknown workspace geography cannot settle at global rates");
+  assert.equal(anthropicPricing(model.pricing, model.upstream, {}, {}).inputMicrosPerMillion, 4_400_000, "unknown workspace geography settles at the reserved US bound");
+  assert.deepEqual(anthropicModifiers({ speed: null }), { speed: null });
+  assert.equal(anthropicPricing(model.pricing, model.upstream, request, { speed: null, inferenceGeo: null, serviceTier: null }).inputMicrosPerMillion, 8_800_000);
+  assert.equal(anthropicPricing(model.pricing, model.upstream, { speed: null, inferenceGeo: null, serviceTier: null }).inputMicrosPerMillion, 4_400_000);
 });
 
 test("hard-budget SSE guard preserves backpressure, exact UTF-8 frames and upstream cancellation", async () => {

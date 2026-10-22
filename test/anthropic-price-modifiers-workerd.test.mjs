@@ -22,9 +22,18 @@ const upstream = `let calls = 0; export default { async fetch(request) {
   if (scenario === "missing") delete usage.inference_geo;
   if (scenario === "null") usage.speed = null;
   if (scenario === "batch") usage.service_tier = "batch";
+  // Token-only excerpt from the recorded Claude CLI Haiku 4.5 usage fixture.
+  // No recorded prompt, completion, account or credential data is included.
+  if (scenario === "recorded-geo" || scenario === "nullable") Object.assign(usage, {
+    input_tokens: 10, cache_creation_input_tokens: 9215, cache_read_input_tokens: 19288,
+    cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 9215 }, output_tokens: 4,
+    speed: null, inference_geo: scenario === "nullable" ? null : "not_available", service_tier: scenario === "nullable" ? null : "standard" });
+  if (scenario === "native-default") Object.assign(usage, { input_tokens: 100, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 },
+    output_tokens: 20, inference_geo: body.model === "claude-haiku-4-5" ? "not_available" : "us" });
   if (scenario === "long") usage.input_tokens = 200001;
   if (scenario === "refusal") { usage.output_tokens = 0; delete usage.inference_geo; }
-  const message = { id: "msg_fixture", type: "message", role: "assistant", content: [{ type: "text", text: "fixture" }], stop_reason: "end_turn", usage };
+  const message = { id: "msg_fixture", model: body.model, type: "message", role: "assistant", content: [{ type: "text", text: "fixture" }], stop_reason: "end_turn", usage };
   if (scenario === "refusal") { message.content = []; message.stop_reason = "refusal"; }
   if (scenario === "oversized") message.content[0].text = "x".repeat(2 * 1024 * 1024 + 1);
   if (!body.stream) return Response.json(message);
@@ -33,6 +42,10 @@ const upstream = `let calls = 0; export default { async fetch(request) {
     { type: "message_delta", delta: { stop_reason: message.stop_reason }, usage: { output_tokens: usage.output_tokens } },
     { type: "message_stop" } ];
   if (scenario === "late-invalid") events[2].usage.speed = "unknown";
+  if (scenario === "late-unreported" || scenario === "late-null") {
+    Object.assign(events[0].message.usage, { speed: "fast", inference_geo: "us", service_tier: "standard" });
+    Object.assign(events[2].usage, { speed: null, inference_geo: scenario === "late-null" ? null : "not_available", service_tier: null });
+  }
   const newline = scenario === "cr" ? "\\r" : scenario === "lf" ? "\\n" : "\\r\\n";
   const bytes = new TextEncoder().encode(events.map(event => "event: " + event.type + newline + "data: " + JSON.stringify(event) + newline + newline).join("")); let offset = 0;
   const stride = scenario === "oversized" ? 65536 : 7;
@@ -85,9 +98,9 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         const input = Buffer.byteLength(JSON.stringify({ ...global.body, model: "claude-opus-5-5" })) + 1024;
         assert.equal(global.event.reserved_cost_micros, Math.ceil(input * 17.6) + 44000);
       });
-      for (const scenario of ["priority", "batch", "invalid", "null", "missing", "oversized", ...(stream ? ["late-invalid"] : [])]) {
+      for (const scenario of ["priority", "batch", "invalid", "oversized", ...(stream ? ["late-invalid"] : [])]) {
         await t.test(`unknown response price fails safe: ${scenario} (${stream ? "SSE" : "JSON"})`, async () => {
-          const { response, text, event, budget } = await fixture({ stream, ...(scenario === "missing" ? { inference_geo: undefined } : {}), metadata: { user_id: scenario } });
+          const { response, text, event, budget } = await fixture({ stream, metadata: { user_id: scenario } });
           assert.equal(response.status, stream ? 200 : 502);
           assert.match(text, /pricing_required/);
           assert.equal(event.cost_basis, "unpriced_usage");
@@ -97,6 +110,58 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         });
       }
     }
+    for (const stream of [false, true]) {
+      for (const scenario of ["null", "missing"]) await t.test(`B1 unreported usage settles at admission rate: ${scenario} (${stream})`, async () => {
+        const { response, text, event, budget } = await fixture({ stream, inference_geo: undefined, metadata: { user_id: scenario } });
+        assert.equal(response.status, 200, text); assert.doesNotMatch(text, /pricing_required/);
+        if (stream) assert.match(text, /message_stop/);
+        assert.equal(event.actual_cost_micros, 6160); assert.equal(budget.spentMicros, 6160);
+        assert.equal(event.cost_basis, "manifest_pricing"); assert.equal(event.status, "success");
+      });
+      for (const [mode, policy] of [["hard", {}], ["soft", { budgetMode: "soft" }], ["unmetered", { monthlyBudgetMicros: null }]]) {
+        for (const [model, actual] of [["claude-haiku-4-5", 20389], ["claude-opus-5-5", 85468]]) {
+          for (const scenario of ["recorded-geo", "nullable"]) await t.test(`B1 real-shaped ${scenario}: ${model}, ${mode}, ${stream ? "SSE" : "JSON"}`, async () => {
+            const { response, text, event, budget } = await fixture({ model: `anthropic/${model}`, stream,
+              speed: undefined, inference_geo: undefined, metadata: { user_id: scenario } }, policy);
+            assert.equal(response.status, 200, text); assert.doesNotMatch(text, /pricing_required/);
+            if (stream) assert.match(text, /message_stop/);
+            else assert.equal(JSON.parse(text).usage.inference_geo, scenario === "nullable" ? null : "not_available");
+            assert.equal(event.actual_cost_micros, actual); assert.equal(event.cost_basis, "manifest_pricing");
+            assert.equal(event.status, "success"); if (mode !== "unmetered") assert.equal(budget.spentMicros, actual);
+          });
+        }
+      }
+      for (const [model, actual] of [["claude-opus-4-8", 1100], ["claude-fable-5", 2200], ["claude-sonnet-4-6", 660], ["claude-haiku-4-5", 200]]) {
+        for (const service_tier of [undefined, "auto", null]) await t.test(`B2 native default: ${model}, tier=${service_tier}, ${stream ? "SSE" : "JSON"}`, async () => {
+          const before = await calls();
+          const { response, text, event, budget } = await fixture({ model: `anthropic/${model}`, stream, speed: undefined,
+            inference_geo: undefined, service_tier, metadata: { user_id: "native-default" } });
+          assert.equal(response.status, 200, text); assert.equal(await calls(), before + 1);
+          if (stream) assert.match(text, /message_stop/); assert.doesNotMatch(text, /pricing_required/);
+          assert.equal(event.actual_cost_micros, actual); assert.equal(budget.spentMicros, actual);
+          assert.equal(event.cost_basis, "manifest_pricing");
+        });
+      }
+      for (const service_tier of [undefined, "auto"]) for (const scenario of ["priority", "batch"]) await t.test(`B2 auto response ${scenario} still fails safe: tier=${service_tier}, ${stream}`, async () => {
+        const before = await calls();
+        const { response, text, event, budget } = await fixture({ model: "anthropic/claude-opus-4-8", stream, service_tier, metadata: { user_id: scenario } });
+        assert.equal(await calls(), before + 1); assert.equal(response.status, stream ? 200 : 502);
+        assert.match(text, /pricing_required/); if (stream) assert.doesNotMatch(text, /event: message_stop/);
+        assert.equal(event.cost_basis, "unpriced_usage"); assert.equal(event.status, "provider_error");
+        assert.ok(event.reserved_cost_micros > 0); assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
+        assert.equal(budget.spentMicros, event.reserved_cost_micros);
+      });
+      await t.test(`B1 nullable requests inherit defaults (${stream})`, async () => {
+        const { response, text, event, budget } = await fixture({ stream, speed: null, inference_geo: null, service_tier: null, metadata: { user_id: "nullable" } });
+        assert.equal(response.status, 200, text); assert.doesNotMatch(text, /pricing_required/);
+        assert.equal(event.actual_cost_micros, 85468); assert.equal(budget.spentMicros, 85468);
+      });
+    }
+    for (const scenario of ["late-unreported", "late-null"]) await t.test(`B1 ${scenario} SSE delta cannot erase authoritative start modifiers`, async () => {
+      const { response, text, event } = await fixture({ stream: true, speed: "standard", inference_geo: "global", metadata: { user_id: scenario } });
+      assert.equal(response.status, 200); assert.match(text, /message_stop/); assert.doesNotMatch(text, /pricing_required/);
+      assert.equal(event.actual_cost_micros, 6160);
+    });
     for (const [model, actual] of [["claude-opus-5", 8250], ["claude-opus-4-8", 8250]]) await t.test(`published fast rate: ${model}`, async () => {
       const { response, event } = await fixture({ model: `anthropic/${model}` });
       assert.equal(response.status, 200); assert.equal(event.actual_cost_micros, actual);
@@ -132,8 +197,7 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
       assert.equal(response.status, 200); assert.equal(event.cost_basis, "none"); assert.equal(event.actual_cost_micros, 0); assert.equal(budget.spentMicros, 0);
     });
     for (const modifiers of [ { speed: "turbo" }, { inference_geo: "eu" }, { service_tier: "priority" },
-      { model: "anthropic/claude-sonnet-5", speed: "fast" }, { model: "anthropic/claude-opus-4-8", service_tier: "auto" },
-      { model: "anthropic/claude-opus-4-8", service_tier: undefined }, { model: "anthropic/claude-haiku-4-5", speed: "standard", inference_geo: "us" } ]) {
+      { model: "anthropic/claude-sonnet-5", speed: "fast" }, { speed: 1 }, { inference_geo: {} }, { service_tier: [] }, { model: "anthropic/claude-haiku-4-5", speed: "standard", inference_geo: "us" } ]) {
       await t.test(`unpriced request denied before dispatch: ${JSON.stringify(modifiers)}`, async () => {
         const before = await calls(), { response, text, event } = await fixture(modifiers);
         assert.equal(response.status, 400, text); assert.match(text, /pricing_required/);

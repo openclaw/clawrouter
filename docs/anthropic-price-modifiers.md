@@ -30,7 +30,13 @@ first-party Anthropic Messages API, not Bedrock/Vertex/Foundry billing.
   capacity burndown factors, **not a public Priority token tariff**. No Priority
   price is invented. Batch is not a synchronous Messages settlement contract.
   Priority is explicitly unavailable on the bundled Opus 5.5, Opus 5, Sonnet 5,
-  and Fable 5.1 models; auto requests for those models have a standard-tier bound.
+  and Fable 5.1 models. Omitted/auto remains admitted at standard rates on all
+  bundled models for native-client compatibility; positive response evidence of
+  Priority still fails safe because no public tariff exists.
+- [Messages API reference](https://platform.claude.com/docs/en/api/messages/create):
+  request speed/geography and usage speed/geography/tier are nullable. Usage
+  geography can also be `not_available` (seen in recorded Haiku 4.5 and Opus 5.5
+  responses); it is unreported, not a premium or malformed geography.
 
 ## Admission and settlement
 
@@ -43,25 +49,33 @@ support is deliberately enumerated rather than guessed from model-name prefixes.
 Adding another Anthropic card must qualify its modifier support as well.
 
 - Reservation uses the requested modifiers. Missing geography on supported
-  models reserves at 1.1× without modifying the upstream request.
+  models reserves at 1.1× without modifying the upstream request. This default
+  reservation is 10% higher than global rates and can cause HTTP 402 near a
+  budget boundary. Explicit `global` keeps the 1× reservation.
 - Settlement prefers authoritative response usage; a documented explicit
   request value is the fallback when that response field is absent. Omitted
-  geography with no response geography is **unpriced**, not assumed global.
+  geography with no response geography settles at the same 1.1× rate used for
+  admission on geo-capable models, and at base price on older models. Null fields
+  and response geography `not_available` count as unreported. This is a
+  conservative published-rate charge, not proof of the provider invoice.
 - SSE retains speed, geography and tier through cumulative usage deltas that
-  omit unchanged fields. Invalid/null values remain invalid evidence instead
-  of reverting to defaults. Cache counters are still merged once.
+  omit unchanged fields. Later null fields or `not_available` geography cannot
+  erase earlier reported modifiers. Invalid types and unknown strings remain
+  unpriced evidence. Cache counters are still merged once.
 - Hard budgets reject unknown/unsupported request combinations with HTTP 400
-  `pricing_required`, before dispatch. For a model that can use Priority,
-  omitted/auto tier has no bounded public tariff: use `standard_only` or an
-  explicit fixed policy request price. The router never silently rewrites auto.
+  `pricing_required`, before dispatch. Omitted, null or `auto` tier is admitted
+  at the standard rate, including Opus 4.8, Fable 5, Sonnet 4.6 and Haiku 4.5.
+  The router never silently rewrites auto to `standard_only`. Unreported response
+  tier uses the admitted standard rate; explicit `priority` or `batch` does not.
 - An unexpected unpriced successful response (including Priority or Batch) is
   not settled at base price. Nonstream returns HTTP 502 `pricing_required`;
   SSE emits an error frame instead of the successful terminal frame (headers
   may already be HTTP 200). The dispatched reservation is retained and the
   usage event is `unpriced_usage` / `provider_error`, preserving observed usage
   and the served tier. This is **not a claim to know the provider invoice**.
-  A provider that violates the admitted standard-only contract has no known
-  upper tariff; an already-dispatched call cannot be undone.
+  A legacy Priority account using auto may incur negotiated charges before the
+  error; use `standard_only` or a fixed policy price to avoid that ambiguity.
+  No known upper Priority tariff exists; an already-dispatched call cannot be undone.
 - Fixed-price policies remain explicit contracts. Soft/unmetered calls retain
   pass-through, but unknown modifier prices are reported as `unpriced_usage`
   with no invented token charge. Known no-output classifier refusals remain

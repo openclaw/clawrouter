@@ -51,7 +51,7 @@ test("current Anthropic native models retain routing and budget pricing", () => 
     const prepared = prepareNativeRequest(
       anthropic,
       messages,
-      { model: `anthropic/${model}`, max_tokens: 16, service_tier: "standard_only", messages: [{ role: "user", content: "hello" }] },
+      { model: `anthropic/${model}`, max_tokens: 16, messages: [{ role: "user", content: "hello" }] },
       "/v1/messages",
       {},
     );
