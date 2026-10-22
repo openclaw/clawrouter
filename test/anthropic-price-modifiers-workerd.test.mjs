@@ -36,6 +36,15 @@ const upstream = `let calls = 0; export default { async fetch(request) {
   const message = { id: "msg_fixture", model: body.model, type: "message", role: "assistant", content: [{ type: "text", text: "fixture" }], stop_reason: "end_turn", usage };
   if (scenario === "refusal") { message.content = []; message.stop_reason = "refusal"; }
   if (scenario === "oversized") message.content[0].text = "x".repeat(2 * 1024 * 1024 + 1);
+  if (scenario === "late-headers") await new Promise(resolve => setTimeout(resolve, 2000));
+  if (scenario === "slow-json") {
+    let sent = false;
+    return new Response(new ReadableStream({ async pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(" ")); return; }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      controller.enqueue(new TextEncoder().encode(JSON.stringify(message))); controller.close();
+    } }), { headers: { "content-type": "application/json" } });
+  }
   if (!body.stream) return Response.json(message);
   const events = [ { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { ...usage, output_tokens: 0 } } },
     ...(scenario === "refusal" ? [] : [{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: message.content[0].text } }]),
@@ -55,7 +64,9 @@ const upstream = `let calls = 0; export default { async fetch(request) {
 test("Anthropic modifiers traverse real Worker admission, usage inspection, queue and durable budgets", { timeout: 90_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-anthropic-modifiers-")); let mf;
   try {
-    mf = await startWorkerdFixture(temporary, `export { default } from "./worker/index.ts"; export * from "./worker/index.ts";`, upstream);
+    mf = await startWorkerdFixture(temporary, `import { providerById } from "./worker/providers.ts";
+      providerById("anthropic").endpoints.find(endpoint => endpoint.id === "messages").timeout_ms = 1000;
+      export { default } from "./worker/index.ts"; export * from "./worker/index.ts";`, upstream);
     const kv = await mf.getKVNamespace("POLICY_KV", "router"), origin = await mf.ready;
     await kv.put("connections/anthropic", JSON.stringify({ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }));
     const service = await mf.getWorker("upstream"), calls = async () => (await service.fetch("https://api.anthropic.com/fixture-count")).json();
@@ -204,6 +215,19 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         assert.equal(await calls(), before); assert.equal(event.actual_cost_micros, 0);
       });
     }
+    await t.test("JSON price inspection outlives the retired initial-response deadline", async () => {
+      const { response, text, event, budget } = await fixture({ metadata: { user_id: "slow-json" } });
+      assert.equal(response.status, 200, text); assert.equal(JSON.parse(text).id, "msg_fixture");
+      assert.equal(event.actual_cost_micros, 6160); assert.equal(budget.spentMicros, 6160);
+      assert.equal(event.status, "success"); assert.equal(event.cost_basis, "manifest_pricing");
+    });
+    await t.test("late initial headers still time out and retain dispatched reservation", async () => {
+      const { response, text, event, budget } = await fixture({ metadata: { user_id: "late-headers" } });
+      assert.equal(response.status, 502); assert.match(text, /provider_unavailable/);
+      assert.equal(event.status, "timeout"); assert.equal(event.cost_basis, "manifest_reservation");
+      assert.ok(event.reserved_cost_micros > 0); assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
+      assert.equal(budget.spentMicros, event.reserved_cost_micros);
+    });
     await t.test("higher reservation denies a request that would fit base price", async () => {
       const before = await calls(), { response, text } = await fixture({}, { monthlyBudgetMicros: 40_000 });
       assert.equal(response.status, 402, text); assert.equal(await calls(), before);

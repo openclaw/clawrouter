@@ -475,6 +475,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
     response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    // Price inspection reads delivery bytes, not initial-response headers.
+    // Retire only the timer; caller cancellation remains connected through EOF.
+    operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && auth.policy.requestCostMicros == null) {
       priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation);
       response = priceGuard.response;

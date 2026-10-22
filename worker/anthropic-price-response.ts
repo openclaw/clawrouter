@@ -1,7 +1,7 @@
 import { createSseUsageInspector, extractUsageTokens, usageInspectionLimit, type UsageTokens } from "./token-usage.ts";
 import type { HttpOperation } from "./http-operation.ts";
 
-const error = { type: "error", error: { type: "pricing_required", code: "pricing_required", message: "Anthropic response modifiers have no qualified price. The reservation is retained; no base-rate settlement was made." } };
+const error = { type: "error", error: { type: "pricing_required", code: "pricing_required", message: "Anthropic response pricing could not be verified: unsupported usage modifiers or an exceeded inspection limit. Contact the router operator; for oversized responses, reduce max_tokens or response size. The reservation is retained; do not blindly retry paid work." } };
 export interface AnthropicPriceGuard { response: Response; failure(): { tokens: UsageTokens | null } | undefined }
 
 // Hard budgets only. JSON must be qualified before success is published. SSE
