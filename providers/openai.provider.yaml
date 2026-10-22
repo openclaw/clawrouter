@@ -990,12 +990,8 @@ billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
   counters:
-    - name: input_tokens
-      source: usage.input_tokens
-      unit: token
-    - name: output_tokens
-      source: usage.output_tokens
-      unit: token
+    - { name: input_tokens, source: usage.input_tokens, unit: token }
+    - { name: output_tokens, source: usage.output_tokens, unit: token }
 tests:
   fixtures:
     - name: chat-basic
