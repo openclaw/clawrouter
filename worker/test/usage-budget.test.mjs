@@ -196,7 +196,7 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
     assert.equal((await providerBudgetStatus(env, "anthropic", limit)).spentMicros, expectedCost);
     const next = await handler.fetch(request, env, context);
     assert.equal(next.status, expectedCost === 0 ? 200 : 402);
-    if (expectedCost !== 0) assert.equal((await next.json()).error.code, "budget_exhausted");
+    if (expectedCost !== 0) { assert.equal(next.headers.get("x-clawrouter-error-code"), "budget_exhausted"); await next.text(); }
     else await next.text();
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), expectedCost === 0 ? 2 : 1);
@@ -351,7 +351,7 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
 }
 
 test("HTTP and native streaming outcomes settle each ledger once without rewriting delivery", async (t) => {
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["failed", "failed_without_usage", "error", "eof", "cancel", "cancel_after_terminal", "abort", "abort_after_terminal", "broken_after_terminal"]) {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["failed", "failed_without_usage", "error", "first_error", "eof", "cancel", "cancel_after_terminal", "abort", "abort_after_terminal", "broken_after_terminal"]) {
     const events = [], pending = [], limit = 1_000_000;
     const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
@@ -359,9 +359,9 @@ test("HTTP and native streaming outcomes settle each ledger once without rewriti
     env.USAGE_QUEUE = { send: async event => { events.push(event); } };
     const measured = scenario === "failed" || scenario.endsWith("after_terminal");
     const terminal = scenario.startsWith("failed") ? { type: "response.failed", response: { status: "failed", service_tier: "priority", ...(measured ? { usage: astraUsage } : {}) } }
-      : scenario === "error" ? { type: "error", error: { message: "fixture" } }
+      : ["error", "first_error"].includes(scenario) ? { type: "error", error: { message: "fixture" } }
       : measured ? { type: "response.completed", response: { service_tier: "priority", usage: astraUsage } } : null;
-    const body = sse({ type: "response.created" }, ...(terminal ? [terminal] : []));
+    const body = sse(...(scenario === "first_error" ? [] : [{ type: "response.created" }]), ...(terminal ? [terminal] : []));
     const abort = new AbortController(), callerCanceled = scenario.startsWith("cancel") || scenario.startsWith("abort");
     let pulls = 0, canceled = false;
     const upstream = t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ pull(controller) {
@@ -523,7 +523,7 @@ test("known nonbillable responses stay readable and zero across tariffs and brok
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, status);
-    if (brokenType) assert.deepEqual(await response.json(), { error: { message: "upstream request failed", type: "upstream_error", code: status } });
+    if (brokenType) assert.deepEqual(await response.json(), { error: { message: "upstream request failed", type: status >= 500 ? "server_error" : status === 429 ? "rate_limit_error" : "invalid_request_error", param: null, code: status } });
     else await response.text();
     await Promise.all(pending);
     assert.equal(events.length, 1);
@@ -676,7 +676,7 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
       body: JSON.stringify(route.startsWith("/v1/proxy/") ? { body: requestBody } : requestBody),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, denied ? 400 : 200);
-    if (denied) { const body = await response.json(); assert.equal(body.error.code, "pricing_required"); assert.match(body.error.message, /fixed policy request price/); }
+    if (denied) { const body = await response.json(); assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required"); assert.match(body.error.message, /fixed policy request price/); }
     else assert.equal(await response.text(), wire);
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), denied ? 0 : 1);

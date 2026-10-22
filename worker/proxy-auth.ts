@@ -1,4 +1,5 @@
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { markLocalError } from "./native-errors.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { snapshot } from "./providers.ts";
@@ -37,7 +38,7 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
   const policyEntry = admission.policy;
   const failure = proxyCredentialFailure(credentialEntry.credential, policyEntry);
   if (failure) return failure.code === "proxy_key_expired"
-    ? Response.json({ error: { code: failure.code, message: failure.message }, expiresAt: credentialEntry.credential.expiresAt, expired: true, active: false }, { status: 401 })
+    ? markLocalError(Response.json({ error: { code: failure.code, message: failure.message }, expiresAt: credentialEntry.credential.expiresAt, expired: true, active: false }, { status: 401 }), failure.code, failure.message)
     : errorResponse(failure.code, failure.message, failure.status);
   if (admission.ownerUnavailable) throw new Error("admission owner resolution failed");
   const owner = admission.owner;

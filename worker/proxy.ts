@@ -3,6 +3,7 @@ import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDisco
 import { softBudget } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
+import { inheritLocalError } from "./native-errors.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
@@ -212,7 +213,7 @@ async function proxyFusion(
   headers.set("x-clawrouter-fusion-failed-count", String(result.failedModels.length));
   headers.set("x-clawrouter-fusion-latency-ms", String(result.durationMs));
   if (result.proposals.length) headers.set("x-clawrouter-fusion-advisers", result.proposals.map((proposal) => proposal.model).join(","));
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return inheritLocalError(response, new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
 }
 
 export async function proxyManifest(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -463,7 +464,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
-    response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation);
+    const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
+    response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation, errorFormat ? { format: errorFormat, requestId } : undefined);
   } catch (error) {
     soft?.close();
     if (soft?.denial) {

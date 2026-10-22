@@ -123,7 +123,10 @@ export function parseTraceparent(value: string | null): { traceId: string; spanI
 
 export function withRequestId(response: Response, requestId: string): Response {
   const copy = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers, ...(response.webSocket ? { webSocket: response.webSocket } : {}) });
-  copy.headers.set("x-request-id", requestId);
+  copy.headers.set("x-clawrouter-request-id", requestId);
+  // Keep native upstream IDs intact. The legacy alias remains available when
+  // neither provider ID exists; the router-specific header is authoritative.
+  if (!copy.headers.has("x-request-id") && !copy.headers.has("request-id")) copy.headers.set("x-request-id", requestId);
   return copy;
 }
 

@@ -662,6 +662,7 @@ test("actual Fusion adviser deadlines and oversized consumption stay distinct fr
     else if (origin === "deadline") { assert.equal(typeof adviserDeadline, "function"); adviserDeadline(); }
     const response = await pending;
     assert.equal(response.status, origin === "caller" ? 502 : 200);
+    if (origin === "caller") assert.deepEqual((await response.clone().json()).error, { message: "upstream request to provider openai failed", type: "server_error", param: null, code: "provider_unavailable" });
     await f.consume(response);
     assert.equal(f.events.length, 2);
     const adviser = f.events.find(event => event.compound_request_stage === "fusion_adviser");
@@ -784,7 +785,7 @@ for (const format of ["sse", "json"]) test(`${format} rejections own reciprocal 
     f.response = () => new Response(new ReadableStream({
       pull(controller) { controller.enqueue(new TextEncoder().encode(text)); },
       cancel() { cancels++; if (cleanup === "caller") caller.abort(new Error("fixture reciprocal cancellation")); else if (cleanup === "deadline") deadline(); },
-    }, { highWaterMark: 0 }), { status: format === "sse" ? 200 : status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json" } });
+    }, { highWaterMark: 0 }), { status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json" } });
     const response = await f.request({ stream: true }, {}, "/v1/responses", caller.signal);
     assert.equal(response.status, status, "cleanup must not replace the accepted rejection with a generic502");
     if (cleanup === "none") assert.equal(JSON.parse(await f.consume(response)).error.code, status);

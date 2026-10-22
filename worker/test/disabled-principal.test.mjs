@@ -55,7 +55,8 @@ test("disabled owners are denied before HTTP, discovery, and WebSocket work", as
       ...(method === "POST" ? { body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture" }) } : {}),
     }), env, context);
     assert.equal(response.status, 403, `${method} ${path}`);
-    assert.equal((await response.json()).error.code, "principal_disabled");
+    const body = await response.json();
+    assert.equal(path === "/v1/messages" ? response.headers.get("x-clawrouter-error-code") : body.error.code, "principal_disabled");
   }
 });
 

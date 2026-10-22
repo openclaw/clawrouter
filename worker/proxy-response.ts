@@ -3,6 +3,7 @@ import { extractCompactUsageTokens } from "./responses-compact.ts";
 import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
@@ -16,7 +17,7 @@ export interface ResponseBodyInspection {
 
 export function proxyResponseHeaders(response: Response, providerId: string): Headers {
   const headers = new Headers(response.headers);
-  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade", "x-clawrouter-grant-failover"]) headers.delete(name);
+  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade", "x-clawrouter-grant-failover", "x-clawrouter-error-code"]) headers.delete(name);
   headers.set("x-clawrouter-upstream-provider", providerId);
   return headers;
 }
@@ -116,27 +117,30 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
 }
 
-export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation()): Promise<Response> {
+export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
   if (!streamingRequested) return response;
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
   if (response.status >= 400) {
     try {
-      if (eventStream && response.body) return await normalizeFirstSseEvent(response, response.status, operation);
+      if (eventStream && response.body) return await normalizeFirstSseEvent(response, response.status, operation, native);
       const body = await readLimited(response, 64 * 1024, operation);
-      return mappedUpstreamError(response, upstreamError(body), response.status);
+      // Valid native JSON errors are already the wire contract: preserve even
+      // whitespace and extension fields instead of rebuilding their envelope.
+      if (native && nativeJsonError(body, native)) return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      return mappedUpstreamError(response, upstreamError(body), response.status, native);
     } catch {
       // Failure to read error details cannot replace an accepted HTTP status.
       // The operation still owns cancellation and the accounting cause.
-      return mappedUpstreamError(response, {}, response.status);
+      return mappedUpstreamError(response, {}, response.status, native);
     }
   }
   if (!response.ok || !eventStream || !response.body) return response;
-  return normalizeFirstSseEvent(response, null, operation);
+  return normalizeFirstSseEvent(response, null, operation, native);
 }
 
 const FIRST_SSE_EVENT_LIMIT = 8 * 1024;
 
-async function normalizeFirstSseEvent(response: Response, errorStatus: number | null, operation: HttpOperation): Promise<Response> {
+async function normalizeFirstSseEvent(response: Response, errorStatus: number | null, operation: HttpOperation, native?: NativeErrorContext): Promise<Response> {
   const reader = response.body!.getReader();
   const chunks: Uint8Array[] = [];
   const sniffed = new Uint8Array(FIRST_SSE_EVENT_LIMIT);
@@ -162,18 +166,20 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
         const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
         eventStart = boundary.end;
         if (event.kind === "empty") continue;
-        if (errorStatus !== null || event.kind === "error") {
+        // A native HTTP-200 error event is still SSE, even when it is the
+        // first event. Retain the sniff/deadline but never invent an HTTP 502.
+        if (errorStatus !== null || !native && event.kind === "error") {
           const upstream = event.upstream;
           const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
           operation.acceptRejection(status);
-          return mappedUpstreamError(response, upstream, status);
+          return mappedUpstreamError(response, upstream, status, native);
         }
         transferred = true;
         return replayResponse(response, reader, chunks, done);
       }
       if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
         if (errorStatus === null) { transferred = true; return replayResponse(response, reader, chunks, done); }
-        return mappedUpstreamError(response, {}, errorStatus);
+        return mappedUpstreamError(response, {}, errorStatus, native);
       }
     }
   } finally {
@@ -242,18 +248,26 @@ function hasTopLevelError(data: string): boolean {
   } catch { return false; }
 }
 
-function mappedUpstreamError(response: Response, upstream: ReturnType<typeof upstreamError>, status: number): Response {
+function mappedUpstreamError(response: Response, upstream: NativeErrorDetails, status: number, native?: NativeErrorContext): Response {
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   headers.set("content-type", "application/json; charset=utf-8");
-  return Response.json({ error: {
-    message: upstream.message ?? (response.ok ? "upstream request failed" : response.statusText || "upstream request failed"),
-    type: upstream.type ?? "upstream_error",
-    code: upstream.code ?? status,
-  } }, { status, statusText: status === response.status ? response.statusText : "", headers });
+  const message = upstream.message ?? (response.ok ? "upstream request failed" : response.statusText || "upstream request failed");
+  const body = native ? nativeErrorEnvelope(native, status, {
+    ...upstream, message, requestId: upstream.requestId === undefined ? headers.get("request-id") ?? native.requestId : upstream.requestId,
+  }) : { error: { message, type: upstream.type ?? "upstream_error", code: upstream.code ?? status } };
+  return Response.json(body, { status, statusText: status === response.status ? response.statusText : "", headers });
 }
 
-function upstreamError(body: string): { message?: string; type?: string; code?: string | number } {
+function nativeJsonError(body: string, native: NativeErrorContext): boolean {
+  try {
+    const value = JSON.parse(body), error = value?.error;
+    if (!error || typeof error.message !== "string" || typeof error.type !== "string") return false;
+    return native.format === "anthropic" ? value.type === "error" && (typeof value.request_id === "string" || value.request_id === null) : Object.hasOwn(error, "param") && Object.hasOwn(error, "code");
+  } catch { return false; }
+}
+
+function upstreamError(body: string): NativeErrorDetails {
   let value: unknown;
   try {
     const eventData = firstSseData(body);
@@ -264,7 +278,9 @@ function upstreamError(body: string): { message?: string; type?: string; code?: 
   return {
     message: typeof error.message === "string" ? error.message : undefined,
     type: typeof error.type === "string" ? error.type : undefined,
-    code: typeof error.code === "string" || typeof error.code === "number" ? error.code : undefined,
+    code: typeof error.code === "string" || typeof error.code === "number" || error.code === null ? error.code : undefined,
+    param: error.param,
+    requestId: "request_id" in value && (typeof value.request_id === "string" || value.request_id === null) ? value.request_id : undefined,
   };
 }
 
