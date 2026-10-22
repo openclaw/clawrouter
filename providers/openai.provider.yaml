@@ -121,8 +121,8 @@ endpoints:
   moderations: {path: /v1/moderations, requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
   models_list: { method: GET, path: /v1/models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   models_retrieve: { method: GET, path: "/v1/models/${model_id}", pathParams: [model_id], pathParamStyles: { model_id: opaque_segment }, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
-  realtime: {"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
-  responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
+  realtime: {"requestHeaders":["X-Client-Request-Id"],"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
+  responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state, X-Client-Request-Id], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
   decisions: { path: /v1/decisions, requestFormat: openai.decisions, responseFormat: openai.decisions, timeoutMs: 120000 }
   responses:
     modelPassthrough: {}
@@ -140,6 +140,7 @@ endpoints:
   responses_retrieve:
     method: GET
     path: /v1/responses/${response_id}
+    requestHeaders: [X-Client-Request-Id]
     pathParams: [response_id]
     requestFormat: openai.responses
     responseFormat: openai.responses
@@ -148,6 +149,7 @@ endpoints:
   responses_cancel:
     method: POST
     path: /v1/responses/${response_id}/cancel
+    requestHeaders: [X-Client-Request-Id]
     pathParams: [response_id]
     requestFormat: openai.responses
     responseFormat: openai.responses
@@ -155,6 +157,7 @@ endpoints:
   chat_completions:
     modelPassthrough: {}
     path: /v1/chat/completions
+    requestHeaders: [X-Client-Request-Id]
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
@@ -162,18 +165,21 @@ endpoints:
   embeddings:
     modelPassthrough: {}
     path: /v1/embeddings
+    requestHeaders: [X-Client-Request-Id]
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings
     timeoutMs: 120000
-  transcriptions: {path: /v1/audio/transcriptions, requestFormat: openai.audio_transcriptions, responseFormat: openai.audio_transcriptions, timeoutMs: 120000}
+  transcriptions: {requestHeaders: [X-Client-Request-Id], path: /v1/audio/transcriptions, requestFormat: openai.audio_transcriptions, responseFormat: openai.audio_transcriptions, timeoutMs: 120000}
   speech:
     path: /v1/audio/speech
+    requestHeaders: [X-Client-Request-Id]
     requestFormat: openai.audio_speech
     responseFormat: audio.binary
     streaming: audio
     timeoutMs: 120000
   images_generations:
     path: /v1/images/generations
+    requestHeaders: [X-Client-Request-Id]
     requestFormat: openai.images_generations
     responseFormat: openai.images_generations
     timeoutMs: 600000

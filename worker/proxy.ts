@@ -4,6 +4,7 @@ import { softBudget } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
+import { workspaceSelectionDenied } from "./native-request-headers.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
@@ -311,6 +312,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     return auth;
   }
+  const workspaceDenial = workspaceSelectionDenied(request, selection.provider.id);
+  if (workspaceDenial) return workspaceDenial;
   validateSelectedInput(selection);
   const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;

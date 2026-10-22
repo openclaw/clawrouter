@@ -54,6 +54,7 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
     response = await operation.wait(dispatchResponseControl(env, {
       owner: binding.owner, responseId, action, query: query.toString(), stream: binding.background?.stream === true,
       route: retainedResponseRoute({}, request.headers),
+      clientRequestId: request.headers.get("x-client-request-id") ?? undefined,
       authorization: publicControlAuthorization(binding.auth),
     }, operation.signal), "upstream", late => { void late.body?.cancel().catch(() => undefined); });
     // Controls must not hand a redirect destination to the client either. The
