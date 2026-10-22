@@ -158,12 +158,11 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
   // Preserve JSON.parse semantics/cost within the existing 8 MiB envelope.
   let parser: ReturnType<typeof createJsonBodyParser> | undefined;
   const canceled = () => { void reader.cancel(request.signal.reason).catch(() => undefined); };
-  request.signal.addEventListener("abort", canceled, { once: true });
   try {
     while (true) {
-      if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+      if (parser && request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       const { done, value } = await reader.read();
-      if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+      if (parser && request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       if (done) break;
       size += value.byteLength;
       if (size > maxBytes) {
@@ -176,6 +175,8 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
         // Authenticate/admit before parsing this chunk or pulling any more.
         await onExpand?.();
         parser = createJsonBodyParser();
+        request.signal.addEventListener("abort", canceled, { once: true });
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
         await parser.push(text);
         text = "";
       }

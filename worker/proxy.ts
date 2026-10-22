@@ -52,7 +52,13 @@ let expandedJsonInFlight = 0;
 class ExpandedJsonAdmission {
   private acquired = false;
   completion?: Promise<unknown>;
-  constructor(private request: Request, private env: Env, private mode: AuthMode, private providerId: string) {}
+  private readonly request: Request;
+  private readonly env: Env;
+  private readonly mode: AuthMode;
+  private readonly providerId: string;
+  constructor(request: Request, env: Env, mode: AuthMode, providerId: string) {
+    this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
+  }
   expand = async (): Promise<void> => {
     const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
     if (auth instanceof Response) throw auth;
@@ -61,10 +67,12 @@ class ExpandedJsonAdmission {
     expandedJsonInFlight++;
     this.acquired = true;
   };
-  async finish(): Promise<void> {
+  finish(context: ExecutionContext): void {
     if (!this.acquired) return;
-    try { await this.completion; }
-    finally { if (this.acquired) { this.acquired = false; expandedJsonInFlight--; } }
+    context.waitUntil((async () => {
+      try { await this.completion; }
+      finally { this.acquired = false; expandedJsonInFlight--; }
+    })());
   }
 }
 
@@ -252,7 +260,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     if (preauthenticated instanceof Response) return preauthenticated;
     const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
     return await proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
-  } finally { if (admission) context.waitUntil(admission.finish()); }
+  } finally { admission?.finish(context); }
 }
 
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
@@ -288,7 +296,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
     if (preauthenticated instanceof Response) return preauthenticated;
     return await proxySelected(request, env, context, "proxy_key", selection, searchParamsRecord(new URL(request.url).searchParams), preauthenticated, undefined, undefined, undefined, admission);
-  } finally { if (admission) context.waitUntil(admission.finish()); }
+  } finally { admission?.finish(context); }
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: ExpandedJsonAdmission): Promise<Response> {
