@@ -37,8 +37,15 @@ an upstream provider are not branded as router-generated errors.
   SSE events, UTF-8, and line endings remain byte-identical.
 - First-event inspection remains bounded and owns the endpoint deadline. Stream
   delivery, cancellation, and accounting keep their existing owners. A first
-  error event before generation starts is a received rejection: both budget
-  reservations release to zero, including background creates and cancellations.
+  error event before generation starts is a provisional received rejection:
+  both budget reservations release to zero only while subsequent events remain
+  empty or errors, including background creates and cancellations. If a provider
+  continues with a non-empty, non-error event, authoritative later usage settles
+  the request; missing or uninspectable usage retains the conservative reservation.
+  Delivery bytes and the original error outcome stay unchanged. Background
+  rejection settlement waits for delivery rather than freezing a free receipt
+  before later work can be observed. Response identities after an initial error
+  are not published as continuations.
   Errors after `response.created` or `message_start` retain actual or conservative
   charges; HTTP 200 alone is not billing evidence.
 

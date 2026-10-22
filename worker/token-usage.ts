@@ -119,8 +119,8 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
 
 export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error" } | { kind: "invalid" } | { kind: "unavailable" };
 
-export function createSseUsageInspector() {
-  const accumulator = createSseUsageAccumulator();
+export function createSseUsageInspector(revokeRejection?: () => void) {
+  const accumulator = createSseUsageAccumulator(revokeRejection);
   function inspect(frame: string | null) {
     if (frame === null) { accumulator.accept({ kind: "unavailable" }); return; }
     const lines = frame.split("\n");
@@ -140,13 +140,24 @@ export function createSseUsageInspector() {
 
 // Both bounded frame parsing and the Responses scalar projection feed one
 // accounting state owner; parser limits cannot invent a terminal provider error.
-export function createSseUsageAccumulator() {
+export function createSseUsageAccumulator(revokeRejection?: () => void) {
+  let provisionalRejection = !!revokeRejection;
+  function continuedWork() {
+    if (!provisionalRejection) return;
+    provisionalRejection = false; revokeRejection?.();
+    // The original operation retains its error status. Resume usage collection
+    // only for this first-event rejection; normal terminal semantics stay fixed.
+    outcome = null; terminalTokens = null;
+  }
   let found: UsageTokens | null = null, terminalTokens: UsageTokens | null = null;
   let message: Record<string, unknown> | null = null, messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false, uncertain = false;
   let protocol: "message" | "response" | "chat" | null = null;
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
   function accept(evidence: SseUsageEvidence) {
+    const root = evidence.kind === "data" ? record(evidence.value) : null;
+    const error = evidence.kind === "error" || root && (Object.hasOwn(root, "error") || responseOutcome(root) === "provider_error");
+    if (provisionalRejection && !error) continuedWork();
     if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.
@@ -162,7 +173,6 @@ export function createSseUsageAccumulator() {
       return;
     }
     if (evidence.kind === "invalid") { if (protocol) outcome = "provider_error"; found = null; return; }
-    const root = record(evidence.value);
     if (!root) { if (protocol) outcome = "provider_error"; found = null; return; }
     const terminal = responseOutcome(root);
     if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root); return; }
@@ -206,6 +216,9 @@ export function createSseUsageAccumulator() {
   return {
     accept,
     result(ended = true, overflowed = false): UsageInspection {
+      // An oversized trailing frame cannot certify that delivered bytes were
+      // error-only; retain conservative billing when bounded inspection fails.
+      if (overflowed) continuedWork();
       return { tokens: outcome ? terminalTokens : protocol || !ended ? null : found, outcome: outcome ?? (ended && protocol && !uncertain && !overflowed ? "provider_error" : null) };
     },
   };

@@ -16,6 +16,28 @@ const errors = {
   anthropic: { type: "error", error: { type: "overloaded_error", message: "busy 🦞" }, request_id: "anthropic-body-id" },
 };
 const event = value => `: heartbeat\r\n\r\nevent: error\r\ndata: ${JSON.stringify(value)}\r\n\r\n`;
+const dataEvent = value => `data: ${JSON.stringify(value)}\r\n\r\n`;
+const continued = {
+  openai: [
+    { object: "chat.completion.chunk", choices: [{ delta: { content: "real output 🦞" } }] },
+    { object: "chat.completion.chunk", choices: [], service_tier: "default", usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } },
+  ].map(dataEvent).join("") + "data: [DONE]\r\n\r\n",
+  responses: [
+    { type: "response.output_text.delta", delta: "real output 🦞" },
+    { type: "response.completed", response: { id: "resp_after_error", status: "completed", service_tier: "default", usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } } },
+  ].map(dataEvent).join(""),
+  anthropic: [
+    { type: "message_start", message: { type: "message", usage: { input_tokens: 10, output_tokens: 0 } } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "real output 🦞" } },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+    { type: "message_stop" },
+  ].map(dataEvent).join(""),
+};
+const followup = (kind, mode) => mode === "usage" ? continued[kind]
+  : mode === "truncated" ? dataEvent(kind === "anthropic" ? { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 0 } } } : kind === "responses" ? { type: "response.output_text.delta", delta: "real output" } : { object: "chat.completion.chunk", choices: [{ delta: { content: "real output" } }] })
+  : mode === "oversized" ? dataEvent({ type: "future_event", output: "x".repeat(2 * 1024 * 1024 + 100) })
+  : mode === "invalid" ? "data: not-json\r\n\r\n"
+  : ": keepalive\r\n\r\ndata: \r\n\r\n" + event(errors[kind === "anthropic" ? kind : "openai"]);
 const router = `
 import worker, { BudgetLedgerObject as Budget } from "./worker/index.ts";
 export * from "./worker/index.ts";
@@ -48,12 +70,23 @@ export default { ...worker, async fetch(request, env, context) {
 `;
 const upstream = `
 const errors = ${JSON.stringify(errors)}, ids = ${JSON.stringify(upstreamIds)}, rates = ${JSON.stringify(rateHeaders)};
+const continued = ${JSON.stringify(continued)};
+const dataEvent = ${dataEvent.toString()}, event = ${event.toString()}, followup = ${followup.toString()};
 export default { async fetch(request) {
   const body = await request.json();
   const provider = new URL(request.url).hostname === "api.anthropic.com" ? "anthropic" : "openai";
   const scenario = body.metadata?.fixture;
   const headers = { ...ids, ...rates, "x-clawrouter-request-id": "untrusted-upstream-correlation", "x-clawrouter-error-code": "untrusted-upstream-code", "x-fixture-private": "not-browser-exposed", "openai-organization": "fixture-org", "openai-project": "fixture-project", "anthropic-organization-id": "fixture-anthropic-org", "anthropic-workspace-id": "fixture-workspace" };
   if (scenario === "json-error") return new Response("  " + JSON.stringify(errors[provider]) + "\\n", { status: 400, headers: { ...headers, "content-type": "application/json" } });
+  if (scenario.startsWith("after-error:")) {
+    const [, kind, mode] = scenario.split(":");
+    const bytes = new TextEncoder().encode(event(errors[provider]) + followup(kind, mode)); let offset = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (offset === bytes.length) return controller.close();
+      const end = Math.min(bytes.length, offset + (mode === "oversized" ? 4093 : 7));
+      controller.enqueue(bytes.subarray(offset, end)); offset = end;
+    } }, { highWaterMark: 0 }), { headers: { ...headers, "content-type": "text/event-stream" } });
+  }
   if (scenario === "sse-error" || scenario === "sse-rejection") {
     const text = ": heartbeat\\r\\n\\r\\nevent: error\\r\\ndata: " + JSON.stringify(errors[provider]) + "\\r\\n\\r\\n";
     const bytes = new TextEncoder().encode(text); let offset = 0;
@@ -210,3 +243,41 @@ test("first native SSE errors release both real SQL budgets, including durable b
     }
   }
 });
+
+// A provider may violate its terminal-error contract. Preserve its bytes, but
+// observable later work must withdraw the initial no-charge evidence.
+for (const [kind, path, background] of [["openai", "/v1/chat/completions", false], ["responses", "/v1/responses", false], ["anthropic", "/v1/messages", false], ["responses", "/v1/responses", true]]) {
+  for (const mode of ["usage", "truncated", "errors-only", "invalid", "oversized"]) test(`first SSE error followed by ${mode}: ${kind}, background=${background}`, { timeout: 60000 }, async () => {
+    const provider = kind === "anthropic" ? kind : "openai", id = `continued-${kind}-${background}-${mode}`;
+    const owners = ["tenant:fixture", "provider:" + provider];
+    const rows = async name => (await (await runtime.dispatchFetch("https://router.example/fixture/rows?name=" + encodeURIComponent(name))).json());
+    const before = await Promise.all(owners.map(rows));
+    const raw = JSON.stringify({ model: provider === "anthropic" ? "claude-sonnet-4-6" : "openai/gpt-6-astra", input: "synthetic", messages: [{ role: "user", content: "synthetic" }], max_tokens: 16, max_output_tokens: 16, stream: true, ...(background ? { background: true } : {}), metadata: { fixture: `after-error:${kind}:${mode}` } });
+    const response = await call(provider, "", { path, raw, headers: { "x-request-id": id } });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), event(errors[provider]) + followup(kind, mode));
+    let receipt;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const snapshot = await (await runtime.dispatchFetch("https://router.example/fixture/events")).json();
+      const matches = snapshot.events.filter(value => value.request_id === id);
+      if (matches.length) { assert.equal(matches.length, 1); receipt = matches[0]; break; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(receipt, "one durable receipt must be visible");
+    assert.equal(receipt.status_code, 200); assert.equal(receipt.status, "provider_error");
+    if (mode === "errors-only") { assert.equal(receipt.actual_cost_micros, 0); assert.equal(receipt.cost_basis, "none"); }
+    else {
+      assert.ok(receipt.actual_cost_micros > 0, "delivered work cannot be free");
+      if (mode === "usage") {
+        assert.deepEqual([receipt.input_tokens, receipt.output_tokens, receipt.total_tokens], [10, 2, 12]);
+        assert.equal(receipt.cost_basis, "manifest_pricing");
+        assert.equal(receipt.actual_cost_micros, provider === "anthropic" ? 60 : 200);
+        assert.ok(receipt.actual_cost_micros < receipt.reserved_cost_micros, "authoritative usage replaces the reservation");
+      } else { assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros); assert.equal(receipt.cost_basis, "manifest_reservation"); }
+    }
+    for (let index = 0; index < owners.length; index++) {
+      const added = (await rows(owners[index])).slice(before[index].length);
+      assert.equal(added.length, 1); assert.equal(added[0].settled, 1); assert.equal(added[0].reserved_micros, receipt.actual_cost_micros);
+    }
+  });
+}

@@ -43,8 +43,11 @@ export class HttpBackground {
     return backgroundCall(this.env, this.scope, { action: "observe", id: this.admission.id, fact, statusCode });
   }
   unsent(statusCode: number, status: AccountingOutcome["status"], contentRef: string | null): Promise<unknown> {
+    return this.finishRejectedDelivery({ statusCode, status, billable: false, tokens: null, contentRef });
+  }
+  finishRejectedDelivery(outcome: Pick<AccountingOutcome, "statusCode" | "status" | "billable" | "tokens" | "contentRef">): Promise<unknown> {
     return backgroundCall(this.env, this.scope, { action: "freeze", id: this.admission.id,
-      outcome: { occurredAtMs: Date.now(), statusCode, status, billable: false, tokens: null, contentRef } });
+      outcome: { ...outcome, occurredAtMs: Date.now() } });
   }
 }
 

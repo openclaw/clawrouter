@@ -11,9 +11,9 @@ const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 
 // Observe the declared Responses format without assembling output. Identity
 // publication and complete output/tool-history evidence have different owners.
-export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesInspectionTools, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens) {
+export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesInspectionTools, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens, revokeRejection?: () => void) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const accumulator = createSseUsageAccumulator();
+  const accumulator = createSseUsageAccumulator(revokeRejection);
   const hosted = createHostedSearchUsage();
   let document = metadataParser(!!observe, !!tools?.witness), json = empty(), stopped = false;
   let prefix = "", mode: "prefix" | "data" | "event" | "ignored" = "prefix";

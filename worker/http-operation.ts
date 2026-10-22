@@ -41,6 +41,9 @@ export class HttpOperation {
   // Billing evidence is independent of the HTTP status delivered to the client:
   // a first native SSE error stays HTTP 200 but is a known pre-output rejection.
   get receivedRejection(): boolean { return this.rejectionReceived; }
+  // Later delivered work invalidates only the no-charge evidence, not the
+  // original error outcome or cancellation owner.
+  revokeRejection(): void { this.rejectionReceived = false; }
 
   retireDeadline(): void { clearTimeout(this.timer); this.timer = undefined; }
 
