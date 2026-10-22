@@ -1,5 +1,6 @@
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { softBudget } from "./soft-budget.ts";
+import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
@@ -40,15 +41,45 @@ import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./p
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
-  errorResponse, HttpError, randomId, readJson,
+  errorResponse, HttpError, json, maxAnthropicJsonBodyBytes, maxJsonBodyBytes, randomId, readJson,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
 
+// Shared by native, unified and manifest routes in this isolate. Keep the slot
+// through response delivery: accounting closures can still own the input body.
+let expandedJsonInFlight = 0;
+class ExpandedJsonAdmission {
+  private acquired = false;
+  completion?: Promise<unknown>;
+  private readonly request: Request;
+  private readonly env: Env;
+  private readonly mode: AuthMode;
+  private readonly providerId: string;
+  constructor(request: Request, env: Env, mode: AuthMode, providerId: string) {
+    this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
+  }
+  expand = async (): Promise<void> => {
+    const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
+    if (auth instanceof Response) throw auth;
+    if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+    if (expandedJsonInFlight >= 2) throw json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" });
+    expandedJsonInFlight++;
+    this.acquired = true;
+  };
+  finish(context: ExecutionContext): void {
+    if (!this.acquired) return;
+    context.waitUntil((async () => {
+      try { await this.completion; }
+      finally { this.acquired = false; expandedJsonInFlight--; }
+    })());
+  }
+}
+
 interface PreparedUpstream {
   headers: Headers;
   url: URL;
-  requestBody: string | undefined;
+  requestBody: string | ReadableStream<Uint8Array> | undefined;
   grantKey: string | null;
   grantLane: import("./types").GrantLane;
   grantRevision: string | null;
@@ -210,22 +241,26 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
-  let envelope, prepared;
+  const admission = provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? new ExpandedJsonAdmission(request, env, mode, provider.id) : undefined;
   try {
-    envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request));
-    prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
-  } catch (error) {
-    const auth = await preauthenticate(request, env, mode, provider.id);
-    if (auth instanceof Response) return auth;
-    throw error;
-  }
-  const method = (envelope.method ?? endpoint.method).toUpperCase();
-  if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-  if (!session) preauthenticated = await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
-  if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
-  if (preauthenticated instanceof Response) return preauthenticated;
-  const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-  return proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
+    let envelope, prepared;
+    try {
+      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined, admission?.expand));
+      prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
+    } catch (error) {
+      if (error instanceof Response) return error;
+      const auth = await preauthenticate(request, env, mode, provider.id);
+      if (auth instanceof Response) return auth;
+      throw error;
+    }
+    const method = (envelope.method ?? endpoint.method).toUpperCase();
+    if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
+    if (!session) preauthenticated = await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
+    if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
+    if (preauthenticated instanceof Response) return preauthenticated;
+    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+    return await proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
+  } finally { admission?.finish(context); }
 }
 
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
@@ -244,23 +279,27 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
   }
-  let prepared;
+  const admission = provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? new ExpandedJsonAdmission(request, env, "proxy_key", provider.id) : undefined;
   try {
-    const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
-    prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
-  } catch (error) {
-    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
-    if (auth instanceof Response) return auth;
-    throw error;
-  }
-  const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-  const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
-  const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
-  if (preauthenticated instanceof Response) return preauthenticated;
-  return proxySelected(request, env, context, "proxy_key", selection, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
+    let prepared;
+    try {
+      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined, admission?.expand);
+      prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
+    } catch (error) {
+      if (error instanceof Response) return error;
+      const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+      if (auth instanceof Response) return auth;
+      throw error;
+    }
+    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+    const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
+    if (preauthenticated instanceof Response) return preauthenticated;
+    return await proxySelected(request, env, context, "proxy_key", selection, searchParamsRecord(new URL(request.url).searchParams), preauthenticated, undefined, undefined, undefined, admission);
+  } finally { admission?.finish(context); }
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity): Promise<Response> {
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: ExpandedJsonAdmission): Promise<Response> {
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
@@ -448,6 +487,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
   const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format);
+  if (admission) admission.completion = observed.result;
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
   } else context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation!, content, operation.status)));
@@ -541,8 +581,15 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     upstream.query.forEach((value, name) => url.searchParams.set(name, value));
     for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
     for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
-    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
-    await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
+    const body = transformTransportBody(upstream.transport, selection.body);
+    // Claude's enlarged envelope must not coexist with full-document pricing,
+    // transport and retention copies in the Worker's 128 MB isolate. Keep small
+    // requests on the existing path; large unsigned Claude JSON streams out.
+    const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages"
+      && !selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4") ? jsonBodyBytes(body) : 0;
+    const streamBody = bytes > maxJsonBodyBytes;
+    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
+    if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");

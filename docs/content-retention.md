@@ -52,6 +52,17 @@ metadata-only; request retention requires an explicit policy opt-in.
   sweeps cannot find. This cleanup guarantees R2-visible removal after a successful
   delete, not crash-proof erasure of every backing byte or backup copy.
 
+## Large Claude requests
+
+When retention is enabled, the complete authorized Claude request is archived,
+including **whole documents/PDFs and inline image data**, not merely extracted
+text. Messages and token-counting ingress accepts up to **32,000,000 bytes**;
+the R2 record also includes a small metadata envelope. Large records use a
+known-length stream, not another whole-document serialization. Upload still
+finishes before provider dispatch, so retaining large media adds storage cost
+and admission latency. The existing 30-day expiry, user exemption and admin-only
+read controls are unchanged. See [Claude JSON request limits](anthropic-request-limits.md).
+
 ## Disclosure
 
 The console header shows `retention on · 30d` or `retention off`. Proxy-key users

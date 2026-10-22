@@ -1,4 +1,5 @@
 import { logCorrelationError } from "./correlation.ts";
+import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
@@ -137,34 +138,65 @@ export function nowIso(): string { return new Date().toISOString(); }
 export function randomId(prefix: string): string { return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`; }
 
 export const maxJsonBodyBytes = 8 * 1024 * 1024;
+// Claude documents 32 MB for both Messages and token counting. Opt in only
+// after resolving those endpoints; admin and other provider routes stay at 8 MiB.
+export const maxAnthropicJsonBodyBytes = 32_000_000;
 
-export async function readJson<T>(request: Request, emptyValue?: T): Promise<T> {
+export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes, onExpand?: () => Promise<void>): Promise<T> {
+  const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
   const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maxJsonBodyBytes) throw new HttpError(413, "request_too_large", "JSON request body exceeds the 8 MiB limit");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void request.body?.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
   if (!request.body) {
     if (emptyValue !== undefined) return emptyValue;
     throw new HttpError(400, "invalid_json", "request body must be valid JSON");
   }
   const reader = request.body.getReader(), decoder = new TextDecoder();
   let size = 0, text = "";
+  // Preserve JSON.parse semantics/cost within the existing 8 MiB envelope.
+  let parser: ReturnType<typeof createJsonBodyParser> | undefined;
+  const canceled = () => { void reader.cancel(request.signal.reason).catch(() => undefined); };
   try {
     while (true) {
+      if (parser && request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       const { done, value } = await reader.read();
+      if (parser && request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
       if (done) break;
       size += value.byteLength;
-      if (size > maxJsonBodyBytes) {
-        await reader.cancel();
-        throw new HttpError(413, "request_too_large", "JSON request body exceeds the 8 MiB limit");
+      if (size > maxBytes) {
+        // Cancellation failure must not turn a size rejection into invalid JSON,
+        // and a hostile source cannot hold the rejection open indefinitely.
+        void reader.cancel().catch(() => undefined);
+        throw tooLarge();
       }
-      text += decoder.decode(value, { stream: true });
+      if (!parser && size > maxJsonBodyBytes) {
+        // Authenticate/admit before parsing this chunk or pulling any more.
+        await onExpand?.();
+        parser = createJsonBodyParser();
+        request.signal.addEventListener("abort", canceled, { once: true });
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+        await parser.push(text);
+        text = "";
+      }
+      if (parser) {
+        for (let offset = 0; offset < value.byteLength; offset += 4096) await parser.push(decoder.decode(value.subarray(offset, offset + 4096), { stream: true }));
+      } else text += decoder.decode(value, { stream: true });
     }
     // Some HTTP runtimes expose an empty stream for a bodyless request. Only
     // callers with an optional-body contract may accept zero bytes as a default.
     if (size === 0 && emptyValue !== undefined) return emptyValue;
+    if (parser) { await parser.push(decoder.decode()); return await parser.end() as T; }
     return JSON.parse(text + decoder.decode()) as T;
   } catch (error) {
-    if (error instanceof HttpError) throw error;
+    void reader.cancel().catch(() => undefined);
+    if (error instanceof JsonBodyStructureLimit) throw new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)");
+    if (error instanceof HttpError || error instanceof Response) throw error;
     throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+  } finally {
+    request.signal.removeEventListener("abort", canceled);
+    reader.releaseLock();
   }
 }
 

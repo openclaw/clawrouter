@@ -1,4 +1,5 @@
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
+import { jsonBodyBytes } from "./json-body.ts";
 import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
@@ -163,7 +164,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   const opaque = (!endpoint || endpoint.request_format === "openai.responses" || compact) && responsesHasOpaqueInput(body);
   const opaqueLimit = opaque ? opaqueInputLimit(pricing) : null;
   if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
-  const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
+  const bytes = endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
   // Claude base64 images with a recognized header replace their encoded bytes
   // with their visual-token ceiling. Every other media input stays unbounded.
