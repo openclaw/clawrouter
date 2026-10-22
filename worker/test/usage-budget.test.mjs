@@ -554,14 +554,14 @@ test("settlement bases distinguish nonbillable work from tariffs, fallback charg
     ["measured refusal", route.model, null, unbilled, 0, "none"],
     ["zero tariff", route.model, 0, unbilled, 0, "policy_fixed"],
     ["positive tariff", route.model, 7, unbilled, 7, "policy_fixed"],
-    ["unpriced fallback", { ...route.model, pricing: null }, null, unbilled, 1, "flat_fallback"],
+    ["unpriced refusal", { ...route.model, pricing: null }, null, unbilled, 0, "none"],
     ["free manifest rate", freeModel, null, normal, 0, "manifest_pricing"],
   ]) {
     const events = [];
     const owner = createProxyAccounting({
       env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: {},
       auth: { policyId: "fixture", policy: { requestCostMicros: fixed } },
-      selection: { ...route, model, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "messages"), body: {}, capability: "llm.messages" },
+      selection: { ...route, model, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "messages"), body: { service_tier: "standard_only" }, capability: "llm.messages" },
       request: correlateIngressRequest(new Request("https://router.example/v1/messages")).request,
     });
     const reservation = { reservations: [], reservedMicros: owner.cost.reserveMicros };
@@ -709,7 +709,7 @@ test("Anthropic client-owned tools settle both ledgers from token usage", async 
     });
     const response = await handler.fetch(new Request("https://clawrouter.example/v1/native/anthropic/v1/messages", {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: "claude-haiku-4-5", tools, max_tokens: 20, stream, messages: [{ role: "user", content: [{ type: "text", text: "fixture", cache_control: { type: "ephemeral", ttl: "1h" } }] }] }),
+      body: JSON.stringify({ model: "claude-haiku-4-5", tools, service_tier: "standard_only", max_tokens: 20, stream, messages: [{ role: "user", content: [{ type: "text", text: "fixture", cache_control: { type: "ephemeral", ttl: "1h" } }] }] }),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, 200);
     assert.equal(await response.text(), wire);

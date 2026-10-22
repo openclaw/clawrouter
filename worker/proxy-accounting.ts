@@ -1,4 +1,5 @@
 import { isModelDiscovery } from "./model-discovery.ts";
+import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
@@ -38,7 +39,8 @@ interface AccountingContext {
 // before delivery to any accounting sink.
 export interface AccountingFacts {
   event: UsageEvent;
-  model: Pick<CompiledModel, "pricing"> | null;
+  model: (Pick<CompiledModel, "pricing"> & Partial<Pick<CompiledModel, "upstream">>) | null;
+  anthropicRequest?: AnthropicModifiers;
   fixed: number | null;
   cost: EstimatedCost;
   requestFormat: string;
@@ -58,6 +60,7 @@ export interface AccountingOutcome {
   servedTier?: string | null;
   characterEstimate?: number | null;
   hostedSearch?: HostedSearchUsage;
+  pricingUnavailable?: boolean;
 }
 
 export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOutcome): UsageEvent {
@@ -71,8 +74,9 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
   const soft = reservation.charges !== undefined;
   const audioUnbounded = cost.pricingGap === "audio_upload_bound";
+  const anthropicUnpriced = outcome.pricingUnavailable || tokens?.billable !== false && fixed == null && requestFormat === "anthropic.messages" && event.capability !== "llm.count_tokens" && !anthropicPricing(model?.pricing, model?.upstream, facts.anthropicRequest ?? {}, tokens?.anthropic ?? {});
   const claudeWeb = requestFormat === "anthropic.messages" ? facts.anthropicWebPrice : undefined;
-  const measured = cost.pricingGap && !soft && !audioUnbounded && !claudeWeb ? null : tokens ? ((soft || claudeWeb) && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat))
+  const measured = anthropicUnpriced ? null : cost.pricingGap && !soft && !audioUnbounded && !claudeWeb ? null : tokens ? ((soft || claudeWeb) && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat, facts.anthropicRequest))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
   const image = model?.pricing?.unit === "image_token";
   const searchCount = tokens?.webSearchRequests ?? null;
@@ -81,13 +85,14 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   const hostedEvent = hosted && (searchPrice || hosted.webSearch > 0);
   // OpenAI stays soft-only. Claude uses the authoritative usage counter for
   // soft and unmetered settlement; fixed policy tariffs remain unchanged.
+  // Per-search fees are not token categories: speed/geo multipliers do not apply.
   const toolFee = billable && (claudeWeb || soft && !!reservation.charges?.length) && fixed == null && tokens && tokens.billable !== false && hosted?.complete
     ? hostedSearchCost(searchPrice, hosted.webSearch) : null;
-  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (audioUnbounded || claudeWeb ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
+  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (anthropicUnpriced ? reservation.reservedMicros : audioUnbounded || claudeWeb ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
   const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
   const measuredBasis = characterEstimate !== null ? "request_character_estimate"
     : model?.pricing?.unit == null && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
-  const basis = audioUnbounded && billable ? measured === null ? "unpriced_usage" : measuredBasis : soft && !image && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
+  const basis = anthropicUnpriced && billable ? "unpriced_usage" : audioUnbounded && billable ? measured === null ? "unpriced_usage" : measuredBasis : soft && !image && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : (cost.basis === "unpriced_service_tier" || cost.basis === "unpriced_modifier")
     ? measured == null ? "unpriced_usage" : measuredBasis
     : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
   // An unproven reservation bound does not make a published tariff unknown.
@@ -119,7 +124,8 @@ export function createProxyAccounting(options: AccountingContext) {
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
-    model: model ? { pricing: model.pricing } : null, fixed: isModelDiscovery(selection.endpoint) ? 0 : auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
+    ...(selection.endpoint.request_format === "anthropic.messages" && !Array.isArray(selection.body) ? { anthropicRequest: anthropicModifiers(selection.body) } : {}),
+    model: model ? { pricing: model.pricing, upstream: model.upstream } : null, fixed: isModelDiscovery(selection.endpoint) ? 0 : auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
       grant_key: options.grantKey ?? null, grant_lane: options.grantLane ?? null,
@@ -146,6 +152,10 @@ export function createProxyAccounting(options: AccountingContext) {
   }
   return {
     settle,
+    pricingFailure(tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
+      const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode: 502, status: "provider_error", billable: true, tokens, reservation, contentRef, pricingUnavailable: true });
+      return finalizeAccounting(env, reservation, event.actual_cost_micros, event);
+    },
     cost,
     requestId,
     facts,
@@ -177,13 +187,20 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   const pricingGap = requestPricingGap(pricing, body, endpoint.request_format, parentTools);
   if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null };
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
-  const estimate = estimateModelCost(pricing, body, endpoint);
+  const qualified = endpoint.request_format === "anthropic.messages" ? anthropicPricing(pricing, model?.upstream, anthropicModifiers(body)) : pricing;
+  if (!qualified) return { reserveMicros: 0, basis: "unpriced_modifier", inputTokens: null, outputTokens: null };
+  const estimate = estimateModelCost(qualified, body, endpoint);
   return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
 }
 
-function actualCost(model: Pick<CompiledModel, "pricing"> | null, tokens: UsageTokens, fixed: number | null | undefined, requestFormat?: string): number | null {
+function actualCost(model: AccountingFacts["model"], tokens: UsageTokens, fixed: number | null | undefined, requestFormat?: string, requested?: AnthropicModifiers): number | null {
   if (fixed != null) return fixed;
   const pricing = model?.pricing;
+  if (requestFormat === "anthropic.messages") {
+    if (tokens.billable === false) return 0;
+    const qualified = anthropicPricing(pricing, model?.upstream, requested ?? {}, tokens.anthropic ?? {});
+    return qualified ? actualModelCost(qualified, tokens, requestFormat) : null;
+  }
   if (!pricing) return 1;
   return actualModelCost(pricing, tokens, requestFormat);
 }

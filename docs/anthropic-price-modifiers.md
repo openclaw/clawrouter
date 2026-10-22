@@ -1,0 +1,84 @@
+# Anthropic Messages price modifiers
+
+Source verification: **2026-10-22 UTC** (2026-10-21 MDT). Applies to the
+first-party Anthropic Messages API, not Bedrock/Vertex/Foundry billing.
+
+## Published contracts
+
+- [Pricing](https://platform.claude.com/docs/en/about-claude/pricing#fast-mode-pricing)
+  and [fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode):
+  `speed: "fast"` costs **2×** across the full context window, including over
+  200k input tokens. Opus 5.5: $8 input / $40 output per million tokens versus
+  $4 / $20 standard. Opus 5 and Opus 4.8: $10 / $50 versus $5 / $25.
+  Cache multipliers and inference geography compose with this price.
+  Opus 5/4.8 require the `fast-mode-2026-02-01` beta header and upstream access;
+  Opus 5.5 does not. Fast mode is not available with Batch or Priority Tier.
+  `usage.speed` reports `fast` or `standard`. Opus 4.6 has a documented
+  standard-speed fallback, but has no bundled card here; no fast tariff is
+  inferred for it or another unsupported model.
+- [Data residency](https://platform.claude.com/docs/en/manage-claude/data-residency):
+  Claude 4.6+ `inference_geo: "us"` costs **1.1× every token category**, including
+  both cache-write durations, cache reads, and any applicable long-context tier.
+  `global` costs 1×. Omission inherits `default_inference_geo` from the upstream
+  workspace, including workspaces migrated from a legacy US-only opt-out.
+  `usage.inference_geo` reports the actual setting. Older models reject an
+  explicitly supplied geography, including `global`.
+- [Service tiers](https://platform.claude.com/docs/en/api/service-tiers): requests
+  accept `auto` (also the omitted default) or `standard_only`; the response puts
+  the assigned tier in **`usage.service_tier`**, not at the message root.
+  Existing Priority commitments are negotiated contracts; the document supplies
+  capacity burndown factors, **not a public Priority token tariff**. No Priority
+  price is invented. Batch is not a synchronous Messages settlement contract.
+  Priority is explicitly unavailable on the bundled Opus 5.5, Opus 5, Sonnet 5,
+  and Fable 5.1 models; auto requests for those models have a standard-tier bound.
+
+## Admission and settlement
+
+A small native-format adapter qualifies the bundled model's base pricing card.
+The existing manifest schema has OpenAI service-tier cards, but cannot express
+independent request/usage speed and geography or an unknown workspace default.
+The adapter scales every token rate, including long-context rates, before the
+existing reservation/weighted settlement routines round the totals. Model
+support is deliberately enumerated rather than guessed from model-name prefixes.
+Adding another Anthropic card must qualify its modifier support as well.
+
+- Reservation uses the requested modifiers. Missing geography on supported
+  models reserves at 1.1× without modifying the upstream request.
+- Settlement prefers authoritative response usage; a documented explicit
+  request value is the fallback when that response field is absent. Omitted
+  geography with no response geography is **unpriced**, not assumed global.
+- SSE retains speed, geography and tier through cumulative usage deltas that
+  omit unchanged fields. Invalid/null values remain invalid evidence instead
+  of reverting to defaults. Cache counters are still merged once.
+- Hard budgets reject unknown/unsupported request combinations with HTTP 400
+  `pricing_required`, before dispatch. For a model that can use Priority,
+  omitted/auto tier has no bounded public tariff: use `standard_only` or an
+  explicit fixed policy request price. The router never silently rewrites auto.
+- An unexpected unpriced successful response (including Priority or Batch) is
+  not settled at base price. Nonstream returns HTTP 502 `pricing_required`;
+  SSE emits an error frame instead of the successful terminal frame (headers
+  may already be HTTP 200). The dispatched reservation is retained and the
+  usage event is `unpriced_usage` / `provider_error`, preserving observed usage
+  and the served tier. This is **not a claim to know the provider invoice**.
+  A provider that violates the admitted standard-only contract has no known
+  upper tariff; an already-dispatched call cannot be undone.
+- Fixed-price policies remain explicit contracts. Soft/unmetered calls retain
+  pass-through, but unknown modifier prices are reported as `unpriced_usage`
+  with no invented token charge. Known no-output classifier refusals remain
+  free; upstream HTTP rejections release the reservation.
+
+## Bounds and remaining limitations
+
+Hard-budget JSON responses are buffered only to the existing 2 MiB usage
+inspection limit before success delivery. SSE is demand-driven and buffers at
+most one bounded event, forwarding valid UTF-8 events with their original line
+endings. A response/event exceeding that inspection bound fails safe as
+`pricing_required` and retains the reservation, rather than claiming a verified
+base price. Unmetered/soft/fixed-price transport is unchanged. Partial delivery
+without terminal usage still follows the existing conservative reservation path.
+
+This does not qualify negotiated discounts, subscription entitlement, hosted
+fees, compaction iterations, model fallback, async Batches, new model cards, or
+end-to-end data residency. No deployment or paid Anthropic call is part of the
+fixture verification. See `test/anthropic-price-modifiers-workerd.test.mjs` for
+real Worker/queue/SQL-ledger JSON and fragmented SSE tests.
