@@ -211,7 +211,11 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
       { model: "anthropic/claude-sonnet-5", speed: "fast" }, { speed: 1 }, { inference_geo: {} }, { service_tier: [] }, { model: "anthropic/claude-haiku-4-5", speed: "standard", inference_geo: "us" } ]) {
       await t.test(`unpriced request denied before dispatch: ${JSON.stringify(modifiers)}`, async () => {
         const before = await calls(), { response, text, event } = await fixture(modifiers);
-        assert.equal(response.status, 400, text); assert.match(text, /pricing_required/);
+        assert.equal(response.status, 400, text);
+        const error = JSON.parse(text);
+        assert.equal(error.type, "error"); assert.equal(error.error.type, "invalid_request_error"); assert.equal(error.error.code, undefined);
+        assert.ok(event.request_id); assert.equal(error.request_id, event.request_id);
+        assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required"); assert.equal(response.headers.get("request-id"), event.request_id);
         assert.equal(await calls(), before); assert.equal(event.actual_cost_micros, 0);
       });
     }
@@ -223,7 +227,11 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
     });
     await t.test("late initial headers still time out and retain dispatched reservation", async () => {
       const { response, text, event, budget } = await fixture({ metadata: { user_id: "late-headers" } });
-      assert.equal(response.status, 502); assert.match(text, /provider_unavailable/);
+      assert.equal(response.status, 502);
+      const error = JSON.parse(text);
+      assert.equal(error.type, "error"); assert.equal(error.error.type, "api_error"); assert.equal(error.error.code, undefined);
+      assert.ok(event.request_id); assert.equal(error.request_id, event.request_id);
+      assert.equal(response.headers.get("x-clawrouter-error-code"), "provider_unavailable"); assert.equal(response.headers.get("request-id"), event.request_id);
       assert.equal(event.status, "timeout"); assert.equal(event.cost_basis, "manifest_reservation");
       assert.ok(event.reserved_cost_micros > 0); assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
       assert.equal(budget.spentMicros, event.reserved_cost_micros);

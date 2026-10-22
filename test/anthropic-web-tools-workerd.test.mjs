@@ -174,7 +174,11 @@ test("hard fast-US search cannot reach unpriced-response settlement; fixed tarif
   for (const stream of [false, true]) {
     const options = { stream, mode: "priority", modifiers: { speed: "fast", inference_geo: "us" } };
     const before = await f.count(), denied = await f.send("reserve", options);
-    assert.equal(denied.status, 400); assert.equal((await denied.json()).error.code, "pricing_required");
+    assert.equal(denied.status, 400);
+    const error = await denied.json(), requestId = "reserve-priority-" + stream;
+    assert.equal(error.type, "error"); assert.equal(error.error.type, "invalid_request_error"); assert.equal(error.error.code, undefined);
+    assert.equal(error.request_id, requestId); assert.equal(denied.headers.get("request-id"), requestId);
+    assert.equal(denied.headers.get("x-clawrouter-error-code"), "pricing_required"); assert.equal(denied.headers.get("x-clawrouter-request-id"), requestId);
     assert.equal(await f.count(), before); assert.deepEqual(await f.ledger("reserve"), []);
     const fixed = await f.send("fixed", options);
     assert.equal(fixed.status, 200); assert.match(await fixed.text(), /priority/);

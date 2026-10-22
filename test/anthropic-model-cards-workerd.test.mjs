@@ -144,10 +144,14 @@ test("new Claude cards project and settle through actual workerd without changin
       });
       for (const modifiers of [{ speed: "fast" }, { inference_geo: "eu" }, { service_tier: "priority" }, { service_tier: "batch" }]) await t.test(`${id} unpriced request ${JSON.stringify(modifiers)} ${isStream} never dispatches`, async () => {
         const before = (await calls()).length, response = await post(id, isStream, "/v1/messages", modifiers);
-        assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required");
+        assert.equal(response.status, 400);
+        const error = await response.json(), requestId = response.headers.get("x-clawrouter-request-id");
+        assert.ok(requestId); assert.equal(error.type, "error"); assert.equal(error.error.type, "invalid_request_error");
+        assert.equal(error.error.code, undefined); assert.equal(error.request_id, requestId);
+        assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required"); assert.equal(response.headers.get("request-id"), requestId);
         assert.equal((await calls()).length, before);
         const body = await settled(++eventCount);
-        assert.equal(body.usage.events[0].actual_cost_micros, 0);
+        assert.equal(body.usage.events[0].actual_cost_micros, 0); assert.equal(body.usage.events[0].request_id, requestId);
         assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
       });
       for (const modifiers of [{ speed: "fast" }, { service_tier: "priority" }, { service_tier: "batch" }]) await t.test(`${id} unpriced response ${JSON.stringify(modifiers)} ${isStream} retains its reservation`, async () => {
