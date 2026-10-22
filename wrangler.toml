@@ -4,6 +4,9 @@ compatibility_date = "2026-06-05"
 compatibility_flags = ["enable_request_signal"]
 keep_vars = true
 
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [build]
 command = "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build"
 

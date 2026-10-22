@@ -124,11 +124,16 @@ for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => 
 try {
   const base = `http://127.0.0.1:${port}`;
   await waitUntilReady(`${base}/v1/health`);
-  const health = await json(`${base}/v1/health`);
+  const healthResponse = await fetch(`${base}/v1/health`);
+  assert.equal(healthResponse.status, 200);
+  const health = await healthResponse.json();
+  const versionId = healthResponse.headers.get("x-clawrouter-version-id");
+  assert.match(versionId, /^[0-9a-f-]{36}$/i, "workerd version metadata is bound");
   assert.deepEqual(health, {
     ok: true,
     service: "clawrouter-edge",
     version: packageMetadata.version,
+    versionId,
     runtime: "typescript",
     environment: "production",
     observability: {
