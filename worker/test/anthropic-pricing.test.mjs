@@ -48,3 +48,23 @@ test("hard-budget SSE guard preserves backpressure, exact UTF-8 frames and upstr
   assert.equal(pulls, 2);
   await reader.cancel(); assert.equal(canceled, true); assert.equal(guard.failure(), undefined);
 });
+
+test("qualified new cards preserve the exact Haiku boundary and safe undocumented defaults", () => {
+  const haiku = providerById("anthropic").models.find(model => model.upstream === "claude-haiku-5-5");
+  const us = anthropicPricing(haiku.pricing, haiku.upstream, { inferenceGeo: "us" }, {});
+  for (const [input, expected] of [[99_999, 11_935], [100_000, 11_935], [100_001, 59_676]]) {
+    assert.equal(actualModelCost(us, { input, output: 1000, cached: 10_000, cacheWrite: 20_000, cacheWrite5m: 10_000, cacheWrite1h: 10_000 }), expected);
+  }
+  // A source-qualified card with no documented premiums is still usable at
+  // standard rates. It must not acquire premium support from its model name.
+  const unpublishedPremiums = { ...haiku.pricing, anthropicModifiers: { ...haiku.pricing.anthropicModifiers, usMultiplier: null, fastMultiplier: null } };
+  for (const serviceTier of [undefined, null, "auto", "standard_only"]) {
+    const qualified = anthropicPricing(unpublishedPremiums, haiku.upstream, { serviceTier }, { speed: null, inferenceGeo: "not_available", serviceTier: null });
+    assert.equal(actualModelCost(qualified, { input: 1000, output: 20 }), 110);
+    assert.equal(anthropicPricing(unpublishedPremiums, haiku.upstream, { serviceTier }).inputMicrosPerMillion, 100_000);
+  }
+  for (const modifiers of [{ speed: "fast" }, { inferenceGeo: "us" }, { serviceTier: "priority" }]) {
+    assert.equal(anthropicPricing(unpublishedPremiums, haiku.upstream, modifiers), null);
+    assert.equal(anthropicPricing(unpublishedPremiums, haiku.upstream, {}, modifiers), null);
+  }
+});

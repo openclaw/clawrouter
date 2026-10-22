@@ -8,7 +8,7 @@ import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 
 const sonnet = "anthropic/claude-sonnet-5-5", haiku = "anthropic/claude-haiku-5-5";
-const usage = (input = 70_000) => ({ input_tokens: input, cache_read_input_tokens: 10_000,
+const usage = (input = 70_000) => ({ speed: "standard", inference_geo: "global", service_tier: "standard", input_tokens: input, cache_read_input_tokens: 10_000,
   cache_creation_input_tokens: 20_000, cache_creation: { ephemeral_5m_input_tokens: 10_000, ephemeral_1h_input_tokens: 10_000 }, output_tokens: 1_000 });
 const message = counts => ({ id: "msg_fixture", type: "message", role: "assistant", content: [{ type: "text", text: "synthetic reply" }], stop_reason: "end_turn", usage: counts });
 const sse = (...events) => events.map(event => "data: " + JSON.stringify(event) + "\n\n").join("");
@@ -58,7 +58,7 @@ test("new Claude cards project and settle through actual workerd without changin
     };
     const calls = async () => (await service.fetch("https://upstream/fixture/calls")).json();
     const setReply = reply => service.fetch("https://upstream/fixture/reply", { method: "POST", body: JSON.stringify(reply) });
-    const post = (id, stream = false, path = "/v1/messages") => mf.dispatchFetch("https://router" + path, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ model: id, max_tokens: 1_000, service_tier: "standard_only", stream, messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(110_000), cache_control: { type: "ephemeral", ttl: "1h" } }] }] }) });
+    const post = (id, stream = false, path = "/v1/messages", modifiers = {}) => mf.dispatchFetch("https://router" + path, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ model: id, max_tokens: 1_000, stream, ...modifiers, messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(110_000), cache_control: { type: "ephemeral", ttl: "1h" } }] }] }) });
     let spent = 0, eventCount = 0;
     const settled = async expected => {
       let body;
@@ -106,13 +106,63 @@ test("new Claude cards project and settle through actual workerd without changin
       const sent = (await calls()).at(-1);
       assert.equal(sent.url, "https://api.anthropic.com/v1/messages"); assert.equal(sent.method, "POST");
       assert.equal(sent.key, "fixture-anthropic-key"); assert.equal(sent.authorization, null); assert.equal(sent.version, "2023-06-01");
-      assert.equal(sent.body.model, id.slice("anthropic/".length)); assert.equal(sent.body.service_tier, "standard_only");
+      assert.equal(sent.body.model, id.slice("anthropic/".length)); assert.equal(Object.hasOwn(sent.body, "service_tier"), false, "native default is not rewritten");
       assert.equal(sent.body.stream, isStream); assert.equal(sent.body.messages[0].content[0].cache_control.ttl, "1h");
       assert.equal(event.model, id); assert.equal(event.actual_cost_micros, cost); assert.equal(event.cost_basis, "manifest_pricing");
       assert.equal(event.pricing_ref, card(id).pricing_ref); assert.ok(event.reserved_cost_micros >= cost);
       assert.deepEqual([event.input_tokens, event.output_tokens, event.cached_input_tokens, event.cache_write_input_tokens], [input + 30_000, 1_000, 10_000, 20_000]);
       spent += cost; assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
     });
+    for (const id of [sonnet, haiku]) for (const isStream of [false, true]) {
+      for (const service_tier of [undefined, "auto", "standard_only", null]) await t.test(`${id} default modifiers tier=${service_tier} ${isStream ? "SSE" : "JSON"} settle at the #308 base card`, async () => {
+        const counts = usage(), wire = isStream ? stream(counts) : JSON.stringify(message(counts));
+        await setReply({ body: wire, contentType: isStream ? "text/event-stream" : "application/json" });
+        const before = (await calls()).length, response = await post(id, isStream, "/v1/messages", { service_tier });
+        assert.equal(response.status, 200, await response.clone().text()); assert.equal(await response.text(), wire);
+        assert.equal((await calls()).length, before + 1);
+        const sent = (await calls()).at(-1).body;
+        assert.equal(sent.service_tier, service_tier); assert.equal(Object.hasOwn(sent, "speed"), false); assert.equal(Object.hasOwn(sent, "inference_geo"), false);
+        const body = await settled(++eventCount), event = body.usage.events[0], cost = id === haiku ? 10_850 : 216_000;
+        assert.equal(event.actual_cost_micros, cost); assert.equal(event.cost_basis, "manifest_pricing");
+        assert.equal(event.pricing_ref, card(id).pricing_ref); assert.equal(event.served_service_tier, "standard");
+        spent += cost; assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
+      });
+      for (const [geo, reported, cost] of [
+        ["global", "global", id === haiku ? 54_251 : 216_002],
+        ["us", "us", id === haiku ? 59_676 : 237_603],
+        ["us", "not_available", id === haiku ? 59_676 : 237_603],
+        [undefined, null, id === haiku ? 59_676 : 237_603],
+      ]) await t.test(`${id} geo=${geo}, reported=${reported}, ${isStream ? "SSE" : "JSON"} scales every long-context/cache category`, async () => {
+        const counts = { ...usage(70_001), inference_geo: reported }, wire = isStream ? stream(counts) : JSON.stringify(message(counts));
+        await setReply({ body: wire, contentType: isStream ? "text/event-stream" : "application/json" });
+        const response = await post(id, isStream, "/v1/native/anthropic/v1/messages", { speed: "standard", inference_geo: geo });
+        assert.equal(response.status, 200, await response.clone().text()); assert.equal(await response.text(), wire);
+        const body = await settled(++eventCount), event = body.usage.events[0];
+        assert.equal(event.actual_cost_micros, cost); assert.equal(event.cost_basis, "manifest_pricing");
+        assert.ok(event.reserved_cost_micros >= cost);
+        spent += cost; assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
+      });
+      for (const modifiers of [{ speed: "fast" }, { inference_geo: "eu" }, { service_tier: "priority" }, { service_tier: "batch" }]) await t.test(`${id} unpriced request ${JSON.stringify(modifiers)} ${isStream} never dispatches`, async () => {
+        const before = (await calls()).length, response = await post(id, isStream, "/v1/messages", modifiers);
+        assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required");
+        assert.equal((await calls()).length, before);
+        const body = await settled(++eventCount);
+        assert.equal(body.usage.events[0].actual_cost_micros, 0);
+        assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
+      });
+      for (const modifiers of [{ speed: "fast" }, { service_tier: "priority" }, { service_tier: "batch" }]) await t.test(`${id} unpriced response ${JSON.stringify(modifiers)} ${isStream} retains its reservation`, async () => {
+        const counts = { ...usage(), ...modifiers }, wire = isStream ? stream(counts) : JSON.stringify(message(counts));
+        await setReply({ body: wire, contentType: isStream ? "text/event-stream" : "application/json" });
+        const before = (await calls()).length, response = await post(id, isStream), text = await response.text();
+        assert.equal(response.status, isStream ? 200 : 502); assert.match(text, /pricing_required/);
+        if (isStream) assert.doesNotMatch(text, /message_stop/);
+        assert.equal((await calls()).length, before + 1);
+        const body = await settled(++eventCount), event = body.usage.events[0];
+        assert.equal(event.cost_basis, "unpriced_usage"); assert.equal(event.status, "provider_error");
+        assert.ok(event.reserved_cost_micros > 0); assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
+        spent += event.actual_cost_micros; assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
+      });
+    }
     await t.test("truncated long-context SSE cannot settle at the cheaper partial price", async () => {
       const wire = stream(usage(70_001), false);
       await setReply({ body: wire, contentType: "text/event-stream" });

@@ -234,6 +234,17 @@ models:
       pricing:
         effectiveAt: "2026-09-28"
         source: https://platform.claude.com/docs/en/about-claude/pricing
+        # First-party Messages only: 4.6+ US residency; fast is Opus-only.
+        # Priority explicitly excludes both 5.5 cards. Batch is asynchronous.
+        anthropicModifiers:
+          checkedAt: "2026-10-22"
+          sources:
+            - https://platform.claude.com/docs/en/manage-claude/data-residency#pricing
+            - https://platform.claude.com/docs/en/build-with-claude/fast-mode#model-availability
+            - https://platform.claude.com/docs/en/api/service-tiers#supported-models
+          fastMultiplier: null
+          usMultiplier: 1.1
+          serviceTiers: [standard]
         inputMicrosPerMillion: 2000000
         cachedInputMicrosPerMillion: 100000
         cacheWrite5mInputMicrosPerMillion: 2500000
@@ -263,6 +274,17 @@ models:
       pricing:
         effectiveAt: "2026-10-07"
         source: https://platform.claude.com/docs/en/about-claude/pricing
+        # First-party Messages only: 4.6+ US residency; fast is Opus-only.
+        # Priority explicitly excludes both 5.5 cards. Batch is asynchronous.
+        anthropicModifiers:
+          checkedAt: "2026-10-22"
+          sources:
+            - https://platform.claude.com/docs/en/manage-claude/data-residency#pricing
+            - https://platform.claude.com/docs/en/build-with-claude/fast-mode#model-availability
+            - https://platform.claude.com/docs/en/api/service-tiers#supported-models
+          fastMultiplier: null
+          usMultiplier: 1.1
+          serviceTiers: [standard]
         inputMicrosPerMillion: 100000
         cachedInputMicrosPerMillion: 10000
         cacheWrite5mInputMicrosPerMillion: 125000

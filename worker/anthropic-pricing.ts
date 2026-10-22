@@ -16,7 +16,13 @@ export function anthropicModifiers(value: Record<string, unknown>): AnthropicMod
 }
 
 export function anthropicPricing(pricing: ModelPricing | null | undefined, model: string | undefined, requested: AnthropicModifiers, served?: AnthropicModifiers): ModelPricing | null {
-  if (!pricing || pricing.unit != null || !model || !knownModels.has(model)) return null;
+  if (!pricing || pricing.unit != null || !model) return null;
+  // New cards qualify support in the manifest. Keep the previously reviewed
+  // legacy cards unchanged; do not infer capabilities from version prefixes.
+  const modifiers = pricing.anthropicModifiers;
+  if (!modifiers && !knownModels.has(model)) return null;
+  const fastMultiplier = modifiers ? modifiers.fastMultiplier : fastModels.has(model) ? 2 : null;
+  const usMultiplier = modifiers ? modifiers.usMultiplier : geoModels.has(model) ? 1.1 : null;
   const reserve = served === undefined;
   // Request null means omitted. Usage fields are documented nullable, and models
   // without inference_geo report "not_available": unreported, not premium evidence.
@@ -25,18 +31,18 @@ export function anthropicPricing(pricing: ModelPricing | null | undefined, model
   const servedGeo = served?.inferenceGeo == null || served.inferenceGeo === "not_available" ? undefined : served.inferenceGeo;
   const speed = servedSpeed ?? requestedSpeed ?? "standard";
   // Unreported geography settles at the reserved 1.1x bound, never at global.
-  const geo = servedGeo ?? requestedGeo ?? (geoModels.has(model) ? "us" : "global");
+  const geo = servedGeo ?? requestedGeo ?? (usMultiplier != null ? "us" : "global");
   const requestedTier = requested.serviceTier ?? "auto";
   const tier = reserve ? requestedTier
     : servedTier ?? (["standard_only", "auto"].includes(requestedTier) ? "standard" : null);
-  if (speed !== "standard" && !(speed === "fast" && fastModels.has(model))) return null;
+  if (speed !== "standard" && !(speed === "fast" && fastMultiplier != null)) return null;
   if (geo !== "global" && geo !== "us") return null;
   // Older models reject even explicit global geo; omission uses base pricing.
-  if (!geoModels.has(model) && (requestedGeo !== undefined || servedGeo !== undefined && servedGeo !== "global")) return null;
+  if (usMultiplier == null && (requestedGeo !== undefined || servedGeo !== undefined && servedGeo !== "global")) return null;
   // Preserve native auto/default admission at standard rates without rewriting
   // the request. Positive Priority/Batch evidence still has no public tariff.
   if (reserve ? tier !== "standard_only" && tier !== "auto" : tier !== "standard") return null;
-  const multiplier = (speed === "fast" ? 2 : 1) * (geo === "us" ? 1.1 : 1);
+  const multiplier = (speed === "fast" ? fastMultiplier! : 1) * (geo === "us" ? usMultiplier! : 1);
   const scale = (rates: TokenRates): TokenRates => Object.fromEntries(Object.entries(rates).map(([key, value]) =>
     [key, key.endsWith("MicrosPerMillion") && typeof value === "number" ? Math.round(value * multiplier) : value])) as unknown as TokenRates;
   // Scale each category before rounding the total, and compose with context

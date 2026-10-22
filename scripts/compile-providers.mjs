@@ -214,6 +214,7 @@ function normalizePricing(pricing) {
     inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
     ...(pricing.unpricedCosts ? { unpricedCosts: pricing.unpricedCosts } : {}),
     ...(pricing.settlementBasis ? { settlementBasis: pricing.settlementBasis } : {}),
+    ...(pricing.anthropicModifiers ? { anthropicModifiers: structuredClone(pricing.anthropicModifiers) } : {}),
     longContext: normalizeLongContext(pricing.longContext),
     ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
   };
@@ -273,6 +274,9 @@ function validateManifest(manifest) {
       if (!endpoint || !manifest.capabilities.some((capability) => capability.endpoint === id && model.capabilities?.includes(capability.id))) throw new Error(`model ${model.id} requestParameters must reference a supported endpoint`);
       if (!["openai.chat_completions", "openai.responses"].includes(endpoint.requestFormat)) throw new Error(`model ${model.id} requestParameters requires an OpenAI Chat or Responses wire format`);
       if (parameters.defaultReasoningEffort !== undefined && !model.supportedReasoningEfforts?.includes(parameters.defaultReasoningEffort)) throw new Error(`model ${model.id} requestParameters default effort must belong to supportedReasoningEfforts`);
+    }
+    if ([model.pricing, ...Object.values(model.endpointPricing ?? {}).map(card => card.pricing)].some(pricing => pricing?.anthropicModifiers)) {
+      if (manifest.id !== "anthropic" || !manifest.capabilities.some(capability => model.capabilities?.includes(capability.id) && manifest.endpoints[capability.endpoint]?.requestFormat === "anthropic.messages" && manifest.endpoints[capability.endpoint]?.responseFormat === "anthropic.messages")) throw new Error(`model ${model.id} anthropicModifiers requires first-party Anthropic Messages`);
     }
     validatePricing(model.pricing, model.id);
     if (model.capabilities?.includes("image.generation") && model.pricing?.unit !== "image_token") throw new Error("image generation requires a qualified image pricing contract");

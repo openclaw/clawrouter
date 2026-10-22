@@ -33,8 +33,8 @@ first-party Anthropic Messages API, not Bedrock/Vertex/Foundry billing.
   capacity burndown factors, **not a public Priority token tariff**. No Priority
   price is invented. Batch is not a synchronous Messages settlement contract.
   Priority is explicitly unavailable on the bundled Opus 5.5, Opus 5, Sonnet 5,
-  and Fable 5.1 models. Omitted/auto remains admitted at standard rates on all
-  bundled models for native-client compatibility; positive response evidence of
+  Fable 5.1, Sonnet 5.5, and Haiku 5.5 models. Omitted/auto remains admitted at
+  standard rates on all bundled models for native-client compatibility; positive response evidence of
   Priority still fails safe because no public tariff exists.
 - [Messages API reference](https://platform.claude.com/docs/en/api/messages/create):
   request speed/geography and usage speed/geography/tier are nullable. Usage
@@ -50,6 +50,18 @@ The adapter scales every token rate, including long-context rates, before the
 existing reservation/weighted settlement routines round the totals. Model
 support is deliberately enumerated rather than guessed from model-name prefixes.
 Adding another Anthropic card must qualify its modifier support as well.
+
+Sonnet 5.5 and Haiku 5.5 now carry source-qualified `pricing.anthropicModifiers`
+in YAML and the compiled snapshot: US **1.1×**, global **1×**, no fast tariff,
+and standard synchronous service only. Native omitted/null/`auto` and
+`standard_only` requests remain admitted, without rewriting. Reported global
+usage settles at the unchanged #308 base rates. Haiku's >100k input tier and all
+cache categories also receive the US multiplier; unreported geography still
+settles at the reserved 1.1× bound. Fast and Priority are explicitly unavailable
+for these models in the cited docs. Batch is a separate asynchronous contract.
+A null premium in a qualified card refuses that explicit modifier, not default
+requests; undocumented premiums must never be guessed. The previously reviewed
+legacy-card qualification remains unchanged.
 
 - Reservation uses the requested modifiers. Missing geography on supported
   models reserves at 1.1× without modifying the upstream request. This default
