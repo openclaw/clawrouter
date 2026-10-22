@@ -10,10 +10,7 @@ service:
   configKeys: [OPENAI_API_KEY]
 auth:
   schemes:
-    - type: bearer
-      header: Authorization
-      format: "Bearer ${secret}"
-      secretKind: api_key
+    - { type: bearer, header: Authorization, format: "Bearer ${secret}", secretKind: api_key }
   refresh: # No browser onboarding (docs/openai-subscriptions.md); retain released stored-grant refresh.
     tokenUrl: https://auth.openai.com/oauth/token
     clientId: app_EMoamEEZ73f0CkXaXp7hrann
@@ -125,7 +122,7 @@ endpoints:
   realtime: {"requestHeaders":["X-Client-Request-Id"],"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state, X-Client-Request-Id], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
   decisions: { path: /v1/decisions, requestHeaders: [X-Client-Request-Id], requestFormat: openai.decisions, responseFormat: openai.decisions, timeoutMs: 120000 }
-  responses_input_tokens: { path: /v1/responses/input_tokens, requestFormat: openai.responses_input_tokens, responseFormat: openai.responses_input_tokens, timeoutMs: 120000 }
+  responses_input_tokens: { path: /v1/responses/input_tokens, requestHeaders: [X-Client-Request-Id], requestFormat: openai.responses_input_tokens, responseFormat: openai.responses_input_tokens, timeoutMs: 120000 }
   responses:
     modelPassthrough: {}
     path: /v1/responses

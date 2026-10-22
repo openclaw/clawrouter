@@ -33,7 +33,7 @@ const upstream = [
   ' if(path==="/fixture/upstream/config") { await this.storage.put("mode",await request.text());return new Response("ok"); }',
   ' if(path==="/fixture/upstream/calls") return Response.json(await this.storage.get("calls")??[]);',
   ' const calls=await this.storage.get("calls")??[]; const body=await request.json();',
-  ' calls.push({url:request.url,method:request.method,authorization:request.headers.get("authorization"),body});await this.storage.put("calls",calls);',
+  ' calls.push({url:request.url,method:request.method,authorization:request.headers.get("authorization"),clientRequestId:request.headers.get("x-client-request-id"),unlisted:request.headers.get("x-count-not-allowed"),body});await this.storage.put("calls",calls);',
   ' if(request.url!=="https://api.openai.com/v1/responses/input_tokens"||request.method!=="POST"||body.model!=="gpt-6-astra"||request.headers.get("authorization")!=="Bearer fixture-upstream-key") return new Response("wrong wire",{status:500});',
   ' const mode=await this.storage.get("mode");',
   ' if(mode==="429")return Response.json({error:{message:"synthetic rate limit"}},{status:429,headers:{"retry-after":"11"}});',
@@ -48,20 +48,27 @@ function nativeRefusal(response, body, code) {
   assert.deepEqual(body, { error: { message: body.error.message, type: response.status >= 500 ? "server_error" : response.status === 429 ? "rate_limit_error" : "invalid_request_error", param: null, code } });
 }
 
-test("real workerd count wire, zero settlement, rejections and revocation", { timeout: 60000 }, async () => {
+test("real workerd count wire, zero settlement, rejections and revocation", { timeout: 60000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-input-tokens-")); let worker;
   try {
     worker = await startWorkerdFixture(temporary, router, upstream, { upstreamDurableObjects: { UPSTREAM: { className: "Upstream", useSQLite: true } } });
     const get = path => worker.dispatchFetch("https://router.example" + path);
     const control = (path, body) => worker.dispatchFetch("https://router.example/fixture/upstream/" + path, { method: "POST", body });
-    const send = (path = "/v1/responses/input_tokens", extra = {}) => {
+    const send = (path = "/v1/responses/input_tokens", extra = {}, headers = {}) => {
       const body = { model: path.includes("/native/") ? "gpt-6-astra" : "openai/gpt-6-astra", input: "synthetic inline", ...extra };
-      return worker.dispatchFetch("https://router.example" + path, { method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-fixture-key", "content-type": "application/json" }, body: JSON.stringify(path.includes("/proxy/") ? { body } : body) });
+      return worker.dispatchFetch("https://router.example" + path, { method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-fixture-key", "content-type": "application/json", ...headers }, body: JSON.stringify(path.includes("/proxy/") ? { body } : body) });
     };
     assert.equal((await get("/fixture/setup")).status, 200);
     for (const path of ["/v1/responses/input_tokens", "/v1/native/openai/v1/responses/input_tokens", "/v1/proxy/openai/responses_input_tokens"]) {
-      const response = await send(path); assert.equal(response.status, 200, await response.clone().text());
-      assert.equal(await response.text(), '{ "object": "response.input_tokens", "input_tokens": 37 }\n');
+      await t.test("X-Client-Request-Id forwards through " + path, async () => {
+        const clientRequestId = "synthetic-count-" + path.split("/").at(-1);
+        const response = await send(path, {}, { "X-Client-Request-Id": clientRequestId, "x-count-not-allowed": "must-not-forward" });
+        assert.equal(response.status, 200, await response.clone().text());
+        assert.equal(await response.text(), '{ "object": "response.input_tokens", "input_tokens": 37 }\n');
+        const calls = await (await get("/fixture/upstream/calls")).json();
+        assert.equal(calls.at(-1).clientRequestId, clientRequestId);
+        assert.equal(calls.at(-1).unlisted, null, "only manifest-allowlisted headers forward");
+      });
     }
     for (const path of ["/v1/responses/input_tokens", "/v1/native/openai/v1/responses/input_tokens", "/v1/proxy/openai/responses_input_tokens"]) {
       const response = await send(path + "?trace=a&trace=b&empty=");
@@ -80,6 +87,7 @@ test("real workerd count wire, zero settlement, rejections and revocation", { ti
     const denied = await send(); assert.equal(denied.status, 403); nativeRefusal(denied, await denied.json(), "proxy_key_revoked");
     const calls = await (await get("/fixture/upstream/calls")).json();
     assert.equal(calls.length, 5, "neither custody rejection nor revoked auth may reach upstream");
+    assert.deepEqual(calls.slice(3).map(call => call.clientRequestId), [null, null], "absent caller IDs are not synthesized");
     assert.ok(calls.every(call => call.url === "https://api.openai.com/v1/responses/input_tokens" && call.method === "POST" && call.body.model === "gpt-6-astra"));
     const snapshot = await (await get("/fixture/usage")).json();
     assert.equal(snapshot.summary.requestCount, 8); assert.equal(snapshot.summary.actualCostMicros, 0);
