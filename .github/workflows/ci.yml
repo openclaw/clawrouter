@@ -99,6 +99,9 @@ jobs:
   admin:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
+      options: --init --ipc=host
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -108,7 +111,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build
-      - run: pnpm --dir admin exec playwright install --with-deps chromium
+      - name: Verify baked Playwright version and Chromium
+        run: |
+          pnpm --dir admin exec node <<'NODE'
+          const fs = require("node:fs");
+          const image = JSON.parse(fs.readFileSync("/ms-playwright/.docker-info", "utf8"));
+          const version = require("@playwright/test/package.json").version;
+          if (image.driverVersion !== version) {
+            throw new Error(`Playwright image ${image.driverVersion} != @playwright/test ${version}; update the image tag and digest together`);
+          }
+          const chromium = require("@playwright/test").chromium.executablePath();
+          fs.accessSync(chromium, fs.constants.X_OK);
+          fs.accessSync(process.env.HOME, fs.constants.W_OK);
+          console.log(JSON.stringify({ image, version, chromium, home: process.env.HOME, uid: process.getuid(), node: process.version }));
+          NODE
       - run: pnpm --dir admin exec playwright test
         id: browser
       - name: Upload browser failure output
