@@ -1,6 +1,7 @@
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { softBudget } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
+import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
@@ -12,7 +13,7 @@ import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { admissionDuration } from "./admission-timing.ts";
 import {
   concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
-  prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, validateSelectedInput, type ProxySelection,
+  prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
@@ -122,7 +123,7 @@ export async function proxyOpenAi(request: Request, env: Env, context: Execution
     if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
     return proxyFusion(request, env, context, mode, body, preauthenticated);
   }
-  if (!isSelectionFailure(earlySelection)) return proxySelected(request, env, context, mode, earlySelection, {}, preauthenticated);
+  if (!isSelectionFailure(earlySelection)) return proxySelected(request, env, context, mode, earlySelection, new URL(request.url).searchParams, preauthenticated);
   return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated);
 }
 
@@ -144,7 +145,7 @@ async function proxyConcreteOpenAi(
     if (compound && result.auditSelection) await auditSelectionFailure(request, env, context, mode, result.auditSelection, preauthenticated, result.response.status, compound, auditAuth);
     return result.response;
   }
-  return proxySelected(request, env, context, mode, result, {}, preauthenticated, reservedBudget, compound, auditAuth);
+  return proxySelected(request, env, context, mode, result, new URL(request.url).searchParams, preauthenticated, reservedBudget, compound, auditAuth);
 }
 
 async function proxyFusion(
@@ -197,7 +198,7 @@ async function proxyFusion(
       return selection.response;
     }
     selection.body = prepareAdviserBody(selection.body as Record<string, unknown>, selection.model, selection.endpoint, config.temperature);
-    return proxySelected(adviserRequest, env, context, mode, selection, {}, preauthenticated, undefined, compound, aggregatorBudget.auth);
+    return proxySelected(adviserRequest, env, context, mode, selection, new URL(adviserRequest.url).searchParams, preauthenticated, undefined, compound, aggregatorBudget.auth);
   });
   const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
   const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {
@@ -295,11 +296,11 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
     if (preauthenticated instanceof Response) return preauthenticated;
-    return await proxySelected(request, env, context, "proxy_key", selection, searchParamsRecord(new URL(request.url).searchParams), preauthenticated, undefined, undefined, undefined, admission);
+    return await proxySelected(request, env, context, "proxy_key", selection, new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
   } finally { admission?.finish(context); }
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: ExpandedJsonAdmission): Promise<Response> {
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: ExpandedJsonAdmission): Promise<Response> {
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
@@ -534,7 +535,7 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
   const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground);
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
@@ -548,12 +549,12 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   assertServiceTier(auth, selection);
-  if (selection.endpoint.request_format === "openai.images_generations" && (Object.keys(queryInput).length || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
+  if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
   const compact = selection.endpoint.request_format === "openai.responses_compact";
-  if (compact && (Object.keys(queryInput).length || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");
+  if (compact && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
@@ -571,7 +572,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const backgroundRecovery = recoverBackground && backgroundResponse(selection.endpoint, selection.body) && grantSupports(lifecycle, upstream.grant);
     if (backgroundRecovery) {
       assertOperationConfiguration(lifecycle, upstream.grant, env);
-      if (Object.keys(queryInput).length || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
+      if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
     const headers = new Headers(upstream.headers);
     copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
@@ -580,7 +581,10 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
     upstream.query.forEach((value, name) => url.searchParams.set(name, value));
     for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
-    for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
+    // Continuations and controls reconstruct the configured route, not the
+    // incidental query of one create call. Credential/config changes still pin.
+    const configuredOwnerUrl = new URL(url);
+    applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
     const body = transformTransportBody(upstream.transport, selection.body);
     // Claude's enlarged envelope must not coexist with full-document pricing,
     // transport and retention copies in the Worker's 128 MB isolate. Keep small
@@ -595,7 +599,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
       if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
-      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : url;
+      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : configuredOwnerUrl;
       if (compact) upstream.query.forEach((value, name) => ownerUrl.searchParams.set(name, value));
       continuation = {
         providerId: selection.provider.id, endpointId: create.id, grantKey: upstream.grantKey,

@@ -118,7 +118,7 @@ export function prepareNativeRequest(provider: CompiledProvider, endpoint: Compi
   return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env, true);
 }
 
-export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
+export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: URLSearchParams; body: Record<string, unknown> } {
   const query = new URL(request.url).searchParams;
   const pathParams: Record<string, string> = {};
   for (const name of endpoint.path_params) {
@@ -126,7 +126,7 @@ export function directManifestEnvelope(request: Request, endpoint: CompiledEndpo
     if (value != null) pathParams[name] = value;
     query.delete(name);
   }
-  return { method: request.method, pathParams, query: searchParamsRecord(query), body: {} };
+  return { method: request.method, pathParams, query, body: {} };
 }
 
 export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
