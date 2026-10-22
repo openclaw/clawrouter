@@ -91,7 +91,7 @@ async function fixture(t, policy = routing) {
   };
 }
 async function selected(response, id) { assert.equal(response.status, 200, await response.clone().text()); assert.equal((await response.json()).selectedGrantKey, id === null ? null : key(id)); }
-async function unavailable(response) { assert.equal(response.status, 503, await response.clone().text()); assert.equal((await response.json()).error.code, "upstream_grant_pool_unavailable"); }
+async function unavailable(response) { assert.equal(response.status, 503, await response.clone().text()); assert.equal(response.headers.get("x-clawrouter-error-code"), "upstream_grant_pool_unavailable"); await response.text(); }
 
 // A refreshable login and B/C access-only setup tokens exercise the composed
 // lifecycle without depending on provider logins or any production state.
