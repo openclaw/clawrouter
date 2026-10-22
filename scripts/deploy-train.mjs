@@ -1,3 +1,4 @@
+import { runDeployCli } from './deploy-cli.mjs';
 import assert from 'node:assert/strict';
 import { waitForHealth } from './smoke-readiness.mjs';
 import { createVersionFetch } from './smoke-version.mjs';
@@ -175,4 +176,4 @@ export async function main(env = process.env) {
     appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await runDeployCli(() => main());
