@@ -18,7 +18,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
   let document = metadataParser(!!observe, !!tools?.witness), json = empty(), stopped = false;
   let prefix = "", mode: "prefix" | "data" | "event" | "ignored" = "prefix";
   let lineNonempty = false, optionalSpace = false, skipLf = false;
-  let hasData = false, hasContent = false, eventError = false;
+  let hasData = false, hasContent = false, eventError = false, undecodedData = false;
   let eventName = literal("error"), done = literal("[DONE]", true);
 
   async function data(text: string) {
@@ -52,7 +52,12 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
   }
   async function endLine() {
     if (!lineNonempty) {
-      if (eventError) { accumulator.accept({ kind: "error" }); tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+      if (eventError) {
+        const evidence = hasContent ? await document.end() : null;
+        if (stopped) return;
+        accumulator.accept({ kind: "error", ...(evidence?.kind === "data" ? { value: evidence.value } : {}) });
+        tools?.invalid(); tools?.witness?.invalid(); hosted.invalid();
+      }
       else if (hasData && hasContent) {
         const evidence = done.matches() ? { kind: "done" } as const : await document.end();
         if (stopped) return;
@@ -93,6 +98,17 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
     else json = { tokens: null, outcome: "provider_error" };
     stopped = true;
   }
+  function finishDecoder(): string {
+    try { return decoder.decode(); }
+    catch {
+      // A trailing code point may still be buffered when the caller cancels.
+      // Only payload bytes in a data field undermine no-work evidence. A raw
+      // comment must not turn an otherwise empty/error/marker tail into work.
+      if (sse && revokeRejection) undecodedData ||= mode === "data" && !eventError;
+      else invalidUtf8();
+      return "";
+    }
+  }
   return {
     async push(bytes: Uint8Array) {
       // The parser may materialize one feed's tokens before the selector runs.
@@ -106,8 +122,8 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
     },
     async end() {
       if (stopped) return;
-      let tail: string;
-      try { tail = decoder.decode(); } catch { invalidUtf8(); return; }
+      const tail = finishDecoder();
+      if (stopped) return;
       await text(tail);
       if (stopped || sse) return; // An undelimited SSE event is never dispatched.
       const evidence = await document.end();
@@ -124,8 +140,14 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
         : { tokens: null, outcome: evidence.kind === "invalid" ? "provider_error" : null };
     },
     result(ended: boolean): UsageInspection {
-      if (sse && revokeRejection && hasData && hasContent) {
-        accumulator.unfinished(eventError ? { kind: "error" } : done.matches() ? { kind: "done" } : document.pending());
+      if (sse && revokeRejection) {
+        if (!ended && !stopped) finishDecoder();
+        if (undecodedData) accumulator.unfinished({ kind: "invalid" });
+        else if (hasData && hasContent) {
+          const pending = document.pending();
+          accumulator.unfinished(eventError ? { kind: "error", ...(pending.kind === "data" ? { value: pending.value } : {}) }
+            : done.matches() ? { kind: "done" } : pending);
+        }
       }
       return sse ? accumulator.result(ended, document.unavailable()) : ended ? json : empty();
     },
@@ -189,8 +211,8 @@ function metadataParser(inspectIdentity: boolean, encrypted: boolean) {
 }
 
 type Context = "root" | "response" | "usage" | "details" | "creation";
-type Field = Context | "text" | "identity" | "number" | "error" | null;
-type Frame = { context: Context | null; value: Record<string, unknown> | null; key: string | null };
+type Field = Context | "output" | "text" | "identity" | "number" | "error" | null;
+type Frame = { context: Context | null; value: Record<string, unknown> | null; key: string | null; output?: unknown[] };
 const counters = new Set(["input_tokens", "prompt_tokens", "inputTokens", "output_tokens", "completion_tokens", "outputTokens", "total_tokens", "totalTokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"]);
 const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens", "text_tokens", "image_tokens", "reasoning_tokens"]);
 const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]);
@@ -207,6 +229,7 @@ function metadataProjection(inspectIdentity: boolean) {
     if (frame.context === "root" || frame.context === "response") {
       if (["type", "object", "status", "service_tier"].includes(key)) return "text";
       if (inspectIdentity && key === "id") return "identity";
+      if (key === "output") return "output";
       if (frame.context === "root" && key === "error") return "error";
       if (frame.context === "root" && key === "response") return "response";
       return key === "usage" ? "usage" : null;
@@ -228,6 +251,11 @@ function metadataProjection(inspectIdentity: boolean) {
     clear() { value = undefined; complete = false; frames.length = 0; scalar = ""; capture = null; },
     accept(token: Token) {
       const selected = field();
+      // Retain only a one-element witness for a nonempty output array, never
+      // its generated text/tool arguments. Duplicate output/response keys still
+      // replace the witness together with their other projected descendants.
+      const output = current()?.output;
+      if (output && !output.length && ["startObject", "startArray", "startString", "startNumber", "nullValue", "trueValue", "falseValue"].includes(token.name)) output.push(true);
       switch (token.name) {
         case "startObject":
         case "startArray": {
@@ -237,8 +265,8 @@ function metadataProjection(inspectIdentity: boolean) {
           // primitive/array must still block the normalizer's nullish fallback.
           const next = selected ? object ? {} : [] : undefined;
           assign(next);
-          const context = object && selected && !["text", "identity", "number", "error"].includes(selected) ? selected as Context : null;
-          frames.push({ context, value: context ? next as Record<string, unknown> : null, key: null });
+          const context = object && selected && !["text", "identity", "number", "error", "output"].includes(selected) ? selected as Context : null;
+          frames.push({ context, value: context ? next as Record<string, unknown> : null, key: null, ...(selected === "output" && !object ? { output: next as unknown[] } : {}) });
           break;
         }
         case "endObject":

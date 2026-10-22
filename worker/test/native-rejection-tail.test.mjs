@@ -17,6 +17,9 @@ for (const format of ["openai.chat", "openai.responses", "anthropic.messages"]) 
   const usage = anthropic ? { type: "message_delta", usage: { output_tokens: 2 } }
     : format === "openai.responses" ? { type: "response.completed", response: { status: "completed", usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } } }
     : { object: "chat.completion.chunk", choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } };
+  const encode = value => new TextEncoder().encode(value);
+  const rawTail = value => new Uint8Array([...encode(value), 0xf0, 0x9f]);
+  const marker = anthropic ? 'data: {"type":"message_stop"}' : "data: [DONE]";
   const tails = [
     ["content", "data: " + JSON.stringify(content), true],
     ["usage", "data: " + JSON.stringify(usage), true],
@@ -26,11 +29,23 @@ for (const format of ["openai.chat", "openai.responses", "anthropic.messages"]) 
     ["marker", anthropic ? 'data: {"type":"message_stop"}' : "data: [DONE]", false],
     ["json-error", `data: ${JSON.stringify(error)}`, false],
     ["event-error", 'event: error\r\ndata: {"partial"', false],
+    ["mid-counter", 'data: {"type":"response.completed","response":{"usage":{"input_tokens":0', true],
+    ["marker-then-work", marker + '\r\n\r\ndata: {"delta":"paid work 🦞', true],
+    ["split-cr-usage", "data: " + JSON.stringify(usage) + "\r", true],
+    ["raw-utf8", rawTail("data: "), true],
+    ["raw-comment", rawTail(": keepalive "), false],
+    ["raw-empty-comment", rawTail("data: \r\n: keepalive "), false],
+    ["raw-error-comment", rawTail(`data: ${JSON.stringify(error)}\r\n: keepalive `), false],
+    ["raw-marker-comment", rawTail(marker + "\r\n: keepalive "), false],
+    ["raw-event-error", rawTail('event: error\r\ndata: {"partial":"'), false],
+    ["failed-output", 'data: {"type":"response.failed","response":{"status":"failed","output":[{"type":"message","content":[{"text":"paid work"}]}]}}', true],
+    ["failed-usage", 'data: {"type":"response.failed","response":{"status":"failed","usage":{"input_tokens":10,"output_tokens":2}}}', true],
+    ["event-error-usage", 'event: error\r\ndata: {"usage":{"input_tokens":10,"output_tokens":2}}', true],
     ["null-error", 'data: {"error":null,"delta":"work"}', true],
   ];
   for (const [kind, tail, billable] of tails) for (const delivery of ["complete", "canceled"]) {
     test(`${format}: unfinished ${kind} at ${delivery} preserves rejection evidence correctly`, async () => {
-      const wire = new TextEncoder().encode(prefix + tail);
+      const wire = new Uint8Array([...encode(prefix), ...(typeof tail === "string" ? encode(tail) : tail)]);
       let offset = 0, canceled = 0;
       const source = new ReadableStream({
         pull(controller) {
@@ -38,7 +53,7 @@ for (const format of ["openai.chat", "openai.responses", "anthropic.messages"]) 
             if (delivery === "complete") controller.close();
             return;
           }
-          const end = Math.min(wire.byteLength, offset + 7);
+          const end = Math.min(wire.byteLength, offset + 1);
           controller.enqueue(wire.subarray(offset, end)); offset = end;
         },
         cancel() { canceled++; },

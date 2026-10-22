@@ -117,10 +117,14 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
   return inspector.result().tokens;
 }
 
-export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error" } | { kind: "invalid" } | { kind: "unavailable" };
+export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error"; value?: unknown } | { kind: "invalid" } | { kind: "unavailable" };
 
 function rejectionOnlyEvidence(evidence: SseUsageEvidence): boolean {
-  const root = evidence.kind === "data" ? record(evidence.value) : null;
+  const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
+  // A failure is not necessarily a rejection before generation. Usage and
+  // nonempty output take precedence over its error/terminal classification.
+  const outputs = [root?.output, record(root?.response)?.output];
+  if (root && (extractUsageTokens(root) || outputs.some(output => Array.isArray(output) ? output.length > 0 : output != null))) return false;
   return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
 }
 
@@ -130,7 +134,11 @@ export function createSseUsageInspector(revokeRejection?: () => void) {
     if (frame === null) return { kind: "unavailable" };
     const lines = frame.split("\n");
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
-    if (lines.some(line => /^event:\s*error\s*$/.test(line))) return { kind: "error" };
+    const error = lines.some(line => /^event:\s*error\s*$/.test(line));
+    if (error) {
+      try { return { kind: "error", value: JSON.parse(data) }; }
+      catch { return { kind: "error" }; }
+    }
     if (!data) return null;
     if (data === "[DONE]") return { kind: "done" };
     try { return { kind: "data", value: JSON.parse(data) }; }
@@ -163,7 +171,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   let protocol: "message" | "response" | "chat" | null = null;
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
   function accept(evidence: SseUsageEvidence) {
-    const root = evidence.kind === "data" ? record(evidence.value) : null;
+    const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
     // End markers carry no content or usage; later work still revokes rejection.
     if (provisionalRejection && !rejectionOnlyEvidence(evidence)) continuedWork();
     if (evidence.kind === "unavailable") {
@@ -172,7 +180,12 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
       uncertain = true; found = null; messageUsage = null;
       return;
     }
-    if (evidence.kind === "error") { outcome = "provider_error"; return; }
+    if (evidence.kind === "error") {
+      // Preserve the normal event:error precedence. Only the provisional
+      // rejection path can resume accounting from a usage-bearing error event.
+      if (revokeRejection && !provisionalRejection && outcome === null) terminalTokens = extractUsageTokens(root);
+      outcome = "provider_error"; return;
+    }
     if (outcome !== null) return;
     if (evidence.kind === "done") {
       if (protocol === "message" || protocol === "response") { outcome = "provider_error"; return; }

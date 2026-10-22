@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createResponsesUsageInspector } from "../responses-usage.ts";
-import { extractUsageTokens, responseOutcome } from "../token-usage.ts";
+import { createSseUsageInspector, extractUsageTokens, responseOutcome } from "../token-usage.ts";
 import { observeUsage } from "../proxy-response.ts";
 import { HttpOperation } from "../http-operation.ts";
 import { createResponsesToolEvidence } from "../responses-tool-evidence.ts";
@@ -274,4 +274,50 @@ test("cancel during an awaited feed cannot publish identities or late JSON facts
   assert.equal(decoded, 2); assert.equal(published, 0); assert.equal(ended, 0);
   assert.equal(canceled, 1);
   assert.equal(upstream.body.locked, false);
+});
+
+// Both accounting parsers must distinguish an actual failed generation from a
+// no-work rejection, without using output text as a token estimate.
+for (const projected of [false, true]) test(`failed-terminal work outranks error-only evidence, projected=${projected}`, async () => {
+  const paid = '[{"type":"message","content":[{"text":"paid output"}]}]';
+  const usage = '"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}';
+  for (const [fields, billable, measured] of [
+    ['"output":' + paid, true, false],
+    ['"output":[],' + usage, true, true],
+    ['"output":' + paid + ',' + usage, true, true],
+    ['"output":' + paid + ',"output":[]', false, false],
+    ['"output":[],"outp\\u0075t":' + paid, true, false],
+    ['"output":[]', false, false],
+    ['"output":null,"error":{"output":' + paid + '}', false, false],
+  ]) for (const eventError of [false, true]) {
+    let revoked = 0;
+    const revoke = () => { revoked++; };
+    const inspector = projected ? createResponsesUsageInspector(true, undefined, undefined, undefined, revoke) : createSseUsageInspector(revoke);
+    const wire = frame({ error: { message: "initial rejection" } }) + (eventError ? "event: error\n" : "")
+      + frame('{"type":"response.failed","response":{"status":"failed",' + fields + '}}');
+    for (const byte of encode(wire)) await inspector.push(new Uint8Array([byte]));
+    if (projected) await inspector.end();
+    const result = inspector.result(true);
+    assert.equal(revoked, billable ? 1 : 0, fields);
+    assert.equal(result.outcome, "provider_error");
+    if (measured) assert.deepEqual([result.tokens.input, result.tokens.output, result.tokens.total], [10, 2, 12]);
+    else assert.equal(result.tokens, null);
+  }
+});
+
+test("Responses work witness stays bounded across large output and ancestor replacement", async () => {
+  const output = JSON.stringify([{ type: "message", content: [{ text: "x".repeat(2 * 1024 * 1024 + 100) }] }]);
+  for (const [body, billable] of [
+    ['"response":{"status":"failed","output":' + output + '}', true],
+    ['"output":[],"response":{"status":"failed","output":' + output + '}', true],
+    ['"response":{"status":"failed","output":' + output + '},"response":{"status":"failed","output":[]}', false],
+    ['"response":{"status":"failed","output":[]},"response":{"status":"failed","output":' + output + '}', true],
+  ]) {
+    let revoked = 0;
+    const inspector = createResponsesUsageInspector(true, undefined, undefined, undefined, () => { revoked++; });
+    await inspector.push(encode(frame({ error: { message: "rejection" } }) + frame('{"type":"response.failed",' + body + '}')));
+    await inspector.end();
+    assert.equal(revoked, billable ? 1 : 0);
+    assert.deepEqual(inspector.result(true), { tokens: null, outcome: "provider_error" });
+  }
 });

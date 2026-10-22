@@ -43,9 +43,13 @@ an upstream provider are not branded as router-generated errors.
   `[DONE]` and Anthropic `message_stop` markers carry no content or usage and do
   not withdraw that zero-charge evidence. If a provider continues with actual
   content or usage, even after such a marker, authoritative later usage settles
-  the request; missing or uninspectable usage retains the conservative reservation.
-  Nonempty unfinished SSE data at EOF or cancellation is also uninspectable work,
-  never authoritative usage or a new terminal fact. Recognizable terminal-only
+  the request. A failed Responses terminal may still carry billed usage or
+  generated output: those facts take precedence over its error label. Output is
+  observed through a bounded nonempty witness, not retained or counted as tokens;
+  missing or uninspectable usage retains the conservative reservation.
+  Nonempty unfinished SSE data at EOF or cancellation, including undecoded UTF-8
+  payload bytes, is also uninspectable work, never authoritative usage or a new
+  terminal fact. Recognizable terminal-only
   markers, errors and empty/comment tails do not by themselves revoke rejection.
   Delivery bytes and the original error outcome stay unchanged. Background
   rejection settlement waits for delivery rather than freezing a free receipt
