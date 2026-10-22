@@ -2,6 +2,7 @@ import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
+import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
@@ -597,6 +598,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     validateDiscoveryQuery(selection.provider, selection.endpoint, auth.policy, queryInput);
   }
   assertServiceTier(auth, selection);
+  if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
   const compact = selection.endpoint.request_format === "openai.responses_compact";
   if (compact && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");

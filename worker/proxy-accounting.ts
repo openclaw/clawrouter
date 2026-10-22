@@ -114,6 +114,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const google = selection.endpoint.request_format === "google.generate_content";
+  const count = selection.endpoint.request_format === "openai.responses_input_tokens";
   const requestedTier = google ? googleServiceTier(googleField(selection.body, "serviceTier", "service_tier"))
     : extractServiceTier(Array.isArray(selection.body) ? null : selection.body) ?? null;
   let responseTier: string | null | undefined;
@@ -125,7 +126,8 @@ export function createProxyAccounting(options: AccountingContext) {
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
     ...(selection.endpoint.request_format === "anthropic.messages" && !Array.isArray(selection.body) ? { anthropicRequest: anthropicModifiers(selection.body) } : {}),
-    model: model ? { pricing: model.pricing, upstream: model.upstream } : null, fixed: isModelDiscovery(selection.endpoint) ? 0 : auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
+    // Counting is not generation: neither model rates nor a fixed request tariff apply.
+    model: !count && model ? { pricing: model.pricing, upstream: model.upstream } : null, fixed: count || isModelDiscovery(selection.endpoint) ? 0 : auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
       grant_key: options.grantKey ?? null, grant_lane: options.grantLane ?? null,
@@ -140,8 +142,8 @@ export function createProxyAccounting(options: AccountingContext) {
       model: model?.id ?? null, input_tokens: null, output_tokens: null,
       total_tokens: null, cached_input_tokens: null, cache_write_input_tokens: null,
       reserved_cost_micros: 0, actual_cost_micros: 0, reserved_input_tokens: cost.inputTokens,
-      reserved_output_tokens: cost.outputTokens, pricing_ref: model?.pricing_ref ?? null,
-      pricing_effective_at: model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: null,
+      reserved_output_tokens: cost.outputTokens, pricing_ref: count ? null : model?.pricing_ref ?? null,
+      pricing_effective_at: count ? null : model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: null,
       requested_service_tier: requestedTier, served_service_tier: null,
       duration_ms: null, content_retained: false, content_ref: null, status: "success",
     },

@@ -1,7 +1,6 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
@@ -370,10 +369,11 @@ test("catalog and session preserve saved provider health independently of operat
     else fixture.records.delete("health/providers/openai");
     for (const [enabled, limit, blockedStatus, reasonCode] of [
       [true, 100, null, null], [false, 100, "disabled", "provider_disabled"],
-      [true, 0, "unavailable", "budget_exhausted"],
+      [true, 0, "unavailable", "daily_budget_exhausted"],
     ]) {
       fixture.connection.enabled = enabled;
       fixture.policy.monthlyBudgetMicros = limit;
+      fixture.policy.dailyBudgetMicros = limit === 0 ? 0 : null; // Monthly spend exempts counts; zero daily still blocks all operations.
       // A disabled operation owns its blocker even when coarse config is missing.
       fixture.env.OPENAI_API_KEY = enabled ? "fixture-environment-key" : "";
       const executable = blockedStatus === null;
@@ -387,7 +387,7 @@ test("catalog and session preserve saved provider health independently of operat
         assert.equal(view.readiness.latencyMs, health?.latencyMs ?? null);
         assert.equal(view.readiness.status, blockedStatus ?? probeStatus);
         assert.deepEqual(view.readiness.reasons, [
-          ...(reasonCode ? [reasonCode, ...(reasonCode === "budget_exhausted" ? ["grant_transport_unavailable"] : [])] : ["grant_transport_unavailable", ...(mode === "key" ? ["budget_exhausted"] : [])]),
+          ...(reasonCode ? [reasonCode, ...(reasonCode === "daily_budget_exhausted" ? ["grant_transport_unavailable"] : [])] : ["grant_transport_unavailable", ...(mode === "key" ? ["budget_exhausted"] : [])]),
           ...(executable && !verified ? ["Configured but not recently verified by a live smoke test."] : []),
           ...(failure ? [failure] : []),
         ]);
@@ -435,18 +435,16 @@ test("mandatory request fees have the same catalog admission for policy and prov
   }
 });
 
-test("zero policy and provider budgets preserve canonical free token counting", async (t) => {
+for (const providerId of ["anthropic", "openai"]) test("zero monthly policy and provider budgets preserve canonical free token counting: " + providerId, async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
-  fixture.policy.providers = ["anthropic"];
-  fixture.env.ANTHROPIC_API_KEY = "fixture-anthropic-key";
+  fixture.policy.providers = [providerId]; fixture.env.ANTHROPIC_API_KEY = "fixture-anthropic-key";
   fixture.config.enabled = false;
-  const connection = { providerId: "anthropic", enabled: true };
-  fixture.connections.push(connection);
+  const connection = { providerId, enabled: true }; fixture.connections.splice(0, fixture.connections.length, connection);
   for (const [policyLimit, providerLimit] of [[0, null], [null, 0]]) {
     fixture.policy.monthlyBudgetMicros = policyLimit;
     connection.monthlyBudgetMicros = providerLimit;
     const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
-    const models = catalog.providers.find(({ id }) => id === "anthropic").models;
+    const models = catalog.providers.find(({ id }) => id === providerId).models;
     assert.ok(models.length > 0);
     assert.ok(models.every((model) => model.capabilities.length === 1 && model.capabilities[0] === "llm.count_tokens"));
   }
@@ -657,7 +655,9 @@ test("ordered policy selection does not shop for a richer budget", async (t) => 
     const offers = all.filter(offer => offer.endpoint !== "realtime");
     assert.ok(offers.length > 0);
     assert.ok(offers.every((offer) => offer.policyId === expectedPolicy));
-    assert.equal(offers.some((offer) => offer.eligible), eligible);
+    assert.equal(offers.filter(offer => offer.endpoint !== "responses_input_tokens").some((offer) => offer.eligible), eligible);
+    const counts = offers.filter(offer => offer.endpoint === "responses_input_tokens"); assert.ok(counts.length > 0);
+    assert.ok(counts.every(offer => offer.eligible), "free counts keep the selected owner without shopping for budget");
   }
 });
 
@@ -854,8 +854,9 @@ test("overlapping allowlists cannot advertise a richer later policy for the same
   const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
   const offers = catalog.providers.find(p => p.id === "openai").offers.filter(offer => offer.modelId === id);
   assert.ok(offers.length > 0);
-  assert.ok(offers.every(offer => offer.policyId === "fixture" && !offer.eligible));
-  assert.equal(catalog.providers.flatMap(p => p.models).some(model => model.id === id), false);
+  assert.ok(offers.every(offer => offer.policyId === "fixture")); assert.ok(offers.filter(offer => offer.endpoint !== "responses_input_tokens").every(offer => !offer.eligible));
+  assert.ok(offers.some(offer => offer.endpoint === "responses_input_tokens" && offer.eligible));
+  assert.deepEqual(catalog.providers.flatMap(p => p.models).find(model => model.id === id).capabilities, ["llm.count_tokens"]);
 });
 
 test("restricted policies cannot advertise opaque gateway offers even with fixed pricing", async t => {
