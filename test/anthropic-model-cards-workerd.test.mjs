@@ -127,7 +127,7 @@ test("new Claude cards project and settle through actual workerd without changin
       const connection = await authority.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "anthropic", enabled: true, monthlyBudgetMicros: owner === "provider" ? spent + 60_000 : 100_000_000 }) });
       assert.equal(connection.status, 200);
       const before = (await calls()).length, response = await post(haiku);
-      assert.equal(response.status, 402); assert.equal((await response.json()).error.code, owner === "policy" ? "budget_exhausted" : "provider_budget_exhausted");
+      assert.equal(response.status, 402); assert.equal(response.headers.get("x-clawrouter-error-code"), owner === "policy" ? "budget_exhausted" : "provider_budget_exhausted"); await response.text();
       assert.equal((await calls()).length, before); assert.equal((await get("/v1/usage")).budget.spentMicros, spent);
       assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
     });

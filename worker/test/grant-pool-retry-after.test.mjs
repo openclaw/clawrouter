@@ -13,7 +13,7 @@ const endpoint = provider.endpoints.find(item => item.id === 'messages');
 const model = 'claude-sonnet-5';
 const keyA = 'oauth/fixture/anthropic', keyB = 'oauth/fixture/backup';
 const grant = (extra = {}) => ({ provider: provider.id, kind: 'subscription', enabled: true, accessToken: 'synthetic-token', updatedAt: '2026-01-01T00:00:00Z', ...extra });
-const unavailableBody = { error: { code: 'upstream_grant_pool_unavailable', message: 'provider anthropic has no available scoped upstream grant' } };
+const unavailableBody = (type, requestId) => ({ type: 'error', error: { type, message: 'provider anthropic has no available scoped upstream grant' }, request_id: requestId });
 
 // Fixed clock: Retry-After is whole seconds until the earliest pooled grant returns.
 const now = Date.parse('2026-10-21T12:00:00.000Z');
@@ -40,7 +40,7 @@ async function fixture(t, { legacy = false, routing } = {}) {
     const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: admissionHeaders, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] }) }), f.env, f.context);
     const body = await response.json();
     await Promise.all(f.pending);
-    return { status: response.status, retryAfter: response.headers.get('retry-after'), exposed: response.headers.get('access-control-expose-headers')?.split(',') ?? [], body };
+    return { status: response.status, errorCode: response.headers.get('x-clawrouter-error-code'), requestId: response.headers.get('request-id'), retryAfter: response.headers.get('retry-after'), exposed: response.headers.get('access-control-expose-headers')?.split(',') ?? [], body };
   };
   return f;
 }
@@ -66,7 +66,9 @@ for (const legacy of [false, true]) for (const [name, stateA, stateB, retryAfter
   assert.equal(response.status, 429);
   assert.equal(response.retryAfter, retryAfter);
   assert.ok(response.exposed.includes('retry-after'), 'browser clients can read the retry time');
-  assert.deepEqual(response.body, unavailableBody, 'the error body shape and code are unchanged');
+  assert.deepEqual(response.body, unavailableBody('rate_limit_error', response.requestId));
+  assert.match(response.requestId, /^req_[a-f0-9]{32}$/);
+  assert.equal(response.errorCode, 'upstream_grant_pool_unavailable');
   assert.equal(upstream.mock.callCount(), 0);
   assert.deepEqual(f.calls, ['/admission/resolve']);
 });
@@ -95,7 +97,9 @@ for (const [name, routing, stateB, stateA = r => exhausted(null, r), legacy = fa
   const response = await f.send();
   assert.equal(response.status, 503);
   assert.equal(response.retryAfter, null);
-  assert.deepEqual(response.body, unavailableBody);
+  assert.deepEqual(response.body, unavailableBody('api_error', response.requestId));
+  assert.match(response.requestId, /^req_[a-f0-9]{32}$/);
+  assert.equal(response.errorCode, 'upstream_grant_pool_unavailable');
   assert.equal(upstream.mock.callCount(), 0);
 });
 

@@ -116,7 +116,7 @@ test("max_uses bounds search fees but not cumulative server-loop tokens: hard bu
   const f = await fixture(t);
   for (const fetchOnly of [false, true]) for (const maxUses of [1, null, -1, "2"]) {
     const response = await f.send("reserve", { fetchOnly, maxUses });
-    assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required");
+    assert.equal(response.status, 400); assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required"); await response.text();
   }
   assert.equal(await f.count(), 0); assert.deepEqual(await f.ledger("reserve"), []);
   const fixed = await f.send("fixed"); assert.equal(fixed.status, 200); await fixed.text();
@@ -129,7 +129,7 @@ test("a provider-only hard budget also rejects an unqualified Claude server loop
   const f = await fixture(t, 1_000_000);
   for (const fetchOnly of [false, true]) for (const maxUses of [1, null]) {
     const response = await f.send("unmetered", { fetchOnly, maxUses });
-    assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required");
+    assert.equal(response.status, 400); assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required"); await response.text();
   }
   assert.equal(await f.count(), 0); assert.deepEqual(await f.ledger("unmetered"), []);
 });

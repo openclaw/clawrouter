@@ -60,7 +60,7 @@ async function send(env, body) {
   }), env, { waitUntil: (promise) => pending.push(promise) });
   const text = await response.text();
   await Promise.all(pending);
-  return { status: response.status, body: text ? JSON.parse(text) : null };
+  return { status: response.status, errorCode: response.headers.get("x-clawrouter-error-code"), body: text ? JSON.parse(text) : null };
 }
 
 async function spent(env, limit) {
@@ -111,7 +111,7 @@ test("the image bound is an exact admission boundary, not a waiver", async (t) =
     const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({ type: "message", content: [], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 1 } }));
     const response = await send(env, screenshotBody);
     assert.equal(response.status, allowed ? 200 : 402, JSON.stringify(response.body));
-    if (!allowed) assert.equal(response.body.error.code, "budget_exhausted");
+    if (!allowed) assert.equal(response.errorCode, "budget_exhausted");
     assert.equal(upstream.mock.callCount(), allowed ? 1 : 0);
     assert.equal(events[0].reserved_input_tokens, screenshotInput);
     assert.deepEqual(await spent(env, limit), allowed ? [60, 60] : [0, 0]);
@@ -137,7 +137,7 @@ for (const [name, source, extra = {}] of [
   if (extra.document) body.messages[2].content[0].content = [{ type: "document", source }];
   const response = await send(env, body);
   assert.equal(response.status, 402, JSON.stringify(response.body));
-  assert.equal(response.body.error.code, "budget_exhausted");
+  assert.equal(response.errorCode, "budget_exhausted");
   assert.equal(upstream.mock.callCount(), 0);
   assert.equal(events.length, 1);
   assert.equal(events[0].reserved_input_tokens, opus.inputMax);
@@ -159,7 +159,7 @@ test("an image-shaped object inside tool_use.input is billed as text and keeps t
   const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({ type: "message", content: [], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 1 } }));
   const response = await send(env, body);
   assert.equal(response.status, 402, `reserved ${events[0]?.reserved_input_tokens} input tokens`);
-  assert.equal(response.body.error.code, "budget_exhausted");
+  assert.equal(response.errorCode, "budget_exhausted");
   assert.equal(upstream.mock.callCount(), 0);
   assert.equal(events.length, 1);
   assert.equal(events[0].reserved_input_tokens, opus.inputMax);

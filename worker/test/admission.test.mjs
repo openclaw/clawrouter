@@ -73,7 +73,8 @@ for (const [name, setup, expected] of [
   t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }));
   const result = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [] }) }), f.env, f.context);
   assert.equal(result.status, expected[0]);
-  if (expected[1]) assert.equal((await result.json()).error.code, expected[1]); else await result.text();
+  if (expected[1]) assert.equal(result.headers.get('x-clawrouter-error-code'), expected[1]);
+  await result.text();
   await Promise.all(f.pending);
   assert.deepEqual(f.calls, ['/admission/resolve']);
 });
@@ -108,7 +109,7 @@ test('provider read failures preserve secret and model error precedence', async 
   ]) {
     f.policy.models = models; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
     const result = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: { ...headers, authorization }, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', messages: [], max_tokens: 16 }) }), f.env, f.context);
-    assert.equal(result.status, status, await result.clone().text()); assert.equal((await result.json()).error.code, code);
+    assert.equal(result.status, status, await result.clone().text()); assert.equal(result.headers.get('x-clawrouter-error-code'), code); await result.text();
   }
   await Promise.all(f.pending);
 });
@@ -132,7 +133,7 @@ for (const family of ['policies', 'users']) test(`failed ${family} imports canno
     [headers.authorization, 500, 'internal_error'],
   ]) {
     const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: { ...headers, authorization }, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', messages: [], max_tokens: 16 }) }), f.env, f.context);
-    assert.equal(response.status, expected); assert.equal((await response.json()).error.code, code);
+    assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code); await response.text();
   }
 });
 

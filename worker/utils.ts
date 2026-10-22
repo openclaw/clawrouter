@@ -1,11 +1,12 @@
 import { logCorrelationError } from "./correlation.ts";
 import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
+import { markLocalError } from "./native-errors.ts";
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
   "access-control-allow-headers": [
-    "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version", "openai-organization", "openai-project",
+    "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version", "anthropic-user-profile-id", "anthropic-workspace-id", "openai-organization", "openai-project", "x-client-request-id",
     "x-request-id", "traceparent", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",
     "x-clawrouter-agent-id", "x-clawrouter-parent-agent-id", "x-clawrouter-project-id",
     "x-clawrouter-client", "x-claude-code-session-id", "x-claude-code-agent-id",
@@ -16,7 +17,7 @@ const corsHeaders = {
     "x-stainless-helper",
   ].join(","),
   "access-control-expose-headers": [
-    "retry-after", "server-timing", "x-request-id", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
+    "retry-after", "server-timing", "request-id", "x-request-id", "x-clawrouter-request-id", "x-clawrouter-error-code", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
     "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
     "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers", "x-clawrouter-background-recovery",
   ].join(","),
@@ -31,12 +32,17 @@ export function json(value: unknown, status = 200, headers: HeadersInit = {}): R
 }
 
 export function errorResponse(code: string, message: string, status: number, detail?: unknown, headers: HeadersInit = {}): Response {
-  return json({ error: { code, message, ...(detail === undefined ? {} : { detail }) } }, status, headers);
+  return markLocalError(json({ error: { code, message, ...(detail === undefined ? {} : { detail }) } }, status, headers), code, message);
 }
 
 export function withCors(response: Response): Response {
   const copy = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers, ...(response.webSocket ? { webSocket: response.webSocket } : {}) });
   for (const [key, value] of Object.entries(corsHeaders)) copy.headers.set(key, value);
+  // Expose actual native rate headers, including new limit dimensions, without
+  // exposing arbitrary provider headers or cookies to browser callers.
+  const exposed = new Set(corsHeaders["access-control-expose-headers"].split(","));
+  for (const name of response.headers.keys()) if (name.startsWith("x-ratelimit-") || name.startsWith("anthropic-ratelimit-")) exposed.add(name);
+  copy.headers.set("access-control-expose-headers", [...exposed].join(","));
   return copy;
 }
 

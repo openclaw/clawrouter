@@ -317,7 +317,8 @@ test("policy model admission denies native, manifest, OpenAI and Responses befor
   ]) {
     const response = await handler.fetch(new Request(`https://router.example${path}`, { method: "POST", headers, body: JSON.stringify(body) }), f.env, f.context);
     assert.equal(response.status, 403, `${path}: ${await response.clone().text()}`);
-    assert.equal((await response.json()).error.code, "model_not_allowed", path);
+    assert.equal(response.headers.get("x-clawrouter-error-code"), "model_not_allowed", path);
+    await response.text();
   }
   f.values.set("config/fusion", { enabled: true, aggregatorModel: "openai/gpt-5.6", adviserModels: ["openai/gpt-5.5"] });
   const fusion = await handler.fetch(new Request("https://router.example/v1/chat/completions", { method: "POST", headers, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic" }] }) }), f.env, f.context);

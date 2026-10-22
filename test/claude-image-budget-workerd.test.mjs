@@ -83,7 +83,8 @@ test("workerd admits a budgeted Claude image turn at its visual-token bound and 
     // A URL image has no header to bound it: the full-window reservation still refuses it.
     const unbounded = await send({ ...body, messages: [{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://example.com/screenshot.png" } }] }] });
     assert.equal(unbounded.status, 402);
-    assert.equal((await unbounded.json()).error.code, "budget_exhausted");
+    assert.equal(unbounded.headers.get("x-clawrouter-error-code"), "budget_exhausted");
+    assert.equal((await unbounded.json()).error.type, "billing_error");
     assert.deepEqual(await (await ledger.fetch("https://budget/fixture-reservations")).json(), [{ settled: 1, dispatch_started: 1, reserved_micros: actual }]);
   } finally {
     await mf?.dispose();

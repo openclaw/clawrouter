@@ -1,4 +1,5 @@
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
+import { withNativeLocalError } from "./native-errors.ts";
 import { poolResponse } from "./pool";
 import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
@@ -50,6 +51,7 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     } catch (error) {
       response = caughtResponse(error, correlated.requestId);
     }
+    response = withNativeLocalError(response, path, correlated.requestId);
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
     return corsEnabled(path) ? withCors(response) : response;
   },

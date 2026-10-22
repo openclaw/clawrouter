@@ -129,7 +129,7 @@ for (const route of routes) test("image route " + route + " returns corrective p
   ]) {
     const response = await f.call(route, body);
     assert.equal(response.status, 400);
-    assert.deepEqual((await response.json()).error, { code: "invalid_image_generation", message });
+    assert.deepEqual((await response.json()).error, { message, type: "invalid_request_error", param: null, code: "invalid_image_generation" });
   }
   await Promise.all(f.pending);
   assert.equal(upstream.mock.callCount(), 0);
