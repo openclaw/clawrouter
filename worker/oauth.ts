@@ -47,8 +47,12 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   for (const [key, value] of Object.entries(config.extraTokenParams)) form.set(key, value);
   let tokenResponse: Response;
   try {
-    tokenResponse = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form, signal: fetchTimeoutSignal(request.signal) });
+    tokenResponse = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form, signal: fetchTimeoutSignal(request.signal), redirect: "manual" });
   } catch {
+    return callbackPage(false, "Provider token exchange failed.");
+  }
+  if (tokenResponse.status >= 300 && tokenResponse.status < 400) {
+    await tokenResponse.body?.cancel().catch(() => undefined);
     return callbackPage(false, "Provider token exchange failed.");
   }
   const payload: Record<string, unknown> = await tokenResponse.json<Record<string, unknown>>().catch(() => ({}));

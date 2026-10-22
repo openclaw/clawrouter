@@ -352,8 +352,14 @@ export class GrantCredentialObject implements DurableObject {
         headers: { "content-type": requestFormat === "json" ? "application/json" : "application/x-www-form-urlencoded", accept: "application/json" },
         body: requestFormat === "json" ? JSON.stringify(Object.fromEntries(form)) : form,
         signal: AbortSignal.timeout(30_000),
+        redirect: "manual",
       });
     } catch {
+      throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
+    }
+    // A redirect is a transient endpoint failure, never evidence of token revocation.
+    if (response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
     let payload: Record<string, unknown>;
@@ -593,7 +599,7 @@ async function probeQuota(env: Env, provider: CompiledProvider, record: Credenti
     for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
     const probeStartedAt = Date.now();
     let response: Response;
-    try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
+    try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000), redirect: "manual" }); }
     catch { if (probe.windows.length) throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); else continue; }
     if (response.status === 429) {
       const retry = response.headers.get("retry-after");
@@ -656,8 +662,12 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
   query.forEach((value, name) => url.searchParams.set(name, value));
   const body = transformTransportBody(transport, structuredClone(config.body));
   let response: Response;
-  try { response = await fetch(url, { method: endpoint.method, headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) }); }
+  try { response = await fetch(url, { method: endpoint.method, headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000), redirect: "manual" }); }
   catch { throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request failed`); }
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request returned ${response.status}`);
+  }
   const state = observeGrantQuota(response, provider.quota);
   if (state) await publishRuntime(env, record, state);
   await response.body?.cancel().catch(() => undefined);
