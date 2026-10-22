@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
+import { assertAnthropicPricingError } from "./helpers/anthropic-pricing-error.mjs";
 
 const upstream = `let calls = 0; export default { async fetch(request) {
   if (new URL(request.url).pathname === "/fixture-count") return Response.json(calls);
@@ -45,7 +46,7 @@ const upstream = `let calls = 0; export default { async fetch(request) {
       controller.enqueue(new TextEncoder().encode(JSON.stringify(message))); controller.close();
     } }), { headers: { "content-type": "application/json" } });
   }
-  if (!body.stream) return Response.json(message);
+  if (!body.stream) return Response.json(message, { headers: { "request-id": "fixture-upstream-id" } });
   const events = [ { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { ...usage, output_tokens: 0 } } },
     ...(scenario === "refusal" ? [] : [{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: message.content[0].text } }]),
     { type: "message_delta", delta: { stop_reason: message.stop_reason }, usage: { output_tokens: usage.output_tokens } },
@@ -58,7 +59,7 @@ const upstream = `let calls = 0; export default { async fetch(request) {
   const newline = scenario === "cr" ? "\\r" : scenario === "lf" ? "\\n" : "\\r\\n";
   const bytes = new TextEncoder().encode(events.map(event => "event: " + event.type + newline + "data: " + JSON.stringify(event) + newline + newline).join("")); let offset = 0;
   const stride = scenario === "oversized" ? 65536 : 7;
-  return new Response(new ReadableStream({ pull(controller) { if (offset < bytes.length) { controller.enqueue(bytes.slice(offset, offset + stride)); offset += stride; } else controller.close(); } }), { headers: { "content-type": "text/event-stream" } });
+  return new Response(new ReadableStream({ pull(controller) { if (offset < bytes.length) { controller.enqueue(bytes.slice(offset, offset + stride)); offset += stride; } else controller.close(); } }), { headers: { "content-type": "text/event-stream", "request-id": "fixture-upstream-id" } });
 } };`;
 
 test("Anthropic modifiers traverse real Worker admission, usage inspection, queue and durable budgets", { timeout: 90_000 }, async t => {
@@ -72,7 +73,7 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
     const service = await mf.getWorker("upstream"), calls = async () => (await service.fetch("https://api.anthropic.com/fixture-count")).json();
     let serial = 0;
     async function fixture(overrides = {}, policy = {}, path = "/v1/messages") {
-      const id = "case" + ++serial, secret = "modifier-fixture-secret", headers = { authorization: `Bearer clawrouter-live-${id}-${secret}`, "content-type": "application/json", "anthropic-beta": "fast-mode-2026-02-01" };
+      const id = "case" + ++serial, secret = "modifier-fixture-secret", headers = { authorization: `Bearer clawrouter-live-${id}-${secret}`, "content-type": "application/json", "anthropic-beta": "fast-mode-2026-02-01", "x-request-id": "req_modifiers_" + id };
       await kv.put("policies/" + id, JSON.stringify({ enabled: true, generation: "g1", providers: ["anthropic"], tenantId: "fixture", monthlyBudgetMicros: 10_000_000, requestCostMicros: null, retainRequestContent: false, ...policy }));
       await kv.put("credentials/" + id, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: id, policyGeneration: "g1" }));
       await kv.put("oauth/" + id + "/anthropic", JSON.stringify({ provider: "anthropic", kind: "api_key", enabled: true, credential: "fixture-anthropic-key", updatedAt: "2026-01-01T00:00:00Z" }));
@@ -86,6 +87,7 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         await new Promise(resolve => setTimeout(resolve, 20));
       } while (Date.now() < deadline);
       assert.equal(snapshot.usage.events.length, 1, JSON.stringify({ status: response.status, text, snapshot }));
+      assert.equal(snapshot.usage.events[0].request_id, headers["x-request-id"]);
       return { response, text, event: snapshot.usage.events[0], budget: snapshot.budget, body };
     }
     for (const stream of [false, true]) {
@@ -93,6 +95,8 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         const { response, text, event, budget, body } = await fixture({ stream });
         assert.equal(response.status, 200, text);
         assert.match(text, /fixture/);
+        assert.equal(response.headers.get("request-id"), "fixture-upstream-id");
+        assert.equal(response.headers.get("x-clawrouter-error-code"), null);
         // $4 input, $.2 reads, $5 5m writes, $8 1h writes, $20 output per MTok, times 2 * 1.1.
         assert.equal(event.actual_cost_micros, 6160);
         assert.equal(event.served_service_tier, "standard");
@@ -113,7 +117,7 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         await t.test(`unknown response price fails safe: ${scenario} (${stream ? "SSE" : "JSON"})`, async () => {
           const { response, text, event, budget } = await fixture({ stream, metadata: { user_id: scenario } });
           assert.equal(response.status, stream ? 200 : 502);
-          assert.match(text, /pricing_required/);
+          assertAnthropicPricingError(response, text, stream, event.request_id);
           assert.equal(event.cost_basis, "unpriced_usage");
           assert.equal(event.status, "provider_error");
           assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
@@ -157,7 +161,7 @@ test("Anthropic modifiers traverse real Worker admission, usage inspection, queu
         const before = await calls();
         const { response, text, event, budget } = await fixture({ model: "anthropic/claude-opus-4-8", stream, service_tier, metadata: { user_id: scenario } });
         assert.equal(await calls(), before + 1); assert.equal(response.status, stream ? 200 : 502);
-        assert.match(text, /pricing_required/); if (stream) assert.doesNotMatch(text, /event: message_stop/);
+        assertAnthropicPricingError(response, text, stream, event.request_id); if (stream) assert.doesNotMatch(text, /event: message_stop/);
         assert.equal(event.cost_basis, "unpriced_usage"); assert.equal(event.status, "provider_error");
         assert.ok(event.reserved_cost_micros > 0); assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
         assert.equal(budget.spentMicros, event.reserved_cost_micros);

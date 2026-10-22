@@ -1,15 +1,17 @@
+import { nativeErrorEnvelope } from "./native-errors.ts";
 import { createSseUsageInspector, extractUsageTokens, usageInspectionLimit, type UsageTokens } from "./token-usage.ts";
 import type { HttpOperation } from "./http-operation.ts";
 
-const error = { type: "error", error: { type: "pricing_required", code: "pricing_required", message: "Anthropic response pricing could not be verified: unsupported usage modifiers or an exceeded inspection limit. Contact the router operator; for oversized responses, reduce max_tokens or response size. The reservation is retained; do not blindly retry paid work." } };
+const message = "Anthropic response pricing could not be verified: unsupported usage modifiers or an exceeded inspection limit. Contact the router operator; for oversized responses, reduce max_tokens or response size. The reservation is retained; do not blindly retry paid work.";
 export interface AnthropicPriceGuard { response: Response; failure(): { tokens: UsageTokens | null } | undefined }
 
 // Hard budgets only. JSON must be qualified before success is published. SSE
 // stays demand-driven and byte-identical until a terminal price fails; then an
 // error replaces that terminal frame (HTTP headers may already be delivered).
-export async function guardAnthropicPrice(response: Response, priced: (tokens: UsageTokens | null) => boolean, operation: HttpOperation): Promise<AnthropicPriceGuard> {
+export async function guardAnthropicPrice(response: Response, priced: (tokens: UsageTokens | null) => boolean, operation: HttpOperation, requestId: string): Promise<AnthropicPriceGuard> {
   let failure: { tokens: UsageTokens | null } | undefined;
   if (!response.ok || !response.body) return { response, failure: () => failure };
+  const error = nativeErrorEnvelope({ format: "anthropic", requestId }, 502, { message });
   const reader = response.body.getReader();
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const headers = new Headers(response.headers); headers.delete("content-length");
@@ -32,6 +34,8 @@ export async function guardAnthropicPrice(response: Response, priced: (tokens: U
         failure = { tokens };
       }
       headers.set("content-type", "application/json");
+      headers.set("x-clawrouter-error-code", "pricing_required");
+      headers.set("request-id", requestId);
       return { response: new Response(JSON.stringify(error), { status: 502, headers }), failure: () => failure };
     } finally { void reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }

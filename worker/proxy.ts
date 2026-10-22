@@ -479,7 +479,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Retire only the timer; caller cancellation remains connected through EOF.
     operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && auth.policy.requestCostMicros == null) {
-      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation);
+      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
   } catch (error) {
@@ -532,6 +532,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }));
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
+  // Header sanitization strips upstream router-code spoofing. Only a verified
+  // local JSON replacement may restore this diagnostic; SSE fails after headers.
+  if (priceGuard?.failure() && response.status === 502) outputHeaders.set("x-clawrouter-error-code", "pricing_required");
   outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}`);
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");

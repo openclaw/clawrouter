@@ -85,7 +85,11 @@ legacy-card qualification remains unchanged.
 - An unexpected unpriced successful response (including Priority or Batch) is
   not settled at base price. Nonstream returns HTTP 502 `pricing_required`;
   SSE emits an error frame instead of the successful terminal frame (headers
-  may already be HTTP 200). The dispatched reservation is retained and the
+  may already be HTTP 200). Both use the native Claude `api_error` envelope with
+  the router's `request_id`. JSON also sets `request-id` and the separate
+  `x-clawrouter-error-code: pricing_required`; a late SSE failure cannot replace
+  already-sent headers, so its message explains the pricing failure.
+  The dispatched reservation is retained and the
   usage event is `unpriced_usage` / `provider_error`, preserving observed usage
   and the served tier. This is **not a claim to know the provider invoice**.
   A legacy Priority account using auto may incur negotiated charges before the

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
+import { assertAnthropicPricingError } from "./helpers/anthropic-pricing-error.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 
 const sonnet = "anthropic/claude-sonnet-5-5", haiku = "anthropic/claude-haiku-5-5";
@@ -31,7 +32,7 @@ const upstream = [
   'if (path === "/fixture/reply") { reply = await request.json(); return new Response("ok"); }',
   'if (path === "/fixture/calls") return Response.json(calls);',
   'const body = await request.json(); calls.push({ url: request.url, method: request.method, body, key: request.headers.get("x-api-key"), version: request.headers.get("anthropic-version"), authorization: request.headers.get("authorization") });',
-  'return new Response(reply.body, { status: reply.status ?? 200, headers: { "content-type": reply.contentType } }); } };',
+  'return new Response(reply.body, { status: reply.status ?? 200, headers: { "content-type": reply.contentType, "request-id": "fixture-upstream-id" } }); } };',
 ].join("\n");
 
 test("new Claude cards project and settle through actual workerd without changing endpoints", { timeout: 90_000 }, async t => {
@@ -158,13 +159,14 @@ test("new Claude cards project and settle through actual workerd without changin
         const counts = { ...usage(), ...modifiers }, wire = isStream ? stream(counts) : JSON.stringify(message(counts));
         await setReply({ body: wire, contentType: isStream ? "text/event-stream" : "application/json" });
         const before = (await calls()).length, response = await post(id, isStream), text = await response.text();
-        assert.equal(response.status, isStream ? 200 : 502); assert.match(text, /pricing_required/);
+        assert.equal(response.status, isStream ? 200 : 502);
         if (isStream) assert.doesNotMatch(text, /message_stop/);
         assert.equal((await calls()).length, before + 1);
         const body = await settled(++eventCount), event = body.usage.events[0];
         assert.equal(event.cost_basis, "unpriced_usage"); assert.equal(event.status, "provider_error");
         assert.ok(event.reserved_cost_micros > 0); assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
         spent += event.actual_cost_micros; assert.equal(body.budget.spentMicros, spent); assert.equal((await get("/fixture/provider-budget")).spentMicros, spent);
+        assertAnthropicPricingError(response, text, isStream, event.request_id);
       });
     }
     await t.test("truncated long-context SSE cannot settle at the cheaper partial price", async () => {

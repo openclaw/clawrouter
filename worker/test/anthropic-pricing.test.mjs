@@ -39,7 +39,7 @@ test("hard-budget SSE guard preserves backpressure, exact UTF-8 frames and upstr
   let pulls = 0, canceled = false;
   const chunks = [text, content].map(value => new TextEncoder().encode(value));
   const response = new Response(new ReadableStream({ pull(controller) { if (pulls < chunks.length) controller.enqueue(chunks[pulls++]); }, cancel() { canceled = true; } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
-  const guard = await guardAnthropicPrice(response, () => true, new HttpOperation());
+  const guard = await guardAnthropicPrice(response, () => true, new HttpOperation(), "req_backpressure");
   assert.equal(pulls, 0);
   const reader = guard.response.body.getReader();
   assert.deepEqual((await reader.read()).value, chunks[0]);
@@ -66,5 +66,29 @@ test("qualified new cards preserve the exact Haiku boundary and safe undocumente
   for (const modifiers of [{ speed: "fast" }, { inferenceGeo: "us" }, { serviceTier: "priority" }]) {
     assert.equal(anthropicPricing(unpublishedPremiums, haiku.upstream, modifiers), null);
     assert.equal(anthropicPricing(unpublishedPremiums, haiku.upstream, {}, modifiers), null);
+  }
+});
+
+for (const format of ["JSON", "SSE terminal frame", "SSE EOF terminal"]) test(`price guard emits native api_error with the router ID: ${format}`, async () => {
+  const requestId = "req_price_guard", usage = { input_tokens: 10, output_tokens: 1, service_tier: "priority" };
+  const frame = value => "data: " + JSON.stringify(value);
+  const wire = format === "JSON" ? JSON.stringify({ type: "message", usage })
+    : frame({ type: "message_start", message: { usage } }) + "\n\n"
+      + frame({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }) + "\n\n"
+      + frame({ type: "message_stop" }) + (format === "SSE EOF terminal" ? "\r\r" : "\n\n");
+  const response = new Response(wire, { headers: { "content-type": format === "JSON" ? "application/json" : "text/event-stream", "request-id": "upstream-id" } });
+  const guard = await guardAnthropicPrice(response, tokens => !!anthropicPricing(model.pricing, model.upstream, request, tokens?.anthropic ?? {}), new HttpOperation(), requestId);
+  const text = await guard.response.text();
+  const value = format === "JSON" ? JSON.parse(text) : JSON.parse(text.split("event: error\ndata: ")[1].trim());
+  assert.deepEqual(value, { type: "error", error: { type: "api_error", message: value.error.message }, request_id: requestId });
+  assert.match(value.error.message, /pricing could not be verified/); assert.match(value.error.message, /reservation is retained/);
+  assert.equal(guard.failure().tokens.anthropic.serviceTier, "priority");
+  if (format === "JSON") {
+    assert.equal(guard.response.status, 502); assert.equal(guard.response.headers.get("request-id"), requestId);
+    assert.equal(guard.response.headers.get("x-clawrouter-error-code"), "pricing_required");
+  } else {
+    assert.equal(guard.response.status, 200); assert.doesNotMatch(text, /message_stop/);
+    assert.equal(guard.response.headers.get("request-id"), "upstream-id");
+    assert.equal(guard.response.headers.get("x-clawrouter-error-code"), null);
   }
 });
