@@ -144,10 +144,10 @@ test("real workerd accepts large Claude vision/PDF bodies and preserves reservat
   const count=JSON.stringify(pdf), exact=count+" ".repeat(limit-count.length);
   for(const [extra,status] of [["",200],[" ",413]]) {
    const response=await worker.dispatchFetch("https://router.example/v1/messages/count_tokens",{method:"POST",headers:{authorization:key,"content-type":"application/json"},body:fragmented(exact+extra),duplex:"half"});
-   assert.equal(response.status,status);if(status===413)assert.equal((await response.json()).error.code,"request_too_large");else await response.text();
+   assert.equal(response.status,status);if(status===413)assert.equal(response.headers.get("x-clawrouter-error-code"),"request_too_large");await response.text();
   }
   const invalid=await worker.dispatchFetch("https://router.example/v1/messages",{method:"POST",headers:{authorization:key,"content-type":"application/json"},body:fragmented(serialized.slice(0,-1)),duplex:"half"});
-  assert.equal(invalid.status,400);assert.equal((await invalid.json()).error.code,"invalid_json");
+  assert.equal(invalid.status,400);assert.equal(invalid.headers.get("x-clawrouter-error-code"),"invalid_json");await invalid.text();
   const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();
   const messages=snapshot.events.filter(e=>e.capability==="llm.messages");assert.equal(messages.length,4);
   for(const e of messages){assert.equal(e.actual_cost_micros,60);assert.equal(e.content_ref,null);}
@@ -180,7 +180,7 @@ test("real workerd still denies a large PDF that exceeds its full-window hard bu
   assert.equal((await worker.dispatchFetch("https://router.example/fixture/setup?limit=2000000")).status,200);
   const send=value=>worker.dispatchFetch("https://router.example/v1/messages",{method:"POST",headers:{authorization:key,"content-type":"application/json"},body:fragmented(JSON.stringify(value)),duplex:"half"});
   const pdf=body("document");
-  const denied=await send(pdf);assert.equal(denied.status,402);assert.equal((await denied.json()).error.code,"budget_exhausted");
+  const denied=await send(pdf);assert.equal(denied.status,402);assert.equal(denied.headers.get("x-clawrouter-error-code"),"budget_exhausted");await denied.text();
   // Unauthenticated large ingress and zero-charge behavior are covered below
   // with a workerd-owned source, avoiding Node upload-pump cancellation races.
   const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();
