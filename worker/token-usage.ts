@@ -157,7 +157,10 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   function accept(evidence: SseUsageEvidence) {
     const root = evidence.kind === "data" ? record(evidence.value) : null;
     const error = evidence.kind === "error" || responseOutcome(root) === "provider_error";
-    if (provisionalRejection && !error) continuedWork();
+    // End markers carry no content or usage; keep a genuine rejection free.
+    // Later work must still revoke it, even if it follows one of these markers.
+    const terminalMarker = evidence.kind === "done" || root?.type === "message_stop";
+    if (provisionalRejection && !error && !terminalMarker) continuedWork();
     if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.

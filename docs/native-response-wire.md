@@ -39,8 +39,10 @@ an upstream provider are not branded as router-generated errors.
   delivery, cancellation, and accounting keep their existing owners. A first
   error event before generation starts is a provisional received rejection:
   both budget reservations release to zero only while subsequent events remain
-  empty or errors, including background creates and cancellations. If a provider
-  continues with a non-empty, non-error event, authoritative later usage settles
+  empty or errors, including background creates and cancellations. Terminal-only
+  `[DONE]` and Anthropic `message_stop` markers carry no content or usage and do
+  not withdraw that zero-charge evidence. If a provider continues with actual
+  content or usage, even after such a marker, authoritative later usage settles
   the request; missing or uninspectable usage retains the conservative reservation.
   Delivery bytes and the original error outcome stay unchanged. Background
   rejection settlement waits for delivery rather than freezing a free receipt
