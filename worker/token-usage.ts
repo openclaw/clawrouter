@@ -1,6 +1,7 @@
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
 
 export interface UsageTokens {
+  webSearchRequests?: number | null; // Anthropic cumulative usage, not content-block count.
   image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
   input: number | null;
@@ -38,7 +39,8 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   const unbilled = root?.type === "message" && root.stop_reason === "refusal"
     && Array.isArray(root.content) && root.content.length === 0 && output === 0;
   const serviceTier = extractServiceTier(record(root?.response) ?? root);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+  const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
 }
 
 function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null): number | null {
@@ -240,6 +242,12 @@ function messageCounters(usage: Record<string, unknown> | null): Record<string, 
   if (!usage) return null;
   // Stream history is unbounded; retain only the finite cumulative counter set.
   const counters = Object.fromEntries(["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"].filter(key => numeric(usage[key]) != null).map(key => [key, usage[key]]));
+  // Explicit malformed snapshots invalidate an older valid count; omitted
+  // unchanged counters retain it. Never retain tool inputs or result content.
+  const serverTools = record(usage.server_tool_use);
+  if (Object.hasOwn(usage, "server_tool_use") && (!serverTools || Object.hasOwn(serverTools, "web_search_requests"))) {
+    counters.server_tool_use = { web_search_requests: searchRequests(serverTools?.web_search_requests) };
+  }
   const creation = record(usage.cache_creation);
   if (creation) counters.cache_creation = Object.fromEntries(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"].filter(key => numeric(creation[key]) != null).map(key => [key, creation[key]]));
   return counters;
@@ -264,6 +272,10 @@ function pickNumber(value: Record<string, unknown>, ...keys: string[]): number |
     if (number != null) return number;
   }
   return null;
+}
+
+function searchRequests(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function numeric(value: unknown): number | null {

@@ -1,7 +1,7 @@
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
-import { actualCharacterCost, actualModelCost, estimateModelCost, hostedSearchCost, hostedSearchPrice, requestPricingGap, type HostedSearchPrice, type PricingEndpoint } from "./pricing";
+import { actualCharacterCost, actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
@@ -43,6 +43,7 @@ export interface AccountingFacts {
   requestFormat: string;
   startedAtMs: number;
   hostedSearchPrice?: HostedSearchPrice;
+  anthropicWebPrice?: AnthropicWebPrice;
 }
 
 export interface AccountingOutcome {
@@ -64,29 +65,35 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
   const soft = reservation.charges !== undefined;
   const audioUnbounded = cost.pricingGap === "audio_upload_bound";
-  const measured = cost.pricingGap && !soft && !audioUnbounded ? null : tokens ? (soft && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat))
+  const claudeWeb = requestFormat === "anthropic.messages" ? facts.anthropicWebPrice : undefined;
+  const measured = cost.pricingGap && !soft && !audioUnbounded && !claudeWeb ? null : tokens ? ((soft || claudeWeb) && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
   const image = model?.pricing?.unit === "image_token";
-  const hosted = outcome.hostedSearch;
-  const hostedEvent = hosted && (facts.hostedSearchPrice || hosted.webSearch > 0);
-  // Only an already-admitted SOFT budget consumes this observed component.
-  // Unknown content tokens remain a gap; fixed/unmetered prices are unchanged.
-  const toolFee = billable && soft && !!reservation.charges?.length && fixed == null && tokens && tokens.billable !== false && hosted?.complete
-    ? hostedSearchCost(facts.hostedSearchPrice, hosted.webSearch) : null;
-  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (audioUnbounded ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
+  const searchCount = tokens?.webSearchRequests ?? null;
+  const hosted = claudeWeb?.search ? { webSearch: searchCount ?? 0, complete: searchCount !== null } : outcome.hostedSearch;
+  const searchPrice = claudeWeb ?? facts.hostedSearchPrice;
+  const hostedEvent = hosted && (searchPrice || hosted.webSearch > 0);
+  // OpenAI stays soft-only. Claude uses the authoritative usage counter for
+  // soft and unmetered settlement; fixed policy tariffs remain unchanged.
+  const toolFee = billable && (claudeWeb || soft && !!reservation.charges?.length) && fixed == null && tokens && tokens.billable !== false && hosted?.complete
+    ? hostedSearchCost(searchPrice, hosted.webSearch) : null;
+  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (audioUnbounded || claudeWeb ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
   const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
   const measuredBasis = characterEstimate !== null ? "request_character_estimate"
     : model?.pricing?.unit == null && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
   const basis = audioUnbounded && billable ? measured === null ? "unpriced_usage" : measuredBasis : soft && !image && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
     ? measured == null ? "unpriced_usage" : measuredBasis
     : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
+  // An unproven reservation bound does not make a published tariff unknown.
+  const claudeBasis = claudeWeb && fixed == null && billable
+    ? knownNoCharge ? "none" : measured != null && claudeWeb.usageComplete && cost.pricingGap === "hosted_tool_usage" && (!claudeWeb.search || toolFee != null) ? measuredBasis : "unpriced_usage" : null;
   return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
     ...(hostedEvent ? { hosted_tool_calls: { web_search: hosted.webSearch }, hosted_tool_calls_complete: hosted.complete,
-      hosted_tool_cost_micros: toolFee, hosted_tool_pricing_ref: facts.hostedSearchPrice?.version ?? null } : {}),
+      hosted_tool_cost_micros: toolFee, hosted_tool_pricing_ref: searchPrice?.version ?? null } : {}),
     input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null, total_tokens: tokens?.total ?? null,
     ...(tokens?.image ? { image_usage: { text_input_tokens: tokens.image.textInput, image_input_tokens: tokens.image.imageInput, image_output_tokens: tokens.image.imageOutput } } : {}),
     cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
-    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, cost_basis: billable && fixed == null && hostedEvent ? "unpriced_usage" : basis,
+    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, cost_basis: claudeBasis ?? (billable && fixed == null && hostedEvent ? "unpriced_usage" : basis),
     served_service_tier: outcome.servedTier === undefined ? tokens?.serviceTier ?? null : outcome.servedTier,
     duration_ms: outcome.occurredAtMs - facts.startedAtMs, content_retained: !!contentRef, content_ref: contentRef };
 }
@@ -103,6 +110,8 @@ export function createProxyAccounting(options: AccountingContext) {
   const requestId = correlation.requestId;
   const started = options.startedAtMs ?? Date.now();
   const facts: AccountingFacts = {
+    ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
+      ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
     model: model ? { pricing: model.pricing } : null, fixed: auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {

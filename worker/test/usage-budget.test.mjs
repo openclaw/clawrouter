@@ -681,12 +681,15 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
     assert.equal(events.length, 1);
-    assert.equal(events[0].cost_basis, denied ? "none" : fixedCost != null ? "policy_fixed" : "unpriced_usage");
-    assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
+    const measuredWeb = provider === "anthropic" && tool.tools?.some(item => ["web_search_20260318", "web_fetch_20260318"].includes(item.type));
+    const fetchOnly = measuredWeb && tool.tools.length === 1 && tool.tools[0].type === "web_fetch_20260318";
+    const settledCost = denied ? 0 : fixedCost ?? (measuredWeb ? 4_710 : 0);
+    assert.equal(events[0].cost_basis, denied ? "none" : fixedCost != null ? "policy_fixed" : fetchOnly ? "manifest_pricing" : "unpriced_usage");
+    assert.equal(events[0].actual_cost_micros, settledCost);
     if (!denied) assert.ok(tool.compaction ? events[0].input_tokens === 0 : events[0].input_tokens > 0, "top-level token usage must not imply a complete request price");
-    assert.equal((await providerBudgetStatus(env, provider, 1_000_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
+    assert.equal((await providerBudgetStatus(env, provider, 1_000_000)).spentMicros, providerLimit == null ? 0 : settledCost);
     const report = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
-    assert.equal((await report.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
+    assert.equal((await report.json()).budget.spentMicros, limit == null ? null : settledCost);
     upstream.mock.restore();
   }
 });

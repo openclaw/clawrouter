@@ -329,8 +329,11 @@ function validateManifest(manifest) {
       if (!models.length || models.some(model => !model.pricing || model.pricing.unit != null || !Number.isSafeInteger(model.pricing.defaultMaxOutputTokens) || model.pricing.defaultMaxOutputTokens <= 0)) throw new Error(`provider ${manifest.id} endpoint ${id} compact requires registered token-priced models with authoritative output bounds`);
     }
     if (endpoint.toolPricing) {
-      if ((endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses"
-        || !manifest.capabilities.some(capability => capability.endpoint === id)) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing requires a Responses generation endpoint`);
+      const responses = endpoint.requestFormat === "openai.responses" && endpoint.responseFormat === "openai.responses";
+      const messages = endpoint.requestFormat === "anthropic.messages" && endpoint.responseFormat === "anthropic.messages";
+      if ((endpoint.method ?? "POST") !== "POST" || (!responses && !messages)
+        || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id !== "llm.count_tokens")) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing requires a Responses or Messages generation endpoint`);
+      if (messages && Object.keys(endpoint.toolPricing.previewMicrosPerCallByModel).length) throw new Error(`provider ${manifest.id} endpoint ${id} Messages toolPricing cannot declare preview models`);
       for (const model of Object.keys(endpoint.toolPricing.previewMicrosPerCallByModel)) {
         if (!manifest.models?.entries?.some(entry => entry.upstream === model && entry.capabilities?.some(capability => manifest.capabilities.some(item => item.id === capability && item.endpoint === id)))) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing references an unsupported preview model`);
       }

@@ -27,6 +27,23 @@ export function hostedSearchPrice(card: ToolPricing | undefined, body: unknown, 
   return { version: card.version, microsPerCall: rates.every(rate => rate === rates[0]) ? rates[0] : null };
 }
 
+// Messages web tools have known tariffs but no qualified cumulative token bound.
+// max_uses caps the search fee, not repeated model-input processing. Never use
+// one context window (or max_content_tokens) to admit a hard-budget server loop.
+const claudeSearchTypes = new Set(["web_search_20250305", "web_search_20260209", "web_search_20260318"]);
+const claudeFetchTypes = new Set(["web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318"]);
+export interface AnthropicWebPrice extends HostedSearchPrice { search: boolean; usageComplete: boolean }
+export function anthropicWebPrice(card: ToolPricing | undefined, body: unknown): AnthropicWebPrice | undefined {
+  if (!card || !isObject(body) || !Array.isArray(body.tools)) return undefined;
+  const tools = body.tools;
+  const web = tools.filter(tool => isObject(tool) && (claudeSearchTypes.has(String(tool.type)) || claudeFetchTypes.has(String(tool.type))));
+  if (!web.length) return undefined;
+  // Other server tools, MCP and compaction keep their independent pricing gaps.
+  // Top-level token counters cannot attest separately billed iterations.
+  const usageComplete = requestPricingGap(undefined, { ...body, tools: tools.filter(tool => !web.includes(tool)) }, "anthropic.messages") === null;
+  return { version: card.version, microsPerCall: card.webSearchMicrosPerCall, usageComplete, search: web.some(tool => isObject(tool) && claudeSearchTypes.has(String(tool.type))) };
+}
+
 export function hostedSearchCost(price: HostedSearchPrice | undefined, count: number): number | null {
   return price?.microsPerCall == null ? null : saturatingMultiply(price.microsPerCall, count);
 }
@@ -110,7 +127,10 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
       // Hosted search has no qualified cumulative bound; this is not a fee claim.
       if (["mcp", "programmatic_tool_calling"].includes(tool.type) || tool.type === "tool_search" && tool.execution !== "client") usageGap = true;
     }
-    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^web_search_\d{8}$/.test(tool.type)) return "hosted_tool_fee";
+    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^web_search_\d{8}$/.test(tool.type)) {
+      if (!claudeSearchTypes.has(tool.type)) return "hosted_tool_fee";
+      usageGap = true;
+    }
     // Anthropic waives execution fees when these web-tool versions are present.
     // Their search fee, when applicable, is still handled by the branch above.
     if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^code_execution_\d{8}$/.test(tool.type) && !tools.some((candidate) => isObject(candidate) && typeof candidate.type === "string" && /^web_(?:search|fetch)_\d{8}$/.test(candidate.type) && candidate.type.slice(-8) >= "20260209")) return "hosted_tool_fee";

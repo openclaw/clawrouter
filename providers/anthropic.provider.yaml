@@ -196,6 +196,7 @@ endpoints:
     requestHeaders: [anthropic-beta, anthropic-version]
     requestFormat: anthropic.messages
     responseFormat: anthropic.messages
+    toolPricing: {"version": "anthropic-web-search-2026-10-21", "effectiveAt": "2026-10-21", "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool#usage-and-pricing", "webSearchMicrosPerCall": 10000, "previewMicrosPerCallByModel": {}}
     streaming: sse
     timeoutMs: 600000
   count_tokens:
