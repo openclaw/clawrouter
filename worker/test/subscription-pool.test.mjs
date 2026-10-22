@@ -80,7 +80,7 @@ test("429 one-shot failover selects environment transport and accounts the final
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     const headers = new Headers(init.headers); sent.push(headers);
     return headers.has("authorization") ? Response.json({ error: "synthetic quota rejection" }, { status: 429 })
-      : Response.json({ id: "synthetic-message", type: "message", content: [{ type: "text", text: "synthetic" }], usage: { input_tokens: 20, output_tokens: 3 } });
+      : Response.json({ id: "synthetic-message", type: "message", content: [{ type: "text", text: "synthetic" }], usage: { input_tokens: 20, output_tokens: 3, speed: "standard", inference_geo: "global", service_tier: "standard" } });
   });
   const response = await handler.fetch(new Request("https://router.example/v1/messages", { method: "POST", headers: { authorization: "Bearer clawrouter-live-client-synthetic-client", "content-type": "application/json" }, body: JSON.stringify({ model: "anthropic/claude-sonnet-5", max_tokens: 10, messages: [{ role: "user", content: "synthetic" }] }) }), f.env, f.context);
   assert.equal(response.status, 200, await response.clone().text());
@@ -89,7 +89,8 @@ test("429 one-shot failover selects environment transport and accounts the final
   await response.text(); while (f.pending.length) await Promise.all(f.pending.splice(0));
   assert.equal(sent.length, 2); assert.equal(sent[1].has("authorization"), false);
   assert.equal(f.events.length, 1); assert.equal(f.events[0].grant_key, null); assert.equal(f.events[0].grant_lane, "environment");
-  assert.ok(f.events[0].actual_cost_micros > 0);
+  assert.equal(f.events[0].actual_cost_micros, 70);
+  assert.equal(f.events[0].cost_basis, "manifest_pricing");
 });
 
 test("profile facts survive header observations; throttled probes keep readings and honor Retry-After", async t => {
@@ -336,7 +337,7 @@ test("null allowlist preserves native inference and Opus 5.5 uses its compiled p
   await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     assert.equal(JSON.parse(init.body).model, "claude-opus-5-5");
-    return Response.json({ id: "synthetic", type: "message", content: [], usage: { input_tokens: 10, output_tokens: 1 } });
+    return Response.json({ id: "synthetic", type: "message", content: [], usage: { input_tokens: 10, output_tokens: 1, speed: "standard", inference_geo: "global", service_tier: "standard" } });
   });
   const response = await handler.fetch(new Request("https://router.example/v1/messages", { method: "POST", headers, body: JSON.stringify({ model: "anthropic/claude-opus-5-5", max_tokens: 1, messages: [] }) }), f.env, f.context);
   assert.equal(response.status, 200, await response.clone().text()); await response.text();
@@ -344,6 +345,10 @@ test("null allowlist preserves native inference and Opus 5.5 uses its compiled p
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].pricing_ref, "anthropic-claude-opus-5-5-standard-2026-10-11");
   assert.equal(f.events[0].actual_cost_micros, 60, "10 input and 1 output tokens are settled at the compiled Opus 5.5 rates");
+  assert.equal(f.events[0].cost_basis, "manifest_pricing");
+  const model = provider.models.find(model => model.id === "anthropic/claude-opus-5-5");
+  assert.equal(model.pricing_ref, "anthropic-claude-opus-5-5-standard-2026-10-11");
+  assert.deepEqual(model.pricing, { effectiveAt: "2026-10-11", source: "https://platform.claude.com/docs/en/about-claude/pricing", inputMicrosPerMillion: 4000000, cachedInputMicrosPerMillion: 200000, cacheWrite5mInputMicrosPerMillion: 5000000, cacheWrite1hInputMicrosPerMillion: 8000000, outputMicrosPerMillion: 20000000, maxInputTokens: 1000000, defaultMaxOutputTokens: 128000, cacheWriteInputMicrosPerMillion: null, maxRequestInputTokens: null, inputTokenOverhead: 1024, longContext: null });
 });
 
 test("pool is opt-in, scope-bound, explicitly projected, and shares scoped reserve eligibility", async t => {

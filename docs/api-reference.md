@@ -195,6 +195,37 @@ budgets, and request-retention policy apply. The bundled route uses OpenAI's
 default global API endpoint; regional processing endpoints/premiums are not
 configured by this feature.
 
+## Anthropic Messages pricing
+
+Native, unified and manifest Anthropic Messages routes apply the published 2×
+fast-mode price on supported Opus models and the 1.1× US inference price across
+input, output, cache reads and cache writes. The multipliers compose.
+
+Omitted or null `inference_geo` can inherit the upstream workspace default, so
+geo-capable models reserve at 1.1×: **10% more than global pricing**, which can
+cause HTTP 402 near a budget boundary. Explicit `global` reserves at 1×.
+Settlement prefers response usage. Null modifier fields and response geography
+`not_available` are unreported: use the request's rate or the conservative
+admission rate (1.1× on geo-capable models, base on older models), not zero.
+SSE deltas cannot erase earlier reported modifiers with unreported values.
+
+Omitted, null or `auto` service tier remains admitted at the standard rate,
+without rewriting the upstream request. Unsupported request modifiers return
+HTTP 400 `pricing_required` under hard budgets before dispatch. Explicit response
+`priority`, `batch` or unknown modifiers without a published tariff instead
+return HTTP 502 `pricing_required`; SSE emits an `error` frame in place of
+`message_stop`, possibly after HTTP 200 headers and partial content. The dispatched
+reservation is retained as `unpriced_usage`, not a provider-invoice claim. Legacy
+Priority accounts should request `standard_only` or use a fixed policy price;
+a failed response cannot undo paid work, and blind retries can pay again.
+
+Hard-budget JSON responses and individual SSE events exceeding the 2 MiB price
+inspection bound also fail with `pricing_required`. Fixed-price contracts and
+soft/unmetered passthrough are unchanged; truly unknown soft/unmetered prices
+report `unpriced_usage` without inventing a charge. See
+[Anthropic price modifiers](anthropic-price-modifiers.md) for model support,
+sources and limitations.
+
 ## Responses continuation contract
 
 Responses HTTP/SSE and WebSocket routes preserve upstream `previous_response_id` and

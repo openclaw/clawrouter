@@ -1,9 +1,11 @@
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
+import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 
 export interface UsageTokens {
   webSearchRequests?: number | null; // Anthropic cumulative usage, not content-block count.
   image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
+  anthropic?: AnthropicModifiers;
   input: number | null;
   output: number | null;
   total: number | null;
@@ -38,9 +40,10 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   // not bill it. Keep observed counts separate from the settlement decision.
   const unbilled = root?.type === "message" && root.stop_reason === "refusal"
     && Array.isArray(root.content) && root.content.length === 0 && output === 0;
-  const serviceTier = extractServiceTier(record(root?.response) ?? root);
+  const modifiers = anthropicModifiers(usage);
+  const serviceTier = modifiers.serviceTier !== undefined ? modifiers.serviceTier : extractServiceTier(record(root?.response) ?? root);
   const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
 }
 
 function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null): number | null {
@@ -183,7 +186,7 @@ export function createSseUsageAccumulator() {
       if (delta) {
         // Cumulative deltas omit unchanged counters. Merge before normalizing
         // so disjoint cache input is added once, never once per frame.
-        const updates = Object.fromEntries(Object.entries(delta).filter(([, value]) => value != null));
+        const updates = Object.fromEntries(Object.entries(delta).filter(([key, value]) => value != null && !(key === "inference_geo" && value === "not_available")));
         const creation = record(updates.cache_creation);
         if (creation) updates.cache_creation = { ...record(messageUsage.cache_creation), ...creation };
         Object.assign(messageUsage, updates);
@@ -248,6 +251,7 @@ function messageCounters(usage: Record<string, unknown> | null): Record<string, 
   if (Object.hasOwn(usage, "server_tool_use") && (!serverTools || Object.hasOwn(serverTools, "web_search_requests"))) {
     counters.server_tool_use = { web_search_requests: searchRequests(serverTools?.web_search_requests) };
   }
+  for (const key of ["speed", "inference_geo", "service_tier"]) if (Object.hasOwn(usage, key)) counters[key] = usage[key] === null ? null : typeof usage[key] === "string" && usage[key].length <= 64 ? usage[key] : "invalid";
   const creation = record(usage.cache_creation);
   if (creation) counters.cache_creation = Object.fromEntries(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"].filter(key => numeric(creation[key]) != null).map(key => [key, creation[key]]));
   return counters;

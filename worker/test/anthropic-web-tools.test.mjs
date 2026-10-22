@@ -13,7 +13,7 @@ const provider = snapshot.providers.find(row => row.id === "anthropic");
 const endpoint = provider.endpoints.find(row => row.id === "messages");
 const model = provider.models.find(row => row.id === "anthropic/claude-opus-5-5");
 const body = { max_tokens: 32, tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }] };
-const usage = { input_tokens: 1000, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, server_tool_use: { web_search_requests: 2 } };
+const usage = { speed: "standard", inference_geo: "global", service_tier: "standard", input_tokens: 1000, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, server_tool_use: { web_search_requests: 2 } };
 const message = counters => ({ type: "message", content: [], usage: counters });
 const frames = counters => [{ type: "message_start", message: message({ ...usage, output_tokens: 0, server_tool_use: { web_search_requests: 1 } }) }, { type: "message_delta", usage: counters }, { type: "message_delta", usage: { output_tokens: 20 } }, { type: "message_stop" }];
 

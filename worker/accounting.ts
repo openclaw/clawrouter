@@ -48,6 +48,7 @@ export function validateBudgetReservation(capability: string, cost: EstimatedCos
   if (policyLimit == null && providerLimit == null && dailyLimit == null && weeklyLimit == null) return false;
   if (policyLimit === 0) throw new HttpError(402, "budget_exhausted", withLimitHint("proxy key budget is exhausted", { limitHint }));
   if (providerLimit === 0) throw new HttpError(402, "provider_budget_exhausted", `provider ${connection?.providerId ?? "unknown"} monthly budget is exhausted`);
+  if (cost.basis === "unpriced_modifier") throw new HttpError(400, "pricing_required", "Anthropic speed, inference geography or service tier is unsupported or has no published price; use supported modifiers or configure a fixed policy request price");
   if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
   if (cost.pricingGap === "audio_upload_bound") throw new HttpError(400, "pricing_required", "transcription uploads have no source-qualified whole-request token ceiling; enforced budgets require a qualified envelope or explicit fixed policy price");
   if (cost.pricingGap === "opaque_input_bound") throw new HttpError(400, "pricing_required", "opaque Responses input requires a valid manifest input bound or a fixed policy request price");

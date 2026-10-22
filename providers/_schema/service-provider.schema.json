@@ -1160,6 +1160,18 @@
         "maxInputCharacters": { "const": 4096 }
       }
     },
+    "anthropicPriceModifiers": {
+      "type": "object",
+      "required": ["sources", "checkedAt", "fastMultiplier", "usMultiplier", "serviceTiers"],
+      "additionalProperties": false,
+      "properties": {
+        "sources": { "$ref": "#/$defs/modelRequestParameters/properties/sources" },
+        "checkedAt": { "type": "string", "format": "date" },
+        "fastMultiplier": { "enum": [2, null] },
+        "usMultiplier": { "enum": [1.1, null] },
+        "serviceTiers": { "const": ["standard"] }
+      }
+    },
     "tokenPricing": {
       "type": "object",
       "required": [
@@ -1186,6 +1198,7 @@
         "inputTokenOverhead": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "unpricedCosts": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "enum": ["request_fee"] } },
         "settlementBasis": { "enum": ["published_upper_bound"] },
+        "anthropicModifiers": { "$ref": "#/$defs/anthropicPriceModifiers" },
         "longContext": { "$ref": "#/$defs/longContextPricing" },
         "serviceTiers": {
           "type": "array",

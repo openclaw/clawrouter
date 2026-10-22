@@ -52,7 +52,7 @@ test("workerd admits a budgeted Claude image turn at its visual-token bound and 
     await kv.put("oauth/fixture/anthropic", JSON.stringify({ provider: "anthropic", kind: "api_key", enabled: true, credential: "fixture-pool-anthropic-key", updatedAt: "2026-01-01T00:00:00Z" }));
     await kv.put("connections/anthropic", JSON.stringify({ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }));
     const origin = await mf.ready;
-    const body = { model: "anthropic/claude-opus-5-5", max_tokens: 128_000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png(1920, 1080) } }, { type: "text", text: "Describe it." }] }] };
+    const body = { model: "anthropic/claude-opus-5-5", inference_geo: "global", max_tokens: 128_000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: png(1920, 1080) } }, { type: "text", text: "Describe it." }] }] };
     const headers = { authorization: `Bearer clawrouter-live-fixture-${secret}` };
     const send = (payload) => fetch(new URL("/v1/messages", origin), { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(10_000) });
 

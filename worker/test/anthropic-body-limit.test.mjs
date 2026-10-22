@@ -72,14 +72,14 @@ const upstream = `export default { async fetch(request) {
  const body=JSON.parse(text);
  if(body.metadata?.user_id==="reject")return Response.json({type:"error",error:{type:"api_error",message:"fixture"}},{status:500});
  if(body.metadata?.user_id==="stream")return new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('event: message_start\\ndata: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}\\n\\n'));},async pull(c){await new Promise(resolve=>setTimeout(resolve,50));c.enqueue(new TextEncoder().encode(': keepalive\\n\\n'));}}),{headers:{"content-type":"text/event-stream"}});
- if(typeof body.messages[0].content==="string")return Response.json({type:"message",content:[{type:"text",text:JSON.stringify({messages:body.messages.length,values:body.messages[1]?.content?.[0]?.input?.values??null})}],stop_reason:"end_turn",usage:{input_tokens:10,output_tokens:1}});
+ if(typeof body.messages[0].content==="string")return Response.json({type:"message",content:[{type:"text",text:JSON.stringify({messages:body.messages.length,values:body.messages[1]?.content?.[0]?.input?.values??null})}],stop_reason:"end_turn",usage:{input_tokens:10,output_tokens:1,speed:"standard",inference_geo:"global",service_tier:"standard"}});
  const blocks=body.messages[0].content;
  if(body.model!=="claude-opus-5-5" || !Array.isArray(blocks) || !blocks.length) throw Error("lost native request");
  // Inspect forwarded media, not just the response status: the complete large
  // strings must survive ingress, provider transforms, pricing and dispatch.
  const lengths=blocks.map(block=>block.source.data.length);
  if(request.url.endsWith("count_tokens")) return Response.json({input_tokens:123,lengths});
- return Response.json({type:"message",content:[{type:"text",text:JSON.stringify(lengths)}],stop_reason:"end_turn",usage:{input_tokens:10,output_tokens:1}});
+ return Response.json({type:"message",content:[{type:"text",text:JSON.stringify(lengths)}],stop_reason:"end_turn",usage:{input_tokens:10,output_tokens:1,speed:"standard",inference_geo:"global",service_tier:"standard"}});
 }};`;
 
 function png() {

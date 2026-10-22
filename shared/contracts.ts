@@ -4,7 +4,10 @@ import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-re
 export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
 export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
 export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
-export interface TokenPricing extends TokenRates { unit?: never; effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
+// Native Messages modifiers are independent of OpenAI service-tier tariffs.
+// Null means no qualified premium; it never prevents standard/default admission.
+export interface AnthropicPriceModifiers { sources: string[]; checkedAt: string; fastMultiplier: 2 | null; usMultiplier: 1.1 | null; serviceTiers: ["standard"] }
+export interface TokenPricing extends TokenRates { unit?: never; effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; anthropicModifiers?: AnthropicPriceModifiers; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
 export interface CharacterPricing { unit: "character"; effectiveAt: string; source: string; inputMicrosPerMillionCharacters: number; maxInputCharacters: number }
 // Image generation uses modality-specific usage, not an ordinary chat token card.
 export interface ImageTokenPricing {

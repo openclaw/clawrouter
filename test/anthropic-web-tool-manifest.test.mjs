@@ -12,7 +12,11 @@ test("compiler binds the Claude search tariff only to a Messages generation endp
   const root = mkdtempSync(join(tmpdir(), "clawrouter-claude-tariff-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   function compile(mutate = () => {}) {
-    const manifest = structuredClone(original); mutate(manifest);
+    const manifest = structuredClone(original);
+    // Isolate hosted-tool endpoint validation from the independent modifier-card
+    // guard, which also rejects a changed Messages wire format.
+    for (const model of manifest.models.entries) delete model.pricing.anthropicModifiers;
+    mutate(manifest);
     const input = join(root, "provider.yaml"); writeFileSync(input, stringify(manifest));
     return spawnSync(process.execPath, ["scripts/compile-providers.mjs", input], { encoding: "utf8" });
   }

@@ -1,5 +1,7 @@
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
+import { anthropicPricing } from "./anthropic-pricing.ts";
+import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { softBudget } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
@@ -410,6 +412,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
   let response: Response | undefined;
+  let priceGuard: AnthropicPriceGuard | undefined;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
@@ -472,6 +475,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
     response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    // Price inspection reads delivery bytes, not initial-response headers.
+    // Retire only the timer; caller cancellation remains connected through EOF.
+    operation.retireDeadline();
+    if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && auth.policy.requestCostMicros == null) {
+      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
+      response = priceGuard.response;
+    }
   } catch (error) {
     soft?.close();
     if (soft?.denial) {
@@ -513,9 +523,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (admission) admission.completion = observed.result;
   if (background) {
     if (!response.ok || operation.receivedRejection) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
-  } else context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation!, content, operation.status)));
+  } else context.waitUntil(observed.result.then(result => {
+    const failure = priceGuard?.failure();
+    // Replacing an unpriced response doesn't undo the dispatched work. Retain
+    // the hard reservation and record the original usage, not a free rejection.
+    return failure ? accounting.pricingFailure(failure.tokens, reservation!, content)
+      : accounting.complete(observed.response, result, reservation!, content, operation.status);
+  }));
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
+  // Header sanitization strips upstream router-code spoofing. Only a verified
+  // local JSON replacement may restore this diagnostic; SSE fails after headers.
+  if (priceGuard?.failure() && response.status === 502) outputHeaders.set("x-clawrouter-error-code", "pricing_required");
   outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}`);
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");

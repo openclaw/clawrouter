@@ -32,7 +32,7 @@ function png(width, height) {
 // 1h cache marker on the newest block and the Claude 5 128k output ceiling.
 function screenshotTurn(source) {
   return {
-    model, max_tokens: 128_000, stream: false,
+    model, max_tokens: 128_000, stream: false, inference_geo: "global",
     messages: [
       { role: "user", content: [{ type: "text", text: "Open the dashboard and tell me what you see." }] },
       { role: "assistant", content: [{ type: "tool_use", id: "toolu_fixture", name: "browser", input: { action: "screenshot" } }] },
