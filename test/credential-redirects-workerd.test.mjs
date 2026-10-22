@@ -111,7 +111,10 @@ for (const requestFormat of ["form", "json"]) test(`workerd ${requestFormat} ref
     const calls = await noReplay(f);
     const sent = requestFormat === "json" ? JSON.parse(calls[0].body) : Object.fromEntries(new URLSearchParams(calls[0].body));
     assert.equal(sent.refresh_token, g.refreshToken); assert.equal(sent.client_secret, "fixture-client-secret");
-    assert.equal(response.status, 502); assert.equal((await response.json()).error.code, "grant_refresh_failed");
+    assert.equal(response.status, 502); assert.equal(response.headers.get("location"), null);
+    const error = (await response.json()).error;
+    assert.equal(error.code, "grant_refresh_failed");
+    assert.equal(error.message, `provider openai rejected the refresh request (HTTP ${config.status} redirect)`);
     const { record, alarm } = await g.state();
     assert.equal(record.status, "active"); assert.equal(record.enabled, true); assert.equal(record.revokedAt, null);
     assert.equal(record.refreshDiagnosis.failure.failureClass, "transient"); assert.equal(record.refreshDiagnosis.failure.httpStatus, config.status);
@@ -190,7 +193,11 @@ test("workerd OAuth exchange redirects cannot replay code, verifier or client se
     await f.configure(config); const { grantKey, response } = await callback();
     const calls = await noReplay(f), sent = new URLSearchParams(calls[0].body);
     assert.equal(sent.get("code"), "fixture-auth-code"); assert.equal(sent.get("code_verifier"), "fixture-verifier"); assert.equal(sent.get("client_secret"), "fixture-client-secret");
-    assert.equal(response.status, 400); assert.match(await response.text(), /Provider token exchange failed/);
+    assert.equal(response.status, 400); assert.equal(response.headers.get("location"), null);
+    const page = await response.text();
+    assert.match(page, /Connection failed/);
+    assert.ok(page.includes(`Provider token exchange failed (HTTP ${config.status} redirect).`));
+    assert.doesNotMatch(page, /invalid_grant|redirect-target|fixture-auth-code|fixture-verifier|fixture-client-secret/);
     assert.equal(await f.kv.get(grantKey), null);
   });
   await t.test("successful exchange still saves the connection", async () => {

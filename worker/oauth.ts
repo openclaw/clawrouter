@@ -54,7 +54,7 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   }
   if (tokenResponse.status >= 300 && tokenResponse.status < 400) {
     await tokenResponse.body?.cancel().catch(() => undefined);
-    return callbackPage(false, "Provider token exchange failed.");
+    return callbackPage(false, `Provider token exchange failed (HTTP ${tokenResponse.status} redirect).`);
   }
   const payload: Record<string, unknown> = await tokenResponse.json<Record<string, unknown>>().catch(() => ({}));
   if (!tokenResponse.ok || typeof payload.access_token !== "string") return callbackPage(false, "Provider token exchange failed.");

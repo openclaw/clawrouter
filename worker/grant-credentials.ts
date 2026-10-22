@@ -352,7 +352,7 @@ export class GrantCredentialObject implements DurableObject {
     if (response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => undefined);
       await this.recordRefreshFailure(record, response.status, "invalid_response", "transient", response.headers.get("retry-after"));
-      throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
+      throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request (HTTP ${response.status} redirect)`);
     }
     let payload: Record<string, unknown>;
     try { payload = await boundedRefreshJson(response); }

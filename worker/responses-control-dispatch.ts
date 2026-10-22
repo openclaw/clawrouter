@@ -77,7 +77,9 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
   signal.throwIfAborted();
   if (input.owner.grantKey) {
     const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(input.owner.grantKey));
-    return stub.fetch("https://clawrouter.internal/responses/control", { method: "POST", body: JSON.stringify(input), signal });
+    // The owner returns the upstream response unchanged. Its internal transport
+    // must not follow that response before the public boundary can reject it.
+    return stub.fetch("https://clawrouter.internal/responses/control", { method: "POST", body: JSON.stringify(input), signal, redirect: "manual" });
   }
   const preparation = new HttpOperation(signal, 10_000);
   try {
