@@ -11,12 +11,14 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 const router = `
 import worker, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';
 import { putGrantCredentials, revokeGrantCredentials } from './worker/grant-credentials.ts';
+import { snapshot } from './worker/providers.ts';
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject };
 export default { ...worker, async fetch(request, env, context) {
  const path = new URL(request.url).pathname;
  if (path === '/fixture/object') { const b = await request.json(); const ns = env[b.binding]; return ns.get(ns.idFromName(b.name)).fetch('https://authority'+b.path, {method:'POST',body:JSON.stringify(b.value)}); }
  if (path === '/fixture/grant') { const b = await request.json(); return Response.json(b.revoke ? await revokeGrantCredentials(env,b.key) : await putGrantCredentials(env,b.key,b.grant)); }
  if (path === '/fixture/upstream') return fetch('https://upstream/fixture', {method:'POST',body:request.body});
+ if (path === '/fixture/decision-only') { const model=snapshot.providers.find(p=>p.id==='openai').models.find(m=>m.id==='openai/gpt-6-luna'); if(!model.nativeCapabilities?.endpoints.decisions) return new Response('missing Decisions declaration',{status:500}); model.capabilities=['llm.decisions']; model.nativeCapabilities.endpoints={decisions:model.nativeCapabilities.endpoints.decisions}; delete model.requestParameters; return new Response('ok'); }
  return worker.fetch(request,env,context);
 }, async queue(batch) {
  await fetch('https://upstream/events', {method:'POST',body:JSON.stringify(batch.messages.map(m=>m.body))}); batch.ackAll();
@@ -178,4 +180,55 @@ test('metadata parsing fails closed on oversized/non-model payloads and rewritte
  await f.state([{body:{object:'list',data:[openai('gpt-6-astra'),openai('private-hidden')]},headers:{etag:'private-hidden',location:'/private-hidden','last-modified':'Wed, 01 Jan 2025 00:00:00 GMT','cache-control':'public, max-age=3600'}}]);
  const safe=await f.call('/v1/native/openai/v1/models'); assert.equal(safe.status,200); assert.equal(safe.headers.get('etag'),null); assert.equal(safe.headers.get('location'),null); assert.equal(safe.headers.get('last-modified'),null); assert.match(safe.headers.get('cache-control'),/private, no-store/); assert.ok(!(await safe.text()).includes('private-hidden'));
  const events=await f.events(4); assert.ok(events.every(e=>e.actual_cost_micros===0));
+});
+
+
+test('Decisions catalog composes with opaque native and manifest model metadata', async t => {
+ const f=await fixture(t);
+ const catalogResponse=await f.call('/v1/catalog'); assert.equal(catalogResponse.status,200);
+ const provider=(await catalogResponse.json()).providers.find(p=>p.id==='openai');
+ const luna=provider.models.find(m=>m.id==='openai/gpt-6-luna');
+ assert.ok(luna.capabilities.includes('llm.decisions'));
+ assert.equal(luna.nativeCapabilities.endpoints.decisions.inference.chat,false);
+ assert.equal(luna.nativeCapabilities.endpoints.decisions.inference.decision.limits.maxQuestions,400);
+ assert.ok(provider.offers.some(o=>o.modelId===luna.id&&o.endpoint==='decisions'&&o.eligible));
+ const aggregate=await (await f.call('/v1/models')).json();
+ assert.ok(aggregate.data.find(m=>m.id===luna.id).capabilities.includes('llm.decisions'));
+ const decisionOnly={...openai('fixture-decisions-only'),inference:{chat:false,decision:true}};
+ await f.updatePolicy({models:['openai/'+decisionOnly.id]});
+ const list={object:'list',data:[decisionOnly]};
+ let expected=0;
+ for(const [path,body] of [
+  ['/v1/native/openai/v1/models',list],
+  ['/v1/native/openai/v1/models/'+decisionOnly.id,decisionOnly],
+  ['/v1/proxy/openai/models_list',list],
+  ['/v1/proxy/openai/models_retrieve?model_id='+decisionOnly.id,decisionOnly],
+ ]) {
+  await f.reply(body); const response=await f.call(path); assert.equal(response.status,200,await response.clone().text());
+  assert.deepEqual(await response.json(),body,'upstream metadata must not acquire inferred Chat/Responses capability claims');
+  const call=(await f.state()).calls.at(-1); assert.equal(call.method,'GET'); assert.equal(call.body,'');
+  assert.equal(call.headers.authorization,'Bearer synthetic-openai-key');
+  expected++; const event=(await f.events(expected)).at(-1); assert.equal(event.actual_cost_micros,0); assert.equal(event.reserved_cost_micros,0);
+ }
+ const scopedCatalog=await (await f.call('/v1/catalog')).json();
+ assert.deepEqual(scopedCatalog.providers.find(p=>p.id==='openai').models,[],'grant metadata is not a fabricated local inference declaration');
+ assert.deepEqual((await (await f.call('/v1/models')).json()).data,[]);
+ assert.equal((await f.state()).calls.length,4,'local catalog projection must not call upstream');
+});
+
+
+test('decision-only catalog rows never gain Chat or Responses capabilities', async t => {
+ const f=await fixture(t); await f.updatePolicy({models:['openai/gpt-6-luna']});
+ // Only the compiled declaration is synthetic; authorization, grant/budget
+ // eligibility, native-capability projection and catalog serialization stay real.
+ const configured=await f.call('/fixture/decision-only',{method:'POST'}); assert.equal(configured.status,200,await configured.text());
+ const response=await f.call('/v1/catalog'); assert.equal(response.status,200);
+ const view=(await response.json()).providers.find(p=>p.id==='openai');
+ assert.deepEqual(view.models.map(m=>({id:m.id,capabilities:m.capabilities})),[{id:'openai/gpt-6-luna',capabilities:['llm.decisions']}]);
+ assert.deepEqual(Object.keys(view.models[0].nativeCapabilities.endpoints),['decisions']);
+ const offers=view.offers.filter(o=>o.modelId==='openai/gpt-6-luna'); assert.ok(offers.length>0);
+ assert.ok(offers.every(o=>o.endpoint==='decisions'&&o.eligible));
+ const models=await (await f.call('/v1/models')).json();
+ assert.deepEqual(models.data.map(m=>({id:m.id,capabilities:m.capabilities})),[{id:'openai/gpt-6-luna',capabilities:['llm.decisions']}]);
+ assert.equal((await f.state()).calls.length,0,'local compiled capability projection must not probe upstream');
 });

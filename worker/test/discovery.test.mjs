@@ -6,7 +6,6 @@ const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } 
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
 const { listHealth, snapshot } = await import("../providers.ts");
-
 test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);
@@ -31,7 +30,6 @@ test("Worker catalog reads known health in one bulk request without a KV listing
   assert.equal(catalog.providers.find(({ id }) => id === "openai").readiness.verified, true);
   assert.deepEqual(calls, [{ method: "get", key: keys, type: "json" }]);
 });
-
 test("Worker catalog uses one admission before independent health and config reads", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const get = fixture.env.POLICY_KV.get, started = [];
@@ -52,7 +50,6 @@ test("Worker catalog uses one admission before independent health and config rea
     assert.equal(started.length, 0, `${state}: no discovery KV reads before authorization`);
   }
 });
-
 test("provider health bulk reads stay within the 100-key KV limit and ignore missing keys", async (t) => {
   const original = [...snapshot.providers];
   snapshot.providers.push(...Array.from({ length: 205 - original.length }, (_, index) => ({ id: `fixture-${index}` })));
@@ -71,7 +68,6 @@ test("provider health bulk reads stay within the 100-key KV limit and ignore mis
   assert.deepEqual(calls.flat(), snapshot.providers.map(({ id }) => `health/providers/${id}`));
   assert.deepEqual([...health], [["openai", record]]);
 });
-
 test("missing optional Lanseq credentials preserve health and other providers without advertising Lanseq", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.policy.providers.push("lanseq");
