@@ -125,6 +125,7 @@ test("native identity selection and correlation headers cross the actual Worker 
 
     await t.test("X-Client-Request-Id covers JSON native operations and stays out of Responses ownership", async t => {
       const operations = [
+        ["decisions", { model: "gpt-6-luna", input: "synthetic é", questions: [{ type: "predicate", name: "fixture", instructions: "Synthetic?" }] }],
         ["chat/completions", { model: "gpt-4.1-mini", messages: [{ role: "user", content: "synthetic é" }], max_completion_tokens: 8, service_tier: "default" }],
         ["embeddings", { model: "text-embedding-3-small", input: "synthetic é" }],
         ["audio/speech", { model: "tts-1", voice: "alloy", input: "synthetic é" }],
@@ -146,7 +147,7 @@ test("native identity selection and correlation headers cross the actual Worker 
       });
       // Exercise both environment dispatch and the actual credential-owner DO.
       assert.equal((await fetch(new URL("/fixture/openai-grant", origin))).status, 200);
-      const pooled = await send("/v1/native/openai/v1/responses", operations[4][1], { "x-client-request-id": "fixture-pooled-create" });
+      const pooled = await send("/v1/native/openai/v1/responses", operations.find(([path]) => path === "responses")[1], { "x-client-request-id": "fixture-pooled-create" });
       assert.equal(pooled.status, 200, await pooled.clone().text());
       await pooled.arrayBuffer();
       assert.equal((await calls()).at(-1).headers.authorization, "Bearer fixture-openai-pool");

@@ -123,7 +123,7 @@ endpoints:
   models_retrieve: { method: GET, path: "/v1/models/${model_id}", pathParams: [model_id], pathParamStyles: { model_id: opaque_segment }, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   realtime: {"requestHeaders":["X-Client-Request-Id"],"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state, X-Client-Request-Id], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
-  decisions: { path: /v1/decisions, requestFormat: openai.decisions, responseFormat: openai.decisions, timeoutMs: 120000 }
+  decisions: { path: /v1/decisions, requestHeaders: [X-Client-Request-Id], requestFormat: openai.decisions, responseFormat: openai.decisions, timeoutMs: 120000 }
   responses:
     modelPassthrough: {}
     path: /v1/responses
