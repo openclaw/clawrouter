@@ -19,6 +19,8 @@ export interface ResponseControlDispatch {
   query: string;
   stream: boolean;
   deadline?: number;
+  // Per-call diagnostics, not persisted ownership or an idempotency promise.
+  clientRequestId?: string;
   authorization: ResponseControlAuthorization;
 }
 
@@ -68,6 +70,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action])!;
   const url = urlFor(endpoint, { response_id: id.value });
   for (const [name, value] of query) url.searchParams.append(name, value);
+  if (input.clientRequestId) incoming.set("x-client-request-id", input.clientRequestId);
   copyRequestHeaders(incoming, provider, endpoint, headers, env);
   applyTransportHeaders(headers, upstream.transport, grant);
   return new Request(url, { method: endpoint.method, headers, redirect: "manual" });

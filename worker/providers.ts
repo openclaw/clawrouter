@@ -269,7 +269,10 @@ export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpo
 
 export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider, endpoint: CompiledEndpoint, target: Headers, env: Env): void {
   for (const name of [...provider.adapter.passthroughHeaders, ...endpoint.request_headers]) {
-    if (name.toLowerCase() === "x-clawrouter-background-recovery") continue;
+    const lower = name.toLowerCase();
+    // Caller-selected tenancy, profile trust grants and replay keys have no
+    // authorized owner binding. A manifest allowlist cannot grant authority.
+    if (["x-clawrouter-background-recovery", "anthropic-workspace-id", "anthropic-user-profile-id", "idempotency-key"].includes(lower)) continue;
     const value = incoming.get(name);
     if (value) target.set(name, value);
   }

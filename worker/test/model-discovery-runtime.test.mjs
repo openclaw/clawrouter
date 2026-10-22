@@ -76,12 +76,12 @@ test('native discovery and manifest envelopes use selected API-key grants, prese
    ['/v1/proxy/'+provider+'/models_retrieve',{method:'POST',body:JSON.stringify({method:'GET',pathParams:{model_id:model.id}})},model],
    ['/v1/models/'+encodeURIComponent(provider+'/'+model.id),{},model],
   ]) {
-   await f.reply(body);const r=await f.call(path,{...init,headers:{'content-type':'application/json','anthropic-version':'2023-06-01','anthropic-beta':'fixture-beta','anthropic-workspace-id':'workspace-fixture','OpenAI-Project':'project-fixture'}});
+   await f.reply(body);const r=await f.call(path,{...init,headers:{'content-type':'application/json','anthropic-version':'2023-06-01','anthropic-beta':'fixture-beta','OpenAI-Project':'project-fixture'}});
    assert.equal(r.status,200,await r.clone().text());assert.deepEqual(await r.json(),body);assert.match(r.headers.get('cache-control'),/no-store/);
    const sent=(await f.state()).calls.at(-1);assert.equal(sent.method,'GET');assert.equal(sent.body,'');assert.equal(new URL(sent.url).origin,provider==='openai'?'https://api.openai.com':'https://api.anthropic.com');
    assert.equal(sent.headers[provider==='openai'?'authorization':'x-api-key'],provider==='openai'?'Bearer synthetic-openai-key':'synthetic-anthropic-key');
    assert.ok(!JSON.stringify(sent).includes('clawrouter-live'));assert.ok(!JSON.stringify(sent).includes('synthetic-subscription'));
-   if(provider==='anthropic'){assert.equal(sent.headers['anthropic-workspace-id'],'workspace-fixture');assert.equal(sent.headers['anthropic-beta'],'fixture-beta');}
+   if(provider==='anthropic'){assert.equal(sent.headers['anthropic-workspace-id'],undefined);assert.equal(sent.headers['anthropic-beta'],'fixture-beta');}
    else assert.equal(sent.headers['openai-project'],'project-fixture');
    expected++;const event=(await f.events(expected)).at(-1);assert.equal(event.actual_cost_micros,0);assert.equal(event.reserved_cost_micros,0);assert.equal(event.grant_key,'oauth/fixture/'+provider);assert.equal(event.cost_basis,'none');
   }
@@ -267,4 +267,34 @@ test('existing inference cooldown still blocks discovery without upstream egress
  const denied=await f.call('/v1/native/openai/v1/models'); assert.equal(denied.status,429); assert.ok(Number(denied.headers.get('retry-after'))>0); await denied.text();
  assert.equal((await f.state()).calls.length,before);
  const catalog=await (await f.call('/v1/catalog')).json(); assert.ok(catalog.providers.find(p=>p.id==='openai').offers.filter(o=>o.endpoint.startsWith('models_')).every(o=>!o.eligible));
+});
+
+test('caller-selected Anthropic workspace is refused for discovery without egress', async t => {
+ const f=await fixture(t); const before=(await f.state()).calls.length;
+ for (const path of ['/v1/native/anthropic/v1/models','/v1/proxy/anthropic/models_list','/v1/native/anthropic/v1/models/claude-sonnet-4-6']) {
+  const r=await f.call(path,{headers:{'anthropic-version':'2023-06-01','anthropic-workspace-id':'workspace-fixture'}});
+  assert.equal(r.status,403); const body=await r.json(); assert.equal(body.error.type,'permission_error'); assert.ok(!JSON.stringify(body).includes('workspace-fixture'));
+ }
+ assert.equal((await f.state()).calls.length,before);
+});
+
+test('OpenAI discovery forwards per-call diagnostic IDs without replay keys', async t => {
+ const f=await fixture(t), model=openai('custom:fixture');
+ const before=(await f.state()).calls.length;
+ for (const [path,body] of [
+  ['/v1/native/openai/v1/models',{object:'list',data:[model]}],
+  ['/v1/proxy/openai/models_list',{object:'list',data:[model]}],
+  ['/v1/native/openai/v1/models/'+model.id,model],
+  ['/v1/proxy/openai/models_retrieve?model_id='+encodeURIComponent(model.id),model],
+ ]) {
+  const id='fixture-discovery-'+path.replaceAll('/','-');
+  await f.reply(body); const r=await f.call(path,{headers:{'X-Client-Request-Id':id,'Idempotency-Key':'fixture-unbound-replay'}});
+  assert.equal(r.status,200,await r.clone().text()); assert.deepEqual(await r.json(),body);
+  const call=(await f.state()).calls.at(-1);
+  assert.equal(call.headers['x-client-request-id'],id);
+  assert.equal(call.headers['idempotency-key'],undefined);
+  assert.equal(call.headers.authorization,'Bearer synthetic-openai-key');
+  assert.equal(call.method,'GET'); assert.equal(call.body,'');
+ }
+ assert.equal((await f.state()).calls.length,before+4,'exactly one upstream request per discovery call');
 });
