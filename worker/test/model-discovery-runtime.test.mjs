@@ -37,7 +37,7 @@ export class Upstream {
  calls.push({url:request.url,method:request.method,headers:Object.fromEntries(request.headers),body:await request.text()}); await this.storage.put('calls',calls);
  const replies=await this.storage.get('replies')??[], reply=replies.length>1?replies.shift():replies[0]; await this.storage.put('replies',replies);
  if(reply?.disconnect) throw new Error('synthetic upstream failure');
- return new Response(reply?.wire??JSON.stringify(reply?.body??{}),{status:reply?.status??200,headers:{'content-type':'application/json','x-request-id':'upstream-fixture',...reply?.headers}});
+ return new Response(reply?.status===304?null:reply?.wire??JSON.stringify(reply?.body??{}),{status:reply?.status??200,headers:{'content-type':'application/json','x-request-id':'upstream-fixture',...reply?.headers}});
  }
 }
 export default {fetch(request,env){return env.UPSTREAM.get(env.UPSTREAM.idFromName('fixture')).fetch(request);}};
@@ -297,4 +297,33 @@ test('OpenAI discovery forwards per-call diagnostic IDs without replay keys', as
   assert.equal(call.method,'GET'); assert.equal(call.body,'');
  }
  assert.equal((await f.state()).calls.length,before+4,'exactly one upstream request per discovery call');
+});
+
+for (const surface of ['native','manifest']) test(surface+' internal discovery redirects fail closed as provider unavailable', async t => {
+ const f=await fixture(t); await f.updatePolicy({models:['anthropic/claude-sonnet-4-6']});
+ const path=surface==='native'?'/v1/native/anthropic/v1/models':'/v1/proxy/anthropic/models_list';
+ const redirects=[301,302,303,307,308].flatMap(status=>[false,true].map(crossOrigin=>({status,crossOrigin})));
+ redirects.push(...[300,304,399].map(status=>({status,noLocation:true})));
+ let expected=0;
+ for (const config of redirects) await t.test(JSON.stringify(config), async () => {
+  const before=(await f.state()).calls.length;
+  await f.state([
+   {body:page([anthropic('hidden-private')],true)},
+   {status:config.status,body:{private:'hidden-redirect-body'},headers:{'retry-after':'900',...(config.noLocation?{}:{location:config.crossOrigin?'https://redirect.example/redirect-target?secret=hidden-location':'/redirect-target?secret=hidden-location'})}},
+  ]);
+  const response=await f.call(path);
+  assert.equal(response.status,502,await response.clone().text());
+  assert.equal(response.headers.get('location'),null); assert.equal(response.headers.get('retry-after'),null);
+  assert.deepEqual(await response.json(),{error:{code:'provider_unavailable',message:'upstream request to provider anthropic failed'}});
+  await f.drain();
+  const calls=(await f.state()).calls.slice(before);
+  assert.equal(calls.length,2,'only the initial and internal page may receive traffic; no redirect follow/replay');
+  for (const call of calls) {
+   const url=new URL(call.url); assert.equal(url.origin,'https://api.anthropic.com'); assert.equal(url.pathname,'/v1/models');
+   assert.equal(call.method,'GET'); assert.equal(call.body,''); assert.equal(call.headers['x-api-key'],'synthetic-anthropic-key');
+  }
+  assert.equal(new URL(calls[0].url).search,''); assert.equal(new URL(calls[1].url).searchParams.get('after_id'),'hidden-private');
+  const events=await f.events(++expected), event=events.at(-1);
+  assert.equal(event.capability,'models.list'); assert.equal(event.actual_cost_micros,0); assert.equal(event.reserved_cost_micros,0);
+ });
 });

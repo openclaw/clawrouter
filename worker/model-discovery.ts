@@ -84,6 +84,10 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
   const restricted = policy.models != null, seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
     if (!response.ok) {
+      if (response.status >= 300 && response.status < 400) {
+        void response.body?.cancel().catch(() => undefined);
+        return errorResponse("provider_unavailable", `upstream request to provider ${provider.id} failed`, 502);
+      }
       if (!restricted) { const headers = new Headers(response.headers); headers.set("cache-control", "private, no-store"); return new Response(response.body, { status: response.status, headers }); }
       void response.body?.cancel().catch(() => undefined);
       return errorResponse("model_discovery_rejected", "upstream rejected model discovery", response.status, undefined, { "retry-after": response.headers.get("retry-after") ?? "0" });
