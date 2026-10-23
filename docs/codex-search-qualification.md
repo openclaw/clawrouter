@@ -90,14 +90,20 @@ and [rollout history](codex-search-rollout.md) use this narrower qualification.
 
 The user confirmed browser inspection complete. FakeCo remains retained pending
 separate cleanup approval. The [current cleanup handoff](codex-search-cleanup-20261023.md)
-records the exact deletion set and approval batches; no cleanup has run.
+records the exact deletion set and approval batches. Approved batch 1 completed
+at 2026-10-23 09:28:51 UTC: bootstrap revoked, fixture route removed, fixture
+namespace deleted through its migration, and empty fixture Worker deleted.
+Both saved canary keys return 403 on inspection. Thirteen final checks passed:
+main FakeCo health/version and Access preserved, production unchanged, other
+Workers/routes/namespaces preserved, queues empty and spend unchanged. Receipt:
+`cleanup-batch1-verification-20261023.json`. Further cleanup is not authorized.
 
 Read-only reconciliation at 2026-10-23 09:24:19 UTC passed 14 checks: main/fixture
 restoration fingerprints match, all 36 Worker dependencies and 27 Access apps'
 policies inspected, no external resource references found, both queues drained,
 R2 empty including multipart uploads, and GitHub Environment entries exclusively
-run-owned. Search remains revoked; bootstrap active; settled router spend remains
-$3.614986. Safari verified the dedicated Access token; its API deletion permission
+run-owned. At that snapshot search was revoked and bootstrap active; settled router
+spend was $3.614986. Safari verified the dedicated Access token; its API deletion permission
 remains unqualified, requiring the manual browser step. No Cloudflare, GitHub or
 router application writes and no paid search calls during this inventory.
 Receipt: `cleanup-readonly-reconciliation-20261023.json` plus its hashed inputs.
@@ -105,13 +111,13 @@ Receipt: `cleanup-readonly-reconciliation-20261023.json` plus its hashed inputs.
 Earlier cap-denial qualification, 2026-10-23 03:54:29 UTC: search credential revoked,
 monthly policy cap equals settled spend ($3.614986), daily/weekly and provider
 monthly limits $50. Later direct provider probes are outside that router total.
-Last fixture restoration: normal version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`,
-prefix route `dd2ae4273551492db92c3b5ffc367529`, retained namespace
+Historical fixture restoration: normal version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`,
+prefix route `dd2ae4273551492db92c3b5ffc367529`, former namespace
 `148cbb6483b4421dbf8b25301a325865`; see `paired-retrieval-receipt.json`.
 Funnel/Serve were independently empty and port 18765 free at 08:45:20.683 UTC;
 there is no pending cleanup from that completed experiment. These are timestamped
-records preceding the refreshed inventory above. The fixture and spend remain
-unchanged. Funnel/Serve and port 18765 were checked again during reconciliation;
+records preceding the refreshed inventory and approved cleanup above. Fixture
+infrastructure is now absent; spend remains unchanged. Funnel/Serve and port 18765 were checked again during reconciliation;
 no exposure or listener remains.
 
 Before any future mutation, refresh the read-only ownership and credential
@@ -119,9 +125,10 @@ inventory. Cloudflare mutations still need explicit approval for each batch;
 browser inspection is complete. Historical registration IDs and exclusive
 experiment receipts must not be reused. The earlier release assessment itself
 made no live credential reads or remote queries; the later read-only inventory
-used targeted credential reads. No PR, push, deployment, live provider probe or
-remote resource change in either step. A local fixture cleanup build passed
-Wrangler's dry-run check without upload.
+used targeted credential reads. Neither step changed remote state. The later
+approved batch 1 made only the mutations listed above. No PR, push or live provider
+probe. The fixture cleanup build passed a local Wrangler dry run before approval;
+the approved deletion migration subsequently deployed once and was verified.
 
 ## Earlier assessment verification
 

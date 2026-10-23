@@ -1,8 +1,9 @@
 # FakeCo cleanup handoff — 2026-10-23
 
-Browser inspection: complete, confirmed by the user. Cleanup: **not authorized or
-executed**. Retain the environment until a separate mutation batch is approved.
-This plan supersedes historical cleanup identities, not the search qualification
+Browser inspection: complete, confirmed by the user. **Batch 1 completed** at
+2026-10-23 09:28:51 UTC after the user's separate approval. Further batches are
+not authorized. Main FakeCo remains available pending core-teardown approval.
+This handoff supersedes historical cleanup identities, not the search qualification
 limits in the [campaign assessment](codex-search-qualification.md).
 
 Read-only reconciliation completed at **2026-10-23 09:24:19 UTC**. Fourteen checks
@@ -10,15 +11,38 @@ passed. No Cloudflare, GitHub or router application writes; no paid search calls
 All evidence below is metadata-only, stored locally under
 `.artifacts/fakeco-codex-search-20261022/`. Do not replay consumed experiment runners.
 
-## Current state
+## Approved batch 1 outcome
 
-- Main and fixture versions, bindings, routes, domains and Access fingerprints
-  match the last qualified fixture restoration. Main version:
-  `3d669069-fb9e-45e0-a71b-bded66c5b7b2`; fixture:
-  `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`.
+- Revoked `fakeco_bootstrap_20261022`. Bootstrap and search credentials both
+  disabled/inactive; both saved keys return 403 on inspection.
+- Deleted only fixture route `dd2ae4273551492db92c3b5ffc367529`.
+- Applied `v2-delete-fixture` once. Namespace
+  `148cbb6483b4421dbf8b25301a325865` absent; all other namespaces preserved.
+  Cleanup version `3599ce34-78a7-49e5-89ab-9a477873a63e` was verified before deletion.
+- Deleted `clawrouter-search-semantics-fakeco`, including its remaining secret
+  binding. Worker inventory and settings 404 confirm absence; former fixture
+  health path now returns 404. Do not redeploy either fixture configuration.
+- Thirteen final checks passed. Main FakeCo health/version/settings/deployments,
+  its domain and Access application, production settings/deployments, all other
+  Workers, routes and namespaces preserved. Both queue backlogs remain zero;
+  settled router spend and budgets unchanged. No paid search calls.
+
+Authoritative receipt: `cleanup-batch1-verification-20261023.json`, including hashes
+of the preflight and four operation receipts. Mutations: one credential revoke,
+one route delete, one fixture deletion-migration deployment and one Worker delete.
+No main teardown, KV/R2 deletion, Access/service-token deletion, GitHub change or
+credential-manager cleanup. The local guarded main-teardown preview passed; it
+made no Cloudflare requests and did not execute deletion.
+
+## Current state and retained pre-cleanup evidence
+
+- Main version remains `3d669069-fb9e-45e0-a71b-bded66c5b7b2`. Main settings,
+  deployments, domains and Access fingerprints match the last qualified fixture
+  restoration. The former fixture version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`
+  and its infrastructure are now removed as recorded above.
 - All 36 account Worker settings inspected. No outside Worker references the
   owned KV, R2, queues, namespaces or either FakeCo Worker.
-- Search credential revoked; bootstrap credential active. Search monthly cap
+- Search and bootstrap credentials revoked. Search monthly cap
   equals settled router spend, **$3.614986**. OpenAI provider monthly limit and
   search daily/weekly limits remain $50. This is not an upstream bill total.
 - Both queue backlogs zero. R2 contains zero objects and zero multipart uploads;
@@ -39,17 +63,18 @@ All evidence below is metadata-only, stored locally under
 - Tailscale Funnel/Serve configurations empty; local port 18765 free. No pending
   exposure cleanup. Certificate state unchanged; no key enrollment or revocation.
 
-## Exact remote deletion set
+## Exact remote ownership and remaining deletion set
 
 Account `91b59577e757131d68d55a471fe32aca` (OpenClaw), zone
 `72b20df9e990ac41365dadace6499187` (openclaw.ai). IDs, not name prefixes, define
-ownership. All six namespaces contain disposable canary data.
+ownership. The five remaining main namespaces contain disposable canary data.
+The three fixture entries below are completed deletions, retained as evidence.
 
 | Resource | Identity |
 | --- | --- |
-| Fixture Worker | `clawrouter-search-semantics-fakeco`; migration tag `v1` |
-| Fixture route | `dd2ae4273551492db92c3b5ffc367529`; `https://clawrouter-fakeco.openclaw.ai/search-semantics/*` |
-| Fixture namespace | `148cbb6483b4421dbf8b25301a325865`; `SearchSemanticsObject` |
+| Fixture Worker — deleted | `clawrouter-search-semantics-fakeco`; final migration tag `v2-delete-fixture` |
+| Fixture route — deleted | `dd2ae4273551492db92c3b5ffc367529`; `https://clawrouter-fakeco.openclaw.ai/search-semantics/*` |
+| Fixture namespace — deleted | `148cbb6483b4421dbf8b25301a325865`; `SearchSemanticsObject` |
 | Main Worker | `clawrouter-edge-fakeco`, including assets, deployments and bound secret copies |
 | Main namespace | `e55d5c688dac4faa98ec8c360df61755`; `ContentArchiveCleanupObject` |
 | Main namespace | `0a4b9486e8454c53a395924376b7870b`; `GrantCredentialObject` |
@@ -69,7 +94,8 @@ ownership. All six namespaces contain disposable canary data.
 
 ## Separate approval batches
 
-1. **First proposed batch: bootstrap revocation and fixture removal.** Refresh
+1. **Completed batch 1: bootstrap revocation and fixture removal.** Historical
+   execution sequence follows; do not replay. Refresh
    identities, dependency checks and queue settlement. POST only
    `/v1/admin/credentials/fakeco_bootstrap_20261022/revoke`; verify inactive and
    key inspection denied, with search still revoked. Delete only the recorded
