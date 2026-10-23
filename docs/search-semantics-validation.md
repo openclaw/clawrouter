@@ -1,5 +1,9 @@
 # FakeCo search semantics validation
 
+An independent [Tailscale Funnel experiment](search-semantics-funnel.md) is now
+prepared locally. Public exposure and one paid retrieval each require separate
+authorization. This does not change the existing FakeCo deployment or results.
+
 Fixture deployment approved and verified at 2026-10-23 04:45:59 UTC from
 `77bf4ac4fa1f155861b2415648242178ec17089b`. One separately approved synthetic
 calibration run has since been created, checked, and deleted. No router credential
