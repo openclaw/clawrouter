@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDiagnosticFixture, createRequestObservation, createSemanticsFixture, fixtureOrigin } from "../scripts/search-semantics-fixture.mjs";
+import { createDiagnosticFixture, createRequestObservation, waitForRequestObservationReadiness, observationResponseDiagnostics, createSemanticsFixture, fixtureOrigin } from "../scripts/search-semantics-fixture.mjs";
 
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
@@ -17,15 +17,37 @@ const internalEvent = "https://fixture-observations.internal/event";
 const mainEnv = { CF_VERSION_METADATA: { id: "synthetic-main-version" } };
 const bucket = (path, method, query, status, count) => ({ path, method, query, status, count });
 
+test("sampled readiness needs three consecutive matching identities; a transition resets the streak", async () => {
+  let clock = 0, calls = 0; const checks = [];
+  const headers = { "x-clawrouter-observation-worker": "observations-worker-v2", "x-clawrouter-observation-handler": "observations-v2", "x-clawrouter-observation-captures": JSON.stringify({ recorded: 0, inactive: 0, rejected: 0, transport: 0 }) };
+  const value = await waitForRequestObservationReadiness({ token, now: () => clock, sleep: async ms => { clock += ms; }, onCheck: check => checks.push(check), fetcher: async (_url, init) => {
+    assert.equal(init.method, "GET"); calls++;
+    return calls === 3 ? new Response(null, { status: 404, headers: { "x-clawrouter-observation-worker": "observations-worker-v2" } }) : Response.json({ ready: true, protocol: "observations-v2" }, { headers });
+  } });
+  assert.equal(calls, 6); assert.equal(clock, 25_000); assert.equal(value.consecutive, 3);
+  assert.deepEqual(checks.map(c => c.consecutive), [1, 2, 0, 1, 2, 3]);
+  assert.deepEqual(checks[2], { attempt: 3, status: 404, workerMatched: true, handlerMatched: false, captures: null, consecutive: 0 });
+  calls = 0; clock = 0;
+  await assert.rejects(waitForRequestObservationReadiness({ token, now: () => clock, sleep: async ms => { clock += ms; }, fetcher: async () => { calls++; return new Response(null, { status: 404 }); } }), /readiness_deadline/);
+  assert.ok(calls <= 25); assert.equal(clock, 120_000);
+  const raw = new Response(null, { headers: { "x-clawrouter-observation-captures": '"SYNTHETIC_PRIVATE_BODY"' } });
+  assert.equal(observationResponseDiagnostics(raw).captures, null);
+});
+
 async function runtime(t, { oldObserver = false } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), "search-observations-test-"));
   const bundle = await build({ stdin: { contents: `
     export { default } from "./worker/fixtures/search-semantics-observe.ts";
     import { SearchSemanticsObject as ObservedObject } from "./worker/fixtures/search-semantics-observe.ts";
+    import { SearchSemanticsObject as OldObject } from "./worker/fixtures/search-semantics.ts";
     export class SearchSemanticsObject extends ObservedObject {
-      constructor(state, env) { super(state, env); this.testStorage = state.storage; }
+      constructor(state, env) { super(state, env); this.testStorage = state.storage; this.oldHandler = new OldObject(state); }
       async fetch(request) {
         const path = new URL(request.url).pathname;
+        if (path === "/fixture-handler-mode") { await this.testStorage.put("handlerMode", await request.text()); return new Response(null); }
+        const mode = await this.testStorage.get("handlerMode");
+        if (mode === "old" || mode === "old-events" && request.url === "${internalEvent}") return this.oldHandler.fetch(request);
+        if (mode === "unmarked-ack" && request.url === "${internalEvent}") return new Response(null, { status: 204 });
         if (path === "/fixture-expire-observations") {
           const value = await this.testStorage.get("observations"); value.expiresAt = Date.now() - 1;
           await this.testStorage.put("observations", value); return new Response(null);
@@ -68,18 +90,58 @@ test("readiness identifies the observation class without allocating session stat
   const { fetcher, observer } = await runtime(t);
   const response = await fetcher(`${control}/ready`, { headers: auth });
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-clawrouter-observation-handler"), "observations-v1");
+  assert.equal(response.headers.get("x-clawrouter-observation-handler"), "observations-v2");
+  assert.equal(response.headers.get("x-clawrouter-observation-worker"), "observations-worker-v2");
   assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(await response.json(), { ready: true, protocol: "observations-v1" });
+  assert.deepEqual(await response.json(), { ready: true, protocol: "observations-v2" });
   assert.deepEqual(await (await observer.fetch("https://fixture/fixture-state")).json(), { keys: [], alarm: null });
   const empty = await fetcher(control, { headers: auth });
   assert.equal(empty.status, 404);
-  assert.equal(empty.headers.get("x-clawrouter-observation-handler"), "observations-v1", "empty state differs from an old handler");
+  assert.equal(empty.headers.get("x-clawrouter-observation-handler"), "observations-v2", "empty state differs from an old handler");
   for (const [target, headers] of [[`${control}/ready`, {}], [`${control}/ready?query=1`, auth], [`${control}/ready`.replace("https:", "http:"), auth]]) {
     const denied = await fetcher(target, { headers });
     assert.equal(denied.status, 404);
     assert.equal(denied.headers.get("x-clawrouter-observation-handler"), null);
+    assert.equal(denied.headers.get("x-clawrouter-observation-worker"), null);
+    assert.equal(denied.headers.get("x-clawrouter-observation-captures"), null);
   }
+});
+
+test("readiness and creation can succeed before an older object handles capture and control reads", async t => {
+  const { fetcher, observer } = await runtime(t);
+  const session = await createRequestObservation({ token, fetcher });
+  await observer.fetch("https://fixture/fixture-handler-mode", { method: "POST", body: "old" });
+  const response = await fetcher(`${fixtureOrigin}/search-semantics/diagnostic/`);
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get("x-clawrouter-observation-worker"), null, "public response unchanged");
+  const failed = await fetcher(`${control}/${session.initial.id}`, { headers: auth });
+  assert.equal(failed.status, 404);
+  assert.equal(failed.headers.get("x-clawrouter-observation-worker"), "observations-worker-v2");
+  assert.equal(failed.headers.get("x-clawrouter-observation-handler"), null);
+  assert.deepEqual(JSON.parse(failed.headers.get("x-clawrouter-observation-captures")), { recorded: 0, inactive: 0, rejected: 1, transport: 0 });
+  await assert.rejects(session.snapshot(), /HTTP 404/);
+  await observer.fetch("https://fixture/fixture-handler-mode", { method: "POST", body: "current" });
+  assert.deepEqual((await session.snapshot()).counters, [], "the returned 404 silently lost a capture in v1");
+  await session.close();
+});
+
+test("capture acknowledgements distinguish recorded, inactive, rejected and transport outcomes privately", async t => {
+  const { fetcher, observer } = await runtime(t);
+  const target = `${fixtureOrigin}/search-semantics/diagnostic/`;
+  await fetcher(target);
+  const session = await createRequestObservation({ token, fetcher });
+  await fetcher(target);
+  for (const mode of ["old-events", "unmarked-ack"]) {
+    await observer.fetch("https://fixture/fixture-handler-mode", { method: "POST", body: mode });
+    assert.equal((await fetcher(target)).status, 404);
+  }
+  await observer.fetch("https://fixture/fixture-handler-mode", { method: "POST", body: "current" });
+  await observer.fetch("https://fixture/fixture-fail-records");
+  assert.equal((await fetcher(target)).status, 404);
+  const ready = await fetcher(`${control}/ready`, { headers: auth });
+  assert.deepEqual(JSON.parse(ready.headers.get("x-clawrouter-observation-captures")), { recorded: 1, inactive: 1, rejected: 2, transport: 1 });
+  assert.deepEqual((await session.snapshot()).counters, [bucket("diagnostic_variant", "GET", false, 404, 1)]);
+  await session.close();
 });
 
 test("mixed Worker and old object versions stop before observation creation", async t => {
@@ -93,7 +155,7 @@ test("mixed Worker and old object versions stop before observation creation", as
 });
 
 test("readiness rejects unknown handlers and failures retain only their HTTP status", async () => {
-  for (const [body, headers] of [[{ ready: true, protocol: "observations-v1" }, {}], [{ ready: true, protocol: "unknown" }, { "x-clawrouter-observation-handler": "observations-v1" }]]) {
+  for (const [body, headers] of [[{ ready: true, protocol: "observations-v2" }, {}], [{ ready: true, protocol: "unknown" }, { "x-clawrouter-observation-handler": "observations-v2" }]]) {
     let calls = 0;
     await assert.rejects(createRequestObservation({ token, fetcher: async () => { calls++; return Response.json(body, { headers }); } }), /observation handler/);
     assert.equal(calls, 1, "invalid readiness cannot reach POST");

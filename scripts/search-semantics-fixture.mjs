@@ -3,6 +3,51 @@ import { createHash, createHmac } from "node:crypto";
 
 export const fixtureOrigin = "https://clawrouter-fakeco.openclaw.ai";
 const prefix = "/search-semantics/";
+export function observationResponseDiagnostics(response) {
+  let captures = null;
+  try {
+    const text = response.headers.get("x-clawrouter-observation-captures");
+    const value = text && text.length <= 128 && JSON.parse(text);
+    if (value && Object.keys(value).sort().join(",") === "inactive,recorded,rejected,transport" && Object.values(value).every(n => Number.isInteger(n) && n >= 0 && n <= 1_000_000)) captures = value;
+  } catch { /* report fixed metadata only */ }
+  return { workerMatched: response.headers.get("x-clawrouter-observation-worker") === "observations-worker-v2",
+    handlerMatched: response.headers.get("x-clawrouter-observation-handler") === "observations-v2", captures };
+}
+
+async function boundedJson(response, limit = 16_384) {
+  let text = "", bytes = 0;
+  for await (const chunk of response.body ?? []) {
+    bytes += chunk.length; assert.ok(bytes <= limit, "fixture response is bounded"); text += Buffer.from(chunk).toString("utf8");
+  }
+  try { return JSON.parse(text); } catch { throw new Error("fixture response is invalid JSON"); }
+}
+
+// A sampled stability gate, not proof of global Worker/object propagation.
+// No session creation, retry of mutations, or public calibration requests.
+export async function waitForRequestObservationReadiness({ token, fetcher = fetch, onCheck = async () => {}, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  assert.match(token ?? "", /^[a-zA-Z0-9_-]{40,128}$/, "inject SEARCH_SEMANTICS_CONTROL_TOKEN");
+  const deadline = now() + 120_000;
+  let consecutive = 0;
+  for (let attempt = 1; attempt <= 25 && now() < deadline; attempt++) {
+    const response = await fetcher(`${fixtureOrigin}${prefix}_control/observations/ready`, { method: "GET", headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(Math.max(1, Math.min(15_000, deadline - now()))) });
+    const diagnostics = observationResponseDiagnostics(response);
+    if (response.status === 200) {
+      assert.ok(diagnostics.workerMatched && diagnostics.handlerMatched && diagnostics.captures, "observation handler identities and diagnostics match");
+      const ready = await boundedJson(response, 512);
+      assert.ok(ready?.ready === true && ready.protocol === "observations-v2" && Object.keys(ready).sort().join(",") === "protocol,ready", "exact observation readiness contract");
+      consecutive++;
+    } else {
+      assert.ok(response.status === 404 && !diagnostics.handlerMatched, "unexpected observation readiness response");
+      consecutive = 0; await response.body?.cancel();
+    }
+    const check = { attempt, status: response.status, ...diagnostics, consecutive };
+    await onCheck(check);
+    if (consecutive === 3) return check;
+    const delay = Math.min(5_000, Math.max(0, deadline - now()));
+    if (attempt < 25 && delay) await sleep(delay);
+  }
+  throw new Error("observation_handler_readiness_deadline");
+}
 export function fixtureControlToken(adminToken) {
   assert.ok(typeof adminToken === "string" && adminToken.length >= 40, "inject the FakeCo admin token");
   return createHmac("sha256", adminToken).update("clawrouter/fakeco/search-semantics/control/v1").digest("hex");
@@ -29,13 +74,11 @@ function fixtureControl(token, fetcher) {
       ...(body ? { body: JSON.stringify(body) } : {}), redirect: "error", signal: AbortSignal.timeout(15_000),
     });
     assert.ok(response.ok, `fixture control request succeeds (HTTP ${response.status})`);
-    if (path.startsWith("observations")) assert.ok(response.headers.get("x-clawrouter-observation-handler") === "observations-v1", "observation handler identity matches");
-    let text = "", bytes = 0;
-    for await (const chunk of response.body) {
-      bytes += chunk.length; assert.ok(bytes <= 16_384, "fixture response is bounded"); text += Buffer.from(chunk).toString("utf8");
+    if (path.startsWith("observations")) {
+      assert.ok(response.headers.get("x-clawrouter-observation-worker") === "observations-worker-v2", "observation handler Worker identity matches");
+      assert.ok(response.headers.get("x-clawrouter-observation-handler") === "observations-v2", "observation handler object identity matches");
     }
-    let value; try { value = JSON.parse(text); } catch { throw new Error("fixture response is invalid JSON"); }
-    return value;
+    return boundedJson(response);
   };
 }
 
@@ -95,7 +138,7 @@ export async function createDiagnosticFixture({ token, fetcher = fetch, ttlSecon
 export async function createRequestObservation({ token, fetcher = fetch }) {
   const control = fixtureControl(token, fetcher);
   const ready = await control("observations/ready");
-  assert.ok(ready?.ready === true && ready.protocol === "observations-v1" && Object.keys(ready).sort().join(",") === "protocol,ready", "observation handler ready before creation");
+  assert.ok(ready?.ready === true && ready.protocol === "observations-v2" && Object.keys(ready).sort().join(",") === "protocol,ready", "observation handler ready before creation");
   const initial = await control("observations", "POST", { ttlSeconds: 300 });
   const id = initial.id;
   assert.match(id ?? "", /^[a-f0-9-]{36}$/, "observation ID valid");

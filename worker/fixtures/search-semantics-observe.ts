@@ -5,7 +5,8 @@ const HOST = "clawrouter-fakeco.openclaw.ai";
 const PREFIX = "/search-semantics/";
 const CONTROL = `${PREFIX}_control/observations`;
 const OBJECT = "request-observations-v1";
-const HANDLER = "observations-v1";
+const HANDLER = "observations-v2";
+const WORKER = "observations-worker-v2";
 const EVENT = "https://fixture-observations.internal/event";
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const PATHS = ["robots", "robots_variant", "diagnostic", "diagnostic_variant", "health", "matrix", "fixture_other"] as const;
@@ -23,6 +24,10 @@ const identified = (response: Response) => { response.headers.set("x-clawrouter-
 const json = (value: unknown, status = 200) => identified(Response.json(value, { status, headers: { "cache-control": "no-store" } }));
 const absent = () => new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
 const object = (env: Env) => env.SEARCH_SEMANTICS.get(env.SEARCH_SEMANTICS.idFromName(OBJECT));
+// Isolate-local diagnostics only: resets/other isolates make these incomplete.
+// Fixed keys and capped counters; never retain request data or error messages.
+const captures = { recorded: 0, inactive: 0, rejected: 0, transport: 0 };
+const countCapture = (kind: keyof typeof captures) => { captures[kind] = Math.min(1_000_000, captures[kind] + 1); };
 
 async function authorized(request: Request, env: Env): Promise<boolean> {
   const token = request.headers.get("authorization")?.match(/^Bearer ([a-zA-Z0-9_-]{40,128})$/)?.[1];
@@ -50,7 +55,11 @@ export default {
     // Controls have the same strict host/scheme/query/auth boundary as the base fixture.
     if (url.pathname === CONTROL || url.pathname.startsWith(`${CONTROL}/`)) {
       if (url.protocol !== "https:" || url.search || !await authorized(request, env)) return absent();
-      return object(env).fetch(request);
+      const upstream = await object(env).fetch(request);
+      const response = new Response(upstream.body, upstream);
+      response.headers.set("x-clawrouter-observation-worker", WORKER);
+      response.headers.set("x-clawrouter-observation-captures", JSON.stringify(captures));
+      return response;
     }
     const robots = url.protocol === "https:" && url.pathname.startsWith("/robots.txt");
     const observe = (robots || url.pathname.startsWith(PREFIX)) && !url.pathname.startsWith(`${PREFIX}_control/`);
@@ -64,7 +73,12 @@ export default {
         const event: Event = { path: category(url), method: METHODS.includes(request.method as Event["method"]) ? request.method as Event["method"] : "OTHER", query: !!url.search, status: response?.status ?? 0 };
         // Measurement failure must not replace the original response/exception.
         // Therefore zero observations never prove that no request arrived.
-        try { await object(env).fetch(EVENT, { method: "POST", body: JSON.stringify(event) }); } catch { /* no raw request logging */ }
+        try {
+          const ack = await object(env).fetch(EVENT, { method: "POST", body: JSON.stringify(event) });
+          const result = ack.headers.get("x-clawrouter-observation-capture");
+          await ack.body?.cancel();
+          countCapture(ack.status === 204 && ack.headers.get("x-clawrouter-observation-handler") === HANDLER && (result === "recorded" || result === "inactive") ? result : "rejected");
+        } catch { countCapture("transport"); }
       }
     }
   },
@@ -134,7 +148,7 @@ export class SearchSemanticsObject extends FixtureObject {
           else if (value.counters.length < 128) value.counters.push({ ...event, count: 1 });
           else if (value.overflow < 1_000_000) value.overflow++; else value.saturated = true;
         }
-        response = new Response(null, { status: 204 });
+        response = identified(new Response(null, { status: 204, headers: { "x-clawrouter-observation-capture": value ? "recorded" : "inactive" } }));
       } else if (path === CONTROL && request.method === "POST") {
         if (value) response = json({ error: "capacity" }, 409);
         else { value = { id: crypto.randomUUID(), expiresAt: Date.now() + 300_000, counters: [], overflow: 0, saturated: false }; response = json(value, 201); }
