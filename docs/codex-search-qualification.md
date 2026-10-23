@@ -96,7 +96,18 @@ namespace deleted through its migration, and empty fixture Worker deleted.
 Both saved canary keys return 403 on inspection. Thirteen final checks passed:
 main FakeCo health/version and Access preserved, production unchanged, other
 Workers/routes/namespaces preserved, queues empty and spend unchanged. Receipt:
-`cleanup-batch1-verification-20261023.json`. Further cleanup is not authorized.
+`cleanup-batch1-verification-20261023.json`.
+
+The user then approved core teardown. Its first Worker DELETE returned HTTP
+403/code `10064` at 09:32:10 UTC; execution stopped before queue or Access deletion.
+Twelve read-only reconciliation checks passed at 09:34:03 UTC: no core resources
+removed, main FakeCo and production unchanged, keys revoked, queues empty and
+spend unchanged. The attached queue consumer is a plausible dependency blocker;
+the exact server message was not retained, so permission failure and root cause
+are not established. The handoff prepares exact consumer disconnection and one
+guarded retry for separate approval. No retry, credential switch or further
+mutation. See `cleanup-batch2-refusal-reconciliation-20261023.json` and
+`cleanup-batch2-consumer-correction-plan-20261023.json`.
 
 Read-only reconciliation at 2026-10-23 09:24:19 UTC passed 14 checks: main/fixture
 restoration fingerprints match, all 36 Worker dependencies and 27 Access apps'
@@ -126,7 +137,8 @@ browser inspection is complete. Historical registration IDs and exclusive
 experiment receipts must not be reused. The earlier release assessment itself
 made no live credential reads or remote queries; the later read-only inventory
 used targeted credential reads. Neither step changed remote state. The later
-approved batch 1 made only the mutations listed above. No PR, push or live provider
+approved batch 1 made only the mutations listed above; batch 2's sole attempt was
+rejected and reconciled without observed resource changes. No PR, push or live provider
 probe. The fixture cleanup build passed a local Wrangler dry run before approval;
 the approved deletion migration subsequently deployed once and was verified.
 

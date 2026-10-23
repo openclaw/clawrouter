@@ -1,8 +1,10 @@
 # FakeCo cleanup handoff — 2026-10-23
 
 Browser inspection: complete, confirmed by the user. **Batch 1 completed** at
-2026-10-23 09:28:51 UTC after the user's separate approval. Further batches are
-not authorized. Main FakeCo remains available pending core-teardown approval.
+2026-10-23 09:28:51 UTC after the user's separate approval. Batch 2 was separately
+approved, but its first Worker DELETE returned HTTP 403/code `10064`; execution
+stopped. No core resource was removed. Main FakeCo remains available; corrective
+consumer removal and a retry await separate approval. No credential switch.
 This handoff supersedes historical cleanup identities, not the search qualification
 limits in the [campaign assessment](codex-search-qualification.md).
 
@@ -63,6 +65,54 @@ made no Cloudflare requests and did not execute deletion.
 - Tailscale Funnel/Serve configurations empty; local port 18765 free. No pending
   exposure cleanup. Certificate state unchanged; no key enrollment or revocation.
 
+## Batch 2 refusal and prepared correction
+
+The refreshed batch-2 preflight passed 16 checks. At **09:32:10 UTC**, the guarded
+teardown attempted only `DELETE /accounts/91b59577e757131d68d55a471fe32aca/workers/services/clawrouter-edge-fakeco?force=true`.
+Cloudflare returned HTTP 403/code `10064`, with no acknowledgement. Neither queue
+nor the Access app was deleted. The endpoint was not retried; no other credential,
+auth mode or endpoint was substituted.
+
+Read-only reconciliation completed **09:34:03 UTC**, passing 12 checks. Worker
+inventory/settings/deployments, all five main namespaces, domain/routes, queue
+configuration and Access app unchanged. Both keys remain revoked; queue backlogs
+zero; router spend $3.614986. Main FakeCo healthy and Access-protected; production
+unchanged. References API shows no incoming/outgoing services, only the main
+Worker's own five namespace bindings, and no tail producers.
+
+This does **not establish a permission failure**. Cloudflare's own
+[Workers SDK issue](https://github.com/cloudflare/workers-sdk/issues/3370) records
+`10064` when a Worker is still a queue consumer and recommends disconnecting that
+consumer before deleting the Worker. FakeCo has that attachment. This is a
+plausible cause, not a confirmed diagnosis: only status/code were persisted from
+the failed request, not its server message. The current guarded command does not
+disconnect consumers before its Worker deletion; do not rerun it unchanged against
+the same attached consumer.
+
+Prepared correction, not executed:
+
+1. Refresh ownership, zero-backlog and revoked-key checks. Disconnect only
+   `0d6d0b30a9a94cbe9efbbf7b0ccaa7aa` from usage queue
+   `bd6016244cd749f78e916e50a2ac7dd9`, using the documented
+   [consumer DELETE endpoint](https://developers.cloudflare.com/api/resources/queues/subresources/consumers/methods/delete/).
+   Its direct metadata GET on **09:34:29 UTC** confirmed `clawrouter-edge-fakeco`,
+   type `worker`, expected FakeCo DLQ and sole-consumer status; queue empty.
+   This removes the consumer attachment, retaining both queues and Access.
+2. Verify that exact consumer absent, then retry the existing guarded core teardown
+   **once**, with the same account/token, exact deletion set and per-operation
+   journaling. Verify Worker/namespaces/domain absent before proceeding with queue
+   deletion; retain Access until serving resources and queues are gone.
+3. Stop on another refusal or unexpected residue; no automatic mutation retry,
+   alternate credential, broader cleanup or budget reset. KV/R2, service token,
+   GitHub Environment and credential-manager items remain outside this correction.
+
+Receipts: `cleanup-batch2-preflight-20261023.json`,
+`cleanup-batch2-core-execution-20261023.json`,
+`cleanup-batch2-refusal-reconciliation-20261023.json`, and
+`cleanup-batch2-consumer-correction-plan-20261023.json`. This correction requires
+fresh approval under the user's per-batch boundary; successful consumer reads do
+not exercise its deletion permission. No source-code changes or paid probes.
+
 ## Exact remote ownership and remaining deletion set
 
 Account `91b59577e757131d68d55a471fe32aca` (OpenClaw), zone
@@ -105,7 +155,8 @@ The three fixture entries below are completed deletions, retained as evidence.
    only the empty fixture Worker. Verify main FakeCo health and Access unchanged.
    This permanently deletes fixture data. Do not redeploy the normal fixture
    config afterward. Local Wrangler 4.147.0 dry-run passed: no bindings, no upload.
-2. **Core teardown, after another approval.** Recheck no serving fixture route or
+2. **Core teardown: approved attempt stopped; correction pending.** Use the
+   corrective approval sequence above before resuming. Recheck no serving fixture route or
    outside dependencies, settled accounting and empty queues. Use the existing
    [guarded teardown](fakeco.md#guarded-teardown), locked to FakeCo, with both
    irreversible-storage confirmations. It removes the main Worker/storage, queues
