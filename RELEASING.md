@@ -23,12 +23,12 @@ gh workflow run release.yml --repo openclaw/clawrouter --ref main -f version=X.Y
 
 A rehearsal freezes current protected `main`, even if that version already has a
 historical tag or release. It validates the version and dated changelog, requires
-exact-commit push CI, runs `scripts/verify-release.sh` with Node.js 24.15.0, assembles
+exact-commit push CI, runs `scripts/verify-release.sh` with Node.js 24.22.1, assembles
 source archives, and independently verifies their inventory and SHA-256 checksums.
 It creates no tag, draft, release, or deployment. No secrets are needed.
 
 The local verification script only installs dependencies, builds, and tests. Run
-it with Node.js 24.15+ and the repository's package manager. It does not publish.
+it with Node.js 24.22.1 and the repository's package manager. It does not publish.
 
 ## Publish an explicitly authorized release
 
