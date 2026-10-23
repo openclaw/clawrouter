@@ -1,10 +1,11 @@
 # Stable retrieval diagnostic
 
-Status: approved deployment and hosted calibration completed 2026-10-23
-06:53:10 UTC. Active fixture version
+Status: deployed and calibrated. One approved Sol retrieval comparison completed
+2026-10-23 06:56:12 UTC: tool-level `Internal Error`, no marker, zero GET/HEAD
+activity; result inconclusive. Active fixture version
 `d29dd6b3-ceed-4d2c-93f5-c60fe791df26`, source `12b5383`. The owned diagnostic
 generation was deleted; private controls and public GET/HEAD return 404.
-No OpenAI call ran in this batch. Provider retrieval remains unqualified.
+Provider retrieval remains unqualified.
 
 Purpose: replace the uncounted, GET-only JSON health comparison with ordinary
 HTML and durable GET/HEAD evidence at a stable URL. The health endpoint and
@@ -55,8 +56,9 @@ into receipts. A helper failure is not permission to replace another generation.
 
 ## Rollout, calibration and one-call comparison
 
-Steps 1–3 completed in the approved deployment/calibration batch below. The
-one-call provider comparison in steps 4–6 still requires separate user approval.
+Steps 1–3 completed in the approved deployment/calibration batch below. One
+separately approved provider attempt completed steps 4–6, also recorded below.
+Any additional hosted write/probe batch requires separate user approval.
 
 1. Read-only refresh: exact account/zone/route ownership, fixture version and
    binding, main FakeCo health and normal security state. New diagnostic path
@@ -124,8 +126,46 @@ independence tests passed. The registry object and namespace remain allocated.
 Metadata receipts, under ignored `.artifacts/fakeco-codex-search-20261022/`:
 `search-diagnostic-deployment-receipt.json` and
 `search-diagnostic-calibration-receipt.json`. No router application writes,
-paid search/inference calls, PR or push. Next: separately approved one-call Sol
-comparison using a fresh generation and a zero-counter baseline.
+paid search/inference calls, PR or push in that deployment/calibration batch.
+
+## Approved single Sol retrieval comparison
+
+Completed 2026-10-23 06:56:12 UTC. Read-only preflight confirmed the calibrated
+version, exact route ID, settings/bindings/runtime/namespace, main FakeCo health,
+Access challenge and diagnostic absence. BIC remained on. A refreshed Safari
+Configuration Rules inventory showed one active rule, original Catalog only.
+No security or deployment change accompanied this probe.
+
+Created one 300-second generation, ID
+`6f5c413f-dcae-4a37-95e6-81b12ec5fc5a`. Private baseline at 06:55:53.555 UTC
+showed zero GET/HEAD counters and null timestamps. The operator never fetched
+the public diagnostic while active; the marker stayed out of the provider request.
+
+Exactly one direct `gpt-6.1-sol` `/v1/alpha/search` call, fresh session,
+`external_web_access: true`, short output, opened only the constant public URL.
+Dispatch 06:55:53.557 UTC; completion 06:55:54.386 UTC:
+
+- HTTP 200; request ID `req_eb5773ea178843b1afd9baea22e0b728`.
+- 281 output characters, tool-level `Internal Error`, expected marker absent.
+  A search reference was present but does not qualify retrieval.
+- Immediate snapshot at 06:55:54.527 UTC and final snapshot at 06:56:09.923 UTC
+  both showed zero GET/HEAD and null timestamps. The final snapshot followed a
+  15-second late-request observation window. No counted handler activity.
+- No usage field; upstream billing remains unqualified. Raw/encrypted tool
+  output, markers and credentials remained in memory; only metadata persisted.
+
+Deleted only the owned generation. At 06:56:10.595 UTC its authenticated lookup,
+collection lookup and public GET/HEAD all returned 404. Infrastructure matched
+baseline after cleanup. No retry, inference, broader matrix, router application
+write, budget change, Cloudflare management write, PR or push.
+
+Receipt: ignored
+`.artifacts/fakeco-codex-search-20261022/search-diagnostic-sol-receipt.json`.
+The calibrated HTML handler saw no accepted GET/HEAD in this finite window.
+Provider no-fetch, URL transformation, prerequisite/robots handling, DNS/network
+failure and pre-Worker rejection remain possible; zero counters do not establish
+no network attempt. Fresh retrieval, cached/live semantics and cause remain
+unqualified. Further paid probing or Cloudflare mutation needs separate approval.
 
 ## Interpretation and rollback
 
@@ -150,4 +190,4 @@ an unexpected concurrent deployment or delete a generation owned by another run.
 Local verification: Worker TypeScript check and 18 focused fixture/matrix/probe
 tests passed, including workerd concurrency, generation ownership, input/auth
 rejection, expiry before alarm and shared-alarm scheduling. Hosted calibration
-passed as recorded above; provider retrieval still requires the separate probe.
+passed; the subsequent single-call provider comparison was inconclusive.

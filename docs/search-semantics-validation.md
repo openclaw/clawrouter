@@ -6,9 +6,11 @@ calibration run has since been created, checked, and deleted. No router credenti
 registered, budget changed, or existing canary cleaned up. A separately approved
 direct Sol probe ran two standalone search calls and deleted its fresh fixture run;
 the result was inconclusive, as detailed below. No inference ran.
-The later stable HTML diagnostic update and hosted calibration also completed;
-its generation was deleted, with no additional OpenAI call. See the completed
-diagnostic batch below. Provider retrieval remains unqualified.
+The later stable HTML diagnostic update/calibration completed, followed by one
+separately approved Sol retrieval call. It returned `Internal Error` with no
+marker and zero GET/HEAD counters. Both owned diagnostic generations were
+deleted. See the completed diagnostic batches below. Provider retrieval remains
+unqualified.
 
 ## What this can establish
 
@@ -433,6 +435,33 @@ Receipts: ignored `search-diagnostic-deployment-receipt.json` and
 next separately approved one-call comparison:
 [stable retrieval diagnostic](search-semantics-diagnostic.md). This validates
 hosted diagnostic behavior, not OpenAI fetching, cached/live semantics or billing.
+
+### Single Sol diagnostic comparison: inconclusive
+
+2026-10-23 06:55:53.557–06:55:54.386 UTC: exactly one separately approved
+direct `gpt-6.1-sol` `/v1/alpha/search` open of the stable HTML diagnostic URL,
+fresh session, external web access enabled, short output. Fresh five-minute
+generation `6f5c413f-dcae-4a37-95e6-81b12ec5fc5a` started at zero counters;
+the operator made no public diagnostic request while active and kept the marker
+out of the provider request. Preflight matched calibrated deployment/route/
+bindings/namespace and healthy FakeCo. BIC on; refreshed Safari Configuration
+Rules inventory contained only the original active Catalog rule.
+
+HTTP 200, 281 output characters, tool-level `Internal Error`, no expected marker;
+request ID `req_eb5773ea178843b1afd9baea22e0b728`. A returned search reference
+alone does not qualify retrieval. Immediate counters and the final snapshot at
+06:56:09.923 UTC, after a 15-second late-request window, were both zero GET/HEAD
+with null timestamps. No accepted diagnostic handler activity; upstream no-fetch,
+prerequisite/URL/network failures and pre-Worker rejection remain possible.
+This is not proof of no network attempt or a cached/live semantics result.
+
+Owned generation deleted; private generation/collection and public GET/HEAD
+returned 404 at 06:56:10.595 UTC. Infrastructure unchanged. No retries, inference,
+broader matrix, router/budget/security/deployment changes, PR or push. Only closed
+metadata persisted; no usage reported and billing remains unqualified. Receipt:
+`.artifacts/fakeco-codex-search-20261022/search-diagnostic-sol-receipt.json`.
+Stop after this one call. Any further paid probe or Cloudflare mutation requires
+separate user approval.
 
 ## Secret and credential preparation
 
