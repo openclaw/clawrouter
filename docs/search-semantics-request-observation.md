@@ -1,18 +1,19 @@
 # Temporary request observations
 
-Status: approved v2 hosted calibration passed all seven public requests and
-all seven exact durable counters. Both owned sessions cleared; normal fixture
-restored and verified 2026-10-23T07:47:09.295Z.
-Current version `f5e2791a-196f-4a8a-a990-590c9bd12891`; prefix route ID
-`e636ada557fd4550a4abb64edd03e3df`; namespace
+Status: v2 synthetic calibration passed seven requests/counters. The later
+approved paired retrieval completed with IANA content returned, FakeCo tool-level
+`Internal Error` and zero recorded requests/diagnostic GETs or HEADs through the
+15-second late window. Both owned sessions cleared; normal fixture restored and
+verified 2026-10-23T07:57:15.634Z.
+Current version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`; prefix route ID
+`dd2ae4273551492db92c3b5ffc367529`; namespace
 `148cbb6483b4421dbf8b25301a325865`. Temporary robots route/service binding removed.
-No paid search calls. Observation coverage is calibrated for this synthetic
-request plan/source/config/time; provider retrieval semantics and upstream billing
-remain unqualified. Further Cloudflare mutation batches and paid comparisons
-require separate approval. Current ownership receipt:
-`request-observation-stability-calibration-receipt.json` (exclusive; do not replay).
-The [paired retrieval runner](search-semantics-paired-retrieval.md) is prepared,
-reviewed through P2 and read-only preflighted; deployment/paid approval pending.
+Exactly two direct search calls in the paired batch; no retry. Observation
+instrumentation remains calibrated for its tested synthetic plan/source/config;
+fresh retrieval, cached/live semantics and upstream billing remain unqualified.
+Further Cloudflare mutation batches and paid calls require separate approval.
+Current ownership receipt: `paired-retrieval-receipt.json` (exclusive; no replay).
+[Paired result and limits](search-semantics-paired-retrieval.md#approved-execution-and-inconclusive-result).
 
 ## Read-only follow-up
 
@@ -560,3 +561,16 @@ Current ownership and full safe metadata:
 this runner must not be replayed. Previous readiness/restoration/preparation
 receipts are historical. Future work must pin the current normal version/route
 and refresh read-only inventory before another approved mutation batch.
+
+
+## Paired batch follow-through
+
+The approved IANA/FakeCo comparison completed with two calls and qualified owned
+cleanup/normal restoration, result inconclusive. Calibrated observation counters
+recorded no request during the immediate/15-second late window; diagnostic counts
+0/0. Both protocol identities matched on active-period private responses. No
+sampled rejected/transport acknowledgement failures; isolate-local diagnostics
+cannot exclude all measurement failure. Current normal ownership at top.
+[Full evidence](search-semantics-paired-retrieval.md#approved-execution-and-inconclusive-result).
+No further paid call or matrix under this authorization. Current receipt
+`paired-retrieval-receipt.json`; earlier calibration receipts remain historical.

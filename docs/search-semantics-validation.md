@@ -47,10 +47,10 @@ resolve them. No OpenAI clarification is assumed available.
 Original deployment ownership receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-deployment-receipt.json`.
 Current deployment ownership receipt:
-`.artifacts/fakeco-codex-search-20261022/request-observation-stability-calibration-receipt.json`.
-Active normal fixture version: `f5e2791a-196f-4a8a-a990-590c9bd12891` at 100%.
-Current route ID: `e636ada557fd4550a4abb64edd03e3df` (Wrangler recreated the
-prefix route during the approved v2 observation calibration/restoration;
+`.artifacts/fakeco-codex-search-20261022/paired-retrieval-receipt.json`.
+Active normal fixture version: `9ea3e336-0cf8-41e0-b44b-09e448fd70cb` at 100%.
+Current route ID: `dd2ae4273551492db92c3b5ffc367529` (Wrangler recreated the
+prefix route during the approved paired retrieval/restoration;
 semantics unchanged).
 SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
 Readiness returns 200 with `cache-control: no-store`; unauthorized controls return
@@ -736,3 +736,25 @@ checks pass. No Cloudflare writes, hosted sessions or paid search calls. Pending
 approval covers temporary wrapper deployment, IANA then conditional FakeCo
 (at most two direct Sol search calls), owned cleanup and normal restoration.
 No approval or execution receipt exists yet; billing remains unqualified.
+
+
+## Paired retrieval completed; fresh control still unqualified
+
+Approved 2026-10-23 07:56:17–07:57:15 UTC pair used two direct Sol search calls.
+IANA returned expected content. Only then were fresh FakeCo sessions created;
+FakeCo returned HTTP-200 tool-level `Internal Error` with no fresh marker.
+Initial, immediate and 15-second late counters: no recorded requests (including
+robots), diagnostic GET/HEAD 0/0, no overflow/saturation. Controls consistently
+identified the compatible Worker/object during the observation window. No
+operator public FakeCo requests during active sessions. Both owned sessions
+DELETEd once with marked cleared-state verification; temporary routing removed,
+normal code/three bindings restored. Current ownership above supersedes the prior
+stability-calibration receipt/IDs. Read-only follow-up observed normal unmarked
+controls after a transient v2 marker during normal deployment propagation.
+
+[Detailed evidence and limits](search-semantics-paired-retrieval.md#approved-execution-and-inconclusive-result).
+Known IANA content can be cached; this does not establish live origin fetch
+capability. Zero best-effort observations do not identify the failure layer.
+Fresh FakeCo retrieval, cached/live semantics and upstream billing remain
+unqualified. Larger matrix and further paid probes remain gated. No inference,
+router write, secret change, security relaxation, new namespace, PR or push.

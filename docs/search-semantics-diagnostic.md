@@ -1,19 +1,27 @@
 # Stable retrieval diagnostic
 
-Status: deployed and calibrated. One approved Sol retrieval comparison completed
-2026-10-23 06:56:12 UTC: tool-level `Internal Error`, no marker, zero GET/HEAD
-activity; result inconclusive. Active fixture version
-`f5e2791a-196f-4a8a-a990-590c9bd12891`, normal source `12b5383` restored
-following the temporary observation attempt. The owned diagnostic
-generation was deleted; private controls and public GET/HEAD return 404.
-Provider retrieval remains unqualified.
+Status: deployed and calibrated. Latest approved paired Sol experiment completed
+2026-10-23 07:57:15 UTC: IANA content passed, then FakeCo returned tool-level
+`Internal Error`, no fresh marker, and zero recorded requests/GET/HEAD counts
+through the 15-second late window. Result inconclusive. Active fixture version
+`9ea3e336-0cf8-41e0-b44b-09e448fd70cb`, normal source `12b5383` restored after
+the temporary observation deployment. Both owned sessions deleted; private
+controls and public diagnostic GET/HEAD absent. Fresh retrieval remains unqualified.
 
 The later [v2 hosted calibration](search-semantics-request-observation.md#approved-v2-hosted-calibration-and-normal-restoration)
 passed all seven public responses and seven exact observation counters, including
 the trailing-slash variant. Diagnostic counts 1/1; both sessions deleted and normal
 configuration restored 2026-10-23 07:47:09 UTC. This calibrates synthetic origin
-instrumentation; provider retrieval remains unqualified. No further paid probe ran.
+instrumentation; provider retrieval remained unqualified. The paired result below
+supersedes the earlier probe status.
 Earlier incomplete observation attempts remain recorded as historical evidence.
+
+The later [paired retrieval](search-semantics-paired-retrieval.md#approved-execution-and-inconclusive-result)
+used two direct Sol calls: IANA content passed, then FakeCo returned tool-level
+`Internal Error` and no fresh marker. Calibrated observation counters and diagnostic
+GET/HEAD stayed zero immediately and after 15 seconds. Both owned sessions cleared;
+normal fixture restored 2026-10-23 07:57:15 UTC. Fresh retrieval/semantics and
+upstream billing remain unqualified. No further paid probe or larger matrix.
 
 Purpose: replace the uncounted, GET-only JSON health comparison with ordinary
 HTML and durable GET/HEAD evidence at a stable URL. The health endpoint and
