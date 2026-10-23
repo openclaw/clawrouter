@@ -13,7 +13,7 @@ export async function boundedText(response, limit = 2 * 1024 * 1024) {
 }
 // Explicit live harness only. Never expose the real credential to the Worker,
 // native client, diagnostic output, or filesystem.
-export function liveUpstream({ key, models, mode, transport, probe = {} }) {
+export function liveUpstream({ key, models, mode, transport, probe = {}, routerUrl, sessionId }) {
   const calls = [], sessions = new Set(), sockets = new Set();
   let attempts = 0, firstReference, searchNamespace, failure, originRequest;
   function entry(model, path, extra = {}) {
@@ -21,15 +21,23 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
     assert.ok(models.includes(model), "upstream uses an allowed qualification model");
     const call = { model, path, ...extra, status: null }; calls.push(call); return call;
   }
-  function report(call) { console.error(JSON.stringify({ phase: "upstream", ...call })); }
+  function report(call) { console.error(JSON.stringify({ phase: routerUrl ? "deployed-router" : "upstream", ...call })); }
   async function outbound(request) {
     const url = new URL(request.url);
     assert.equal(url.origin, "https://api.openai.com");
     const headers = new Headers(request.headers); headers.set("authorization", `Bearer ${key}`);
     headers.delete("content-length"); headers.delete("host");
+    const destination = routerUrl ? new URL(`/v1/native/openai${url.pathname}`, routerUrl) : url;
+    if (routerUrl) {
+      headers.set("x-clawrouter-session-id", sessionId);
+      headers.set("x-clawrouter-client", "codex-search-smoke");
+      headers.delete("x-request-id");
+      headers.delete("cookie");
+    }
     if (request.headers.get("upgrade") === "websocket") {
       assert.equal(transport, "websocket"); assert.equal(url.pathname, "/v1/responses");
-      const ws = new NodeWebSocket("wss://api.openai.com/v1/responses", { headers: Object.fromEntries(headers), handshakeTimeout: 15000, maxPayload: 2 * 1024 * 1024 });
+      const socketUrl = new URL(destination); socketUrl.protocol = destination.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new NodeWebSocket(socketUrl, { headers: Object.fromEntries(headers), handshakeTimeout: 15000, maxPayload: 2 * 1024 * 1024, followRedirects: false });
       sockets.add(ws);
       await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", () => reject(new Error("live WebSocket handshake failed"))); });
       const pair = new WebSocketPair(); pair[1].accept();
@@ -73,8 +81,9 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
     if (call.opensControlledOrigin && probe.replay && !originRequest) originRequest = { body: structuredClone(body), headers: new Headers(headers) };
     if (!search && !url.pathname.endsWith("/compact")) body.max_output_tokens = Math.min(body.max_output_tokens ?? 4096, 4096);
     let response;
-    try { response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(90000) }); }
+    try { response = await fetch(destination, { method: "POST", headers, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(90000) }); }
     catch { throw new Error("live upstream transport failed"); }
+    if (routerUrl && response.ok) assert.equal(response.headers.get("x-clawrouter-content-retention"), "off", "deployed request retention is off");
     call.status = response.status; report(call);
     const responseHeaders = new Headers(response.headers); responseHeaders.delete("content-length"); responseHeaders.delete("content-encoding");
     if (!search) return new Response(response.body, { status: response.status, headers: responseHeaders });
