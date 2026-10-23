@@ -278,3 +278,13 @@ No automatic deploy or creation retry. Hosted lifecycle/counting remain unqualif
 
 Ignored local evidence: `observation-upgrade-reproduction.json` and
 `observation-diagnosis-readonly-inventory.json` in the campaign artifact directory.
+
+
+Correction commit `593a2fa`: Worker TypeScript and 27 focused fixture/observation/
+matrix/probe tests passed. Corrected Wrangler dry-run bundle also passed local
+upgrade/readiness checks. Autoreview completed scoped-clean through P2; report
+status: `/Users/joshavant/.codex/review-results/search-observation-readiness-20261023/status.json`.
+An initial review found no issues but failed report publication; the completed
+rerun produced the valid status above. No hosted deployment in this follow-up.
+The ignored retry operator is a blocked draft, pending its own review and fresh
+source/ownership pins before any deployment approval.
