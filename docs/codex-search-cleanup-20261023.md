@@ -1,12 +1,12 @@
 # FakeCo cleanup handoff — 2026-10-23
 
-Browser inspection: complete, confirmed by the user. **Batch 1 completed** at
-2026-10-23 09:28:51 UTC after the user's separate approval. Batch 2 was separately
-approved, but its first Worker DELETE returned HTTP 403/code `10064`; execution
-stopped. The user then approved consumer removal and one guarded retry. Neither
-was dispatched: fresh preflight found authoritative DNS `NXDOMAIN` for FakeCo.
-Worker/domain metadata remain; current application availability and revocations
-cannot be rechecked. Revised preconditions require approval. No credential switch.
+Browser inspection: complete, confirmed by the user. **Batches 1 and 2 completed**
+after separate approvals. Final core verification completed at **2026-10-23
+09:42:59 UTC**, with eight checks passed. Both FakeCo Workers, all six namespaces,
+serving routes/domain, both queues and the owned Access app/policies are absent.
+Production/shared infrastructure preserved. KV/R2, the dedicated service token,
+GitHub Environment and 1Password items remain for separately approved cleanup.
+No credential switch, DNS repair, paid probe, PR or push.
 This handoff supersedes historical cleanup identities, not the search qualification
 limits in the [campaign assessment](codex-search-qualification.md).
 
@@ -38,12 +38,12 @@ No main teardown, KV/R2 deletion, Access/service-token deletion, GitHub change o
 credential-manager cleanup. The local guarded main-teardown preview passed; it
 made no Cloudflare requests and did not execute deletion.
 
-## Current state and retained pre-cleanup evidence
+## Retained evidence from before core cleanup
 
-- Main version remains `3d669069-fb9e-45e0-a71b-bded66c5b7b2`. Main settings,
+- Last deployed main version was `3d669069-fb9e-45e0-a71b-bded66c5b7b2`. Main settings,
   deployments, domains and Access fingerprints match the last qualified fixture
-  restoration. The former fixture version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`
-  and its infrastructure are now removed as recorded above.
+  restoration in the pre-deletion receipts. Both main and fixture deployments
+  are now removed; former fixture version `9ea3e336-0cf8-41e0-b44b-09e448fd70cb`.
 - All 36 account Worker settings inspected. No outside Worker references the
   owned KV, R2, queues, namespaces or either FakeCo Worker.
 - Search and bootstrap credentials revoked. Search monthly cap
@@ -114,7 +114,7 @@ Receipts: `cleanup-batch2-preflight-20261023.json`,
 `cleanup-batch2-consumer-correction-plan-20261023.json`. Successful consumer reads
 do not exercise its deletion permission. No source-code changes or paid probes.
 
-## Approved correction stopped before dispatch: DNS precondition
+## Earlier correction stopped before dispatch: DNS precondition
 
 Read-only reconciliation completed **09:39:27 UTC**, with five checks passed.
 Cloudflare's authoritative nameserver and public resolver `1.1.1.1` both return
@@ -136,47 +136,87 @@ reachability. The earlier 09:34:03 health/revocation/spend checks are historical
 not current availability evidence. Token access to DNS-record metadata was
 unavailable; no alternate credential or DNS repair was attempted.
 
-Prepared revised execution: refresh management ownership/dependencies and empty
-queues, then perform the same exact consumer removal and single guarded retry,
-using the last successful revocation/spend receipt instead of fresh application,
-key and health checks. **This changes the agreed precondition and needs approval**
-under the user's instruction to stop on unexpected state. It creates no DNS
+Revised execution prepared at that stage: refresh management ownership/dependencies
+and empty queues, then perform the same exact consumer removal and single guarded
+retry, using the last successful revocation/spend receipt instead of fresh
+application, key and health checks. This changed the agreed precondition and
+required approval under the user's instruction to stop on unexpected state. It created no DNS
 record, public re-exposure or alternate-host/IP path. Keep the same token/account
 and all existing deletion gates; stop on another refusal or residue. KV/R2,
 service token, GitHub and 1Password remain outside this batch.
 
 Receipts: `cleanup-batch2-dns-reconciliation-20261023.json` and
 `cleanup-batch2-dns-correction-plan-20261023.json`; the reconciliation hashes all
-three read-only preflight attempts. Do not replay exclusive receipts or treat
-the old application's historical health result as a current result.
+three read-only preflight attempts. The user subsequently approved this changed
+precondition, and execution completed below. Do not replay exclusive receipts or
+treat the old application's historical health result as a current result.
+
+## Approved revised correction completed
+
+The user approved use of historical revocation/spend evidence without restoring
+DNS. Refreshed management preflight passed six checks at **09:41:36 UTC**: exact
+identities/configurations, all 35 Worker settings, all 27 Access applications'
+policies, exclusive references, empty queues, retained storage and unchanged
+guarded-command hashes. No live application/key/health checks were claimed.
+
+Executed once each, with a durable journal before dispatch and the same account,
+token and guarded Worker endpoint:
+
+1. Disconnected consumer `0d6d0b30a9a94cbe9efbbf7b0ccaa7aa` (HTTP 200).
+   Direct GET returned 404; usage queue's consumer list empty, producer unchanged,
+   both queues retained and drained.
+2. Guarded main Worker DELETE acknowledged (HTTP 200). Before queue deletion,
+   verified Worker settings 404, Worker inventory absence, all five namespaces
+   absent, custom-domain binding absent and no serving routes. Unrelated
+   inventories and production settings/deployments preserved.
+3. Deleted usage queue and DLQ (HTTP 200 each); direct GETs confirmed 404.
+4. Deleted the exact Access application last (HTTP 202); subsequent GET confirmed
+   404. Both owned application policies return scoped 404 and are absent from
+   every remaining application's policy list and the reusable-policy inventory.
+
+Final read-only verification passed **eight checks at 09:42:59 UTC**. Account now
+has 34 Workers and 31 namespaces, exactly the unrelated baseline. All 26 remaining
+Access applications' identity/destination/policy sets and all 12 reusable policies
+preserved. Exact KV and R2 resources remain. No service-token API request, GitHub
+write or 1Password change; no additional deletion, DNS repair or paid call.
+
+Authoritative receipt: `cleanup-batch2-verification-20261023.json`, hashing
+`cleanup-batch2-revised-approved-preflight-20261023.json`,
+`cleanup-batch2-consumer-disconnect-20261023.json`, and
+`cleanup-batch2-core-retry-20261023.json`. Five approved management DELETEs total
+in this correction. The successful retry after disconnection supports the
+consumer-dependency explanation; it does not recover the original error message
+or establish the cause of the earlier DNS loss. Last router spend $3.614986 is
+historical evidence, not a post-deletion usage reading or upstream bill total.
 
 ## Exact remote ownership and remaining deletion set
 
 Account `91b59577e757131d68d55a471fe32aca` (OpenClaw), zone
 `72b20df9e990ac41365dadace6499187` (openclaw.ai). IDs, not name prefixes, define
-ownership. The five remaining main namespaces contain disposable canary data.
-The three fixture entries below are completed deletions, retained as evidence.
+ownership. All five main namespaces and the fixture namespace are deleted.
+Completed entries below are retained as evidence; only explicitly retained
+resources belong to later cleanup batches.
 
 | Resource | Identity |
 | --- | --- |
 | Fixture Worker — deleted | `clawrouter-search-semantics-fakeco`; final migration tag `v2-delete-fixture` |
 | Fixture route — deleted | `dd2ae4273551492db92c3b5ffc367529`; `https://clawrouter-fakeco.openclaw.ai/search-semantics/*` |
 | Fixture namespace — deleted | `148cbb6483b4421dbf8b25301a325865`; `SearchSemanticsObject` |
-| Main Worker | `clawrouter-edge-fakeco`, including assets, deployments and bound secret copies |
-| Main namespace | `e55d5c688dac4faa98ec8c360df61755`; `ContentArchiveCleanupObject` |
-| Main namespace | `0a4b9486e8454c53a395924376b7870b`; `GrantCredentialObject` |
-| Main namespace | `b4ecc28ff977441fa1b0290602edef76`; `PolicyBindingIndexObject` |
-| Main namespace | `b0da8f0bbf274503bd931cb112ffd3f5`; `BudgetLedgerObject` |
-| Main namespace | `e5672c159dac4cb28961af4d376b923d`; `UsageLedgerObject` |
-| Worker custom domain | `38664e272d7e218f4f84dfe42a9b268c60fd1fa7`; `clawrouter-fakeco.openclaw.ai` |
-| Usage queue | `bd6016244cd749f78e916e50a2ac7dd9`; sole producer/consumer main FakeCo Worker |
-| DLQ | `2843acdd30004177a6c3a092f13d9ee3`; no producers or consumers |
-| KV | `ca69a07938214acf9fae2bfea2ee2e8d`; `clawrouter-policy-fakeco` |
-| R2 | `clawrouter-content-fakeco`; jurisdiction `default` |
-| Access application | `beac7325-b743-4eef-982f-117bb7d27cce`; `ClawRouter FakeCo Console` |
-| Application policies | `4a44c524-2d85-48ee-bdeb-3f1f5bd43913` and `63650e41-619d-40cc-a3fe-d2d28e7286d6` |
+| Main Worker — deleted | `clawrouter-edge-fakeco`, including assets, deployments and bound secret copies |
+| Main namespace — deleted | `e55d5c688dac4faa98ec8c360df61755`; `ContentArchiveCleanupObject` |
+| Main namespace — deleted | `0a4b9486e8454c53a395924376b7870b`; `GrantCredentialObject` |
+| Main namespace — deleted | `b4ecc28ff977441fa1b0290602edef76`; `PolicyBindingIndexObject` |
+| Main namespace — deleted | `b0da8f0bbf274503bd931cb112ffd3f5`; `BudgetLedgerObject` |
+| Main namespace — deleted | `e5672c159dac4cb28961af4d376b923d`; `UsageLedgerObject` |
+| Worker custom domain — deleted | `38664e272d7e218f4f84dfe42a9b268c60fd1fa7`; `clawrouter-fakeco.openclaw.ai` |
+| Usage queue — deleted | `bd6016244cd749f78e916e50a2ac7dd9`; sole consumer disconnected first |
+| DLQ — deleted | `2843acdd30004177a6c3a092f13d9ee3` |
+| KV — retained | `ca69a07938214acf9fae2bfea2ee2e8d`; `clawrouter-policy-fakeco` |
+| R2 — retained | `clawrouter-content-fakeco`; jurisdiction `default` |
+| Access application — deleted | `beac7325-b743-4eef-982f-117bb7d27cce`; `ClawRouter FakeCo Console` |
+| Application policies — absent | `4a44c524-2d85-48ee-bdeb-3f1f5bd43913` and `63650e41-619d-40cc-a3fe-d2d28e7286d6` |
 | Service token — manual browser deletion | `f6264117-b130-4b39-a4f9-4b01a17b4ffa`; `clawrouter-fakeco-codex-search-20261022` |
-| Router records in owned storage | Policies `fakeco_bootstrap_20261022`, `codex_search_canary_20261022`, `ui_dollars_smoke_20261022`; bootstrap/search credentials; canary ledgers and receipts |
+| Router records | Main Durable Object storage deleted; any copies in retained KV remain for later disposal. Historical policy IDs: `fakeco_bootstrap_20261022`, `codex_search_canary_20261022`, `ui_dollars_smoke_20261022` |
 | GitHub configuration — later approval | `openclaw/clawrouter` Environment `fakeco`, ID `25093378320`; exact names in `cleanup-readonly-github-20261023.json` |
 
 ## Separate approval batches
@@ -192,17 +232,11 @@ The three fixture entries below are completed deletions, retained as evidence.
    only the empty fixture Worker. Verify main FakeCo health and Access unchanged.
    This permanently deletes fixture data. Do not redeploy the normal fixture
    config afterward. Local Wrangler 4.147.0 dry-run passed: no bindings, no upload.
-2. **Core teardown: approved correction stopped on DNS; revised approval pending.**
-   Use the revised precondition sequence above before resuming. Recheck no serving fixture route or
-   outside dependencies, settled accounting and empty queues. Use the existing
-   [guarded teardown](fakeco.md#guarded-teardown), locked to FakeCo, with both
-   irreversible-storage confirmations. It removes the main Worker/storage, queues
-   and Access app; preserve Access if serving resources remain or deletion fails.
-   Keep KV until this command completes its identity checks. Verify all five main
-   namespaces and the owned custom-domain binding actually disappear; do not infer
-   absence from Worker deletion alone. Stop and reconcile any residue before a
-   separately approved corrective action. Verify application policies absent;
-   delete only verified owned residues. Preserve all reusable/shared policies.
+2. **Completed batch 2: core teardown after approved correction.** Consumer
+   disconnected, then existing [guarded teardown](fakeco.md#guarded-teardown)
+   executed once after revised precondition approval. Main Worker, five
+   namespaces, custom domain, queues and Access app/policies absent; all deletion
+   gates verified. KV retained for later disposal. Do not replay the teardown.
 3. **Retained resources, after another approval.** Once every writer is gone,
    re-list R2 objects/uploads, locks and notifications. If still empty, delete the
    exact R2 bucket and KV namespace. Unexpected content/integrations require

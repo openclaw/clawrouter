@@ -88,12 +88,13 @@ and [rollout history](codex-search-rollout.md) use this narrower qualification.
 
 ## Retained environment and handoff
 
-The user confirmed browser inspection complete. FakeCo remains retained pending
-separate cleanup approval. The [current cleanup handoff](codex-search-cleanup-20261023.md)
-records the exact deletion set and approval batches. Approved batch 1 completed
+The user confirmed browser inspection complete. Core FakeCo cleanup completed;
+KV/R2, the dedicated service token, GitHub Environment and 1Password items remain
+for separately approved cleanup. The [current cleanup handoff](codex-search-cleanup-20261023.md)
+records exact identities and approval batches. Approved batch 1 completed
 at 2026-10-23 09:28:51 UTC: bootstrap revoked, fixture route removed, fixture
 namespace deleted through its migration, and empty fixture Worker deleted.
-Both saved canary keys return 403 on inspection. Thirteen final checks passed:
+Both saved canary keys returned 403 on inspection at that stage. Thirteen final checks passed:
 main FakeCo health/version and Access preserved, production unchanged, other
 Workers/routes/namespaces preserved, queues empty and spend unchanged. Receipt:
 `cleanup-batch1-verification-20261023.json`.
@@ -115,10 +116,25 @@ binding, queues/sole consumer and Access unchanged; queues empty, KV/R2 retained
 production and unrelated infrastructure preserved. DNS loss timing/cause remain
 unconfirmed; the prior refused DELETE is not proven atomic. Earlier health,
 revocation and spend checks remain historical evidence. No DNS repair, alternate
-host/IP path, credential switch or paid probe. The handoff prepares the same
+host/IP path, credential switch or paid probe. The handoff prepared the same
 deletion sequence using historical revocation/spend evidence, requiring approval
 for that changed precondition. Receipts: `cleanup-batch2-dns-reconciliation-20261023.json`
-and `cleanup-batch2-dns-correction-plan-20261023.json`.
+and `cleanup-batch2-dns-correction-plan-20261023.json`. This was a historical stop;
+the user subsequently approved the revised precondition.
+
+The approved correction completed at **09:42:59 UTC**, with eight final checks
+passed. Sole consumer disconnected and verified absent, then the same guarded
+Worker DELETE succeeded once. Five main namespaces and the custom domain were
+verified absent before both empty queues were deleted; Access was deleted last.
+Both application policies absent from scoped GETs and all current application/
+reusable inventories. All unrelated Worker/namespace/domain/route inventories,
+production settings/deployments, 26 remaining Access apps and 12 reusable policies
+preserved. KV/R2 retained; service token, GitHub and 1Password untouched. Receipt:
+`cleanup-batch2-verification-20261023.json`, hashing preflight and both execution
+receipts. Five management DELETEs, no retry beyond the approved single core retry,
+no DNS repair and no paid call. Spend/revocation evidence is historical; no live
+application checks after removal. Success supports the consumer-dependency
+explanation without establishing the original refusal or DNS-loss cause.
 
 Read-only reconciliation at 2026-10-23 09:24:19 UTC passed 14 checks: main/fixture
 restoration fingerprints match, all 36 Worker dependencies and 27 Access apps'
@@ -148,9 +164,9 @@ browser inspection is complete. Historical registration IDs and exclusive
 experiment receipts must not be reused. The earlier release assessment itself
 made no live credential reads or remote queries; the later read-only inventory
 used targeted credential reads. Neither step changed remote state. The later
-approved batch 1 made only the mutations listed above; batch 2's sole attempt was
-rejected. Its inspected management resources remain, but subsequent DNS loss
-prevents a claim of unchanged availability. No PR, push or live provider
+approved batch 1 made only the mutations listed above; batch 2's initial attempt
+was rejected, followed by the separately approved correction and verified core
+removal. No PR, push or live provider
 probe. The fixture cleanup build passed a local Wrangler dry run before approval;
 the approved deletion migration subsequently deployed once and was verified.
 
