@@ -253,6 +253,62 @@ for host-relevant restrictions before preparing any targeted fixture/config
 change. Do not broaden permissions, disable protections, add robots rules, or
 repeat paid probes based on the generic error alone.
 
+### Completed read-only Safari bot/security inspection
+
+2026-10-23 06:27–06:29 UTC: verified the OpenClaw account and `openclaw.ai`
+zone in the existing Safari session. Opened configuration drawers for reading,
+then closed them without Save/Apply or changing any value. No credential reads,
+Cloudflare API calls/resource mutations, OpenAI calls, PR or push.
+
+Observed in Security > Settings:
+
+- AI bot policies: Search, Agent and Training each `Allow (do not block)`;
+  Bot Preference Sync off. AI Labyrinth off; Precursor off.
+- Super Bot Fight Mode: definitely automated traffic `Allow`, verified bots on,
+  JavaScript detections off. Static-resource protection state was not qualified.
+- Browser Integrity Check on. Security level is automated; its drawer explicitly
+  showed `I'm under attack mode: disabled` and an off switch.
+- Cloudflare Managed Ruleset and OWASP Core off. HTTP, network-layer and TLS
+  DDoS protections always active. Schema validation on, but zero endpoints and
+  zero active schemas shown. This does not establish per-request behavior.
+
+Security > Security rules showed no Custom rules (0/20), Rate limiting rules
+(0/2), or Managed rules; Response rules showed Cloudflare default protection.
+Rules > Overview showed one active Configuration Rule, `Catalog public API
+clients`, matching exactly `catalog.openclaw.ai`, with Browser Integrity Check
+as its displayed action. It does not match FakeCo. No Origin, URL Rewrite,
+Request/Response Header Transform, Cache or Cache Response rules were present.
+The two redirects matched other hostnames. No FakeCo BIC exception was visible
+in these viewed rules. Account-level inherited restrictions were not separately
+audited; do not call this an exhaustive effective-policy proof.
+
+AI Crawl Control > Security, filtered to OpenAI with inactive crawlers included,
+showed `Block Crawler` off individually for ChatGPT-User, OAI-SearchBot and GPTBot
+(verified in both screenshot and accessibility state). Seven-day zone-wide
+allowed/unsuccessful counters were not attributed to this host or probe.
+
+Finally, Security Events filtered to `Host equals
+clawrouter-fakeco.openclaw.ai`, 2026-10-23 06:18–06:28 UTC, showed no matching
+firewall events and no summary data. This covers the original fresh-page calls
+and the later health control. Sampling/excluded-request caveats still apply.
+Safari was left on this result, with no configuration drawer open.
+
+No explicit OpenAI crawler block found. BIC is a plausible, unconfirmed
+candidate: [Cloudflare documents header-based bot/crawler challenges and selective exceptions](https://developers.cloudflare.com/waf/tools/browser-integrity-check/).
+Enabled BIC plus no visible FakeCo exception does not prove that it rejected
+these requests; there is no matching event or response evidence.
+
+Next candidate for preparation/review, not execution: a temporary BIC-only
+exception limited to the exact FakeCo hostname and the public health/robots
+GET/HEAD paths, preserving all application authorization and other protections.
+Include robots in the proposed scope because rejection of a prerequisite robots
+fetch could otherwise confound a health-only test. Verify current effective rule
+scope and mutation/cleanup path first; prepare the exact rule, original-state
+comparison, one-call Sol control and deletion/absence checks before requesting
+approval. No zone-wide disable, inference, fixture deployment or broader
+semantics matrix is justified by this inspection. A failed comparison would
+remain inconclusive, not rule out all Cloudflare/provider restrictions.
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.
