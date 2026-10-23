@@ -144,7 +144,9 @@ export function DashboardScreen({ grants, grantsReady, grantsError, onOpenGrant,
       <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="dashboardStats" aria-label="access overview">
         <DashboardStat label={isAdmin ? "catalog coverage" : "available services"} value={isAdmin ? `${configuredServices.length}/${services.length}` : String(grantedServices.length)} note={isAdmin ? `${services.length - configuredServices.length} need attention` : `${usableServices.length} ready to call`} />
-        <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
+        {!isAdmin && usage.personal
+          ? <DashboardStat label="your requests" value={usageLoaded ? formatCount(usage.personal.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.personal.summary.totalTokens)} tokens · ${formatCount(usage.summary.requestCount)} across your policy pools` : "Usage unavailable"} />
+          : <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />}
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
         <DashboardStat label={spend.label} value={usageLoaded ? spend.value : "—"} note={usageLoaded ? `Last 30 days · ${spend.note}${isAdmin ? "" : " · across your policy pools"}` : "Usage unavailable"} />
