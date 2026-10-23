@@ -6,7 +6,7 @@ test("request prices display dollars and save existing and edited values as micr
   Object.assign(state.policies[0], { requestCostMicros: 1000, requestCostsMicros: { "search.web": 1000, "llm.responses": 0 } });
   await open(page);
   const fixed = page.getByRole("textbox", { name: "Fixed request cost ($)", exact: true });
-  const capabilities = page.getByRole("textbox", { name: "Price per request by capability ($)", exact: true });
+  const capabilities = page.getByRole("textbox", { name: "Price per request by capability ($) · JSON object", exact: true });
   await expect(fixed).toHaveValue("0.001");
   await expect(capabilities).toHaveValue('{\n  "search.web": 0.001,\n  "llm.responses": 0\n}');
   await tenant(page).fill("price-roundtrip");
