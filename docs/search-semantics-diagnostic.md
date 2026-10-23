@@ -3,15 +3,15 @@
 Status: deployed and calibrated. One approved Sol retrieval comparison completed
 2026-10-23 06:56:12 UTC: tool-level `Internal Error`, no marker, zero GET/HEAD
 activity; result inconclusive. Active fixture version
-`5739c9d6-c696-4358-ba31-5b4054cb5ba8`, normal source `12b5383` restored
+`e5e5231c-4477-4e4a-b95c-0f9c9e2b7101`, normal source `12b5383` restored
 following the temporary observation attempt. The owned diagnostic
 generation was deleted; private controls and public GET/HEAD return 404.
 Provider retrieval remains unqualified.
 
-The [temporary request-observation attempt](search-semantics-request-observation.md#approved-deployment-attempt-and-restoration)
-passed robots response comparisons but stopped at session creation. Normal
-configuration restored; observation counters remain unqualified. No further paid
-probe ran.
+The [readiness deployment and calibration](search-semantics-request-observation.md#approved-readiness-deployment-incomplete-calibration-and-qualified-restoration)
+passed all seven public responses, but captured only six requests and encountered
+intermittent unmarked control 404s. Both sessions cleared; normal configuration
+restored. Observation counters remain unqualified. No further paid probe ran.
 
 Purpose: replace the uncounted, GET-only JSON health comparison with ordinary
 HTML and durable GET/HEAD evidence at a stable URL. The health endpoint and

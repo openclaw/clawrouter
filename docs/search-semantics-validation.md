@@ -47,9 +47,9 @@ resolve them. No OpenAI clarification is assumed available.
 Original deployment ownership receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-deployment-receipt.json`.
 Current deployment ownership receipt:
-`.artifacts/fakeco-codex-search-20261022/request-observation-calibration-receipt.json`.
-Active normal fixture version: `5739c9d6-c696-4358-ba31-5b4054cb5ba8` at 100%.
-Current route ID: `edc2e346c12c4d1d880a20fd91c9e0d6` (Wrangler recreated the
+`.artifacts/fakeco-codex-search-20261022/request-observation-readiness-restoration-receipt.json`.
+Active normal fixture version: `e5e5231c-4477-4e4a-b95c-0f9c9e2b7101` at 100%.
+Current route ID: `adf4daadf3f0489ba46a5084f2193688` (Wrangler recreated the
 prefix route during the approved observation attempt/restoration;
 semantics unchanged).
 SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
@@ -542,6 +542,34 @@ returned 400 `invalid_input`; no session created. Access challenge intact. No
 Cloudflare resource writes or paid search calls. Browser rule inventory remains
 historical. Hosted counters remain unqualified; next mutation batch needs approval.
 See [review, exact runner and failure custody](search-semantics-request-observation.md#reviewed-runner-and-fresh-read-only-preflight).
+
+### Approved readiness calibration: six of seven captures; normal restored
+
+Batch 2026-10-23 07:29:05–07:35:04 UTC. Temporary version
+`fea5430a-e2ae-448e-84df-611db7e45c8b` passed readiness, marked empty baseline and
+both session creations. All seven public responses passed. Final observation
+read and its sole DELETE returned unmarked 404. Later private reads found the
+owned session active with six counts: only diagnostic trailing-slash GET was
+missing. No overflow/saturation; expiry unchanged. Final diagnostic-counter
+assertions did not run. Calibration remains incomplete; initial readiness was
+insufficient to establish stable capture/handler identity. Cause unconfirmed.
+
+Diagnostic owned DELETE acknowledged and absence verified. Observation DELETE
+not retried: its five-minute TTL elapsed, then marked collection/owned-ID 404
+verified at 07:34:27 UTC and reverified at 07:34:49. Reviewed restoration-only
+entrypoint `47cb04c` (P0–P2 scoped-clean) completed the already-approved cleanup.
+Temporary robots route `7ac3c4e743d145dc8f18a7ae43c4bae4` deleted; normal code
+bytes restored, temporary service binding absent. Current ownership above
+supersedes prior IDs. Main Worker, runtime/base bindings, namespace, unrelated
+infrastructure, Access and BIC preserved. No paid search, router writes, secret
+changes, new namespace, PR or push.
+
+Receipts: ignored `request-observation-readiness-calibration-receipt.json`,
+`request-observation-readiness-restoration-receipt.json` (current ownership), and
+`request-observation-readiness-batch-summary.json`. Full
+[evidence, capture table and cleanup](search-semantics-request-observation.md#approved-readiness-deployment-incomplete-calibration-and-qualified-restoration).
+Do not replay either executed batch. Further mutations need approval; paid
+comparisons remain gated on successful hosted observation calibration.
 
 ## Secret and credential preparation
 

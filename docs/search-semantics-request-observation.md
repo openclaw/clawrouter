@@ -1,13 +1,13 @@
 # Temporary request observations
 
-Status: approved temporary deployment completed; hosted calibration stopped at
-observation-session creation. Normal fixture restored at 2026-10-23 07:11:24 UTC.
-Current version `5739c9d6-c696-4358-ba31-5b4054cb5ba8`; prefix route ID
-`edc2e346c12c4d1d880a20fd91c9e0d6`; namespace
-`148cbb6483b4421dbf8b25301a325865`. Temporary robots route and service binding
-removed. No paid calls. Local readiness/status correction prepared after the
-failed calibration; not deployed. Observation counters remain unqualified; further
-Cloudflare mutations and paid comparisons require separate user approval.
+Status: approved readiness deployment completed; all seven public responses passed,
+but only six requests were observed. Calibration incomplete. Both owned sessions
+cleared; normal fixture restored at 2026-10-23 07:35:04 UTC.
+Current version `e5e5231c-4477-4e4a-b95c-0f9c9e2b7101`; prefix route ID
+`adf4daadf3f0489ba46a5084f2193688`; namespace
+`148cbb6483b4421dbf8b25301a325865`. Temporary robots route/service binding removed.
+No paid search calls. Hosted observation counters remain unqualified; further
+Cloudflare mutations and paid comparisons require separate approval.
 
 ## Read-only follow-up
 
@@ -345,5 +345,75 @@ the prior Catalog-only browser inspection remains historical.
 Current local receipts: `request-observation-readiness-preflight.json` and
 `request-observation-runner-preparation-receipt.json` in the campaign artifact
 directory. The reviewed operator and dependencies remain ignored on the feature
-branch. Temporary deployment, seven-request hosted calibration and qualified
-cleanup/restoration still require fresh user approval. No paid calls included.
+branch. These preparation receipts are historical; the approved execution and
+current ownership receipt are recorded below. No paid calls were included.
+
+
+## Approved readiness deployment, incomplete calibration and qualified restoration
+
+Approved batch started 2026-10-23 07:29:05 UTC. Source `593a2fa` deployed as
+`fea5430a-e2ae-448e-84df-611db7e45c8b`, prefix route
+`1c2b602bb58a4cb6b1db52e45820bdae`, temporary robots route
+`7ac3c4e743d145dc8f18a7ae43c4bae4`, with the existing main-Worker service binding.
+Readiness passed on its first GET at 07:29:19 UTC; marked empty baseline and both
+session creations passed. The initial owned snapshots showed zero counters.
+
+All seven public responses passed status/body/header checks. The final observation
+read returned unmarked 404 at 07:29:22 UTC, stopping counter validation. Read-only
+reconciliation at 07:30:17 UTC returned the same owned observation ID, unchanged
+expiry, no overflow/saturation, and only six recorded requests:
+
+| Public request | HTTP | Recorded count |
+| --- | --- | --- |
+| `/robots.txt` GET | 404 | 1 |
+| `/robots.txt` HEAD | 404 | 1 |
+| `/search-semantics/diagnostic` GET | 200 | 1 |
+| `/search-semantics/diagnostic` HEAD | 200 | 1 |
+| `/search-semantics/diagnostic?calibration=1` GET | 404 | 1 |
+| `/search-semantics/diagnostic/` GET | 404 | 0 |
+| `/search-semantics/health` GET | 200 | 1 |
+
+Diagnostic GET contained the private marker; HEAD was empty; HTML/cache headers
+and robots forwarding comparisons passed. Final diagnostic durable-counter
+validation did not run because the observation read failed first. No additional
+operator public requests occurred while this observation remained active; later
+reconciliation used private controls only. Seven successful responses do not
+qualify complete observation capture. Initial readiness also did not establish
+stable handler identity for all subsequent requests. Intermittent unmarked 404s
+and the missing capture remain unexplained; version propagation/capture failure
+are possible, not confirmed causes.
+
+Observation `c2667132-2ad2-4516-9344-955f4304defe` was created with expiry
+07:34:20.614 UTC. Its single DELETE attempt returned unmarked 404, and the later
+marked GET proved it still active. The DELETE was not retried. Diagnostic
+`ac1f54ea-67ab-4dcb-a0cc-1f21be8b035a` DELETE returned 200; owned-ID/collection
+absence verified. Mutations paused while observation TTL elapsed. At 07:34:27 UTC,
+read-only checks returned marked 404 for both observation collection and owned ID,
+plus diagnostic absence. The existing namespace remains allocated for later
+separately approved class-deletion cleanup; marked expiry cleanup clears the
+observation state/alarm, not the fixed object's allocation.
+
+Restoration continued within the approved cleanup scope using
+`complete-observation-readiness-restoration.mjs`. Its restoration functions match
+the reviewed runner; the new entrypoint was separately reviewed as frozen commit
+`47cb04c`, scoped-clean through P2. Exact source/session/version/route pins, TTL
+expiry, marked absence, and fresh infrastructure checks gated restoration. No
+session creation or DELETE retry in this continuation.
+
+Cleanup reverified at 07:34:49 UTC, then only owned robots route
+`7ac3c4e743d145dc8f18a7ae43c4bae4` was removed and normal config redeployed.
+Restoration verified 07:35:04 UTC. Current version/prefix route are at the top;
+normal code bytes match the prior normal deployment, exactly three normal
+bindings remain, and temporary service binding is absent. Main Worker stays on
+`3d669069-fb9e-45e0-a71b-bded66c5b7b2`; runtime/base settings, namespace, unrelated
+routes/domains, Access and BIC preserved. Dashboard challenge remains intact.
+No secret changes, router writes, new namespace, security relaxation, paid search
+call, PR or push. Browser rule inventory was not refreshed.
+
+Current ownership: ignored `request-observation-readiness-restoration-receipt.json`.
+Original failed calibration: `request-observation-readiness-calibration-receipt.json`.
+Combined outcome: `request-observation-readiness-batch-summary.json`.
+All are in the campaign artifact directory. Both batch runners now have exclusive
+execution receipts and must not be replayed. Further investigation should explain
+or stabilize handler identity and capture before another hosted calibration;
+paid comparisons remain gated on a successful calibration.
