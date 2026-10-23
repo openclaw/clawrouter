@@ -177,10 +177,54 @@ This confirms the direct Sol endpoint/request setup can return stable public
 page content. It does not prove a live origin fetch, because existing public
 content could come from a cache. The earlier fresh-fixture failures are not a
 universal failure of this endpoint/request setup. Fresh retrieval, cache-only,
-rotation and navigation semantics remain unqualified. Next candidate: inspect
-the fixture host's robots policy and public fetch prerequisites read-only,
-then design a bounded comparison before authorizing further paid calls or
-Cloudflare changes.
+rotation and navigation semantics remain unqualified.
+
+### Completed read-only public fetch prerequisite inspection
+
+2026-10-23 06:25:24–06:25:26 UTC: nine unauthenticated public HTTP GETs,
+DNS lookups and one strict TLS connection. No OpenAI/Cloudflare API calls,
+credential reads, fixture runs, registered page requests or resource mutations.
+Receipt: `.artifacts/fakeco-codex-search-20261022/search-fetch-prerequisites-receipt.json`.
+
+- Both A and AAAA lookups resolved (three records each). Strict hostname/chain
+  verification passed over TLS 1.3; the presented certificate expires
+  2027-01-21 03:37:36 GMT. This verifies reachability from the operator's machine.
+- HTTPS `/robots.txt` returned the router's JSON `route_not_found` 404 for an
+  ordinary diagnostic user-agent and the published OAI-SearchBot/ChatGPT-User
+  strings. No robots directives, challenge indicators, authentication challenge,
+  or redirect. HTTP `/robots.txt` also returned the same 404. A 4xx robots
+  response is unavailable under [RFC 9309 §2.3.1.3](https://www.rfc-editor.org/rfc/rfc9309.html#section-2.3.1.3),
+  which permits crawling; it is not an explicit disallow policy. This does not
+  establish the alpha endpoint's implementation or cached robots state.
+- `/search-semantics/health` returned the expected fixture JSON with HTTP 200
+  and `Cache-Control: no-store` for all three user-agent strings. No redirect or
+  detected challenge. `/search-semantics/robots.txt` returned fixture 404; the
+  standard robots location is at the origin root, outside the fixture route.
+- `/` returned a same-host 302 to `/dashboard`. The health URL did not redirect;
+  do not follow the dashboard path for a public-fetch control.
+
+The reviewed fixture/config remain byte-identical to commit `77bf4ac`. Source
+inspection confirms public pages are plain static HTML without JavaScript or
+authorization, but send `X-Robots-Tag: noindex`, require the exact HTTPS host and
+two UUID path components, and reject all query strings. The `noindex` header is
+an indexing/eligibility variable, not proof of a fetch block. The observed
+zero-hit fresh calls never obtained that page's header from this Worker, so it
+cannot directly explain their failure on first fetch. Provider handling is
+unqualified. The [official OpenAI crawler documentation](https://developers.openai.com/api/docs/bots)
+distinguishes search crawlers from user-triggered fetches; it does not document
+alpha/search handling of this fixture/header. User-agent checks here do not
+impersonate verified OpenAI egress or establish IP-based security behavior.
+
+No confirmed public-fetch prerequisite blocker found. No live registered HTML
+page was rechecked because the prior run was deleted and this inspection was
+read-only. Fresh/cache-only semantics remain inconclusive. Next bounded
+comparison proposal: one direct Sol live-mode open of the existing
+`https://clawrouter-fakeco.openclaw.ai/search-semantics/health`, fresh session,
+no inference/retry/Cloudflare mutation. Expected public health fields can test
+same-host provider retrieval without creating a run. Success would still not
+prove fresh HTML retrieval; failure would preserve host/network/robots/provider
+policy uncertainty. Do not change robots, noindex or security settings on this
+evidence alone.
 
 ## Secret and credential preparation
 
