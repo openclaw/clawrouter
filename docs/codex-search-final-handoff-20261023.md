@@ -110,10 +110,25 @@ An initial seven-pass run returned no findings but failed final source-stability
 verification after this handoff changed during the run. It produced no accepted
 report; those pass outputs are not a scoped-clean result.
 
-Repeat shared autoreview is pending against the committed handoff and unchanged
-runtime, with the entire branch diff against the pinned base and priority P2.
-The tree must remain unchanged until final verification completes. Final outputs:
-`~/.codex/review-results/codex-search-full-branch-20261023-frozen/`.
+Repeat shared autoreview completed **`scoped-clean` through P2**. All seven passes
+completed with zero findings; final source-stability verification passed and the
+helper exited 0. Engine: GPT-6.1 Sol, high reasoning.
+
+- Reviewed candidate: `1a359ae5766d9322114d974297c10e7a38dcffbc`.
+- Base: `c130b15727021498493d541df168141f1d93528f`.
+- Entire committed branch diff: 104 files, including this handoff at that stage.
+- Runtime matches the validated `5f69436` source; `1a359ae` adds documentation.
+- Accepted report and seven preserved pass conclusions: `report.md` / `report.json`.
+- Machine-readable outcome: `status.json`.
+- Output directory: `~/.codex/review-results/codex-search-full-branch-20261023-frozen/`.
+
+The independent reviewer assessed supplied patch/source evidence; it did not run
+project tests or live probes. The validation above ran separately. The generated
+snapshot's removed/replacement lines occupy separate passes; compiler equality
+and the semantic comparison supplement that static-review limitation. No fresh
+retrieval/cache guarantee or upstream-billing qualification follows from this
+review. This result entry is a subsequent documentation-only update, outside the
+reviewed candidate; runtime source remains unchanged.
 
 ## Evidence index
 
