@@ -3,9 +3,11 @@
 A [source audit pinned to Codex CLI 0.163.0](codex-alpha-source-audit.md) confirms
 the live boolean and ordinary provider request/auth path. No client-side fix
 identified. Native completion/action events do not prove page retrieval; reviewed
-upstream tests mock Alpha. Optional structured `results` metadata is a diagnostic
-gap in our summaries. No runtime changes or additional paid calls from the audit;
-fresh retrieval and wider semantics remain unqualified.
+upstream tests mock Alpha. Subsequent local
+[metadata-only instrumentation](codex-alpha-source-audit.md#subsequent-local-results-diagnostics)
+addresses the optional structured `results` summary gap, with 62 focused synthetic
+tests passing. No deployment or additional paid probes; fresh retrieval and wider
+semantics remain unqualified.
 
 The approved [Responses/alpha comparison](search-semantics-endpoint-comparison.md#authorized-pair-and-verified-cleanup)
 completed at `2026-10-23T08:43:52.742Z`: `neither-observed`. Public calibration

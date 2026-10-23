@@ -28,6 +28,7 @@ test("Responses probe pins endpoint/model, live tool and cost bounds, and expose
   assert.equal(result.summary.targetOpened, true); assert.equal(result.summary.webSearchCalls, 1);
   assert.deepEqual(result.summary.actions, { search: 0, openPage: 1, findInPage: 0, unknown: 0 });
   assert.deepEqual(result.summary.usageTokens, { input: 10, output: 20, total: 30 });
+  assert.equal(Object.hasOwn(result.summary, "results"), false, "hosted Responses does not inherit Alpha's results classification");
   assert.doesNotMatch(JSON.stringify(result.summary), /fixture-private|fixture-only-key|fixture-unseen-marker|example\.com/);
 });
 

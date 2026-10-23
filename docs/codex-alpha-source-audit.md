@@ -69,7 +69,7 @@ reference/navigation and cited-answer results are narrower evidence and do not
 qualify arbitrary fresh-origin retrieval.
 
 The optional `results` array is opaque structured JSON, passed through to clients
-and history. Its absence and an empty array are supported. Current diagnostic
+and history. Its absence and an empty array are supported. At audit time, diagnostic
 summaries record text/error/marker flags and encrypted-output presence, but omit
 `results`. That is a useful instrumentation gap; source does not establish that
 the array contains a diagnostic reason for these failures.
@@ -114,15 +114,62 @@ No runtime patch or additional paid test justified by this audit alone. Keep
 fresh retrieval, broader cached/live semantics and Alpha billing unqualified.
 Do not repeat hosting experiments without a new discriminator.
 
-A focused next preparation could add a closed, metadata-only summary for
-structured-result presence/count and allowlisted result types, with synthetic
-tests. Preserve the no-content logging boundary; do not dump raw results or
-invent error-field semantics. That would improve evidence for a separately
-approved future probe, but it is not implemented or executed by this audit.
+The subsequent local instrumentation below addresses the summary gap. It does
+not identify a backend failure cause or authorize another provider probe.
 
 The [official OpenAI documentation](https://learn.chatgpt.com/docs/web-search#search-with-a-custom-model-provider)
 still describes standalone search as under development and requires compatible
 provider/model/runtime support. It does not resolve these observed fetch failures.
+
+## Subsequent local results diagnostics
+
+`searchProbeSummary` now adds this fixed metadata projection for Alpha responses:
+
+```json
+{
+  "results": {
+    "state": "array",
+    "count": 1,
+    "types": { "textResult": 1, "unknown": 0, "malformed": 0 }
+  }
+}
+```
+
+- `state`: `absent` when no own results field, `null` for explicit null, `array`
+  for an array, `invalid` for another field value. Non-object top-level values
+  have no results field and report `absent`.
+- `count`: array length, including zero; `null` for other states. Zero type
+  counters outside an array are not evidence that the provider returned no data.
+- `textResult`: entries whose own type is exactly `text_result`, the one label
+  observed in pinned upstream fixtures. This does not validate other DTO fields.
+- `unknown`: entries with an unrecognized nonempty string type. Names are not
+  copied to log keys or values, including prototype-related names.
+- `malformed`: null/non-object/array entries, or missing, empty or non-string
+  own type. No nested field inspection or inferred provider error schema.
+
+For arrays, the three counters partition the array length. The existing 2 MiB
+decoder bounds actual provider responses; the projection does not copy URLs,
+references, snippets, arbitrary type names, ciphertext or nested fields. Raw
+response values retain the existing memory-only return path. This changes the
+explicit direct/replay probe summaries, not ordinary native-adapter logging or
+Worker/admin behavior. Hosted Responses retains its separate summary and does
+not acquire Alpha result classifications.
+
+Diagnostic only: result counts do not affect existing text-error detection,
+success assertions or fresh-marker/origin-GET qualification. No provider calls,
+deployment, credential read or exposure in this preparation. Earlier receipts
+remain historical; new source digests would be required for any future run.
+
+Validation: 62 focused synthetic tests passed:
+
+```sh
+node --test test/standalone-search-probe.test.mjs test/responses-search-probe.test.mjs test/search-semantics-matrix.test.mjs test/search-semantics-funnel.test.mjs test/search-semantics-endpoint-comparison.test.mjs
+```
+
+Coverage includes absent/null/empty/invalid results, unknown and malformed entries,
+prototype-related type names, private nested content, unchanged HTTP-200 error
+handling, bounded decoding and existing retrieval/cancellation/cleanup behavior.
+Independent autoreview is required before handoff.
 
 [schema]: https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/codex-api/src/search.rs
 [tool]: https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/ext/web-search/src/tool.rs#L97

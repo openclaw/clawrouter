@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 // Explicit diagnostic only. Keep output content and credentials in memory;
 // return a closed metadata projection suitable for qualification logs.
 export function searchProbeSummary(response, value, marker) {
+  return { ...searchOutputSummary(response, value, marker), results: searchResultsSummary(value) };
+}
+
+// Shared text/transport metadata. Hosted Responses has a different result schema.
+export function searchOutputSummary(response, value, marker) {
   const output = typeof value?.output === "string" ? value.output : "";
   const requestId = response.headers.get("x-request-id");
   return {
@@ -16,6 +21,22 @@ export function searchProbeSummary(response, value, marker) {
     hasUsage: value?.usage != null,
     hasEncryptedOutput: typeof value?.encrypted_output === "string",
   };
+}
+
+export function searchResultsSummary(value) {
+  const summary = { state: "absent", count: null, types: { textResult: 0, unknown: 0, malformed: 0 } };
+  if (value === null || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, "results")) return summary;
+  if (value.results === null) { summary.state = "null"; return summary; }
+  if (!Array.isArray(value.results)) { summary.state = "invalid"; return summary; }
+  summary.state = "array";
+  summary.count = value.results.length;
+  for (const entry of value.results) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry) || !Object.hasOwn(entry, "type") || typeof entry.type !== "string" || entry.type.length === 0) summary.types.malformed++;
+    // Only a type label observed in the pinned Codex fixtures; no DTO validation.
+    else if (entry.type === "text_result") summary.types.textResult++;
+    else summary.types.unknown++;
+  }
+  return summary;
 }
 
 export function assertSearchToolSuccess(value) {

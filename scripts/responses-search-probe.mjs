@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readSearchProbeJson, searchProbeSummary } from "./standalone-search-probe.mjs";
+import { readSearchProbeJson, searchOutputSummary } from "./standalone-search-probe.mjs";
 
 export const responseToolLimit = 3;
 export function responsesSearchBody(url) {
@@ -36,7 +36,7 @@ export function responsesSearchSummary(response, value, marker, url) {
   const usageTokens = tokens && [tokens.input_tokens, tokens.output_tokens, tokens.total_tokens].every(number => Number.isSafeInteger(number) && number >= 0)
     ? { input: tokens.input_tokens, output: tokens.output_tokens, total: tokens.total_tokens } : null;
   return {
-    ...searchProbeSummary(response, { output: text, usage: tokens }, marker),
+    ...searchOutputSummary(response, { output: text, usage: tokens }, marker),
     responseStatus, errorPresent, incomplete, refused, unexpectedOutput, webSearchCalls: calls.length,
     completedWebSearchCalls, actions, toolCallLimitExceeded, usageTokens,
     targetOpened: calls.some(item => item.status === "completed" && item.action?.type === "open_page" && item.action.url === url),
