@@ -1,8 +1,10 @@
 # Stable retrieval diagnostic
 
-Status: prepared locally only. No Worker deployment, hosted generation creation,
-Cloudflare setting change or paid search call authorized by this preparation.
-The last deployed fixture remains version `7c4bb07f-e01e-42f1-a784-7e58de842462`.
+Status: approved deployment and hosted calibration completed 2026-10-23
+06:53:10 UTC. Active fixture version
+`d29dd6b3-ceed-4d2c-93f5-c60fe791df26`, source `12b5383`. The owned diagnostic
+generation was deleted; private controls and public GET/HEAD return 404.
+No OpenAI call ran in this batch. Provider retrieval remains unqualified.
 
 Purpose: replace the uncounted, GET-only JSON health comparison with ordinary
 HTML and durable GET/HEAD evidence at a stable URL. The health endpoint and
@@ -51,10 +53,10 @@ Creation never fetches the public page. Keep `initial`/snapshots and marker in
 memory; project only ID, expiry, counts, timestamps and marker-match booleans
 into receipts. A helper failure is not permission to replace another generation.
 
-## Future rollout, calibration and one-call comparison
+## Rollout, calibration and one-call comparison
 
-Each hosted write/probe batch requires separate user approval. Nothing below
-ran during local preparation.
+Steps 1–3 completed in the approved deployment/calibration batch below. The
+one-call provider comparison in steps 4–6 still requires separate user approval.
 
 1. Read-only refresh: exact account/zone/route ownership, fixture version and
    binding, main FakeCo health and normal security state. New diagnostic path
@@ -63,13 +65,15 @@ ran during local preparation.
    Wrangler configuration and existing credential scope; no authentication
    fallback. Record new version. Verify health identity, public diagnostic 404
    with no active generation, and unauthorized controls 404. No security, robots,
-   DNS, Access, router, budget, route or namespace changes.
+   DNS, Access, router, budget, route pattern/destination or namespace changes.
+   Record any deployment-created route ID replacement for later cleanup.
 3. In that approved calibration batch, create one five-minute generation through
    authenticated control. Record its ID immediately. Make two public GETs and
    one HEAD; require matching HTML, empty HEAD body and exact counts 2/1, with
-   correct timestamps and unchanged existing matrix counters. Delete by ID in
-   `finally`; verify control and public GET/HEAD 404. Save metadata only. This
-   stage makes no OpenAI call.
+   correct timestamps. Compare existing owned matrix counters if available;
+   otherwise record that this hosted independence check remains unqualified.
+   Delete by ID in `finally`; verify control and public GET/HEAD 404. Save
+   metadata only. This stage makes no OpenAI call.
 4. After separate approval for one paid comparison, create a fresh five-minute
    generation and require zero counters. Send only the constant public URL to
    one direct Sol live-mode open, fresh session, short output, using the existing
@@ -83,6 +87,45 @@ ran during local preparation.
 6. Verify generation controls and public GET/HEAD return 404 after cleanup.
    Report partial failures and the owned ID immediately; never delete a different
    generation. No search retry or security relaxation follows automatically.
+
+## Completed deployment and calibration
+
+Reviewed source `12b53838cfb8c27a71d67ee2f5a7ad0c2cc3d7d9` deployed once to
+the existing fixture Worker. Previous version:
+`7c4bb07f-e01e-42f1-a784-7e58de842462`. New version:
+`d29dd6b3-ceed-4d2c-93f5-c60fe791df26` at 100%.
+
+Wrangler replaced internal route ID `3027364f1df44bcfa2b39ce11a1fea14` with
+`a7df3050ed59443aa1b2f96362ecdd94`. Pattern, Worker destination and fail-open
+setting match exactly. Substituting the old ID reproduces the complete baseline
+route-inventory hash; no other route changed. The settings difference is solely
+deployment annotations: substituting prior version annotations reproduces the
+baseline settings hash. Bindings, runtime, namespace, main Worker, domains and
+Access match baseline; BIC remains on. The preflight Safari rule inventory
+contained only the original Catalog rule, with no temporary FakeCo exception.
+Public unprovisioned diagnostic GET/HEAD and unauthorized controls returned 404;
+dashboard Access challenge remained intact.
+
+One authenticated 300-second generation, ID
+`690a3d4e-7849-4e84-a5b2-e751978766cc`, began with zero counters. Private
+reads did not increment them. Two public GETs returned the expected hidden
+marker; HEAD returned an empty body. Counts progressed 1/0 → 2/0 → 2/1;
+timestamps matched the methods and generation window. All three cache headers
+were `no-store`; no `CF-Cache-Status` or `Age` was reported. No marker appeared
+in headers or persisted receipts.
+
+Generation-scoped deletion completed at 06:53:08 UTC. Its private lookup,
+collection lookup and public GET/HEAD all returned 404. Postflight infrastructure
+matched the immediate deployed baseline. No matrix runs were created; both
+previously owned run controls remained 404 before/after. No active owned matrix
+run was available for hosted counter-independence comparison; local workerd
+independence tests passed. The registry object and namespace remain allocated.
+
+Metadata receipts, under ignored `.artifacts/fakeco-codex-search-20261022/`:
+`search-diagnostic-deployment-receipt.json` and
+`search-diagnostic-calibration-receipt.json`. No router application writes,
+paid search/inference calls, PR or push. Next: separately approved one-call Sol
+comparison using a fresh generation and a zero-counter baseline.
 
 ## Interpretation and rollback
 
@@ -106,5 +149,5 @@ an unexpected concurrent deployment or delete a generation owned by another run.
 
 Local verification: Worker TypeScript check and 18 focused fixture/matrix/probe
 tests passed, including workerd concurrency, generation ownership, input/auth
-rejection, expiry before alarm and shared-alarm scheduling. Hosted calibration,
-deployed behavior and provider retrieval still require the approved stages above.
+rejection, expiry before alarm and shared-alarm scheduling. Hosted calibration
+passed as recorded above; provider retrieval still requires the separate probe.

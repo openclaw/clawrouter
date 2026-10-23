@@ -6,6 +6,9 @@ calibration run has since been created, checked, and deleted. No router credenti
 registered, budget changed, or existing canary cleaned up. A separately approved
 direct Sol probe ran two standalone search calls and deleted its fresh fixture run;
 the result was inconclusive, as detailed below. No inference ran.
+The later stable HTML diagnostic update and hosted calibration also completed;
+its generation was deleted, with no additional OpenAI call. See the completed
+diagnostic batch below. Provider retrieval remains unqualified.
 
 ## What this can establish
 
@@ -39,11 +42,14 @@ resolve them. No OpenAI clarification is assumed available.
 | Secret binding | `SEARCH_SEMANTICS_CONTROL_SHA256` |
 | Public readiness | `/search-semantics/health` |
 
-Deployment ownership receipt:
+Original deployment ownership receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-deployment-receipt.json`.
-Active fixture version: `7c4bb07f-e01e-42f1-a784-7e58de842462` at 100%.
-Route ID: `3027364f1df44bcfa2b39ce11a1fea14`.
-New SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
+Current deployment ownership receipt:
+`.artifacts/fakeco-codex-search-20261022/search-diagnostic-deployment-receipt.json`.
+Active fixture version: `d29dd6b3-ceed-4d2c-93f5-c60fe791df26` at 100%.
+Current route ID: `a7df3050ed59443aa1b2f96362ecdd94` (Wrangler replaced the
+original ID during the approved diagnostic update; route semantics unchanged).
+SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
 Readiness returns 200 with `cache-control: no-store`; unauthorized controls return
 404. The existing router remains on `3d669069-fb9e-45e0-a71b-bded66c5b7b2`;
 its settings, deployments, custom domains, Access app, and all prior routes are
@@ -65,9 +71,11 @@ using other Safari windows; further browser actions stopped. Evidence receipt:
 
 Cloudflare supports a path route in front of an existing custom-domain Worker;
 the route takes precedence for matching requests. See [Workers routes](https://developers.cloudflare.com/workers/configuration/routing/routes/).
-No router source imports the fixture. No existing Worker, Access policy, custom
-domain, queue, R2 bucket, KV namespace, or Durable Object is modified by fixture
-deployment. The public prefix is outside the existing FakeCo Access destinations;
+No router source imports the fixture. Original fixture provisioning did not
+modify preexisting Workers, Access policies, custom domains, queues, R2 buckets,
+KV namespaces or Durable Objects. Later diagnostic updates target only the
+fixture Worker and its own stored state. The public prefix is outside the
+existing FakeCo Access destinations;
 the control endpoints enforce their own bearer authentication. Recheck that
 baseline before later changes. Exact path-route creation is now exercised;
 route deletion and the destructive namespace migration remain untested.
@@ -394,6 +402,37 @@ GET/HEAD counters and timestamps, and generation-specific deletion. Existing
 health/matrix behavior, routes, bindings and migration configuration stay intact.
 No deployment or hosted generation creation in this preparation. Worker
 TypeScript check and 18 focused workerd fixture/matrix/probe tests passed.
+
+## Approved stable HTML deployment and hosted calibration
+
+Completed 2026-10-23 06:53:10 UTC. Reviewed source `12b5383` deployed once to
+the existing fixture Worker as version
+`d29dd6b3-ceed-4d2c-93f5-c60fe791df26`, replacing version
+`7c4bb07f-e01e-42f1-a784-7e58de842462`. Wrangler recreated the owned route as
+`a7df3050ed59443aa1b2f96362ecdd94`; old ID
+`3027364f1df44bcfa2b39ce11a1fea14` is absent. Read-only reconciliation proved
+the route inventory differs only by that ID, and Worker settings only by the
+reviewed deployment annotations. Bindings/runtime, namespace, main Worker,
+domains and Access stayed unchanged; BIC remains on. Record the new route ID
+for later cleanup; do not use the historical deployment receipt's ID.
+
+One five-minute diagnostic generation produced matching HTML on two GETs,
+empty HEAD output, exact durable counters 2/1 and correct timestamps. Private
+snapshots did not increment counters. All cache headers were `no-store`; no
+`CF-Cache-Status` or `Age` was reported. Deleted only owned generation
+`690a3d4e-7849-4e84-a5b2-e751978766cc`, then verified private generation and
+collection lookups plus public GET/HEAD all returned 404. Immediate postflight
+infrastructure matched baseline. Both prior owned matrix controls remained 404;
+no active matrix run was available for a hosted counter-independence comparison.
+Local workerd independence tests passed. No matrix run, router write, budget
+change, security change, paid search/inference call, PR or push in this batch.
+
+Receipts: ignored `search-diagnostic-deployment-receipt.json` and
+`search-diagnostic-calibration-receipt.json` under
+`.artifacts/fakeco-codex-search-20261022/`. Full interface, evidence limits and
+next separately approved one-call comparison:
+[stable retrieval diagnostic](search-semantics-diagnostic.md). This validates
+hosted diagnostic behavior, not OpenAI fetching, cached/live semantics or billing.
 
 ## Secret and credential preparation
 
