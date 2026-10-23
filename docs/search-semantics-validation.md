@@ -463,6 +463,23 @@ metadata persisted; no usage reported and billing remains unqualified. Receipt:
 Stop after this one call. Any further paid probe or Cloudflare mutation requires
 separate user approval.
 
+### Read-only event follow-up and prepared request observations
+
+Safari Security Events filtered to exact FakeCo host, 2026-10-23 06:55–06:57 UTC,
+showed no matching firewall events and no summary data. The zone-wide BIC block
+in that interval belonged to `docs.openclaw.ai`. No affirmative edge-block
+evidence; sampling/excluded requests still prevent a no-network/no-block claim.
+No Cloudflare setting changed; Safari remains on the exact-host result.
+
+Prepared locally: [temporary request observations](search-semantics-request-observation.md).
+An optional fixture wrapper observes robots forwarding and rejected/public fixture
+requests using only fixed method/path categories, query-presence, status and
+bounded aggregate counts. One five-minute authenticated session in a separate
+fixed object of the existing namespace; independent alarm and owned deletion.
+Temporary robots route and main-Worker service binding have deployment/restoration
+steps prepared. Normal fixture and main router source stay unchanged. No hosted
+session, deployment, new live route/binding or further search probe in this batch.
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.

@@ -7,6 +7,9 @@ activity; result inconclusive. Active fixture version
 generation was deleted; private controls and public GET/HEAD return 404.
 Provider retrieval remains unqualified.
 
+Prepared next, without deployment or another probe:
+[temporary request observations and restoration](search-semantics-request-observation.md).
+
 Purpose: replace the uncounted, GET-only JSON health comparison with ordinary
 HTML and durable GET/HEAD evidence at a stable URL. The health endpoint and
 existing UUID matrix pages retain their behavior.

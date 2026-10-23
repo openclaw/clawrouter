@@ -23,7 +23,7 @@ export function prepareSemanticsCredential(adminToken, id = "codex_search_semant
 function fixtureControl(token, fetcher) {
   assert.match(token ?? "", /^[a-zA-Z0-9_-]{40,128}$/, "inject SEARCH_SEMANTICS_CONTROL_TOKEN");
   return async function control(path, method = "GET", body) {
-    assert.match(path, /^(?:runs(?:\/[a-f0-9-]{36}(?:\/pages\/warm)?)?|diagnostic(?:\/[a-f0-9-]{36})?)$/);
+    assert.match(path, /^(?:runs(?:\/[a-f0-9-]{36}(?:\/pages\/warm)?)?|(?:diagnostic|observations)(?:\/[a-f0-9-]{36})?)$/);
     const response = await fetcher(`${fixtureOrigin}${prefix}_control/${path}`, {
       method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}), redirect: "error", signal: AbortSignal.timeout(15_000),
@@ -88,6 +88,24 @@ export async function createDiagnosticFixture({ token, fetcher = fetch, ttlSecon
     snapshot: async () => valid(await control(`diagnostic/${id}`)),
     close: async () => { assert.equal((await control(`diagnostic/${id}`, "DELETE")).deleted, true, "diagnostic cleanup confirmed"); },
   };
+}
+
+// Temporary observation entrypoint only; no public request or diagnostic creation.
+export async function createRequestObservation({ token, fetcher = fetch }) {
+  const control = fixtureControl(token, fetcher);
+  const initial = await control("observations", "POST", { ttlSeconds: 300 });
+  const id = initial.id;
+  assert.match(id ?? "", /^[a-f0-9-]{36}$/, "observation ID valid");
+  const valid = value => {
+    assert.equal(value.id, id, "observation identity preserved");
+    assert.ok(Number.isSafeInteger(value.expiresAt) && value.expiresAt > Date.now() + 30_000, "observation has at least 30 seconds remaining");
+    assert.ok(Array.isArray(value.counters) && value.counters.length <= 128, "observation counters bounded");
+    assert.ok(Number.isSafeInteger(value.overflow) && value.overflow >= 0 && value.overflow <= 1_000_000 && typeof value.saturated === "boolean", "observation limits valid");
+    return value;
+  };
+  valid(initial);
+  return { initial, snapshot: async () => valid(await control(`observations/${id}`)),
+    close: async () => { assert.equal((await control(`observations/${id}`, "DELETE")).deleted, true, "observation cleanup confirmed"); } };
 }
 
 // Adapter for the native harness. No request primes the unique public page.
