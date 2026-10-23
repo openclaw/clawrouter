@@ -11,6 +11,8 @@ import { inspectSource } from '../scripts/deploy-train-source.mjs';
 import { command, runTrain, uploadVersion } from '../scripts/deploy-train.mjs';
 import { assertSecretLineage, uploadMessage } from '../scripts/deploy-train-secrets.mjs';
 import { recoverRemote, failureIssue } from '../scripts/deploy-train-recover.mjs';
+import { createHash } from 'node:crypto';
+import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
 
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
@@ -81,6 +83,38 @@ test('zero-only success removes candidate and leaves exactly blue100', async () 
   assert.equal(f.state.status, 'rehearsed');
   assert.equal(f.state.deploymentId, f.deployment.id);
   assert.deepEqual(f.deployment.versions, [{ version_id: blue, percentage: 100 }]);
+});
+
+test('zero-smoke waits for asset version convergence before declaring the rehearsal passed', async () => {
+  const f = fixture();
+  const bytes = Buffer.from('fixture console asset');
+  const asset = { path: '/assets/index-Fixture123.js', bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  let calls = 0;
+  await runTrain({ ...f.options, mode: 'zero-smoke', smoke: async () => {
+    await verifyConsoleAssets({ assets: [asset], baseUrl: 'https://router.example', version: green,
+      readinessTimeoutMs: 2_000, now: f.options.now, wait: f.options.wait, log() {},
+      fetchImpl: async () => {
+        assert.equal(f.state.percentage, 0, 'never promote during asset readiness');
+        return new Response(bytes, { headers: { 'x-clawrouter-version-id': calls++ === 0 ? blue : green } });
+      } });
+  } });
+  assert.equal(calls, 2);
+  assert.equal(f.state.status, 'rehearsed');
+  assert.deepEqual(posts(f).map(p => p.versions), [splitVersions(blue, green, 0), [{ version_id: blue, percentage: 100 }]]);
+});
+
+test('a selected-version asset failure preserves diagnostic metadata and restores blue at zero traffic', async () => {
+  const f = fixture();
+  const asset = { path: '/assets/index-Fixture123.js', bytes: 0, sha256: createHash('sha256').update('').digest('hex') };
+  await assert.rejects(runTrain({ ...f.options, smoke: () => verifyConsoleAssets({
+    assets: [asset], baseUrl: 'https://router.example', version: green, log() {},
+    fetchImpl: async () => new Response('fixture private response', { status: 503, headers: { 'x-clawrouter-version-id': green } }),
+  }) }), /http_status/);
+  assert.equal(f.state.status, 'rolled-back');
+  assert.match(f.state.failure, /index-Fixture123.js/);
+  assert.match(f.state.failure, /"status":503/);
+  assert.doesNotMatch(f.state.failure, /fixture private response/);
+  assert.deepEqual(posts(f).map(p => p.versions), [splitVersions(blue, green, 0), [{ version_id: blue, percentage: 100 }]]);
 });
 
 for (const [name, percentage] of [['initial override', 0], ['10 percent', 10], ['50 percent', 50], ['final full cutover', 100]]) {
