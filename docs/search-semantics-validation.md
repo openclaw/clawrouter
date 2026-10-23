@@ -154,9 +154,33 @@ pre-Worker rejection: [Security Events may use sampled data](https://developers.
 The dashboard also states that Worker subrequests are not included. The Sol
 semantics result remains inconclusive. No Cloudflare settings/resources changed,
 no credentials were read, and no additional OpenAI calls ran. Safari remains on
-the filtered result. Next candidate: a separately approved bounded direct live
-positive control against a stable public page, to distinguish general endpoint
-failure from fresh-fixture retrieval failure before repeating the hosted matrix.
+the filtered result.
+
+### Completed stable public-page positive control
+
+2026-10-23 06:24:22–06:24:23 UTC: one approved direct `/v1/alpha/search`
+operation for `gpt-6.1-sol`, fresh session, `external_web_access: true`, opened
+`https://www.iana.org/help/example-domains` with short response length. A local
+unauthenticated HTTP preflight returned 200 with the expected public content.
+The search call returned HTTP 200, 1,963 output characters, a search reference,
+and the expected page title, `example.com`, and RFC 2606 content. No internal,
+reference, or fetch error was detected. Raw tool output and encrypted output
+remained in memory; only closed metadata was saved.
+
+Request ID: `req_d17eddfba2ee4a7b93874efce2a19d98`. Receipt:
+`.artifacts/fakeco-codex-search-20261022/search-stable-public-sol-receipt.json`.
+Exactly one standalone search call; no retries, inference, Cloudflare API calls,
+resource mutations, router application writes, PR or push. No usage reported;
+upstream billing remains unqualified.
+
+This confirms the direct Sol endpoint/request setup can return stable public
+page content. It does not prove a live origin fetch, because existing public
+content could come from a cache. The earlier fresh-fixture failures are not a
+universal failure of this endpoint/request setup. Fresh retrieval, cache-only,
+rotation and navigation semantics remain unqualified. Next candidate: inspect
+the fixture host's robots policy and public fetch prerequisites read-only,
+then design a bounded comparison before authorizing further paid calls or
+Cloudflare changes.
 
 ## Secret and credential preparation
 
