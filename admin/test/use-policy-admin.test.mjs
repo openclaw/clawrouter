@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../src/domain.ts";
 import { consoleStatusPresentation } from "../src/status-display.ts";
+import { optionalRequestPriceMicros, requestPriceInput, requestPricesInput, requestPricesMicros } from "../src/request-price-input.ts";
 
 // Run the actual owner without installing React; browser journeys cover rendering and events.
 const hookSource = stripTypeScriptTypes(await readFile(new URL("../src/hooks/access/use-policy-admin.ts", import.meta.url), "utf8"))
@@ -13,7 +14,7 @@ const config = await readFile(new URL("../src/ui-config.ts", import.meta.url), "
 const defaultPolicy = evaluate(config.slice(config.indexOf("export const defaultPolicy"), config.indexOf("export const defaultAccess")), "defaultPolicy");
 const rolePresets = evaluate(config.slice(config.indexOf("export const rolePresets"), config.indexOf("export const navItems")), "rolePresets");
 const helpers = await readFile(new URL("../src/ui-helpers.ts", import.meta.url), "utf8");
-const policyFormFromPolicy = new Function("currencyInput", `${stripTypeScriptTypes(helpers.slice(helpers.indexOf("export function policyFormFromPolicy"), helpers.indexOf("export function adminOverviewFromPolicies"))).replace("export function", "function")}\nreturn policyFormFromPolicy;`)(currencyInput);
+const policyFormFromPolicy = new Function("currencyInput", "requestPriceInput", "requestPricesInput", `${stripTypeScriptTypes(helpers.slice(helpers.indexOf("export function policyFormFromPolicy"), helpers.indexOf("export function adminOverviewFromPolicies"))).replace("export function", "function")}\nreturn policyFormFromPolicy;`)(currencyInput, requestPriceInput, requestPricesInput);
 
 const shell = await readFile(new URL("../src/app-shell.tsx", import.meta.url), "utf8");
 const addStart = shell.indexOf("onAdd={(service) => {") + "onAdd={(service) => {".length;
@@ -390,7 +391,7 @@ for (const unchanged of [false, true]) {
     fixture.providers = ["openai", "openrouter", "anthropic"].map((id) => ({ id }));
     const original = { ...policy("policy_a"), tokenRole: unchanged ? "sandbox" : "service", monthlyBudgetMicros: 5_000_000, requestCostMicros: 500, providers: ["openai", "openrouter"] };
     hydrate(fixture, [original, policy("policy_b")]);
-    change(fixture, { enabled: false, monthlyBudgetMicros: "25", requestCostMicros: "900", tokenRole: "ops", providers: ["anthropic"], retainRequestContent: true });
+    change(fixture, { enabled: false, monthlyBudgetMicros: "25", requestCostDollars: "0.0009", tokenRole: "ops", providers: ["anthropic"], retainRequestContent: true });
     const operation = fixture.render().policies.save(event);
     const submitted = JSON.parse(fixture.requests[0].init.body);
     const { allProviders, ...canonical } = submitted;
@@ -402,7 +403,7 @@ for (const unchanged of [false, true]) {
     fixture.requests[0].resolve(canonical);
     await operation;
     const form = fixture.render().policies.form;
-    assert.deepEqual([form.tokenRole, form.monthlyBudgetMicros, form.requestCostMicros, form.providers, form.allProviders], ["sandbox", "5", "500", ["openai", "openrouter"], false]);
+    assert.deepEqual([form.tokenRole, form.monthlyBudgetMicros, form.requestCostDollars, form.providers, form.allProviders], ["sandbox", "5", "0.0005", ["openai", "openrouter"], false]);
     assert.equal(form.enabled, false);
     assert.equal(form.retainRequestContent, true);
     assert.equal(fixture.render().policies.dirty, true);
@@ -512,7 +513,7 @@ test("replacement field roundtrips preserve arrays, booleans and text without re
   const fixture = mount(), original = { ...policy("policy_a"), monthlyBudgetMicros: 5_000_000, providers: ["provider_a"] };
   fixture.providers = [{ id: "provider_a" }, { id: "provider_b" }];
   hydrate(fixture, [original, policy("policy_b")]);
-  change(fixture, { enabled: false, monthlyBudgetMicros: "25", providers: ["provider_b"], retainRequestContent: true, grantStrategy: "least_used", requestCostMicros: "9", grantFailover: false });
+  change(fixture, { enabled: false, monthlyBudgetMicros: "25", providers: ["provider_b"], retainRequestContent: true, grantStrategy: "least_used", requestCostDollars: "0.000009", grantFailover: false });
   const operation = fixture.render().policies.save(event);
   const { allProviders, ...canonical } = JSON.parse(fixture.requests[0].init.body);
   assert.equal(allProviders, false);
@@ -522,7 +523,7 @@ test("replacement field roundtrips preserve arrays, booleans and text without re
   change(fixture, { monthlyBudgetMicros: "5", providers: ["provider_a"], retainRequestContent: false, grantStrategy: "priority" });
   fixture.requests[0].resolve(canonical);
   await operation;
-  const expected = { enabled: false, tenantId: "later-tenant", monthlyBudgetMicros: "5", providers: ["provider_a"], retainRequestContent: false, grantStrategy: "priority", requestCostMicros: "9", grantFailover: false };
+  const expected = { enabled: false, tenantId: "later-tenant", monthlyBudgetMicros: "5", providers: ["provider_a"], retainRequestContent: false, grantStrategy: "priority", requestCostDollars: "0.000009", grantFailover: false };
   for (const [field, value] of Object.entries(expected)) assert.deepEqual(fixture.render().policies.form[field], value, field);
   const nextSave = fixture.render().policies.save(event);
   const payload = JSON.parse(fixture.requests[1].init.body);
@@ -832,7 +833,7 @@ function mount(demoMode = false) {
   const fixture = { requests, statuses, refreshes: 0, confirmations: 0, acceptDiscard: true, demoRows: [], providers: [] };
   const window = { confirm: () => { fixture.confirmations += 1; return fixture.acceptDiscard; } };
   const request = (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, init, resolve, reject }));
-  const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "currencyInput", "errorMessage", "knownPolicyProviders", "optionalCurrencyMicros", "optionalNumber", "parseEligibleGrants", "unique", "normalizeRequestCosts", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique, normalizeRequestCosts);
+  const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "currencyInput", "errorMessage", "knownPolicyProviders", "optionalCurrencyMicros", "optionalNumber", "parseEligibleGrants", "unique", "normalizeRequestCosts", "optionalRequestPriceMicros", "requestPriceInput", "requestPricesMicros", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique, normalizeRequestCosts, optionalRequestPriceMicros, requestPriceInput, requestPricesMicros);
   fixture.render = () => {
     cursor = 0;
     return usePolicyAdmin({ request, allowDemo: demoMode, gatewayOrigin: "https://console.example", session, demoMode, providers: fixture.providers, credentials: [], routes: {}, setStatus: (status) => statuses.push(status), refresh: () => { fixture.refreshes += 1; return new Promise(() => {}); }, syncDemoAdmin: (rows) => { fixture.demoRows = rows; } });
@@ -859,16 +860,52 @@ test("model allowlist and pool visibility round-trip and preserve later field ed
 
 test("capability prices survive an unrelated save and can be cleared", async () => {
   const fixture = ready();
-  hydrate(fixture, [{ ...policy("policy_a"), requestCostsMicros: { "search.web": 0 } }]);
-  assert.deepEqual(JSON.parse(fixture.render().policies.form.requestCostsMicros), { "search.web": 0 });
+  hydrate(fixture, [{ ...policy("policy_a"), requestCostMicros: 1000, requestCostsMicros: { "search.web": 1234567, "llm.responses": 0 } }]);
+  assert.equal(fixture.render().policies.form.requestCostDollars, "0.001");
+  assert.deepEqual(JSON.parse(fixture.render().policies.form.requestCostsDollars), { "search.web": 1.234567, "llm.responses": 0 });
   change(fixture, { tenantId: "later" });
   const save = fixture.render().policies.save(event);
   const submitted = JSON.parse(fixture.requests[0].init.body);
-  assert.deepEqual(submitted.requestCostsMicros, { "search.web": 0 });
+  assert.equal(submitted.requestCostMicros, 1000);
+  assert.deepEqual(submitted.requestCostsMicros, { "search.web": 1234567, "llm.responses": 0 });
   fixture.requests[0].resolve(submitted); await save;
-  change(fixture, { requestCostsMicros: "" });
+  change(fixture, { requestCostDollars: "", requestCostsDollars: "" });
   const clear = fixture.render().policies.save(event);
   const next = JSON.parse(fixture.requests[1].init.body);
   assert.equal(next.requestCostsMicros, null);
+  assert.equal(next.requestCostMicros, null);
   fixture.requests[1].resolve(next); await clear;
 });
+
+test("dollar price edits submit integer microdollars and preserve explicit free prices", async () => {
+  const fixture = ready();
+  change(fixture, { requestCostDollars: "0.001", requestCostsDollars: '{"search.web":0.000001,"llm.responses":0}' });
+  const save = fixture.render().policies.save(event);
+  const submitted = JSON.parse(fixture.requests[0].init.body);
+  assert.equal(submitted.requestCostMicros, 1000);
+  assert.deepEqual(submitted.requestCostsMicros, { "search.web": 1, "llm.responses": 0 });
+  assert.equal(Object.hasOwn(submitted, "requestCostDollars"), false);
+  assert.equal(Object.hasOwn(submitted, "requestCostsDollars"), false);
+  fixture.requests[0].resolve(submitted); await save;
+  assert.equal(fixture.render().policies.form.requestCostDollars, "0.001");
+  assert.equal(fixture.render().policies.dirty, false);
+  change(fixture, { requestCostDollars: "0" });
+  const free = fixture.render().policies.save(event);
+  const next = JSON.parse(fixture.requests[1].init.body);
+  assert.equal(next.requestCostMicros, 0);
+  fixture.requests[1].resolve(next); await free;
+});
+
+for (const fields of [
+  { requestCostDollars: "0.0000001" },
+  { requestCostsDollars: '{"search.web":0.0000001}' },
+]) {
+  test(`sub-microdollar ${Object.keys(fields)[0]} never sends a policy mutation`, async () => {
+    const fixture = ready();
+    change(fixture, fields);
+    await fixture.render().policies.save(event);
+    assert.equal(fixture.requests.length, 0);
+    assert.match(fixture.render().policies.error, /six decimal places/);
+    assert.equal(fixture.render().policies.dirty, true);
+  });
+}

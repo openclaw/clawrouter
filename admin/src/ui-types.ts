@@ -71,8 +71,8 @@ export interface PolicyForm {
   serviceTierAllowed: string;
   serviceTierModels: string;
   limitHint: string;
-  requestCostMicros: string;
-  requestCostsMicros: string;
+  requestCostDollars: string;
+  requestCostsDollars: string;
   budgetScope: NonNullable<AccessPolicy["budgetScope"]>;
   providers: string[];
   allProviders: boolean;

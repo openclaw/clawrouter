@@ -3,6 +3,7 @@ import { type FormEvent, useRef, useState } from "react";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
 import { policyFormFromPolicy } from "../../ui-helpers";
+import { optionalRequestPriceMicros, requestPriceInput, requestPricesMicros } from "../../request-price-input";
 import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, PolicyForm, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse } from "../../ui-types";
 
@@ -80,8 +81,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
         weeklyBudgetMicros: optionalCurrencyMicros(policyForm.weeklyBudgetMicros) ?? null,
         serviceTiers: { allowed: unique(policyForm.serviceTierAllowed.split(",").map(tier => tier.trim()).filter(Boolean)), models: policyForm.serviceTierModels.trim() ? JSON.parse(policyForm.serviceTierModels) : {} },
         limitHint: policyForm.limitHint.trim() || null,
-        requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
-        requestCostsMicros: normalizeRequestCosts(policyForm.requestCostsMicros.trim() ? JSON.parse(policyForm.requestCostsMicros) : null),
+        requestCostMicros: optionalRequestPriceMicros(policyForm.requestCostDollars) ?? null,
+        requestCostsMicros: normalizeRequestCosts(requestPricesMicros(policyForm.requestCostsDollars)),
         budgetScope: policyForm.budgetScope,
         budgetMode: policyForm.budgetMode,
         retainRequestContent: policyForm.retainRequestContent,
@@ -216,7 +217,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
 
   function applyPreset(role: keyof typeof rolePresets) {
     const preset = rolePresets[role], available = new Set(providers.map((provider) => provider.id));
-    setPolicyForm({ tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostMicros: preset.request, providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false });
+    setPolicyForm({ tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostDollars: requestPriceInput(optionalNumber(preset.request)), providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false });
   }
 
   function toggleProvider(providerId: string) {

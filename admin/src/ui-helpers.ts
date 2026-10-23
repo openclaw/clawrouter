@@ -1,4 +1,5 @@
 import providerIconManifest from "./provider-icons.json";
+import { requestPriceInput, requestPricesInput } from "./request-price-input";
 import {
   catalogProviderIds,
   currencyInput,
@@ -330,8 +331,8 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     serviceTierAllowed: (key.serviceTiers?.allowed ?? ["default", "flex", "priority"]).join(", "),
     serviceTierModels: key.serviceTiers?.models ? JSON.stringify(key.serviceTiers.models, null, 2) : "",
     limitHint: key.limitHint ?? "",
-    requestCostMicros: key.requestCostMicros?.toString() ?? "",
-    requestCostsMicros: key.requestCostsMicros ? JSON.stringify(key.requestCostsMicros, null, 2) : "",
+    requestCostDollars: requestPriceInput(key.requestCostMicros),
+    requestCostsDollars: requestPricesInput(key.requestCostsMicros),
     budgetScope: key.budgetScope ?? "policy",
     budgetMode: key.budgetMode ?? "reserve",
     providers: key.providers,
