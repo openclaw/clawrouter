@@ -258,6 +258,43 @@ test("the usage owner requires explicit event scope and does not change historic
   assert.deepEqual((await f.read("/v1/admin/usage", f.admin)).body.usage.events, [original]);
 });
 
+test("personal reads add caller-owned totals and admin reads add a per-principal breakdown", async (t) => {
+  const f = await fixture(t), now = Date.now();
+  await f.setPolicy("second", "second-tenant");
+  await f.bind("alice@example.com", ["shared", "second"]);
+  await f.setCredential("service", null);
+  await f.ingest("alice-key", { principal_id: "alice@example.com", credential_id: "alice", input_tokens: 10, output_tokens: 5, total_tokens: 15, actual_cost_micros: 3 });
+  await f.ingest("alice-alias", { principal_id: " Alice@Example.com ", credential_id: "alice-other", provider: "anthropic", occurred_at_ms: now - 86_400_000 });
+  await f.ingest("alice-second", { principal_id: "alice@example.com", policy_id: "second", tenant_id: "second-tenant", status: "server_error", status_code: 502 });
+  for (let index = 0; index < 105; index++) await f.ingest(`bob-${index}`, { principal_id: "bob@example.com", occurred_at_ms: now - index });
+  await f.ingest("service", { principal_id: null, credential_id: "service" });
+  await f.ingest("legacy", { key_id: "service" });
+  const alice = { requestCount: 2, successCount: 2, errorCount: 0, inputTokens: 12, outputTokens: 6, totalTokens: 18, actualCostMicros: 10, unpricedRequestCount: 0 };
+  const keyRead = (await f.read("/v1/usage", f.key("alice"))).body.usage;
+  assert.deepEqual(keyRead.personal.summary, alice);
+  assert.deepEqual(keyRead.personal.providers.map(row => [row.provider, row.requestCount]).sort(), [["anthropic", 1], ["openai", 1]]);
+  assert.equal(keyRead.personal.daily.reduce((count, day) => count + day.requestCount, 0), 2);
+  assert.equal(keyRead.summary.requestCount, 109);
+  assert.equal(keyRead.principals, undefined);
+  const sessionRead = (await f.read("/v1/session/usage", await f.login("alice@example.com"))).body.usage;
+  assert.deepEqual(sessionRead.personal.summary, { ...alice, requestCount: 3, errorCount: 1, inputTokens: 14, outputTokens: 7, totalTokens: 21, actualCostMicros: 17 });
+  assert.equal(sessionRead.summary.requestCount, 110);
+  assert.equal(JSON.stringify(sessionRead).includes("bob"), false);
+  const service = (await f.read("/v1/usage", f.key("service"))).body.usage;
+  assert.equal(service.personal.summary.requestCount, 1);
+  await f.setCredential("alice", "invalid");
+  assert.equal((await f.read("/v1/usage", f.key("alice"))).body.usage.personal.summary.requestCount, 0);
+  const admin = (await f.read("/v1/admin/usage", f.admin)).body.usage;
+  assert.equal(admin.personal, undefined);
+  assert.deepEqual(admin.principals.map(row => [row.principalId, row.credentialId, row.summary.requestCount]), [
+    ["bob@example.com", null, 105],
+    ["alice@example.com", null, 3],
+    [null, "service", 1],
+    [null, null, 1],
+  ]);
+  assert.equal(admin.principals.reduce((count, row) => count + row.summary.requestCount, 0), admin.summary.requestCount);
+});
+
 function ids(snapshot) { return snapshot.events.map(event => event.id).sort(); }
 function totals({ summary, providers, daily }) { return { summary, providers, daily }; }
 

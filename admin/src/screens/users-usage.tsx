@@ -24,6 +24,7 @@ import type {
   AdminTenantSummary,
   AdminUsageRow,
   PolicyBinding,
+  PrincipalUsage,
   ProxyCredential,
   RetainedRequestContent,
   ServiceItem,
@@ -239,6 +240,8 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
         {!usage.events.length ? <div className="emptyTable">{usageLoaded ? "No request audit events recorded yet." : "Request audit events unavailable."}</div> : null}
       </section>
 
+      {usage.principals ? <PrincipalUsageTable principals={usage.principals} loaded={usageLoaded} stale={usageStale} /> : null}
+
       <section className="analyticsPanel usageTablePanel budgetTablePanel">
         <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? usageStale ? "last known ledger" : "live ledger" : "policy limits only"}</span></div>
         <p className="panelIntro">UTC calendar month · Used includes reservations. Other policy or provider limits still apply.</p>
@@ -289,6 +292,30 @@ export function BudgetUsage({ row }: { row: AdminUsageRow }) {
       {presentAllowanceWindows(row.budget).filter(window => window.label !== "This month").map(window => <small key={window.label}>{window.text}</small>)}
       <span className={`budgetTrack${budget.exhausted ? " exhausted" : ""}`}><span style={{ width: `${budget.percent ?? 0}%` }} /></span>
     </span>
+  );
+}
+
+// Thirty-day totals per user across every policy, with unattributed service-key traffic listed by credential.
+function PrincipalUsageTable({ principals, loaded, stale }: { principals: PrincipalUsage[]; loaded: boolean; stale: boolean }) {
+  return (
+    <section className="analyticsPanel usageTablePanel">
+      <div className="tableSectionHeader secondaryTableHeader"><div><strong>Usage by user</strong><span>{principals.length} identities · last 30 days</span></div><span>{loaded ? stale ? "last known ledger" : "live ledger" : "ledger unavailable"}</span></div>
+      <EntityTable
+        columns={["user", "requests", "tokens", "errors", "accounted spend"]}
+        columnTemplate="minmax(220px, 1.4fr) 110px 140px 90px minmax(160px, 1fr)"
+        rows={principals.map((row) => ({
+          id: JSON.stringify([row.principalId, row.credentialId]),
+          cells: [
+            <EntityName icon={Users} title={row.principalId ?? (row.credentialId ? `service key ${row.credentialId}` : "unattributed")} subtitle={row.principalId ? "user" : "no principal"} />,
+            formatCount(row.summary.requestCount),
+            formatCount(row.summary.totalTokens),
+            formatCount(row.summary.errorCount),
+            presentAccountedSpend(row.summary).value,
+          ],
+        }))}
+      />
+      {!principals.length ? <div className="emptyTable">No requests recorded in this period.</div> : null}
+    </section>
   );
 }
 
