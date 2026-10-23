@@ -786,3 +786,14 @@ capability. Zero best-effort observations do not identify the failure layer.
 Fresh FakeCo retrieval, cached/live semantics and upstream billing remain
 unqualified. Larger matrix and further paid probes remain gated. No inference,
 router write, secret change, security relaxation, new namespace, PR or push.
+
+## Response-shape comparison prepared
+
+[Bounded operator and runbook](search-response-shape-comparison.md): IANA first,
+then the existing static FakeCo health URL only if IANA passes. At most two
+direct Sol Alpha calls; separate sessions, identical settings, no retries or
+hosting changes. Closed `results` metadata can distinguish nonempty arrays from
+absent/null/invalid/empty results alongside a tool-level error. It cannot qualify
+result contents, fresh retrieval, cache/live behavior, billing or the failure cause.
+Preparation is offline; execution remains separately gated. Existing receipts
+and resource ownership records remain unchanged.
