@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { directSearchProbe } from "./standalone-search-probe.mjs";
+import { assertSearchToolSuccess, directSearchProbe } from "./standalone-search-probe.mjs";
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Response: WorkerResponse, WebSocketPair } = require("miniflare");
 const NodeWebSocket = require("ws");
@@ -90,7 +90,7 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
       }
       assert.ok(typeof output === "string" && output.length, "search returns text output");
       assert.ok(!/invalid ref(?:erence|_id)|unable to resolve (?:open|find|click) call/i.test(output), "search output has no reference/tool error");
-      if (!probe.marker) assert.ok(!/internal error/i.test(output), "upstream search/navigation has no internal tool error");
+      if (!probe.marker) assertSearchToolSuccess({ output });
       firstReference ??= output.match(/turn\d+search\d+/)?.[0];
     }
     return new Response(text, { status: response.status, headers: responseHeaders });
@@ -107,5 +107,8 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
     }
     return results;
   }
-  return { outbound, replayOrigin, calls, sessions, get firstReference() { return firstReference; }, get searchNamespace() { return searchNamespace; }, check() { if (failure) throw failure; }, close() { for (const ws of sockets) ws.terminate(); } };
+  return { outbound: async request => {
+    try { return await outbound(request); }
+    catch (error) { failure ??= error; throw error; }
+  }, replayOrigin, calls, sessions, get firstReference() { return firstReference; }, get searchNamespace() { return searchNamespace; }, check() { if (failure) throw failure; }, close() { for (const ws of sockets) ws.terminate(); } };
 }

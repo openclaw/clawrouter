@@ -11,11 +11,18 @@ export function searchProbeSummary(response, value, marker) {
     outputChars: output.length,
     internalError: /internal error/i.test(output),
     referenceError: /invalid ref(?:erence|_id)|unable to resolve (?:open|find|click) call/i.test(output),
-    fetchError: /failed to fetch|not safe to open|blocked|error fetching|403 Forbidden|404 Not Found/i.test(output),
+    fetchError: /failed to fetch|not safe to open|error fetching|403 Forbidden|404 Not Found/i.test(output),
     markerReturned: !!marker && output.includes(marker),
     hasUsage: value?.usage != null,
     hasEncryptedOutput: typeof value?.encrypted_output === "string",
   };
+}
+
+export function assertSearchToolSuccess(value) {
+  assert.ok(typeof value?.output === "string" && value.output.length, "search returns text output");
+  const summary = searchProbeSummary(new Response(null), value);
+  assert.ok(!summary.referenceError, "search output has no reference/tool error");
+  assert.ok(!summary.internalError && !summary.fetchError, "upstream search/navigation has no internal or fetch tool error");
 }
 
 export async function directSearchProbe({ key, body, headers = {}, marker, fetcher = fetch }) {
