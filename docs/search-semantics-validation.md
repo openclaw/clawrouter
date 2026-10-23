@@ -1,8 +1,9 @@
 # FakeCo search semantics validation
 
 Fixture deployment approved and verified at 2026-10-23 04:45:59 UTC from
-`77bf4ac4fa1f155861b2415648242178ec17089b`. No synthetic pages created, router
-credential registered, budget changed, paid probe run, or existing canary cleaned up.
+`77bf4ac4fa1f155861b2415648242178ec17089b`. One separately approved synthetic
+calibration run has since been created, checked, and deleted. No router credential
+registered, budget changed, paid probe run, or existing canary cleaned up.
 
 ## What this can establish
 
@@ -54,7 +55,8 @@ no Workers Cache opt-in; allowed Worker settings/version reads also contain no
 cache/exports opt-in. Cloudflare documents that [omitting the cache block disables
 Workers Cache](https://developers.cloudflare.com/workers/cache/configuration/).
 This is configuration evidence, not an empirical guarantee of every request.
-Run separately approved counter calibration before claiming cache-only semantics.
+The separately approved counter calibration below passed; OpenAI search semantics
+remain unqualified pending fresh controlled provider probes.
 The default-cache configuration page was not inspected after the user began
 using other Safari windows; further browser actions stopped. Evidence receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-cache-inspection.json`.
@@ -87,6 +89,28 @@ check the run again before deleting it. The matrix waits two seconds after each
 call and checks fresh cached-page totals again at the end for late hits. This
 does not bound arbitrarily delayed provider background work. No public test page
 is fetched by readiness.
+
+## Completed hosted counter calibration
+
+One approved run with five-minute expiry passed against the deployed fixture.
+At exactly the same URL, two GETs and one HEAD produced exact totals of two GETs
+and one HEAD. Rotation changed the hidden marker, retained the URL and totals,
+and reset revision GETs. The next GET returned the new marker, with totals of
+three GETs/one HEAD and one GET at revision 2. All other synthetic pages stayed
+at zero requests. No cache-busting query or request directive was used.
+
+Responses carried both CDN `no-store` headers and upstream-eligible
+`Cache-Control: public, max-age=3600`; none reported `CF-Cache-Status` or `Age`.
+Only the owned run was deleted. Its authenticated snapshot and public page then
+returned 404. The registry Durable Object remains allocated under the existing
+namespace; later namespace cleanup still requires its delete migration.
+Fixture/main deployments, settings and routes match the immediate baseline.
+No OpenAI calls or router application writes ran. Receipt:
+`.artifacts/fakeco-codex-search-20261022/search-semantics-calibration-receipt.json`.
+
+This validates counter and rotation behavior for these HTTP requests. It does not
+qualify provider live/cache-only semantics or all possible client/edge behavior.
+Next: separately approved direct Sol probing using a fresh run and hidden markers.
 
 ## Secret and credential preparation
 
