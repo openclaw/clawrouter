@@ -226,6 +226,33 @@ prove fresh HTML retrieval; failure would preserve host/network/robots/provider
 policy uncertainty. Do not change robots, noindex or security settings on this
 evidence alone.
 
+### Completed same-host health positive control: failed
+
+2026-10-23 06:26:41–06:26:42 UTC: one approved direct Sol alpha/search
+live-mode open of the existing fixture health URL, fresh session, short response
+length. Local HTTP preflight returned 200 with the correct fixture/environment/
+ok fields and `Cache-Control: no-store`. The provider returned HTTP 200 with
+273 output characters and a tool-level `Internal Error`; fixture identity and
+`ok: true` content were absent. A reference appeared in the output, but this
+does not establish successful retrieval. Request ID:
+`req_1969c4ec241d43d3b9af621f3f5b2f1a`.
+
+Receipt: `.artifacts/fakeco-codex-search-20261022/search-fixture-health-sol-receipt.json`.
+Exactly one call; no retries, inference, Cloudflare API calls/mutations, fixture
+run creation or router application writes. Only metadata persisted. No reported
+usage; billing remains unqualified. No PR or push.
+
+The failure also occurs at this stable, public, non-UUID URL with no `noindex`
+header. It is not confined to registered synthetic HTML pages. It does not
+establish the same underlying cause across both failures: the controls also
+differ in host, content type and provider cache/history. Health has no origin
+counter, so do not infer zero requests from this result. Stable IANA retrieval
+still passed; same-host provider retrieval and fresh/cache-only semantics remain
+unqualified. Next candidate: inspect Cloudflare bot/security settings read-only
+for host-relevant restrictions before preparing any targeted fixture/config
+change. Do not broaden permissions, disable protections, add robots rules, or
+repeat paid probes based on the generic error alone.
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.
