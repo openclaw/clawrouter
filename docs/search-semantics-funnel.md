@@ -1,8 +1,10 @@
 # Independent retrieval experiment: Tailscale Funnel
 
-Public exposure approved and external calibration passed, 2026-10-23. One paid
-retrieval remains separately pending authorization. No Cloudflare mutation required. Existing FakeCo resources
-and the inconclusive [paired retrieval result](search-semantics-paired-retrieval.md)
+Completed 2026-10-23: public calibration passed, then the separately approved one
+direct Sol search call returned HTTP-200 tool-level `Internal Error`, no marker
+and zero origin requests. Result inconclusive. Fixture/Funnel closed; independent
+checks confirmed both configurations `{}` and port 18765 free. No Cloudflare
+writes; existing FakeCo resources and the [paired retrieval result](search-semantics-paired-retrieval.md)
 remain unchanged.
 
 ## Hosting and boundary
@@ -12,7 +14,7 @@ Use the authenticated Mac and installed Tailscale 1.102.4:
 - CLI: `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
 - Public URL: `https://funnel-fixture.example.invalid/`.
 - Dedicated origin: `http://127.0.0.1:18765`.
-- Current read-only preflight: connected, MagicDNS enabled, certificate eligible,
+- Initial read-only preflight: connected, MagicDNS enabled, certificate eligible,
   Funnel/HTTPS capabilities present, Serve/Funnel configuration `{}`, port free.
 
 [Funnel](https://tailscale.com/docs/reference/tailscale-cli/funnel) exposes the
@@ -23,8 +25,8 @@ in the [versioned configuration source](https://github.com/tailscale/tailscale/b
 
 Do not enroll, read the fallback enrollment key, change tailnet policy, use
 `--bg`, or use global `reset`. Unexpected node identity or existing configuration
-blocks startup. Public HTTPS reachability has now been observed as recorded below;
-certificate issuer/state was not inspected. Real cleanup remains pending.
+blocks startup. Public HTTPS reachability and foreground cleanup were observed
+in this batch; certificate issuer/state was not inspected or revoked.
 
 ## Authorized exposure and calibration result
 
@@ -42,13 +44,48 @@ counted activity. Private witness confirmation matched the returned marker.
 
 The marker was then rotated; generation 1 armed, all counters zero, timestamps
 null. No further operator public requests. This qualifies public reachability
-for calibration; it does not qualify OpenAI search semantics. Paid retrieval
-calls: zero. Exposure remains bounded by the original deadline while awaiting
-separate approval; elapsed time does not authorize retrieval or renewal.
+for calibration; it does not qualify OpenAI search semantics. One paid retrieval
+was subsequently authorized and executed as recorded below. Exposure ended after
+that call, before its original deadline.
 
 Ownership/calibration receipt:
 `.artifacts/fakeco-codex-search-20261022/funnel-exposure-receipt.json`.
 Authorization: `funnel-exposure-authorization.json` in the same directory.
+This is the calibration-time snapshot; the final receipt below supersedes its
+active-exposure/pending-approval state.
+
+## Authorized retrieval and verified cleanup
+
+Exactly one direct `gpt-6.1-sol` call to
+`https://api.openai.com/v1/alpha/search`, `external_web_access: true`.
+Dispatched `2026-10-23T08:18:33.078Z`; immediate and 15-second-late observations
+complete at `2026-10-23T08:18:48.839Z`.
+
+- HTTP 200; tool-level `Internal Error`; no returned measurement marker.
+- Request ID: `req_2133b4eba9c245c1af161064d697a6f9`.
+- Text output length 233; encrypted output present; usage absent. Raw output,
+  ciphertext, credentials and the measurement marker were not persisted.
+- Both snapshots: root GET/HEAD 0/0, robots 0, rejected 0, overflow false,
+  first/last GET timestamps null; generation 1 and verified witness retained.
+- No retry, additional search, inference, router call, operator public request,
+  Cloudflare write, enrollment, policy change or fallback-key access.
+
+Fresh retrieval remains unqualified. Successful independent public calibration
+followed by this failure does not identify the cause of the Cloudflare failure,
+prove that no upstream network attempt occurred, or establish universal live/cache
+semantics. The broader semantics matrix remains gated. Usage was absent; upstream
+billing remains unqualified.
+
+The runner closed the fixture, ended its own foreground child and exited 0.
+It reported empty Funnel/Serve configurations. Independent post-exit checks
+confirmed both `{}` and no listener on 127.0.0.1:18765. No active exposure or
+pending Funnel cleanup. Certificate state/CT history was not revoked or cleared.
+
+Final execution/cleanup receipt:
+`.artifacts/fakeco-codex-search-20261022/funnel-retrieval-receipt.json`.
+Separate retrieval authorization: `funnel-retrieval-authorization.json` in the
+same directory. Do not replay under the completed approvals; any further public
+exposure or paid retrieval needs a fresh approved batch.
 
 ## First authorization: exposure and public calibration
 
@@ -183,4 +220,5 @@ Fixed by installing signal handlers before startup, propagating cancellation,
 and covering all three startup stages with regression tests. Review result:
 `~/.codex/review-results/search-funnel-preparation-20261023/`. The original review
 reports that finding; do not describe it as a clean review. Public HTTPS calibration
-has since passed as recorded above; foreground teardown remains pending.
+and foreground teardown have since passed as recorded above; the one upstream
+retrieval was inconclusive.

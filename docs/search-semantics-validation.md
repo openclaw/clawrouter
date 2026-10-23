@@ -2,9 +2,12 @@
 
 The independent [Tailscale Funnel experiment](search-semantics-funnel.md) passed
 authorized public calibration at `2026-10-23T08:16:48.420Z`: returned fixture marker
-and one corresponding origin GET. Marker rotated and counters reset; one paid
-OpenAI retrieval remains separately pending approval. Exposure expires at
-`2026-10-23T08:26:18.680Z`. Existing FakeCo deployment/results remain unchanged.
+and one corresponding origin GET. After marker rotation/counter reset, the one
+separately approved direct Sol retrieval returned HTTP-200 `Internal Error`, no
+marker and zero origin requests through the 15-second-late snapshot at
+`2026-10-23T08:18:48.839Z`. Result inconclusive; upstream semantics and billing
+remain unqualified. Fixture/Funnel closed, both configurations independently
+verified `{}`, port 18765 free. Existing FakeCo deployment/results unchanged.
 
 Fixture deployment approved and verified at 2026-10-23 04:45:59 UTC from
 `77bf4ac4fa1f155861b2415648242178ec17089b`. One separately approved synthetic
