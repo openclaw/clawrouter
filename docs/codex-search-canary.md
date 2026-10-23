@@ -1,4 +1,9 @@
-# Codex search FakeCo canary runbook
+# Codex search FakeCo canary runbook — archived
+
+**Campaign closed; no live FakeCo deployment or pending cleanup.** The
+[final cleanup record](codex-search-cleanup-20261023.md) is authoritative for
+resource and credential disposition. The procedures below are historical
+snapshots, not instructions to recreate this deployment or replay its runners.
 
 Current campaign status (2026-10-23): use the [qualification and release assessment](codex-search-qualification.md).
 Deployment, native canary qualification and credential revocation completed.
@@ -6,17 +11,52 @@ Fresh retrieval, cache/live semantics and upstream billing remain unqualified.
 The final response-shape pair returned no `results` in either response; the Alpha
 investigation is stopped. Earlier readiness/preparation instructions below are
 historical and do not authorize replay, credential revival or another paid batch.
-Retain FakeCo for the user's browser inspection; cleanup still needs separate
-approval. No remote operations are performed by this local assessment.
+The user confirmed browser inspection complete. Approved cleanup batch 1 completed
+at 2026-10-23 09:28:51 UTC: bootstrap revoked; fixture route, namespace and Worker
+deleted. Batch 2 initially stopped on Worker DELETE 403/code 10064; its correction
+then stopped before dispatch on authoritative FakeCo DNS NXDOMAIN. The user
+approved using historical revocation/spend evidence without repairing DNS.
+Core cleanup completed and passed eight final checks at 09:42:59 UTC: sole
+consumer disconnected, then main Worker, five namespaces, custom domain, both
+queues and Access app/policies removed. Production/shared resources preserved.
+Use `cleanup-batch2-verification-20261023.json` for core removal. Approved retained
+resource cleanup then passed seven checks at 09:47:08 UTC: exact empty R2 bucket,
+KV namespace and GitHub Environment (nine secrets/four variables) deleted.
+The user then deleted the dedicated Access token and both dedicated 1Password
+items. A refreshed complete Safari list confirms token absence; Agent Secrets
+active/archive metadata confirms both item names absent. The shared Cloudflare
+credential item was also removed, confirmed intentional, then restored by the
+user. The restored configured reference passed eight fresh Cloudflare checks at
+09:52:28 UTC; all owned resources absent, production/shared resources preserved.
+GitHub and local exposure/config checks also passed. Final closure recorded at
+09:54:00 UTC in `cleanup-final-verification-20261023.json`; no planned cleanup
+remains. See the [current cleanup handoff](codex-search-cleanup-20261023.md).
+Evidence/history and shared credentials retained. No Recently Deleted purge,
+DNS repair, credential switch, paid closeout call, PR or push.
 
 The procedure snapshots below retain their original campaign stage.
 
-Original pre-deployment snapshot, superseded by the current assessment above:
-at that stage deployment, registration, paid deployed smoke and denial/revocation
-checks had not run. They subsequently completed with separate approvals.
-Desktop and non-Lite models remain excluded; no PR or provider message was sent.
+The first FakeCo deployment and ordinary paid OpenAI inference smoke passed in
+[run 39895613643](https://github.com/openclaw/clawrouter/actions/runs/39895613643),
+with explicit user authorization. Both deployed native WebSocket modes passed:
+cached Sol → Astra and live Astra → Sol, including compaction/reference reuse.
+Cap denial and credential revocation also passed at 2026-10-23 03:54:29 UTC:
+one 402 added zero cost, and the revoked key returns 403. Provider/policy/reporting
+agreed on $3.614986 spent; both queues were empty. The policy monthly cap equaled
+settled spend; daily/weekly and provider monthly limits remained $50, below the
+user's $200 ceiling. The manual browser checkpoint and separately approved
+cleanup subsequently completed. The reviewed tag
+is published; no PR was created. Desktop and non-Lite models are excluded.
 Fresh-origin retrieval, strict cache-only semantics, and upstream pricing remain
 unqualified. A limited canary must explicitly accept those limits.
+
+Before provisioning a new environment, review the
+[permission qualification and complete cleanup plan](codex-search-canary-cleanup.md).
+The existing teardown intentionally retains resources; the cleanup plan covers
+those resources too and records the separate Access service-token permission gap.
+For first-deployment history and its readiness snapshot, use the
+[first-deployment operator handoff](codex-search-canary-handoff.md); its initial
+deployment uses `provider_credentials=upload` and the verified explicit IdP UUID.
 
 ## Freeze and deployment source
 
@@ -53,7 +93,7 @@ public API account, no attached subscription/multi-account pool, and no account
 fallback. Confirm a configured provider budget and a quiet provider traffic
 window if provider-authority spend will be compared.
 
-After separate authorization to publish the candidate ref and deploy, dispatch
+After separate authorization to deploy, dispatch
 the existing locked workflow with its published tag and exact expected SHA:
 
 ```sh
@@ -63,13 +103,23 @@ gh workflow run deploy-cloudflare-fakeco.yml \
   -f provider_credentials=existing
 ```
 
-The tag is local until explicitly published. Dispatch cannot consume a local tag.
+The reviewed tag is now published and its remote commit was verified.
 `existing` requires an established FakeCo Worker with the required bindings;
 do not silently switch to uploading credentials. The workflow also performs
 ordinary live inference smoke outside the dedicated search canary budget.
 Require its target, Access/admin, credential, and provider smoke gates to pass.
 
 ## Dedicated canary policy and credential
+
+Registration is historical; do not rerun creation commands or revive this ID.
+Credential `codex_search_canary_20261022` is now revoked; its original expiry is
+2026-10-24 03:41:17.469 UTC.
+Initial provider monthly and policy daily/weekly/monthly limits were $5; the
+paid tests used $50 limits, with spend preserved. The final policy monthly limit
+is $3.614986 (zero remaining); provider monthly and policy daily/weekly limits
+remain $50. The provider baseline
+begins after bootstrap smoke. The historical read-only registration receipt
+is `.artifacts/fakeco-codex-search-20261022/search-registration-receipt.json`.
 
 The completed batch used policy/credential ID `codex_search_canary_20261022`.
 For a separately approved future run, choose a fresh policy/credential ID and
@@ -121,19 +171,28 @@ API key, Cloudflare token, or admin token is needed by the native smoke.
 
 ## Deployed native qualification
 
+Both modes below passed. These commands record the tested configuration; the
+campaign credential is now revoked. A new run needs a fresh credential and approval.
+
 Capture the provider-budget baseline before paid smoke using the observation
 command below. Run the two modes sequentially; they share the same dedicated
-$5 budget. Each invocation admits at most 32 routed operations and caps inference
+budget. The approved limits at that stage were $50. Astra opaque-state admission reserves
+up to $46.7144 in the pinned pricing envelope; $5 and $15 attempts therefore
+failed qualification on zero-cost 402 denials despite much lower settled spend.
+The fixture and harness default remain $5; explicitly pass the approved $50
+ceiling below. Each invocation admits at most 32 routed operations and caps inference
 output at 4,096 tokens per operation. Admission can stop earlier at the policy or
 provider budget. Do not raise a cap automatically on failure.
 
 ```sh
 CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs \
   --router-url https://clawrouter-fakeco.openclaw.ai --expected-environment fakeco \
+  --max-budget-micros 50000000 \
   --model gpt-6.1-sol --switch-model gpt-6-astra \
   --web-search cached --transport websocket --compact
 CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs \
   --router-url https://clawrouter-fakeco.openclaw.ai --expected-environment fakeco \
+  --max-budget-micros 50000000 \
   --model gpt-6-astra --switch-model gpt-6.1-sol \
   --web-search live --transport websocket --compact
 ```
@@ -186,6 +245,11 @@ error, or new DLQ backlog. Do not reset budgets or silently fall back to HTTP.
 
 ## Budget denial and rollback drill
 
+This campaign's cap-denial and credential-revocation checks passed. The denial
+receipt charged zero and the saved key now returns 403. Metadata receipt:
+`.artifacts/fakeco-codex-search-20261022/cap-denial-revocation-receipt.json`.
+The following commands remain a procedure for future separately approved runs.
+
 After capturing successful accounting, lower the dedicated monthly cap to its
 already-settled spend and make one denial probe. It should return 402 with no
 additional spend. Keep the cap positive so public budget status continues to
@@ -206,6 +270,9 @@ const readUsage = async () => {
 const before = await readUsage();
 assert.ok(Number.isSafeInteger(before.budget.spentMicros) && before.budget.spentMicros > 0);
 const policy = JSON.parse(await readFile('config/codex-search-canary-policy.json', 'utf8'));
+// Preserve the authorized daily/weekly headroom while testing monthly denial.
+policy.dailyBudgetMicros = before.budget.daily.limitMicros;
+policy.weeklyBudgetMicros = before.budget.weekly.limitMicros;
 await adminRequest('/v1/admin/policies/codex_search_canary_20261022', { method: 'PUT', responseMode: 'ack', body: { ...policy, monthlyBudgetMicros: before.budget.spentMicros } });
 const response = await fetch(`${process.env.CLAWROUTER_BASE_URL}/v1/native/openai/v1/alpha/search`, {
   method: 'POST', headers, redirect: 'error', signal: AbortSignal.timeout(10000),
@@ -237,3 +304,9 @@ locked FakeCo workflow against the previously recorded, reviewed published ref a
 its exact full `expected_sha`, keeping existing provider credentials. Revalidate
 health/Access/provider gates after restoration. This is code restoration, not a
 budget reset or secret rollback. Never tear down Durable Objects to roll back.
+
+The requested manual browser checkpoint completed before cleanup. At that stage,
+human Access admission used membership in the `openclaw` GitHub organization.
+At the user's request, `joshavant@gmail.com` was FakeCo's sole human admin email;
+Safari confirmed the admin role. The matching deployment variable was removed
+with the dedicated GitHub Environment during cleanup.
