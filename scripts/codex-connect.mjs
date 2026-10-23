@@ -42,6 +42,8 @@ function document(text) {
 }
 
 function fieldsFor(profile, options, catalog) {
+  // Legacy receipts without a search mode stay disabled. New-connection
+  // defaults are resolved in parse; refresh must not change saved preferences.
   return [
     [["model"], options.model], [["model_provider"], providerId(profile)],
     [["model_catalog_json"], catalogName(profile, hash(`${JSON.stringify(catalog.catalog)}\n`))],
@@ -227,7 +229,7 @@ function parse(args, env) {
   const profile = target === "desktop" ? null : options["--profile"] ?? "clawrouter";
   if (profile !== null && (!/^[a-zA-Z0-9_-]{1,64}$/.test(profile) || profile === "config")) throw new Error("profile must be 1–64 letters, digits, underscores, or hyphens, excluding config");
   if (command !== "connect" && ["--router-url", "--provider", "--model", "--service-tier", "--web-search"].some((name) => options[name])) throw new Error("connection settings belong to connect; remove and reconnect to change them");
-  const webSearch = options["--web-search"] ?? "disabled";
+  const webSearch = options["--web-search"] ?? (target === "cli" ? "cached" : "disabled");
   if (!["disabled", "cached", "live"].includes(webSearch)) throw new Error("--web-search must be disabled, cached, or live");
   if (target === "desktop" && webSearch !== "disabled") throw new Error("standalone search is currently qualified for CLI profiles only");
   return { command, target, profile, webSearch, home: resolve(options["--codex-home"] ?? env.CODEX_HOME ?? join(homedir(), ".codex")),
@@ -274,8 +276,8 @@ export async function manageCodex(args, env = process.env) {
       env: { ...env, CLAWROUTER_API_KEY: keyValue } });
     if ((settings.webSearch ?? "disabled") !== "disabled") {
       const version = /^codex-cli (\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(catalog.producer);
-      if (!version || Number(version[1]) === 0 && Number(version[2]) < 163) throw new Error("standalone search requires Codex CLI 0.163.0 or newer");
-      if (!catalog.standaloneSearchModels.includes(settings.model)) throw new Error("selected model has no qualified native standalone search offer; check the fixed tariff and single API account");
+      if (!version || Number(version[1]) === 0 && Number(version[2]) < 163) throw new Error("standalone search requires Codex CLI 0.163.0 or newer; connect with --web-search disabled for inference-only setup");
+      if (!catalog.standaloneSearchModels.includes(settings.model)) throw new Error("selected model has no qualified native standalone search offer; check the fixed tariff and single API account, or connect with --web-search disabled for inference-only setup");
       catalog.catalog.models = catalog.catalog.models.filter(model => catalog.standaloneSearchModels.includes(model.slug));
     }
     const selected = catalog.catalog.models.find((model) => model.slug === settings.model);
@@ -362,7 +364,7 @@ export async function manageCodex(args, env = process.env) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   if (process.argv.includes("--help")) {
-    process.stdout.write("Usage: node scripts/codex-connect.mjs <connect|verify|update|remove> [--target cli|desktop] [--profile clawrouter] [--codex-home DIR] [--codex PATH] [--key-file PATH] [--dry-run]\nconnect requires --router-url ORIGIN --provider ID --model UPSTREAM_SLUG [--service-tier default|priority for CLI only] [--web-search disabled|cached|live for CLI only].\nUses CLAWROUTER_API_KEY unless --key-file supplies it for this command. No key is stored. Start Codex with the environment key exported.\nCLI creates a separate profile. Desktop edits root routing defaults, also affecting unprofiled CLI; fully quit the app before changing them. Auth, sandbox, shell startup, and key files are untouched. Verify makes no inference calls. Remove does not revoke a key.\n");
+    process.stdout.write("Usage: node scripts/codex-connect.mjs <connect|verify|update|remove> [--target cli|desktop] [--profile clawrouter] [--codex-home DIR] [--codex PATH] [--key-file PATH] [--dry-run]\nconnect requires --router-url ORIGIN --provider ID --model UPSTREAM_SLUG [--service-tier default|priority for CLI only] [--web-search disabled|cached|live for CLI only].\nNew CLI profiles default to cached web search; use --web-search disabled for inference-only setup. Desktop stays disabled. Verify/update preserve the saved mode.\nUses CLAWROUTER_API_KEY unless --key-file supplies it for this command. No key is stored. Start Codex with the environment key exported.\nCLI creates a separate profile. Desktop edits root routing defaults, also affecting unprofiled CLI; fully quit the app before changing them. Auth, sandbox, shell startup, and key files are untouched. Verify makes no inference calls. Remove does not revoke a key.\n");
   } else {
     manageCodex(process.argv.slice(2)).then((summary) => process.stdout.write(`${JSON.stringify(summary)}\n`)).catch((error) => {
       process.stderr.write(`Codex setup failed: ${error.code ? "filesystem operation failed" : error.message}\n`);

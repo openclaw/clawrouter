@@ -1,8 +1,9 @@
 # Codex CLI search rollout candidate
 
 Current decision and evidence: [qualification and release assessment](codex-search-qualification.md).
-Keep search disabled by default; experimental opt-in only within the tested
-workflow scope. General rollout remains pending upstream billing qualification.
+At the user's request, new `codex:connect` CLI profiles default to cached search,
+with explicit live/disabled choices. The integration remains experimental within
+the tested workflow scope. General rollout remains pending upstream billing qualification.
 Fresh retrieval and strict cache-only behavior remain unqualified. Desktop and
 non-Lite models remain outside this campaign.
 

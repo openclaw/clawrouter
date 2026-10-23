@@ -30,7 +30,7 @@ const catalog = { version: "clawrouter.client-catalog.v1", scope: { authType: "p
 catalog.providers[0].offers = offersFor(catalog.providers[0].models);
 const base = '# base stays byte-identical\r\nmodel = "original"\r\nsandbox_mode = "workspace-write"\r\napproval_policy = "on-request"\r\n[model_providers.original]\r\nenv_key = "OTHER_KEY"\r\n';
 
-async function fixture(t) {
+async function fixture(t, { webSearch = "disabled" } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "clawrouter-connect-"));
   let server;
   // A failed after hook prevents later hooks from running. Close live resources
@@ -74,20 +74,25 @@ else process.exit(2);\n`);
   const origin = `http://127.0.0.1:${server.address().port}`;
   const env = { ...process.env, HOME: directory, CODEX_HOME: home, CLAWROUTER_API_KEY: secret, FIXTURE_BUNDLE: bundle };
   const common = ["--codex-home", home, "--codex", binary];
-  const connect = ["connect", "--router-url", origin, "--provider", "fixture", "--model", "fixture-model", "--service-tier", "priority", ...common];
+  // General lifecycle fixtures retain the older producer and explicitly opt out.
+  // Search fixtures pass null to exercise the real default without a flag.
+  const connect = ["connect", "--router-url", origin, "--provider", "fixture", "--model", "fixture-model", "--service-tier", "priority", ...(webSearch === null ? [] : ["--web-search", webSearch]), ...common];
   const profile = join(home, "clawrouter.config.toml");
   const read = async () => getStaticTOMLValue(parseTOML(await readFile(profile, "utf8")));
   return { directory, home, bundle, binary, server, state, env, common, connect, profile, read,
     run: (command, ...args) => manageCodex([command, ...common, ...args], env) };
 }
 
-for (const mode of ["live", "cached"]) test(`standalone ${mode} opt-in surfaces qualification limits through dry-run/verify/update and refuses a lost offer`, async t => {
-  const f = await fixture(t), provider = f.state.catalog.providers[0];
+for (const mode of [undefined, "live", "cached"]) test(`standalone ${mode ?? "default cached"} setup surfaces limits through dry-run/verify/update and refuses a lost offer`, async t => {
+  const f = await fixture(t, { webSearch: null }), provider = f.state.catalog.providers[0];
   await writeFile(f.binary, (await readFile(f.binary, "utf8")).replace("0.155.0", "0.163.0"));
+  const inferenceOnly = { ...provider.models[0], id: "fixture/no-search", upstream: "fixture-no-search", codexModel: descriptor.slug };
+  provider.models.push(inferenceOnly);
+  provider.offers.push(...offersFor([inferenceOnly]));
   provider.models[0].capabilities.push("search.web");
   provider.routes.push({ endpoint: "search", path: "/v1/alpha/search", methods: ["POST"], requestFormat: "openai.standalone_search", responseFormat: "openai.standalone_search" });
   provider.offers.push({ ...provider.offers[0], endpoint: "search", route: "/v1/native/fixture/v1/alpha/search" });
-  const args = [...f.connect, "--web-search", mode];
+  const args = mode === undefined ? f.connect : [...f.connect, "--web-search", mode];
   const planned = await manageCodex([...args, "--dry-run"], f.env);
   assert.equal(planned.warnings.length, 2);
   assert.match(planned.warnings[0], /experimental.*fresh-page.*strict cache-only.*unqualified/);
@@ -97,7 +102,8 @@ for (const mode of ["live", "cached"]) test(`standalone ${mode} opt-in surfaces 
   assert.deepEqual(applied.warnings, planned.warnings);
   assert.ok(!JSON.stringify(applied).includes(secret));
   const config = await f.read();
-  assert.equal(config.web_search, mode);
+  assert.equal(config.web_search, mode ?? "cached");
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, config.model_catalog_json), "utf8")).models.map(model => model.slug), ["fixture-model"]);
   assert.equal(config.model_providers.clawrouter_clawrouter.supports_standalone_web_search, true);
   assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, true);
   assert.deepEqual((await f.run("verify")).warnings, planned.warnings);
@@ -114,10 +120,50 @@ for (const mode of ["live", "cached"]) test(`standalone ${mode} opt-in surfaces 
   assert.equal(Object.hasOwn(await f.run("remove"), "warnings"), false);
 });
 
-test("standalone opt-in rejects an older producer before writing configuration", async t => {
-  const f = await fixture(t);
+test("default search rejects an older producer; explicit disabled still allows inference-only setup", async t => {
+  const f = await fixture(t, { webSearch: null });
+  await assert.rejects(manageCodex(f.connect, f.env), /0.163.0.*--web-search disabled/);
   await assert.rejects(manageCodex([...f.connect, "--web-search", "cached"], f.env), /0.163.0/);
   await assert.rejects(readFile(f.profile), { code: "ENOENT" });
+  const result = await manageCodex([...f.connect, "--web-search", "disabled"], f.env);
+  assert.equal((await f.read()).web_search, "disabled");
+  assert.equal(Object.hasOwn(result, "warnings"), false);
+});
+
+for (const eligibility of ["missing-search-offer", "non-Lite-model"]) test(`default search refuses ${eligibility} without changing files`, async t => {
+  const f = await fixture(t, { webSearch: null });
+  await writeFile(f.binary, (await readFile(f.binary, "utf8")).replace("0.155.0", "0.163.0"));
+  if (eligibility === "non-Lite-model") {
+    const provider = f.state.catalog.providers[0];
+    provider.models[0].capabilities.push("search.web");
+    provider.routes.push({ endpoint: "search", path: "/v1/alpha/search", methods: ["POST"], requestFormat: "openai.standalone_search", responseFormat: "openai.standalone_search" });
+    provider.offers.push({ ...provider.offers[0], endpoint: "search", route: "/v1/native/fixture/v1/alpha/search" });
+    await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, use_responses_lite: false }] }));
+  }
+  await assert.rejects(manageCodex(f.connect, f.env), /no qualified native standalone search offer.*--web-search disabled/);
+  assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+  await manageCodex([...f.connect, "--web-search", "disabled"], f.env);
+  assert.equal((await f.read()).web_search, "disabled");
+});
+
+test("verify/update preserve explicit-disabled and legacy missing-mode profiles under the new default", async t => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  for (const legacy of [false, true]) {
+    if (legacy) {
+      const text = await readFile(f.profile, "utf8"), newline = text.indexOf("\n"), prefix = "# clawrouter-connect-v1 ";
+      const state = JSON.parse(text.slice(prefix.length, newline));
+      delete state.webSearch;
+      await writeFile(f.profile, prefix + JSON.stringify(state) + text.slice(newline));
+    }
+    const before = await readFile(f.profile, "utf8");
+    assert.equal(Object.hasOwn(await f.run("verify"), "warnings"), false);
+    assert.equal(await readFile(f.profile, "utf8"), before);
+    assert.equal(Object.hasOwn(await f.run("update"), "warnings"), false);
+    const config = await f.read();
+    assert.equal(config.web_search, "disabled");
+    assert.equal(config.model_providers.clawrouter_clawrouter.supports_standalone_web_search, undefined);
+  }
 });
 
 test("fixture cleanup closes the listener and active connection when directory removal fails", async (t) => {
@@ -797,7 +843,7 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   }));
   f.state.catalog.providers[0].offers = offersFor(f.state.catalog.providers[0].models, false);
   const common = ["--codex-home", f.home, "--codex", nativeProducer];
-  await manageCodex(["connect", "--router-url", f.connect[2], "--provider", "fixture", "--model", "gpt-6-astra", ...common], env);
+  await manageCodex(["connect", "--router-url", f.connect[2], "--provider", "fixture", "--model", "gpt-6-astra", "--web-search", "disabled", ...common], env);
   const generated = await f.read();
   assert.equal(generated.model, "gpt-6-astra");
   assert.equal(generated.model_provider, "clawrouter_clawrouter");

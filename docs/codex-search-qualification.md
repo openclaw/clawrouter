@@ -6,9 +6,15 @@ from branch `feat/codex-standalone-search`, starting at `6359e16`.
 
 ## Release decision
 
-Keep search disabled by default. The evidence supports an experimental opt-in
-for the tested text-search workflows, with an explicit router tariff and one
-public OpenAI API account. It does not establish general equivalence to direct
+At the user's request, new `codex:connect` CLI profiles enable cached web search
+by default, replacing the earlier default-off recommendation. Explicit
+`--web-search live` and `--web-search disabled` remain available. Existing profiles
+retain their saved mode, including older receipts without a mode, and Desktop
+setup stays disabled. Missing search eligibility fails before writing files;
+inference-only setup requires an explicit disable choice.
+
+This remains an experimental integration for tested text-search workflows, with
+an explicit router tariff and one public OpenAI API account. It does not establish general equivalence to direct
 OpenAI authentication. General rollout remains pending upstream billing
 qualification; fresh-retrieval and strict cache-only claims remain blocked.
 
@@ -23,7 +29,7 @@ not seek billing credentials or provider clarification.
 
 | Surface | Verified evidence | Limit |
 | --- | --- | --- |
-| CLI setup/model gating | Explicit opt-in, minimum CLI 0.163.0, eligible native search offer, matching policy generation and Responses Lite descriptor | Minimum version check is not qualification of every later CLI release; catalog eligibility does not probe upstream |
+| CLI setup/model gating | New profiles default cached; minimum CLI 0.163.0, eligible native search offer, matching policy generation and Responses Lite descriptor | Minimum version check is not qualification of every later CLI release; catalog eligibility does not probe upstream; saved modes are preserved |
 | Public native workflows | CLI 0.163.0 search/open/click/find, cited answer and original-reference resume on eight listed models | Known-content workflows; not fresh-origin proof or a full model × mode × transport matrix |
 | Deployed FakeCo workflows | Cached Sol → Astra and live Astra → Sol over WebSocket inference; five search requests, 16 receipts and two automatic compactions per run | Search itself uses unary HTTP; no Desktop, non-Lite, media, feed or pool-failover qualification |
 | Session ownership | Caller-isolated upstream IDs, authority-owned account/policy binding, reference reuse after restart/resume/compaction, explicit restart on incompatible ownership | Local binding lifetime does not establish upstream reference lifetime |
@@ -68,7 +74,7 @@ does not replace the empirical limits above or qualify this endpoint's billing.
 
 | Contract | Implementation checked | Assessment |
 | --- | --- | --- |
-| Default off; explicit CLI opt-in | `scripts/codex-connect.mjs`, `scripts/codex-catalog.mjs` | Preserved; enabled setup summaries now surface experimental retrieval/cache limits and tariff/billing distinctions, including dry-run/verify/update |
+| New CLI default cached; explicit disable | `scripts/codex-connect.mjs`, `scripts/codex-catalog.mjs` | New connections enable eligible search; saved modes/legacy receipts and Desktop remain unchanged; enabled summaries retain experimental retrieval/cache and tariff/billing notices |
 | Request eligibility and caller/account binding | `worker/standalone-search.ts`, `worker/openai-public-account.ts`, `worker/discovery.ts`, `worker/proxy.ts` | Explicit tariff and single account checked in discovery and dispatch; stale owners cannot silently migrate references; no search failover |
 | Text command scope | `worker/standalone-search.ts`, `providers/openai.provider.yaml` | Only bounded search_query/open/click/find requests; no extra media/feed capability inferred |
 | Honest errors and fixed tariff | `worker/test/standalone-search.test.mjs`, `shared/request-pricing.ts` | Wire errors preserved; capability tariff overrides policy-wide tariff, including zero; in-flight admission freezes its tariff |
@@ -103,7 +109,7 @@ exclusive experiment receipts must not be reused. No PR, push, deployment,
 live provider probe, live credential read or remote resource change in this
 assessment.
 
-## Local verification
+## Earlier assessment verification
 
 - Setup/catalog: 59 passed, five optional native lifecycle tests skipped. Both
   cached/live notices exercised through planning, installation, verification and
@@ -130,6 +136,19 @@ node --test test/standalone-search-workerd.test.mjs
 Autoreview of `1ad6fcd` completed `scoped-clean` through P2 with GPT-6.1 Sol,
 high reasoning, no actionable findings. Static review of the committed change
 and supplied dependency context; the reviewer did not execute tests or probes.
+That review predates the subsequent user-requested default-on change; the
+default-off verification above describes the earlier assessment's test run.
 Outputs: `~/.codex/review-results/codex-search-release-assessment-20261023/`.
 Local assessment receipt:
 `.artifacts/fakeco-codex-search-20261022/release-assessment-receipt.json`.
+
+## Default-on setup verification
+
+The subsequent user request changes only the `codex:connect` default for new CLI
+profiles to cached search. Existing profiles and Desktop are not migrated;
+explicit live/disabled modes and the existing qualification notices remain.
+Focused setup/catalog tests: 63 passed, five optional native lifecycle tests
+skipped. Coverage includes default-enabled installation and catalog narrowing,
+explicit disable on older or search-ineligible producers, refusal before file
+writes, and preservation of explicit-disabled/legacy modes through verify/update.
+No new live qualification or deployment is part of the default change.

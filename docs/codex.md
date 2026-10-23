@@ -36,7 +36,13 @@ in the issued key's catalog. Provider readiness, session access, and model-less
 operation forms do not qualify a model. Use a router version that publishes
 operation offers; older catalogs fail setup before any files change.
 
-By default the profile disables web search and enables WebSockets only when every
+New CLI profiles enable cached web search by default. Use `--web-search disabled`
+for inference-only setup. Search requires CLI 0.163.0 or newer and an eligible
+search offer; an older producer or missing offer fails before writing files.
+Existing profiles keep their saved search mode through `verify` and `update`;
+remove and reconnect to change it. Desktop setup keeps search disabled.
+
+The profile enables WebSockets only when every
 exported model has a matching WebSocket offer for the same endpoint, route,
 policy, and generation. Codex applies that flag to the whole provider, including
 internal models. Catalog observations do not reserve budget or probe upstream;
@@ -44,12 +50,17 @@ token-priced offers remain request-dependent, and dispatch checks access and
 budget again. `--service-tier` defaults to
 `default`; request `priority` explicitly for Fast. A missing native descriptor
 or unqualified priority tier fails before installation. Use a producer that
-contains the selected model, such as Codex 0.155.0 for Astra.
+contains the selected model. Default search-enabled CLI setup needs 0.163.0 or
+newer; older producers require `--web-search disabled`.
 
-## Opt in to built-in CLI web search
+<a id="opt-in-to-built-in-cli-web-search"></a>
 
-With Codex CLI 0.163.0 or newer, add `--web-search live` or `--web-search cached`
-to `connect`. This is an experimental opt-in. Fresh-page retrieval, strict
+## Built-in CLI web search
+
+With Codex CLI 0.163.0 or newer, `codex:connect connect` defaults to
+`--web-search cached` for new CLI profiles. Use `--web-search live` for live mode
+or `--web-search disabled` to turn search off. The integration remains experimental.
+Fresh-page retrieval, strict
 cache-only behavior and upstream billing remain unqualified; see the current
 [qualification and release assessment](codex-search-qualification.md).
 The minimum supported version is enforced by setup; empirical CLI qualification
@@ -58,8 +69,8 @@ HTTP and WebSocket inference, and text search/navigation (`search_query`, `open`
 `click`, `find`), without qualifying every combination. The helper
 enables `supports_standalone_web_search` and narrows the
 exported catalog to eligible standalone-search models. WebSockets follow the
-authorized inference offers; search uses unary HTTP in either case. Search stays disabled
-without this option. Desktop, media commands, feeds, and account-pool failover
+authorized inference offers; search uses unary HTTP in either case. Desktop,
+media commands, feeds, and account-pool failover
 are outside this qualification.
 
 Qualification against the public API with Codex CLI 0.163.0 on 2026-10-22
@@ -411,7 +422,7 @@ account and model before use.
 
 Fusion discovery applies the same Chat model eligibility to its configured
 synthesizer and advisers; unavailable advisers remain optional.
-Responses-hosted search is separate from the opt-in standalone Alpha route above.
+Responses-hosted search is separate from the standalone Alpha route above.
 Reserve-mode hosted search needs a fixed policy tariff; token rates alone do not
 cover its tool fees or repeated search input. Keep Responses-hosted search disabled
 for this setup; [SOFT-mode hosted-tool metering](openai-hosted-search-metering.md)
