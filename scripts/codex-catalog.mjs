@@ -19,7 +19,7 @@ export function buildCodexCatalog(catalog, bundled, providerId) {
   const responseRoute = responses[0];
   if (!Array.isArray(bundled.models) || !bundled.models.length) throw new Error("native Codex export contains no models");
   const official = new Map(bundled.models.map((model) => [model.slug, model]));
-  const models = [], skipped = [], mappings = [], slugs = new Set();
+  const models = [], skipped = [], mappings = [], standaloneSearchModels = [], slugs = new Set();
   let generation, supportsWebsockets = responseRoute.websocket === "openai.responses";
   for (const model of provider.models ?? []) {
     if (!model.capabilities?.includes("llm.responses")) continue;
@@ -51,11 +51,14 @@ export function buildCodexCatalog(catalog, bundled, providerId) {
     const advertised = new Set(copy.service_tiers.map((tier) => tier.id));
     copy.additional_speed_tiers = (copy.additional_speed_tiers ?? []).filter((tier) => advertised.has(tier === "fast" ? "priority" : tier));
     if (copy.default_service_tier != null && !advertised.has(copy.default_service_tier)) copy.default_service_tier = null;
+    const searchRoutes = (provider.routes ?? []).filter(route => route.path === "/v1/alpha/search" && route.methods?.includes("POST") && route.requestFormat === "openai.standalone_search" && route.responseFormat === "openai.standalone_search" && !route.streaming);
+    if (descriptor.use_responses_lite === true && model.capabilities?.includes("search.web") && searchRoutes.length === 1
+      && matching(model, searchRoutes[0], "http").some(offer => offer.policyGeneration === generation)) standaloneSearchModels.push(upstream);
     models.push(copy);
     mappings.push({ route: model.id, upstream, descriptor: descriptor.slug });
   }
   if (!models.length) throw new Error("no authorized Responses model has exact native Codex metadata");
-  return { catalog: { models }, skipped, mappings, supportsWebsockets, nativeBasePath: `${provider.nativeBaseUrl}${responseRoute.path.slice(0, -"/responses".length)}` };
+  return { catalog: { models }, skipped, mappings, supportsWebsockets, standaloneSearchModels, nativeBasePath: `${provider.nativeBaseUrl}${responseRoute.path.slice(0, -"/responses".length)}` };
 }
 
 export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env }) {

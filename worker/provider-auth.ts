@@ -13,6 +13,7 @@ export interface GrantRequirement { provider: CompiledProvider; endpoint: Compil
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
   if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
+  if (requirement.endpoint.request_format === "openai.standalone_search" && grant && grant.kind !== "api_key") return false;
   if (requirement.endpoint.request_format === "openai.moderations" && grant && grant.kind !== "api_key") return false;
   if (requirement.endpoint.request_format === "openai.responses_input_tokens" && grant && grant.kind !== "api_key") return false;
   const transport = transportForGrant(requirement.provider, grant);

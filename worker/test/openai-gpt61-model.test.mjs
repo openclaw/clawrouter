@@ -15,7 +15,7 @@ const counts = { input: 272_000, output: 1_000, cached: 100_000, cacheWrite: 100
 
 test("gpt-6.1-sol resolves Chat, Responses and unary compact with versioned prices and its exact reasoning domain", () => {
   assert.equal(model.upstream, upstream);
-  assert.deepEqual(model.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"]);
+  assert.deepEqual(model.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens", "search.web"]);
   assert.equal(model.pricing_ref, "openai-gpt-6-1-sol-tiers-2026-10-18");
   assert.equal(model.pricing.effectiveAt, "2026-10-18");
   assert.deepEqual(model.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);

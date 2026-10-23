@@ -22,6 +22,19 @@ function catalog(models, overrides = {}) {
 }
 const model = { id: "fixture/sol-alias", upstream: "sol-alias", codexModel: "fixture-sol", capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "default" }, { id: "priority", aliases: ["fast"], maxInputTokens: null }] } };
 
+test("standalone search export needs exact eligible native offers, matching generation, and Lite metadata", () => {
+  const searchRoute = { endpoint: "search", path: "/v1/alpha/search", methods: ["POST"], requestFormat: "openai.standalone_search", responseFormat: "openai.standalone_search" };
+  const input = catalog([{ ...model, capabilities: ["llm.responses", "search.web"] }]);
+  input.providers[0].routes.push(searchRoute);
+  input.providers[0].offers.push(offer(model.id, "http", { endpoint: "search", route: "/v1/native/fixture/v1/alpha/search" }));
+  assert.deepEqual(buildCodexCatalog(input, { models: [descriptor] }, "fixture").standaloneSearchModels, ["sol-alias"]);
+  for (const changes of [{ eligible: false }, { routeKind: "unified" }, { transport: "websocket" }, { policyGeneration: "other" }, { route: "/elsewhere" }]) {
+    const denied = structuredClone(input); Object.assign(denied.providers[0].offers.at(-1), changes);
+    assert.deepEqual(buildCodexCatalog(denied, { models: [descriptor] }, "fixture").standaloneSearchModels, []);
+  }
+  assert.deepEqual(buildCodexCatalog(input, { models: [{ ...descriptor, use_responses_lite: false }] }, "fixture").standaloneSearchModels, []);
+});
+
 test("native-provider export preserves complete instructions and internal metadata while narrowing paid tiers", () => {
   const original = structuredClone(descriptor);
   const result = buildCodexCatalog(catalog([model]), { models: [descriptor] }, "fixture");

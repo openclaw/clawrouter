@@ -528,13 +528,15 @@ test("Fusion shares selected-policy model eligibility across key and session dis
         }
         // One connection snapshot and one read-only pool resolution per eligible
         // provider/policy serve both concrete rows and every Fusion participant.
+        // Stateful search separately rechecks actual membership (no default keys).
+        const admissionPools = calls.filter(({ path, body }) => path === "/grant-pools/resolve" && body.defaultKeys?.length !== 0);
         assert.equal(calls.filter(({ path }) => path === "/connections/resolve").length, mode === "key" ? 0 : 1);
         if (mode === "key") {
           assert.equal(calls.filter(({ path }) => path === "/admission/resolve").length, 1);
-          assert.equal(calls.filter(({ path }) => path === "/grant-pools/resolve").length, 0);
+          assert.equal(admissionPools.length, 0);
           continue;
         }
-        const pools = calls.filter(({ path }) => path === "/grant-pools/resolve").map(({ body }) => `${body.policyId}/${body.providerId}`);
+        const pools = admissionPools.map(({ body }) => `${body.policyId}/${body.providerId}`);
         assert.deepEqual(pools.sort(), (mode === "key" ? policies.slice(0, 1) : policies).flatMap(({ policyId, policy }) => policy.providers.map((provider) => `${policyId}/${provider}`)).sort());
       }
     }
@@ -810,6 +812,7 @@ async function fusionDiscoveryFixture(t, { bindings } = {}) {
       if (path === "/resolve") return Response.json({ initialized: true, bindings: bindings ?? policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
       if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states });
+      if (path === "/grant-pools/attachment") return Response.json({ attached: false, pending: false });
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
     } }) },
   };

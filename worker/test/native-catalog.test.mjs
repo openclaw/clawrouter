@@ -78,7 +78,11 @@ test("public same-key HTTP catalog carries authoritative input and context witho
   assert.equal(model.requestParameters.responses.toolCalling, "supported");
   assert.equal(model.requestParameters.chat_completions.toolCalling, "unsupported");
   assert.equal(model.pricing.maxInputTokens, 922000, "native context must not rewrite the budget envelope");
-  assert.ok(provider.offers.filter(offer => offer.modelId === sol).every(offer => offer.eligible));
+  const offers = provider.offers.filter(offer => offer.modelId === sol);
+  assert.ok(offers.filter(offer => offer.endpoint !== "standalone_search").every(offer => offer.eligible));
+  const search = offers.filter(offer => offer.endpoint === "standalone_search");
+  assert.ok(search.length > 0);
+  assert.ok(search.every(offer => !offer.eligible && offer.reasonCode === "pricing_required"), "unmetered policy still needs an explicit standalone search tariff");
   assert.ok(f.calls.every(path => path === "/admission/resolve"), "discovery performs no authority mutations");
 });
 

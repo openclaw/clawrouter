@@ -80,6 +80,7 @@ interface Rates {
 export type PricingGap = "audio_upload_bound" | "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
+  if (requestFormat === "openai.standalone_search") return "hosted_tool_usage";
   const compact = requestFormat === "openai.responses_compact";
   if (compact) requestFormat = "openai.responses";
   // File/context caps do not qualify a whole-upload billable token ceiling.
