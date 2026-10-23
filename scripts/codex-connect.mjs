@@ -277,7 +277,7 @@ export async function manageCodex(args, env = process.env) {
     if ((settings.webSearch ?? "disabled") !== "disabled") {
       const version = /^codex-cli (\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(catalog.producer);
       if (!version || Number(version[1]) === 0 && Number(version[2]) < 163) throw new Error("standalone search requires Codex CLI 0.163.0 or newer; connect with --web-search disabled for inference-only setup");
-      if (!catalog.standaloneSearchModels.includes(settings.model)) throw new Error("selected model has no qualified native standalone search offer; check the fixed tariff and single API account, or connect with --web-search disabled for inference-only setup");
+      if (!catalog.standaloneSearchModels.includes(settings.model)) throw new Error("selected model has no qualified native standalone search offer; check the search.web capability tariff and single API account, or connect with --web-search disabled for inference-only setup");
       catalog.catalog.models = catalog.catalog.models.filter(model => catalog.standaloneSearchModels.includes(model.slug));
     }
     const selected = catalog.catalog.models.find((model) => model.slug === settings.model);

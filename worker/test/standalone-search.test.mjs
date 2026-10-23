@@ -7,10 +7,17 @@ const { default: handler } = await import("../index.ts");
 
 const path = "/v1/native/openai/v1/alpha/search";
 const wire = '{ "encrypted_output": "fixture-ciphertext", "output": "fixture text 【turn0search0】", "future": {"keep":true} }\n';
-async function setup(t, options) {
+async function setup(t, { searchCost = 7, ...options } = {}) {
   const f = await fixture(t, false, { limit: 100_000, ...options });
+  if (searchCost !== null) {
+    f.policy.requestCostsMicros = { "search.web": searchCost };
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  }
   f.response = () => new Response(wire, { headers: { "content-type": "application/json" } });
-  f.search = (body = {}, headers = {}, route = path) => f.request({ model: "gpt-6-astra", id: "session-fixture", commands: { search_query: [{ q: "synthetic query" }] }, ...body }, headers, route);
+  f.search = (body = {}, headers = {}, route = path) => {
+    const payload = { model: "gpt-6-astra", id: "session-fixture", commands: { search_query: [{ q: "synthetic query" }] }, ...body };
+    return f.request(route.startsWith("/v1/proxy/") ? { body: payload } : payload, headers, route);
+  };
   return f;
 }
 async function expect(f, response, status, code) {
@@ -103,19 +110,51 @@ test("revoked caller and exhausted budgets cannot dispatch search", async t => {
   await expect(f, await f.search(), 403, "proxy_key_revoked");
   assert.equal(f.sent.length, 1);
 });
-test("search requires a fixed tariff even on otherwise unmetered keys", async t => {
-  const f = await setup(t, { fixedCost: null, limit: null });
-  await expect(f, await f.search(), 400, "pricing_required"); assert.equal(f.sent.length, 0);
+for (const fixedCost of [null, 0, 1, 1000]) test(`general request price cannot activate search on uncapped policies (${fixedCost})`, async t => {
+  const f = await setup(t, { fixedCost, searchCost: null, limit: null });
+  for (const route of [path, "/v1/proxy/openai/standalone_search"]) {
+    await expect(f, await f.search({}, {}, route), 400, "pricing_required");
+  }
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.bindings().length, 0, "denied search creates no session ownership");
+  assert.ok(f.events.every(event => event.actual_cost_micros === 0));
+  for (const name of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(name).reservations().length, 0);
+  f.response = () => Response.json({ object: "response", id: "resp_legacy", status: "completed", service_tier: "default", output: [], usage: { input_tokens: 10, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
+  await expect(f, await f.request({ max_output_tokens: 32 }), 200);
+  assert.equal(f.events.at(-1).cost_basis, fixedCost === null ? "manifest_pricing" : "policy_fixed");
+  if (fixedCost !== null) assert.equal(f.events.at(-1).actual_cost_micros, fixedCost);
 });
-for (const fixedCost of [null, 7]) test(`catalog search admission agrees with the fixed tariff (${fixedCost})`, async t => {
-  const f = await setup(t, { fixedCost });
+for (const searchCost of [null, 0, 7]) test(`catalog and dispatch agree on search-specific opt-in despite a general tariff (${searchCost})`, async t => {
+  const f = await setup(t, { fixedCost: 1000, searchCost });
   const response = await handler.fetch(new Request("https://router.example/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), f.env, { waitUntil() {} });
   assert.equal(response.status, 200);
   const provider = (await response.json()).providers.find(provider => provider.id === "openai");
   const offer = provider.offers.find(offer => offer.endpoint === "standalone_search" && offer.modelId === "openai/gpt-6-astra" && offer.routeKind === "native");
-  assert.equal(offer.eligible, fixedCost !== null);
-  if (fixedCost === null) assert.equal(offer.reasonCode, "pricing_required");
+  assert.equal(offer.eligible, searchCost !== null);
+  if (searchCost === null) assert.equal(offer.reasonCode, "pricing_required");
   assert.equal(f.sent.length, 0, "discovery makes no paid calls");
+  await expect(f, await f.search(), searchCost === null ? 400 : 200, searchCost === null ? "pricing_required" : undefined);
+  if (searchCost !== null) assert.equal(f.events[0].actual_cost_micros, searchCost);
+});
+test("another capability's explicit price cannot activate standalone search", async t => {
+  const f = await setup(t, { fixedCost: 1, searchCost: null });
+  f.policy.requestCostsMicros = { "llm.responses": 7 };
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  await expect(f, await f.search(), 400, "pricing_required");
+  assert.equal(f.sent.length, 0);
+});
+test("removing the search tariff disables existing and new search sessions despite a general price", async t => {
+  const f = await setup(t);
+  await expect(f, await f.search(), 200);
+  f.policy.requestCostsMicros = null;
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  const response = await handler.fetch(new Request("https://router.example/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), f.env, { waitUntil() {} });
+  const offers = (await response.json()).providers.find(provider => provider.id === "openai").offers.filter(offer => offer.endpoint === "standalone_search");
+  assert.ok(offers.length > 0 && offers.every(offer => !offer.eligible && offer.reasonCode === "pricing_required"));
+  await expect(f, await f.search({ commands: { open: [{ ref_id: "turn0search0" }] } }), 400, "pricing_required");
+  await expect(f, await f.search({ id: "new-session" }), 400, "pricing_required");
+  assert.equal(f.sent.length, 1);
+  assert.deepEqual(f.events.map(event => event.actual_cost_micros), [7, 0, 0]);
 });
 test("authority failure prevents dispatch instead of creating unbound search state", async t => {
   const f = await setup(t);

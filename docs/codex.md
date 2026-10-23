@@ -93,8 +93,8 @@ pnpm codex:connect connect --profile clawrouter-search \
   --model gpt-6-astra --web-search live
 ```
 
-The key's policy must declare a fixed search tariff, and the route must resolve
-to one public OpenAI API account without fallback. Prefer a capability tariff:
+The key's policy must explicitly declare a `search.web` capability tariff, and the
+route must resolve to one public OpenAI API account without fallback:
 
 ```json
 {"requestCostMicros":null,"requestCostsMicros":{"search.web":1000}}
@@ -105,18 +105,25 @@ uses model token rates. The admin form uses dollars: enter `{"search.web":0.001}
 in **Price per request by capability ($) · JSON object**, and leave **Fixed request
 cost ($)** blank for token-priced inference. Policy API/storage and
 `cf:key:put --request-costs-micros '{"search.web":1000}'` still use integer micros.
-Capability prices override the legacy policy-wide `requestCostMicros`, including explicit
-zero; unspecified capabilities retain the legacy tariff or manifest pricing.
+Capability prices override the legacy policy-wide `requestCostMicros`, including
+explicit zero. Standalone search requires its own entry; a policy-wide price or
+a price for another capability does not enable it. Other unspecified capabilities
+retain the legacy tariff or manifest pricing.
 Omitted capability maps survive policy API updates; `null` clears the map. Free
 counting/discovery/moderation operations remain free.
 
 These are configured router charges, not measured upstream bills. Standalone
 responses currently lack qualified usage data. Ordinary model token rates and
-hosted Responses search fees do not price this endpoint. A legacy policy-wide
-fixed tariff still works, but applies to inference too.
+hosted Responses search fees do not price this endpoint. Removing the `search.web`
+entry disables standalone search in discovery and dispatch without changing
+inference pricing. An explicit zero entry enables free router search; it does
+not disable search or establish that the upstream is free.
 An HTTP-200 response with a tool-level error still incurs the router search
 tariff. Search-enabled connect/dry-run/verify/update summaries include notices
 about the experimental retrieval/cache limits and unqualified upstream billing.
+The [production pilot proposal](codex-search-production-pilot.md) carries this
+search price into a dedicated $25 shared monthly allowance; it requires separate
+deployment and application-write authorization.
 
 Codex sends search commands to `/v1/alpha/search` relative to its provider base.
 ClawRouter forwards them through `/v1/native/openai/v1/alpha/search`, isolates

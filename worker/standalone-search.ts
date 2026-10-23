@@ -1,4 +1,3 @@
-import { policyRequestCost } from "../shared/request-pricing.ts";
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { continuationScope } from "./http-continuation.ts";
@@ -37,7 +36,9 @@ export function validateStandaloneSearch(body: Record<string, unknown>): void {
 }
 
 export function assertSearchTariff(auth: AuthorizedIdentity): void {
-  if (policyRequestCost(auth.policy, "search.web") == null) throw new HttpError(400, "pricing_required", "standalone search requires an explicit fixed search.web tariff (requestCostsMicros or requestCostMicros); measured upstream search usage is unavailable");
+  // General tariffs predate standalone search; require deliberate enablement.
+  const costs = auth.policy.requestCostsMicros;
+  if (!costs || !Object.hasOwn(costs, "search.web") || costs["search.web"] == null) throw new HttpError(400, "pricing_required", "standalone search requires an explicit requestCostsMicros[\"search.web\"] tariff; a policy-wide requestCostMicros does not enable search");
 }
 
 // One metadata row per caller/session. Reuse the existing authority's atomic

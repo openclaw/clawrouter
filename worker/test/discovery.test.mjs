@@ -356,6 +356,7 @@ test("catalog and session preserve saved provider health independently of operat
   const fixture = await fusionDiscoveryFixture(t);
   fixture.config.enabled = false;
   fixture.policy.requestCostMicros = 1;
+  fixture.policy.requestCostsMicros = { "search.web": 1 };
   const fresh = { providerId: "openai", status: "verified", checkedAt: new Date(Date.now() - 1_000).toISOString(), latencyMs: 42 };
   const stale = { ...fresh, checkedAt: new Date(Date.now() - 86_400_001).toISOString() };
   const failed = { ...fresh, status: "failed", latencyMs: 75, error: "Fixture probe failed." };
