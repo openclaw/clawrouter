@@ -1,4 +1,4 @@
-import { normalizeRequestCosts } from "../../../../shared/request-pricing.ts";
+import { normalizeRequestCosts } from "../../../../shared/request-pricing";
 import { type FormEvent, useRef, useState } from "react";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
