@@ -1325,6 +1325,13 @@ readback, never by blindly repeating the write.
    `Cloudflare-Workers-Version-Overrides: clawrouter-edge="<green UUID>"`.
    `/v1/health.versionId` and Worker response headers must identify green; a
    silently ignored override is not a successful smoke.
+   Each console asset must also prove its requested version and exact bytes,
+   through both green and blue (the initial legacy bootstrap keeps its documented
+   exception). A successful response from another runtime is
+   retried for at most 30 seconds per asset because overrides can still propagate
+   after health passes. Missing/invalid version proof, HTTP failures and corrupt
+   bytes fail immediately. Failure receipts include the public asset path, HTTP
+   status and expected/observed version; no response content is logged.
 2. Green 10% for at least two minutes, then green 50% for at least three minutes.
    Full override smoke runs immediately and waits at most 30 seconds between
    checks through each hold. It includes a paid golden-provider request and

@@ -2,7 +2,7 @@ import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
 import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
-import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
+import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
 import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
@@ -218,34 +218,62 @@ export class UsageLedgerObject implements DurableObject {
     return json({ days, since, until, retentionDays: usageWindowDays, grants: [...grants.values()], lanes: [...lanes.values()], daily } satisfies GrantUsageSnapshot);
   }
 
-  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number) {
+  // Builds one shard's usage snapshot. Shared totals cover every event in the
+  // requested policies; recent events and personal totals are limited to the
+  // caller's own rows; the admin scope instead gets a per-principal breakdown.
+  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number): UsageSnapshot {
     this.cleanup();
     const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
-    const params = [...uniquePolicyIds, cutoffs.rolling];
-    const dailyParams = [...uniquePolicyIds, cutoffs.daily];
-    const eventFilter = this.eventFilter(where, params, scope);
-    const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventFilter.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventFilter.params, limit)).map((row) => JSON.parse(row.event_json));
-    // Count final unavailable outcomes, not historical unpriced-tier admission denials.
-    const unpricedCount = "COALESCE(SUM(CASE WHEN json_extract(event_json, '$.cost_basis') = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count";
-    const summary = first<SummaryRow>(this.sql.exec(`SELECT COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where}`, ...params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
-    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where} GROUP BY provider ORDER BY request_count DESC`, ...params) as unknown as Iterable<ProviderRow>);
-    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyParams) as unknown as Iterable<DailyRow>);
-    return { ledger: "durable_object", summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily), events };
+    const range = { where, params: [...uniquePolicyIds, cutoffs.rolling] };
+    const dailyRange = { where, params: [...uniquePolicyIds, cutoffs.daily] };
+    const owner = this.ownerCondition(range, scope);
+    // Ownership is filtered in SQL before LIMIT so other principals' rows never displace the caller's.
+    const eventRange = owner ? restrict(range, owner) : range;
+    const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventRange.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventRange.params, limit)).map((row) => JSON.parse(row.event_json));
+    const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(range, dailyRange), events };
+    if (owner) snapshot.personal = this.totals(restrict(range, owner), restrict(dailyRange, owner));
+    else snapshot.principals = this.principalTotals(range);
+    return snapshot;
   }
 
-  private eventFilter(where: string, params: Array<string | number>, scope: UsageEventScope) {
-    if (scope.kind === "admin") return { where, params };
-    if (scope.kind === "credential") return { where: `${where} AND json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?`, params: [...params, scope.id] };
+  // Aggregates request, token, and spend totals overall, per provider, and per UTC day.
+  private totals(range: SqlRange, dailyRange: SqlRange): UsageTotals {
+    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${summaryColumns} FROM usage_events WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
+    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${totalColumns} FROM usage_events WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
+    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, ${totalColumns} FROM usage_events WHERE ${dailyRange.where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
+    return { summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily) };
+  }
+
+  // Groups totals by attributed principal, or by credential for events without one.
+  // Raw principal IDs are merged under the authority's email normalizer so case and
+  // whitespace variants of one identity report as a single row.
+  private principalTotals(range: SqlRange): PrincipalUsage[] {
+    const attributed = "json_type(event_json, '$.principal_id') = 'text'";
+    const grouped = rows<PrincipalRow>(this.sql.exec(`SELECT
+      CASE WHEN ${attributed} THEN json_extract(event_json, '$.principal_id') END AS principal_id,
+      CASE WHEN ${attributed} THEN NULL ELSE json_extract(event_json, '$.credential_id') END AS credential_id,
+      ${summaryColumns} FROM usage_events WHERE ${range.where} GROUP BY 1, 2`, ...range.params) as unknown as Iterable<PrincipalRow>);
+    return mergePrincipalUsage(grouped.map(({ principal_id, credential_id, ...summary }) => ({
+      principalId: principal_id === null ? null : normalizeEmail(principal_id) ?? principal_id,
+      credentialId: principal_id === null && typeof credential_id === "string" ? credential_id : null,
+      summary: camelSummary(summary),
+    })));
+  }
+
+  // Returns the SQL condition limiting rows to the caller's own events, or null for admin scope.
+  private ownerCondition(range: SqlRange, scope: UsageEventScope): SqlRange | null {
+    if (scope.kind === "admin") return null;
+    if (scope.kind === "credential") return { where: "json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?", params: [scope.id] };
     const principal = normalizeEmail(scope.id);
     if (!principal) return { where: "0", params: [] };
     // SQLite lower/trim do not implement JS Unicode identity normalization.
     // Match retained raw IDs with the authority's normalizer, then filter in SQL
     // before LIMIT. Never derive historical ownership from today's credentials.
-    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${where} AND json_type(event_json, '$.principal_id') = 'text'`, ...params));
+    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${range.where} AND json_type(event_json, '$.principal_id') = 'text'`, ...range.params));
     const aliases = candidates.map((row) => row.principal_id).filter((id) => normalizeEmail(id) === principal);
-    return { where: `${where} AND json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))`, params: [...params, JSON.stringify(aliases)] };
+    return { where: "json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))", params: [JSON.stringify(aliases)] };
   }
 
   private cleanup(cutoff = Date.now() - usageRetentionMs): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff); }
@@ -392,10 +420,16 @@ export function usageStub(env: Env, tenantId: string, policyId: string): Durable
 
 function numberParam(url: URL, name: string): number | null { const value = Number(url.searchParams.get(name)); return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function rows<T>(cursor: Iterable<T>): T[] { return [...cursor]; }
+interface SqlRange { where: string; params: Array<string | number> }
+function restrict(range: SqlRange, condition: SqlRange): SqlRange { return { where: `${range.where} AND ${condition.where}`, params: [...range.params, ...condition.params] }; }
 function first<T>(cursor: Iterable<T>): T | undefined { return rows(cursor)[0]; }
 
 interface SummaryRow { request_count: number; success_count: number; error_count: number; input_tokens: number; output_tokens: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
 interface ProviderRow { provider: string; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
+interface PrincipalRow extends SummaryRow { principal_id: string | null; credential_id: string | null }
+// Count final unavailable outcomes, not historical unpriced-tier admission denials.
+const totalColumns = "COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, COALESCE(SUM(CASE WHEN json_extract(event_json, '$.cost_basis') = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count";
+const summaryColumns = `${totalColumns}, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens`;
 interface DailyRow { day_start_ms: number; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
 function emptySummary(): SummaryRow { return { request_count: 0, success_count: 0, error_count: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, actual_cost_micros: 0, unpriced_request_count: 0 }; }
 function camelSummary(row: SummaryRow) { return { requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, inputTokens: row.input_tokens, outputTokens: row.output_tokens, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }

@@ -16,6 +16,7 @@ export type {
   FusionConfig,
   FusionReadiness,
   PolicyBinding,
+  PrincipalUsage,
   ProviderAccess,
   ProviderConnection,
   ProviderReadiness,

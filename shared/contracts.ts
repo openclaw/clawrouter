@@ -396,7 +396,12 @@ export interface UsageAuditEvent {
   content_retained?: boolean;
   content_ref?: string | null;
 }
-export interface UsageSnapshot { ledger: string; summary: UsageSummary; providers: ProviderUsageSummary[]; daily?: UsageDailySummary[]; events: UsageAuditEvent[] }
+/** Request, token, and spend totals overall, per provider, and per UTC day. */
+export interface UsageTotals { summary: UsageSummary; providers: ProviderUsageSummary[]; daily?: UsageDailySummary[] }
+/** Totals for one principal, or for one credential's events without a principal. */
+export interface PrincipalUsage { principalId: string | null; credentialId: string | null; summary: UsageSummary }
+/** Shared policy totals plus caller-owned `personal` totals (personal reads) or a `principals` breakdown (admin reads). */
+export interface UsageSnapshot extends UsageTotals { ledger: string; events: UsageAuditEvent[]; personal?: UsageTotals; principals?: PrincipalUsage[] }
 export interface RetainedRequestContent { requestId: string; occurredAtMs: number; expiresAtMs: number; principalId?: string | null; provider: string; capability: string; model?: string | null; body: unknown }
 
 export interface AdminBootstrapResponse {
