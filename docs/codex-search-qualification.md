@@ -126,3 +126,10 @@ node --test worker/test/standalone-search.test.mjs worker/test/request-pricing.t
 node --test admin/test/request-price-input.test.mjs admin/test/use-policy-admin.test.mjs admin/test/cost-presentation.test.mjs
 node --test test/standalone-search-workerd.test.mjs
 ```
+
+Autoreview of `1ad6fcd` completed `scoped-clean` through P2 with GPT-6.1 Sol,
+high reasoning, no actionable findings. Static review of the committed change
+and supplied dependency context; the reviewer did not execute tests or probes.
+Outputs: `~/.codex/review-results/codex-search-release-assessment-20261023/`.
+Local assessment receipt:
+`.artifacts/fakeco-codex-search-20261022/release-assessment-receipt.json`.
