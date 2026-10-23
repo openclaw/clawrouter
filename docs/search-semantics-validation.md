@@ -47,9 +47,17 @@ its settings, deployments, custom domains, Access app, and all prior routes are
 unchanged. All 36 prior namespaces remain present.
 
 Cache Rules and Page Rules API inspection returned 403 with the management token.
-Their effective behavior remains unqualified. Resolve this through read-only
-dashboard inspection and/or separately approved counter calibration before
-claiming cache-only semantics. No credential/auth-mode fallback was attempted.
+Subsequent authorized read-only Safari inspection confirmed **no Cache Rules,
+no Cache Response Rules, and no legacy Page Rules** for this account/zone.
+No settings or credential permissions changed. The reviewed fixture config has
+no Workers Cache opt-in; allowed Worker settings/version reads also contain no
+cache/exports opt-in. Cloudflare documents that [omitting the cache block disables
+Workers Cache](https://developers.cloudflare.com/workers/cache/configuration/).
+This is configuration evidence, not an empirical guarantee of every request.
+Run separately approved counter calibration before claiming cache-only semantics.
+The default-cache configuration page was not inspected after the user began
+using other Safari windows; further browser actions stopped. Evidence receipt:
+`.artifacts/fakeco-codex-search-20261022/search-semantics-cache-inspection.json`.
 
 Cloudflare supports a path route in front of an existing custom-domain Worker;
 the route takes precedence for matching requests. See [Workers routes](https://developers.cloudflare.com/workers/configuration/routing/routes/).
