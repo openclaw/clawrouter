@@ -1,8 +1,11 @@
 # FakeCo search semantics validation
 
 A [Responses/alpha comparison](search-semantics-endpoint-comparison.md) is prepared
-locally. Its public exposure and bounded paid pair need fresh approvals;
-no new experimental provider calls or Cloudflare writes during preparation.
+and its separately approved public calibration passed at
+`2026-10-23T08:41:49.924Z`: exact calibration marker and one origin GET. Marker
+rotated, generation 1 armed with zero counters. The bounded paid pair still needs
+separate approval; no experimental API POST or Cloudflare writes in this batch.
+Exposure expires `08:50:45.942Z`; the pair must start before `08:46:35.942Z`.
 
 The independent [Tailscale Funnel experiment](search-semantics-funnel.md) passed
 authorized public calibration at `2026-10-23T08:16:48.420Z`: returned fixture marker

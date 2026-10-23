@@ -1,9 +1,35 @@
 # Responses and alpha retrieval comparison
 
-Status: local preparation only. No new public exposure, credential read, paid
-probe, Cloudflare mutation, PR or push. Both live phases need fresh approval.
+Status: exposure approved and fresh public calibration passed; generation 1 armed,
+all counters zero. Paid pair still requires separate approval. No credential read,
+experimental API POST, Cloudflare mutation, PR or push in this new batch.
 The previous [Funnel batch](search-semantics-funnel.md) is complete; its approvals
 are consumed and its exposure is closed.
+
+## Authorized exposure and public calibration
+
+New exposure began `2026-10-23T08:40:45.942Z`; deadline
+`2026-10-23T08:50:45.942Z`. The paid pair requires more than 250 seconds remaining,
+so it must start before `2026-10-23T08:46:35.942Z`. No automatic renewal.
+
+Anonymous Jina Reader fetched the public URL with `X-No-Cache: true`. The first
+attempt returned HTTP 422 at `08:41:20.470Z`, no marker and zero origin requests;
+cause unqualified. One bounded follow-up returned HTTP 200 at `08:41:49.924Z`,
+with the exact current calibration marker. One corresponding origin GET at
+`08:41:49.095Z`, within the follow-up's `08:41:46.678Z`–`08:41:49.924Z` window.
+Other counters zero; no operator origin requests. Public DNS lookup also returned
+NOERROR/two A records. This does not identify the first attempt's failure cause.
+
+Private witness confirmation passed, then the marker rotated and counters reset.
+Generation 1 armed, all counters zero, first/last GET timestamps null. No operator
+public requests after arming. Foreground ownership and loopback-only listener
+verified; existing authenticated node used without enrollment or fallback key.
+
+Current ownership/calibration receipt:
+`.artifacts/fakeco-codex-search-20261022/endpoint-comparison-exposure-receipt.json`.
+Authorization: `endpoint-comparison-exposure-authorization.json` in that directory.
+This is a time-stamped active-exposure snapshot; cleanup remains pending under
+the original deadline, and elapsed time does not authorize the paid pair.
 
 ## Question and bounds
 
@@ -128,4 +154,5 @@ regression cases for cancellation during alpha's request and late window.
 Original review status remains `findings`; do not describe it as a clean review.
 Results: `~/.codex/review-results/search-endpoint-comparison-20261023/`.
 Independent preparation checks found both real Serve/Funnel configurations `{}`
-and port 18765 free. New exposure and paid-run approvals remain pending.
+and port 18765 free. The later approved exposure/calibration is recorded above;
+paid-run approval remains pending.
