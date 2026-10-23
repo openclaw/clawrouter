@@ -1,19 +1,25 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseArgs } from "./cli-args.mjs";
+import { startSearchOrigin } from "./smoke-codex-search-origin.mjs";
+import { liveUpstream } from "./smoke-codex-search-upstream.mjs";
 import { manageCodex } from "./codex-connect.mjs";
 
-const args = process.argv.slice(2);
-if (args.includes("--help")) {
-  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model UPSTREAM_SLUG]\nRequires injected OPENAI_API_KEY; defaults to gpt-6-astra. Each invocation makes at most 16 upstream requests with at most 4096 output tokens each.");
+const args = parseArgs(process.argv.slice(2));
+if (args.help) {
+  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only]\nRequires injected OPENAI_API_KEY. At most 32 upstream operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
   process.exit(0);
 }
-if (args.length && (args.length !== 2 || args[0] !== "--model" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(args[1]))) throw new Error("use --model UPSTREAM_SLUG or --help");
-const model = args[1] ?? "gpt-6-astra";
+for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only"].includes(name), "unknown qualification option");
+for (const name of ["compact", "origin-check", "origin-only"]) assert.ok(args[name] === undefined || args[name] === true, "qualification flags do not accept values");
+const model = args.model ?? "gpt-6-astra", switchedModel = args["switch-model"] ?? model, mode = args["web-search"] ?? "live", transport = args.transport ?? "http";
+assert.ok([model, switchedModel].every(value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value)));
+assert.ok(["live", "cached"].includes(mode)); assert.ok(["http", "websocket"].includes(transport));
 // Explicit live qualification only. Credential remains in this process's memory;
 // neither the Worker fixture nor Codex receives the real upstream credential.
 if (process.env.CLAWROUTER_SEARCH_LIVE !== "1") throw new Error("set CLAWROUTER_SEARCH_LIVE=1 to authorize bounded live OpenAI inference/search requests");
@@ -25,48 +31,13 @@ const { build } = require("esbuild");
 const temporary = await mkdtemp(join(tmpdir(), "clawrouter-search-live-")), home = join(temporary, "codex");
 const key = "clawrouter-live-fixture-search-fixture-secret";
 const digest = value => createHash("sha256").update(value).digest("hex");
-const calls = [], sessions = new Set(), events = [];
-let mf, firstReference, searchNamespace, attempts = 0;
+const probeState = {}, events = [], upstream = liveUpstream({ probe: probeState, key: upstreamKey, models: [...new Set([model, switchedModel])], mode, transport });
+const { calls, sessions } = upstream;
+let mf, origin, originCheck = null, compactionEvidence = null, qualification;
 const codex = process.env.CLAWROUTER_CODEX_BIN ?? "codex";
 const clientEnv = { PATH: process.env.PATH, HOME: temporary, CODEX_HOME: home, CLAWROUTER_API_KEY: key };
-async function boundedText(response, limit = 2 * 1024 * 1024) {
-  const chunks = []; let bytes = 0;
-  for await (const chunk of response.body) { bytes += chunk.length; if (bytes > limit) throw new Error("live fixture response limit exceeded"); chunks.push(chunk); }
-  return Buffer.concat(chunks).toString("utf8");
-}
-async function outbound(request) {
-  const url = new URL(request.url);
-  assert.equal(url.origin, "https://api.openai.com");
-  assert.ok(["/v1/responses", "/v1/alpha/search"].includes(url.pathname));
-  assert.equal(request.method, "POST");
-  assert.ok(++attempts <= 16, "live qualification request ceiling");
-  const body = JSON.parse(await boundedText(request));
-  assert.equal(body.model, model, "upstream request uses the selected qualification model");
-  const search = url.pathname.endsWith("/search");
-  const headers = new Headers(request.headers); headers.set("authorization", `Bearer ${upstreamKey}`);
-  headers.delete("content-length"); headers.delete("host");
-  if (search) { sessions.add(body.id); searchNamespace ??= digest(body.id); }
-  body.max_output_tokens = Math.min(body.max_output_tokens ?? 4096, 4096);
-  const entry = { model, path: url.pathname, ...(search ? { commands: Object.keys(body.commands ?? {}).filter(name => name !== "response_length"), opensOriginalReference: !!firstReference && !!body.commands?.open?.some(operation => operation.ref_id === firstReference) } : {}), status: null };
-  calls.push(entry);
-  let response;
-  try { response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(90000) }); }
-  catch (error) { entry.failure = error.name; entry.cause = error.cause?.code ?? null; throw new Error("live upstream transport failed"); }
-  entry.status = response.status;
-  console.error(JSON.stringify({ phase: "upstream", ...entry }));
-  const responseHeaders = new Headers(response.headers); responseHeaders.delete("content-length"); responseHeaders.delete("content-encoding");
-  if (!search) return new Response(response.body, { status: response.status, headers: responseHeaders });
-  const text = await boundedText(response);
-  if (response.ok) {
-    const output = JSON.parse(text).output;
-    assert.ok(typeof output === "string" && output.length, "search returns text output");
-    assert.ok(!/invalid ref(?:erence|_id)|unable to resolve (?:open|find|click) call/i.test(output), "search output has no reference/tool error");
-    firstReference ??= output.match(/turn\d+search\d+/)?.[0];
-  }
-  return new Response(text, { status: response.status, headers: responseHeaders });
-}
 async function run(args) {
-  const child = spawn(codex, ["--profile", "search", "-c", "features.plugins=false", "-c", "model_reasoning_effort=\"low\"", ...args], { cwd: temporary, env: clientEnv, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(codex, ["--profile", "search", "-c", "features.plugins=false", "-c", "model_reasoning_effort=\"low\"", ...(transport === "http" ? ["-c", "model_providers.clawrouter_search.supports_websockets=false"] : []), ...args], { cwd: temporary, env: clientEnv, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "", stderrBytes = 0, forceKill;
   const stop = () => { child.kill("SIGTERM"); forceKill ??= setTimeout(() => child.kill("SIGKILL"), 2000); };
   child.stdout.on("data", chunk => { stdout += chunk; if (stdout.length > 4 * 1024 * 1024) stop(); });
@@ -80,37 +51,82 @@ async function run(args) {
     return parsed;
   } finally { clearTimeout(timeout); clearTimeout(forceKill); if (child.exitCode === null) child.kill("SIGKILL"); }
 }
+async function checkOrigin(threadId) {
+  origin = await startSearchOrigin(temporary); Object.assign(probeState, origin);
+  const before = calls.length;
+  await run(["exec", ...(threadId ? ["resume"] : []), "--model", switchedModel, "--json", "--skip-git-repo-check", ...(threadId ? [threadId] : []), `Use web.run to open this controlled synthetic page: ${origin.url} . Find the word ClawRouterProbe on that page and report the full generated marker shown there. Do not run local commands. Report whether it was found, with a source URL.`]);
+  const probeCalls = calls.slice(before).filter(call => call.commands);
+  assert.ok(probeCalls.some(call => call.opensControlledOrigin), "native CLI opened the controlled origin");
+  const result = { nativeOpen: true, externalWebAccess: mode === "live", originRequests: await origin.count(), robotsRequests: origin.robots(), contentReturned: probeCalls.some(call => call.probeContentReturned), fetchError: probeCalls.some(call => call.probeFetchError) };
+  result.retrieved = result.originRequests > 0 && result.contentReturned;
+  console.error(JSON.stringify({ phase: "origin-checked", ...result }));
+  return result;
+}
+
 try {
   await mkdir(home);
   const bundle = await build({ stdin: { contents: 'export {default,PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from "./worker/index.ts";', resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, host: "127.0.0.1", port: 0, workers: [{ name: "router", modules: true, script: bundle.outputFiles[0].text,
     compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"], bindings: { OPENAI_API_KEY: "fixture-upstream-only" }, kvNamespaces: ["POLICY_KV"],
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([name,className]) => [name,{className,useSQLite:true,unsafePreventEviction:true}])),
-    outboundService: outbound,
+    outboundService: upstream.outbound,
   }] }));
   const base = (await mf.ready).origin, kv = await mf.getKVNamespace("POLICY_KV", "router");
   console.error(JSON.stringify({ phase: "worker-ready" }));
-  await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], models: [`openai/${model}`], tenantId: "default", monthlyBudgetMicros: 100000, requestCostMicros: 1000, retainRequestContent: false }));
+  await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], models: [...new Set([model, switchedModel])].map(slug => `openai/${slug}`), tenantId: "default", monthlyBudgetMicros: 100000000, requestCostMicros: null, requestCostsMicros: { "search.web": 1000 }, retainRequestContent: false }));
   await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: digest("search-fixture-secret"), policyId: "fixture", policyGeneration: "g1" }));
-  await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: 100000 }));
-  await manageCodex(["connect", "--profile", "search", "--router-url", base, "--provider", "openai", "--model", model, "--web-search", "live", "--codex-home", home, "--codex", codex], clientEnv);
+  await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: 100000000 }));
+  await manageCodex(["connect", "--profile", "search", "--router-url", base, "--provider", "openai", "--model", model, "--web-search", mode, "--codex-home", home, "--codex", codex], clientEnv);
   const { producer } = await manageCodex(["verify", "--profile", "search", "--codex-home", home, "--codex", codex], clientEnv);
   console.error(JSON.stringify({ phase: "profile-ready", model, producer }));
-  const first = await run(["exec", "--json", "--skip-git-repo-check", "Use web.run to search for the official OpenAI homepage, open a returned search reference, then find the word OpenAI in the opened page. Perform each operation, then answer one sentence with a source link. Use only web.run; do not run local commands."]);
-  const threadId = first.find(event => event.type === "thread.started")?.thread_id;
-  assert.ok(threadId && firstReference, "native session and upstream search reference");
-  const commands = calls.flatMap(call => call.commands ?? []);
-  for (const name of ["search_query", "open", "find"]) assert.ok(commands.includes(name), `missing native ${name}`);
-  const answer = first.filter(event => event.type === "item.completed" && event.item?.type === "agent_message").map(event => event.item.text).join("\n");
-  assert.ok(/https:\/\/(?:www\.)?openai\.com|cite|\]\(https:\/\//.test(answer), "native answer includes a source link or citation");
-  const count = calls.length;
-  await run(["exec", "resume", "--json", "--skip-git-repo-check", threadId, `Use web.run to open ${firstReference} from the prior search, then give its source URL in one sentence. Do not run local commands.`]);
-  assert.ok(calls.slice(count).some(call => call.opensOriginalReference), "native resume opens the original reference");
-  assert.equal(sessions.size, 1, "search namespace survives native resume");
-  assert.ok(calls.every(call => call.status === 200), "upstream requests succeed");
-  console.log(JSON.stringify({ qualified: true, model, producer, calls, resumed: true, searchNamespaces: sessions.size, searchNamespaceSha256: searchNamespace, nativeWebSearchItems: events.filter(event => event.type === "item.completed" && /web.*search/i.test(event.item?.type ?? "")).length, citedAnswer: true }));
+  if (args["origin-only"]) {
+    originCheck = await checkOrigin(); upstream.check();
+    qualification = { qualified: originCheck.retrieved, model, mode, transport, originCheck, producer, calls };
+    if (!qualification.qualified) process.exitCode = 1;
+  } else {
+    const first = await run(["exec", "--json", "--skip-git-repo-check", "Use web.run to search for the official OpenAI homepage, open a returned search reference, then click a numbered link in the opened page, then find the word OpenAI in the clicked page. Perform each operation, then answer one sentence with a source link. Use only web.run; do not run local commands."]);
+    const threadId = first.find(event => event.type === "thread.started")?.thread_id;
+    assert.ok(threadId && upstream.firstReference, "native session and upstream search reference");
+    const commands = calls.flatMap(call => call.commands ?? []);
+    for (const name of ["search_query", "open", "click", "find"]) assert.ok(commands.includes(name), `missing native ${name}`);
+    const answer = first.filter(event => event.type === "item.completed" && event.item?.type === "agent_message").map(event => event.item.text).join("\n");
+    assert.ok(/https:\/\/(?:www\.)?openai\.com|cite|\]\(https:\/\//.test(answer), "native answer includes a source link or citation");
+    const count = calls.length;
+    await run([...(args.compact ? ["-c", "model_auto_compact_token_limit=1000"] : []), "exec", "resume", "--model", switchedModel, "--json", "--skip-git-repo-check", threadId, `Use web.run to open ${upstream.firstReference} from the prior search, then give its source URL in one sentence. Do not run local commands.`]);
+    assert.ok(calls.slice(count).some(call => call.opensOriginalReference), "native resume opens the original reference");
+    assert.equal(sessions.size, 1, "search namespace survives native resume");
+    const rollouts = (await readdir(join(home, "sessions"), { recursive: true })).filter(path => path.endsWith(".jsonl"));
+    let compacted = 0, openedAfterCompaction = false;
+    for (const path of rollouts) {
+      const text = await readFile(join(home, "sessions", path), "utf8");
+      const items = text.split("\n").filter(Boolean).map(line => JSON.parse(line));
+      let seenCompaction = false;
+      for (const item of items) {
+        if (item.type === "compacted") { compacted++; seenCompaction = true; }
+        const payload = item.payload;
+        if (seenCompaction && item.type === "response_item" && /call$/.test(payload?.type ?? "") && JSON.stringify(payload).includes(upstream.firstReference)) openedAfterCompaction = true;
+      }
+    }
+    compactionEvidence = { compacted, openedAfterCompaction };
+    if (args.compact) assert.ok(compacted > 0 && openedAfterCompaction, "native rollout records automatic compaction followed by opening the original reference");
+    if (switchedModel !== model) assert.ok(calls.slice(count).some(call => call.model === switchedModel && call.opensOriginalReference), "changed model reuses the original search namespace");
+    if (transport === "websocket") assert.ok(calls.some(call => call.transport === "websocket" && !call.warmup), "native inference actually uses WebSockets");
+    console.error(JSON.stringify({ phase: "session-checked", ...compactionEvidence }));
+    if (args["origin-check"]) originCheck = await checkOrigin(threadId);
+    assert.equal(sessions.size, 1, "origin checks retain the same search namespace");
+    upstream.check();
+    assert.ok(calls.every(call => call.status === 200), "upstream requests succeed");
+    qualification = { qualified: true, model, switchedModel, mode, transport, automaticCompaction: !!args.compact, compactions: compacted, originCheck, producer, calls, resumed: true, searchNamespaces: sessions.size, searchNamespaceSha256: upstream.searchNamespace, nativeWebSearchItems: events.filter(event => event.type === "item.completed" && /web.*search/i.test(event.item?.type ?? "")).length, citedAnswer: true };
+  }
 } catch (error) {
   // Never print raw model output, credentialed transport diagnostics, or secrets.
-  console.error(JSON.stringify({ qualified: false, model, category: error.name, check: error instanceof assert.AssertionError ? error.message.split("\n")[0] : "runtime_failure", calls }));
+  console.error(JSON.stringify({ qualified: false, model, category: error.name, check: error instanceof assert.AssertionError ? error.message.split("\n")[0] : "runtime_failure", compactionEvidence, originCheck, calls }));
   process.exitCode = 1;
-} finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+} finally {
+  upstream.close();
+  const cleanup = await Promise.allSettled([origin?.close(), mf?.dispose()]);
+  cleanup.push(...await Promise.allSettled([rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })]));
+  if (cleanup.some(result => result.status === "rejected")) {
+    console.error(JSON.stringify({ qualified: false, check: "fixture_cleanup_failed" })); process.exitCode = 1;
+  } else if (qualification) console.log(JSON.stringify(qualification));
+}

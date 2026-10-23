@@ -49,16 +49,19 @@ contains the selected model, such as Codex 0.155.0 for Astra.
 ## Opt in to built-in CLI web search
 
 With Codex CLI 0.163.0 or newer, add `--web-search live` or `--web-search cached`
-to `connect`. Qualification covers the models below, HTTP inference, and
-text search/navigation (`search_query`, `open`, `click`, `find`). The helper
-enables `supports_standalone_web_search`, disables WebSockets, and narrows the
-exported catalog to eligible standalone-search models. Search stays disabled
+to `connect`. Qualification covers the models below, HTTP and WebSocket
+inference, and text search/navigation (`search_query`, `open`, `click`, `find`). The helper
+enables `supports_standalone_web_search` and narrows the
+exported catalog to eligible standalone-search models. WebSockets follow the
+authorized inference offers; search uses unary HTTP in either case. Search stays disabled
 without this option. Desktop, media commands, feeds, and account-pool failover
 are outside this qualification.
 
-Live qualification with Codex CLI 0.163.0 on 2026-10-22 passed search, open,
-find, a cited answer, and resume opening the exact original search reference
-for each model:
+Qualification against the public API with Codex CLI 0.163.0 on 2026-10-22
+passed search, open,
+click, find, a cited answer, and resume opening the exact original search
+reference for each model. The matrix includes cached search with WebSocket
+inference:
 
 - `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`.
 - `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`.
@@ -86,7 +89,7 @@ uses model token rates. Configure it through the policy API, the admin policy
 form, or `cf:key:put --request-costs-micros '{"search.web":1000}'`. Capability
 prices override the legacy policy-wide `requestCostMicros`, including explicit
 zero; unspecified capabilities retain the legacy tariff or manifest pricing.
-Omitted capability maps survive policy updates; `null` clears the map. Free
+Omitted capability maps survive policy API updates; `null` clears the map. Free
 counting/discovery/moderation operations remain free.
 
 These are configured router charges, not measured upstream bills. Standalone
@@ -110,16 +113,43 @@ offer. Remove and reconnect to change modes. Workspace and managed Codex search
 restrictions still apply. Standalone search remains under development upstream;
 see the [official search documentation](https://learn.chatgpt.com/docs/web-search).
 
-The optional live qualification command is
-`CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs --model gpt-6.1-sol`, with
-`OPENAI_API_KEY` injected through the credential helper. It runs an isolated
-local workerd instance and real Codex CLI session in live mode, checks the selected
-upstream model, search/open/find and a cited answer, then resumes the session and
-opens its exact original reference. It rejects reference errors even when upstream
-returns HTTP 200. Omit `--model` to use `gpt-6-astra`. Each invocation makes at most
-16 upstream requests, caps each request's output at 4096 tokens, and removes the
-temporary Codex home. Logs contain protocol metadata only. Strict cache-only
-retrieval is outside this qualification; cached mode forwards Codex's preference.
+The live qualification harness runs an isolated local workerd instance and real
+Codex CLI sessions. Inject `OPENAI_API_KEY` through the credential helper, then run:
+
+```sh
+CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs \
+  --model gpt-6.1-sol --switch-model gpt-6-astra \
+  --web-search cached --transport websocket --compact
+```
+
+It checks the selected upstream models, search/open/click/find, a cited answer,
+and resume opening the exact original reference. `--compact` lowers Codex's
+automatic threshold and requires a completed native compaction record followed
+by reuse of the reference. For this custom provider, native automatic compaction
+uses inference by default; this test does not enable remote `/responses/compact`.
+Model changes between Astra and Sol preserved references in both directions.
+
+`--origin-check` additionally starts an ephemeral public synthetic page through
+`cloudflared`, counts page and robots requests, and asks native search
+to retrieve a marker that was never given to the model. Readiness uses a separate
+URL and verifies public DNS and HTTPS. No production deployment or account
+configuration changes are made. The tunnel and server close at teardown.
+
+Defaults are `gpt-6-astra`, live search, and HTTP inference. Each invocation makes
+at most 32 upstream operations and caps each inference output at 4096 tokens.
+WebSocket qualification rejects silent HTTP fallback. Logs contain protocol
+metadata only; temporary Codex homes are removed. Cached mode forwards
+`external_web_access=false`.
+
+Controlled-origin checks on 2026-10-22 remain **unqualified**: with Sol, both
+cached and live mode returned upstream HTTP 200 with an `Internal Error` in the
+tool output, made no page or robots requests, and failed to return the hidden
+marker. The public origin had passed DNS and HTTPS readiness, including an
+explicit robots allow rule. Since the live control also failed, this does not
+establish whether cached mode forbids origin fetches. Treat it as a preference,
+not a strict cache-only guarantee. `--origin-only` isolates this check and exits
+nonzero when retrieval cannot be qualified; a normal workflow's `qualified`
+result does not qualify its optional `originCheck`.
 
 ```sh
 pnpm codex:connect verify --codex /path/to/codex

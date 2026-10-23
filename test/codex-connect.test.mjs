@@ -91,8 +91,12 @@ test("standalone search opt-in survives verify/update and refuses a lost offer",
   const config = await f.read();
   assert.equal(config.web_search, "live");
   assert.equal(config.model_providers.clawrouter_clawrouter.supports_standalone_web_search, true);
-  assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, false);
+  assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, true);
   await f.run("verify"); await f.run("update");
+  provider.offers = provider.offers.filter(offer => offer.transport !== "websocket");
+  await f.run("update");
+  assert.equal((await f.read()).model_providers.clawrouter_clawrouter.supports_websockets, false);
+  assert.equal((await f.read()).model_providers.clawrouter_clawrouter.supports_standalone_web_search, true);
   const before = await readFile(f.profile, "utf8");
   provider.offers.at(-1).eligible = false;
   await assert.rejects(f.run("update"), /no qualified native standalone search offer/);

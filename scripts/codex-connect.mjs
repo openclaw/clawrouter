@@ -270,7 +270,6 @@ export async function manageCodex(args, env = process.env) {
       if (!version || Number(version[1]) === 0 && Number(version[2]) < 163) throw new Error("standalone search requires Codex CLI 0.163.0 or newer");
       if (!catalog.standaloneSearchModels.includes(settings.model)) throw new Error("selected model has no qualified native standalone search offer; check the fixed tariff and single API account");
       catalog.catalog.models = catalog.catalog.models.filter(model => catalog.standaloneSearchModels.includes(model.slug));
-      catalog.supportsWebsockets = false; // First qualification uses HTTP inference plus unary search.
     }
     const selected = catalog.catalog.models.find((model) => model.slug === settings.model);
     if (!selected) throw new Error("selected model has no authorized native descriptor");
