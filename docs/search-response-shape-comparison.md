@@ -54,7 +54,9 @@ node scripts/search-response-shape-comparison.mjs --run-approved
 
 Execution exclusively creates
 `.artifacts/fakeco-codex-search-20261022/alpha-response-shape-comparison-execution.jsonl`
-with mode 0600 before credential access. It appends and synchronizes complete
+with mode 0600. The initial file and containing directory are synchronized before
+credential access. Directory open/sync failure stops without reading the key or
+dispatching a request. It appends and synchronizes complete
 metadata snapshots before each dispatch intent and after each response, then
 records the stopping reason. Each line is a complete snapshot; inspect the last
 valid line after interruption. An intent counts against the two-call ceiling
@@ -87,5 +89,13 @@ shape, exclusive journal/replay refusal, durable pre-dispatch intent, conditiona
 stopping, transport/JSON/size errors, each results state, content-only success and
 metadata privacy. No Worker, admin or manifest surface changes.
 
-Preparation verification: all 51 tests passed, including 20 new runner scenarios.
+Preparation verification: all 54 tests passed, including 23 new runner scenarios.
 No live provider search, 1Password access or Cloudflare operation was performed.
+
+Autoreview of `8d46dec` completed through P2 with one finding: synchronize the
+new receipt's containing directory. Fixed before handoff; the tests above verify
+sync ordering and failure stopping. The original review status remains `findings`,
+not a clean verdict on the follow-up fix. Outputs:
+`~/.codex/review-results/alpha-response-shape-comparison-20261023/`.
+Preparation receipt and source hashes:
+`.artifacts/fakeco-codex-search-20261022/alpha-response-shape-comparison-preparation.json`.

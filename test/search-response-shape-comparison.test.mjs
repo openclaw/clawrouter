@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, writeFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, stat, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -101,6 +101,57 @@ test("two fixed opens use one key, fresh sessions and durable intents; receipt e
   assert.equal((await stat(receiptPath)).mode & 0o777, 0o600);
   await assert.rejects(runResponseShapeComparison({ approved: true, receiptPath, readKey: () => assert.fail("no replay") }), { code: "EEXIST" });
 });
+
+test("initial file and directory sync complete before credential access", async t => {
+  const receiptPath = await setup(t);
+  const events = [];
+  await runResponseShapeComparison({ approved: true, receiptPath,
+    openFile: async (path, flags, mode) => {
+      const handle = await open(path, flags, mode);
+      const kind = flags === "r" ? "directory" : "receipt";
+      return {
+        writeFile: data => handle.writeFile(data),
+        sync: async () => { await handle.sync(); events.push(`${kind}-synced`); },
+        close: async () => { await handle.close(); events.push(`${kind}-closed`); },
+      };
+    },
+    readKey: async () => {
+      assert.deepEqual(events, ["receipt-synced", "directory-synced", "directory-closed"]);
+      events.push("key-read"); return key;
+    },
+    fetcher: async () => Response.json({ output: "Internal Error" }),
+  });
+  assert.equal(events.filter(event => event === "directory-synced").length, 1);
+  assert.equal(events.at(-1), "receipt-closed");
+});
+
+for (const failure of ["open", "sync"]) {
+  test(`directory ${failure} failure blocks credential access and dispatch, preserving replay guard`, async t => {
+    const receiptPath = await setup(t);
+    let directoryClosed = false;
+    await assert.rejects(runResponseShapeComparison({ approved: true, receiptPath,
+      openFile: async (path, flags, mode) => {
+        if (flags !== "r") return open(path, flags, mode);
+        if (failure === "open") throw new Error("private-filesystem-error");
+        const handle = await open(path, flags, mode);
+        return {
+          sync: async () => { throw new Error("private-filesystem-error"); },
+          close: async () => { await handle.close(); directoryClosed = true; },
+        };
+      },
+      readKey: () => assert.fail("directory must be synced before key access"),
+      fetcher: () => assert.fail("directory must be synced before dispatch"),
+    }), error => error.message === "comparison journal failed; preserve receipt and reconcile without replay");
+    assert.equal(directoryClosed, failure === "sync");
+    const journal = await snapshots(receiptPath);
+    assert.equal(journal.length, 1); assert.equal(journal[0].state, "started");
+    assert.equal(journal[0].attempts.length, 0);
+    assert.doesNotMatch(await readFile(receiptPath, "utf8"), /private-/);
+    await assert.rejects(runResponseShapeComparison({ approved: true, receiptPath,
+      readKey: () => assert.fail("no replay"),
+    }), { code: "EEXIST" });
+  });
+}
 
 for (const [name, response] of [
   ["HTTP failure", () => Response.json(control, { status: 403 })],

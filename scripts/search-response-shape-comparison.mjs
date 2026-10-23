@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { open } from "node:fs/promises";
+import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadProbeKey } from "./search-semantics-funnel.mjs";
 import { directSearchProbe } from "./standalone-search-probe.mjs";
@@ -43,12 +44,12 @@ function inspect(target, { summary, value }) {
 
 // Explicitly authorized execution only. The append-only, exclusive journal is
 // durable before each request intent; an existing/partial journal forbids replay.
-// Responses and credentials remain transient. The fetcher seam is for offline tests.
+// Responses and credentials remain transient. Dependency seams are for offline tests.
 export async function runResponseShapeComparison({
-  approved = false, receiptPath = receipt, readKey = loadProbeKey, fetcher = fetch,
+  approved = false, receiptPath = receipt, readKey = loadProbeKey, fetcher = fetch, openFile = open,
 } = {}) {
   assert.equal(approved, true, "paid comparison requires separate explicit authorization");
-  const journal = await open(receiptPath, "wx", 0o600);
+  const journal = await openFile(receiptPath, "wx", 0o600);
   const record = {
     schemaVersion: 1, kind: "alpha-response-shape-comparison",
     plan: { ...responseShapePlan(), executionReceipt: receiptPath },
@@ -56,11 +57,18 @@ export async function runResponseShapeComparison({
     stopReason: null, structuredResultsWithInternalError: null,
     freshRetrievalQualified: false, upstreamAlphaBillingQualified: false,
   };
-  let stage = "journal", journalFailed = false;
+  let stage = "journal", journalFailed = false, directorySynced = false;
   async function save() {
     try {
       await journal.writeFile(`${JSON.stringify(record)}\n`);
       await journal.sync();
+      if (!directorySynced) {
+        // File fsync alone need not persist a newly created pathname. Establish
+        // replay protection before reading credentials or making a paid request.
+        const directory = await openFile(dirname(receiptPath), "r");
+        try { await directory.sync(); } finally { await directory.close(); }
+        directorySynced = true;
+      }
     } catch {
       journalFailed = true;
       throw new Error("comparison journal failed; preserve receipt and reconcile without replay");
