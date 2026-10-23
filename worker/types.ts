@@ -135,6 +135,7 @@ export interface AccessPolicy {
   limitHint?: string | null;
   serviceTiers?: import("../shared/service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
+  requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
   retainRequestContent: boolean;

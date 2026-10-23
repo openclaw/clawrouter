@@ -1,3 +1,4 @@
+import { normalizeRequestCosts } from "../../shared/request-pricing.ts";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
@@ -831,7 +832,7 @@ function mount(demoMode = false) {
   const fixture = { requests, statuses, refreshes: 0, confirmations: 0, acceptDiscard: true, demoRows: [], providers: [] };
   const window = { confirm: () => { fixture.confirmations += 1; return fixture.acceptDiscard; } };
   const request = (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, init, resolve, reject }));
-  const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "currencyInput", "errorMessage", "knownPolicyProviders", "optionalCurrencyMicros", "optionalNumber", "parseEligibleGrants", "unique", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique);
+  const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "currencyInput", "errorMessage", "knownPolicyProviders", "optionalCurrencyMicros", "optionalNumber", "parseEligibleGrants", "unique", "normalizeRequestCosts", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique, normalizeRequestCosts);
   fixture.render = () => {
     cursor = 0;
     return usePolicyAdmin({ request, allowDemo: demoMode, gatewayOrigin: "https://console.example", session, demoMode, providers: fixture.providers, credentials: [], routes: {}, setStatus: (status) => statuses.push(status), refresh: () => { fixture.refreshes += 1; return new Promise(() => {}); }, syncDemoAdmin: (rows) => { fixture.demoRows = rows; } });
@@ -854,4 +855,20 @@ test("model allowlist and pool visibility round-trip and preserve later field ed
   const next = JSON.parse(fixture.requests[1].init.body);
   assert.equal(next.models, null); assert.equal(next.poolStatus, "hidden");
   fixture.requests[1].resolve(next); await reset;
+});
+
+test("capability prices survive an unrelated save and can be cleared", async () => {
+  const fixture = ready();
+  hydrate(fixture, [{ ...policy("policy_a"), requestCostsMicros: { "search.web": 0 } }]);
+  assert.deepEqual(JSON.parse(fixture.render().policies.form.requestCostsMicros), { "search.web": 0 });
+  change(fixture, { tenantId: "later" });
+  const save = fixture.render().policies.save(event);
+  const submitted = JSON.parse(fixture.requests[0].init.body);
+  assert.deepEqual(submitted.requestCostsMicros, { "search.web": 0 });
+  fixture.requests[0].resolve(submitted); await save;
+  change(fixture, { requestCostsMicros: "" });
+  const clear = fixture.render().policies.save(event);
+  const next = JSON.parse(fixture.requests[1].init.body);
+  assert.equal(next.requestCostsMicros, null);
+  fixture.requests[1].resolve(next); await clear;
 });

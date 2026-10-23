@@ -143,3 +143,31 @@ for (const body of [{ id: "" }, { id: {} }, { commands: {} }, { commands: { scre
   const f = await setup(t); const response = await f.search(body);
   await expect(f, response, 400); assert.equal(f.sent.length, 0);
 });
+
+for (const price of [0, 19]) test(`search-only tariff preserves token inference and exact search budgets (${price})`, async t => {
+  const f = await setup(t, { fixedCost: null });
+  f.policy.requestCostsMicros = { "search.web": price };
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  const searchResponse = f.response;
+  f.response = () => Response.json({ object: "response", id: "resp_priced", status: "completed", service_tier: "default", output: [], usage: { input_tokens: 10, output_tokens: 10, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
+  await expect(f, await f.request({ max_output_tokens: 32 }), 200);
+  const inference = f.events[0];
+  assert.equal(inference.cost_basis, "manifest_pricing"); assert.ok(inference.actual_cost_micros > 0);
+  f.response = searchResponse;
+  await expect(f, await f.search(), 200);
+  assert.equal(f.events[1].actual_cost_micros, price); assert.equal(f.events[1].reserved_cost_micros, price);
+  assert.equal(f.events[1].cost_basis, "policy_fixed");
+  for (const name of ["default:fixture", "provider:openai"]) {
+    const rows = f.env.BUDGET_LEDGER.get(name).reservations();
+    assert.equal(rows.filter(row => row.reserved_micros === price).length, 1);
+    assert.ok(rows.every(row => row.settled === 1));
+  }
+  f.policy.monthlyBudgetMicros = inference.actual_cost_micros + price + Math.max(0, price - 1);
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  const catalog = await handler.fetch(new Request("https://router.example/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), f.env, { waitUntil() {} });
+  const offer = (await catalog.json()).providers.find(p => p.id === "openai").offers.find(o => o.endpoint === "standalone_search" && o.modelId === "openai/gpt-6-astra");
+  assert.equal(offer.eligible, price === 0);
+  const sent = f.sent.length;
+  await expect(f, await f.search(), price === 0 ? 200 : 402, price === 0 ? undefined : "budget_exhausted");
+  assert.equal(f.sent.length, sent + (price === 0 ? 1 : 0));
+});

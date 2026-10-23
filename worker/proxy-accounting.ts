@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
@@ -111,7 +112,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
 
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
-  const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
+  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const google = selection.endpoint.request_format === "google.generate_content";
   const count = selection.endpoint.request_format === "openai.responses_input_tokens";
@@ -127,7 +128,7 @@ export function createProxyAccounting(options: AccountingContext) {
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
     ...(selection.endpoint.request_format === "anthropic.messages" && !Array.isArray(selection.body) ? { anthropicRequest: anthropicModifiers(selection.body) } : {}),
     // Counting is not generation: neither model rates nor a fixed request tariff apply.
-    model: !count && model ? { pricing: model.pricing, upstream: model.upstream } : null, fixed: count || isModelDiscovery(selection.endpoint) ? 0 : auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
+    model: !count && model ? { pricing: model.pricing, upstream: model.upstream } : null, fixed: count || isModelDiscovery(selection.endpoint) ? 0 : policyRequestCost(auth.policy, selection.capability) ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
       grant_key: options.grantKey ?? null, grant_lane: options.grantLane ?? null,

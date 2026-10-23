@@ -115,7 +115,7 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
     effectiveServiceTiers: Object.fromEntries(snapshot.providers.filter(p => !result.policy.providers.length || result.policy.providers.includes(p.id)).flatMap(p => p.models.filter(m => result.policy.models == null || result.policy.models.includes(m.id)).map(m => [m.id, allowedServiceTiers(result.policy, m.id, result.serviceTiers)]))),
     dailyBudgetMicros: result.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: result.policy.weeklyBudgetMicros ?? null, limitHint: result.policy.limitHint ?? null,
     budget: await budgetStatus(env, result.policyId, result.policy, budgetPrincipal(result)),
-    requestCostMicros: result.policy.requestCostMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",
+    requestCostMicros: result.policy.requestCostMicros ?? null, requestCostsMicros: result.policy.requestCostsMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",
   });
 }
 

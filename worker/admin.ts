@@ -1,3 +1,4 @@
+import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { authorizationTimestamp, refreshExpiryWarning } from "../shared/refresh-expiry.ts";
 import { budgetCapsCall } from "./authority-budgets.ts";
 import { effectiveBudgetPolicy, normalizeBudgetOverride } from "./budget-overrides.ts";
@@ -544,12 +545,15 @@ export function normalizePolicy(
   const weeklyBudgetMicros = normalizeBudgetValue(body.weeklyBudgetMicros, "weeklyBudgetMicros");
   const limitHint = normalizeLimitHint(body.limitHint === undefined ? existing?.limitHint : body.limitHint);
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
+  let requestCostsMicros: AccessPolicy["requestCostsMicros"];
+  try { requestCostsMicros = normalizeRequestCosts(body.requestCostsMicros === undefined ? existing?.requestCostsMicros : body.requestCostsMicros); }
+  catch (error) { throw new HttpError(400, "invalid_policy", (error as Error).message); }
   const budgetMode = body.budgetMode === undefined ? existing?.budgetMode : body.budgetMode;
   if (budgetMode !== undefined && budgetMode !== "reserve" && budgetMode !== "soft") throw new HttpError(400, "invalid_policy", "budgetMode must be reserve or soft");
   const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
   if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, requestCostsMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
@@ -707,7 +711,7 @@ function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["main
   return { keepWarm: body.keepWarm === true };
 }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { ...(user.record.budgetOverrides ? { budgetOverrides: user.record.budgetOverrides } : {}), email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) {

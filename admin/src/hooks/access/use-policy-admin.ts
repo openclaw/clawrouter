@@ -1,3 +1,4 @@
+import { normalizeRequestCosts } from "../../../../shared/request-pricing.ts";
 import { type FormEvent, useRef, useState } from "react";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
@@ -80,6 +81,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
         serviceTiers: { allowed: unique(policyForm.serviceTierAllowed.split(",").map(tier => tier.trim()).filter(Boolean)), models: policyForm.serviceTierModels.trim() ? JSON.parse(policyForm.serviceTierModels) : {} },
         limitHint: policyForm.limitHint.trim() || null,
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
+        requestCostsMicros: normalizeRequestCosts(policyForm.requestCostsMicros.trim() ? JSON.parse(policyForm.requestCostsMicros) : null),
         budgetScope: policyForm.budgetScope,
         budgetMode: policyForm.budgetMode,
         retainRequestContent: policyForm.retainRequestContent,

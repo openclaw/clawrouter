@@ -1,3 +1,4 @@
+import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
@@ -35,6 +36,8 @@ const monthlyBudgetMicros = args["monthly-budget-micros"]
 const requestCostMicros = args["request-cost-micros"]
   ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
+const requestCostsMicros = args["request-costs-micros"] === undefined ? undefined
+  : normalizeRequestCosts(JSON.parse(args["request-costs-micros"]));
 const request = {
   enabled,
   providers,
@@ -42,6 +45,7 @@ const request = {
   tenantId,
   secretSha256: createHash("sha256").update(secret).digest("hex"),
 };
+if (requestCostsMicros !== undefined) request.requestCostsMicros = requestCostsMicros;
 if (monthlyBudgetMicros !== undefined) {
   request.monthlyBudgetMicros = monthlyBudgetMicros;
 }
@@ -191,6 +195,7 @@ function policyFields(policy) {
     tokenRole: policy.tokenRole ?? null,
     monthlyBudgetMicros: policy.monthlyBudgetMicros ?? null,
     requestCostMicros: policy.requestCostMicros ?? null,
+    requestCostsMicros: policy.requestCostsMicros ?? null,
     retainRequestContent: policy.retainRequestContent !== false,
   };
 }
