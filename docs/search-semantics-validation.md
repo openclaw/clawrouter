@@ -724,3 +724,15 @@ provider retrieval semantics and upstream billing remain unresolved. No paid cal
 inference, router write, secret change, security relaxation or broader cleanup.
 A paired known-content/FakeCo retrieval comparison now requires its own approval,
 freshly pinned operator/preflight and qualified cleanup/restoration plan.
+
+
+## Paired experiment ready for approval
+
+[Prepared batch](search-semantics-paired-retrieval.md): frozen operator
+`0f45b1f`, review scoped-clean through P2, thirteen offline scenarios and five
+standalone-probe tests pass. Read-only preflight passed 2026-10-23T07:54:45.783Z;
+current normal version/route/infrastructure unchanged. Public IANA HTTP control
+checks pass. No Cloudflare writes, hosted sessions or paid search calls. Pending
+approval covers temporary wrapper deployment, IANA then conditional FakeCo
+(at most two direct Sol search calls), owned cleanup and normal restoration.
+No approval or execution receipt exists yet; billing remains unqualified.

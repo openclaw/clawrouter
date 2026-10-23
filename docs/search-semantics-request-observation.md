@@ -11,6 +11,8 @@ request plan/source/config/time; provider retrieval semantics and upstream billi
 remain unqualified. Further Cloudflare mutation batches and paid comparisons
 require separate approval. Current ownership receipt:
 `request-observation-stability-calibration-receipt.json` (exclusive; do not replay).
+The [paired retrieval runner](search-semantics-paired-retrieval.md) is prepared,
+reviewed through P2 and read-only preflighted; deployment/paid approval pending.
 
 ## Read-only follow-up
 
