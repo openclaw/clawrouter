@@ -17,7 +17,7 @@ const internalEvent = "https://fixture-observations.internal/event";
 const mainEnv = { CF_VERSION_METADATA: { id: "synthetic-main-version" } };
 const bucket = (path, method, query, status, count) => ({ path, method, query, status, count });
 
-async function runtime(t) {
+async function runtime(t, { oldObserver = false } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), "search-observations-test-"));
   const bundle = await build({ stdin: { contents: `
     export { default } from "./worker/fixtures/search-semantics-observe.ts";
@@ -42,15 +42,18 @@ async function runtime(t) {
       }
     }`, resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   const mainBundle = await build({ stdin: { contents: 'export { default } from "./worker/index.ts";', resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  const oldBundle = oldObserver && await build({ entryPoints: ["worker/fixtures/search-semantics.ts"], write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   let forwards = 0, main;
   const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{ name: "fixture", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
     bindings: { SEARCH_SEMANTICS_ENVIRONMENT: "fakeco", SEARCH_SEMANTICS_CONTROL_SHA256: createHash("sha256").update(token).digest("hex") },
-    durableObjects: { SEARCH_SEMANTICS: { className: "SearchSemanticsObject", useSQLite: true } },
+    durableObjects: { SEARCH_SEMANTICS: { className: "SearchSemanticsObject", useSQLite: true, ...(oldObserver ? { scriptName: "old-object" } : {}) } },
     serviceBindings: { SEARCH_SEMANTICS_ROBOTS_ORIGIN: async request => { forwards++; return main.fetch(request); } },
     outboundService: () => { throw new Error("observation fixture must never call an upstream"); },
   }, { name: "main", modules: true, script: mainBundle.outputFiles[0].text, compatibilityDate: "2026-06-05", bindings: mainEnv,
     outboundService: () => { throw new Error("robots must not call an upstream"); },
-  }] }));
+  }, ...(oldObserver ? [{ name: "old-object", modules: true, script: oldBundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
+    durableObjects: { SEARCH_SEMANTICS: { className: "SearchSemanticsObject", useSQLite: true } },
+  }] : [])] }));
   t.after(async () => { await mf.dispose(); await rm(temporary, { recursive: true, force: true }); });
   await mf.ready;
   main = await mf.getWorker("main");
@@ -60,6 +63,47 @@ async function runtime(t) {
   const registry = namespace.get(namespace.idFromName("fixture-v1"));
   return { fetcher, observer, registry, main, forwards: () => forwards };
 }
+
+test("readiness identifies the observation class without allocating session state", async t => {
+  const { fetcher, observer } = await runtime(t);
+  const response = await fetcher(`${control}/ready`, { headers: auth });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-clawrouter-observation-handler"), "observations-v1");
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await response.json(), { ready: true, protocol: "observations-v1" });
+  assert.deepEqual(await (await observer.fetch("https://fixture/fixture-state")).json(), { keys: [], alarm: null });
+  const empty = await fetcher(control, { headers: auth });
+  assert.equal(empty.status, 404);
+  assert.equal(empty.headers.get("x-clawrouter-observation-handler"), "observations-v1", "empty state differs from an old handler");
+  for (const [target, headers] of [[`${control}/ready`, {}], [`${control}/ready?query=1`, auth], [`${control}/ready`.replace("https:", "http:"), auth]]) {
+    const denied = await fetcher(target, { headers });
+    assert.equal(denied.status, 404);
+    assert.equal(denied.headers.get("x-clawrouter-observation-handler"), null);
+  }
+});
+
+test("mixed Worker and old object versions stop before observation creation", async t => {
+  const { fetcher } = await runtime(t, { oldObserver: true });
+  const methods = [];
+  await assert.rejects(createRequestObservation({ token, fetcher: (url, init) => { methods.push(init.method); return fetcher(url, init); } }), /control request succeeds \(HTTP 404\)/);
+  assert.deepEqual(methods, ["GET"], "a readiness failure must not replay or attempt creation");
+  const empty = await fetcher(control, { headers: auth });
+  assert.equal(empty.status, 404);
+  assert.equal(empty.headers.get("x-clawrouter-observation-handler"), null, "404 alone cannot establish cleared observation storage");
+});
+
+test("readiness rejects unknown handlers and failures retain only their HTTP status", async () => {
+  for (const [body, headers] of [[{ ready: true, protocol: "observations-v1" }, {}], [{ ready: true, protocol: "unknown" }, { "x-clawrouter-observation-handler": "observations-v1" }]]) {
+    let calls = 0;
+    await assert.rejects(createRequestObservation({ token, fetcher: async () => { calls++; return Response.json(body, { headers }); } }), /observation handler/);
+    assert.equal(calls, 1, "invalid readiness cannot reach POST");
+  }
+  await assert.rejects(createRequestObservation({ token, fetcher: async () => new Response("SYNTHETIC_PRIVATE_BODY", { status: 503 }) }), error => {
+    assert.match(error.message, /HTTP 503/);
+    assert.equal(error.message.includes("SYNTHETIC_PRIVATE_BODY"), false);
+    return true;
+  });
+});
 
 test("observation captures robots metadata while forwarding actual main Worker responses unchanged", async t => {
   const { fetcher, forwards, main } = await runtime(t);

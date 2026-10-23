@@ -23,12 +23,13 @@ export function prepareSemanticsCredential(adminToken, id = "codex_search_semant
 function fixtureControl(token, fetcher) {
   assert.match(token ?? "", /^[a-zA-Z0-9_-]{40,128}$/, "inject SEARCH_SEMANTICS_CONTROL_TOKEN");
   return async function control(path, method = "GET", body) {
-    assert.match(path, /^(?:runs(?:\/[a-f0-9-]{36}(?:\/pages\/warm)?)?|(?:diagnostic|observations)(?:\/[a-f0-9-]{36})?)$/);
+    assert.match(path, /^(?:runs(?:\/[a-f0-9-]{36}(?:\/pages\/warm)?)?|diagnostic(?:\/[a-f0-9-]{36})?|observations(?:\/(?:ready|[a-f0-9-]{36}))?)$/);
     const response = await fetcher(`${fixtureOrigin}${prefix}_control/${path}`, {
       method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}), redirect: "error", signal: AbortSignal.timeout(15_000),
     });
-    assert.ok(response.ok, "fixture control request succeeds");
+    assert.ok(response.ok, `fixture control request succeeds (HTTP ${response.status})`);
+    if (path.startsWith("observations")) assert.ok(response.headers.get("x-clawrouter-observation-handler") === "observations-v1", "observation handler identity matches");
     let text = "", bytes = 0;
     for await (const chunk of response.body) {
       bytes += chunk.length; assert.ok(bytes <= 16_384, "fixture response is bounded"); text += Buffer.from(chunk).toString("utf8");
@@ -93,6 +94,8 @@ export async function createDiagnosticFixture({ token, fetcher = fetch, ttlSecon
 // Temporary observation entrypoint only; no public request or diagnostic creation.
 export async function createRequestObservation({ token, fetcher = fetch }) {
   const control = fixtureControl(token, fetcher);
+  const ready = await control("observations/ready");
+  assert.ok(ready?.ready === true && ready.protocol === "observations-v1" && Object.keys(ready).sort().join(",") === "protocol,ready", "observation handler ready before creation");
   const initial = await control("observations", "POST", { ttlSeconds: 300 });
   const id = initial.id;
   assert.match(id ?? "", /^[a-f0-9-]{36}$/, "observation ID valid");

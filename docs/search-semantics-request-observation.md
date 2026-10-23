@@ -5,7 +5,8 @@ observation-session creation. Normal fixture restored at 2026-10-23 07:11:24 UTC
 Current version `5739c9d6-c696-4358-ba31-5b4054cb5ba8`; prefix route ID
 `edc2e346c12c4d1d880a20fd91c9e0d6`; namespace
 `148cbb6483b4421dbf8b25301a325865`. Temporary robots route and service binding
-removed. No paid calls. Observation counters remain unqualified; further
+removed. No paid calls. Local readiness/status correction prepared after the
+failed calibration; not deployed. Observation counters remain unqualified; further
 Cloudflare mutations and paid comparisons require separate user approval.
 
 ## Read-only follow-up
@@ -57,6 +58,7 @@ queries and unauthenticated controls return 404. Never persist credentials.
 
 | Path suffix | Method | Behavior |
 | --- | --- | --- |
+| `observations/ready` | GET | Authenticated compatible-handler check; no session/storage read or write. |
 | `observations` | POST | Strict `{ "ttlSeconds": 300 }`; one session, active slot 409. |
 | `observations` | GET | Active session snapshot, or 404. |
 | `observations/{id}` | GET | Matching session snapshot, or 404. |
@@ -78,6 +80,12 @@ overflow count and saturation flag. Each bucket holds:
 - Count, capped at 1,000,000. New buckets beyond 128 increment bounded overflow;
   exhausted numeric capacity sets saturation. Overflow/saturation means partial
   measurement and must prevent claims of complete coverage.
+
+The observation object marks its control responses with fixed
+`x-clawrouter-observation-handler: observations-v1`. Readiness returns exactly
+`{ "ready": true, "protocol": "observations-v1" }`. Authentication/URL denials and
+the normal/older class have no marker. This identifies a compatible object
+handler, not an exact deployment version. It exposes no session or credential.
 
 No raw URL/path/query, headers, IP, user agent, cookie, body, prompt, completion,
 marker or request identifier is retained. Private controls are excluded, including
@@ -116,6 +124,11 @@ Hosted calibration, if included in that approval:
 
 1. Require public diagnostic absent and unauthorized controls denied. Compare
    forwarded robots responses with baseline before starting counted sessions.
+   Before any session POST, require authenticated `observations/ready` 200 with
+   the exact payload and handler marker. Allow bounded readiness GET polling for
+   deployment propagation; never retry a session POST. Record every response's
+   numeric status and marker-match boolean before validation, without raw bodies.
+   Then require marked observation collection 404 and diagnostic collection 404.
 2. Create one observation and one diagnostic session, both five minutes; record
    response status before validation and each owned ID immediately on 201.
    Private snapshots must show no observed requests and zero diagnostic counters.
@@ -132,7 +145,9 @@ Hosted calibration, if included in that approval:
    deployed baseline.
 
 `createRequestObservation` supplies `initial`, generation-checked `snapshot()`
-and `close()`. The caller still journals the creation ID immediately, retains
+and `close()`. Creation first checks readiness; failure cannot reach POST.
+Control errors retain only the HTTP status, without echoing response bodies.
+The caller still journals the creation ID immediately, retains
 cleanup custody after partial failure, and never deletes an unexpected session.
 An ambiguous create/delete outcome requires read-only reconciliation, not replay.
 
@@ -161,8 +176,10 @@ HTTP/host/path variants, cached prerequisites and capture failure possible.
 
 Before restoring the normal class implementation, snapshot metadata and delete
 only the owned observation/diagnostic IDs. Verify observation collection/ID 404
-**while the wrapper is still deployed**; that read prunes expired observation
-storage and clears its alarm. On failure, keep custody of the recorded IDs;
+**while the wrapper is still deployed**, with the observation handler marker on
+that same 404 response; that read prunes expired observation storage and clears
+its alarm. An unmarked 404 is inconclusive and cannot authorize state-cleanup
+claims. On failure, keep custody of the recorded IDs;
 do not blindly roll back to code whose alarm does not know observation storage.
 Expiry fallback also depends on the wrapper remaining deployed until this check.
 
@@ -226,3 +243,38 @@ Receipt: ignored
 Before another attempt, prepare status and handler/version evidence sufficient
 to distinguish authentication, old-handler routing and runtime failure; obtain
 fresh mutation approval. Paid search remains gated on hosted counter calibration.
+
+
+## Local diagnosis and prepared readiness correction
+
+Read-only reconciliation after the failed batch matched the restored version,
+prefix route and all captured infrastructure hashes. No Cloudflare mutation or
+paid call in this investigation. Wrangler dry run exported the intended class.
+The actual generated bundle succeeded in a local normal → observed → normal
+upgrade: authenticated invalid diagnostic input 400, observation creation 201,
+owned read 200, then restored diagnostic validation 400.
+
+A separate local pairing of the new Worker with the old object implementation
+returned 404 for both creation and collection GET. This reproduces the ambiguity
+in the failed calibration; it does not establish its historical cause because
+that response's status was lost. Cloudflare documents temporary Worker/object
+version skew, typically seconds to minutes, during eventually consistent code
+updates: [Durable Object code updates](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates).
+Propagation is a supported hypothesis, not a confirmed root cause; other edge or
+runtime failures remain possible.
+
+Prepared correction: authenticated no-session readiness GET in the observation
+object, fixed handler marker on control responses, and helper readiness gating
+before creation. Non-2xx helper errors include numeric HTTP status only. Tests
+cover no stored keys/alarm after readiness, denied readiness, empty-state marker,
+new Worker/old object rejection before POST, malformed/missing handler identity,
+and response-body privacy. Normal fixture/main router/configuration unchanged.
+
+The old ignored calibration operator is historical and pinned to its earlier
+source/IDs; do not replay it. A new approved batch must prepare fresh receipts
+and source/review pins, journal status and marker-match before validation, and
+require marked absence checks before treating observation state as cleared.
+No automatic deploy or creation retry. Hosted lifecycle/counting remain unqualified.
+
+Ignored local evidence: `observation-upgrade-reproduction.json` and
+`observation-diagnosis-readonly-inventory.json` in the campaign artifact directory.

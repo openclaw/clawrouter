@@ -5,6 +5,7 @@ const HOST = "clawrouter-fakeco.openclaw.ai";
 const PREFIX = "/search-semantics/";
 const CONTROL = `${PREFIX}_control/observations`;
 const OBJECT = "request-observations-v1";
+const HANDLER = "observations-v1";
 const EVENT = "https://fixture-observations.internal/event";
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const PATHS = ["robots", "robots_variant", "diagnostic", "diagnostic_variant", "health", "matrix", "fixture_other"] as const;
@@ -18,7 +19,8 @@ type Env = {
   SEARCH_SEMANTICS: DurableObjectNamespace;
   SEARCH_SEMANTICS_ROBOTS_ORIGIN: Fetcher;
 };
-const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "cache-control": "no-store" } });
+const identified = (response: Response) => { response.headers.set("x-clawrouter-observation-handler", HANDLER); return response; };
+const json = (value: unknown, status = 200) => identified(Response.json(value, { status, headers: { "cache-control": "no-store" } }));
 const absent = () => new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
 const object = (env: Env) => env.SEARCH_SEMANTICS.get(env.SEARCH_SEMANTICS.idFromName(OBJECT));
 
@@ -108,6 +110,8 @@ export class SearchSemanticsObject extends FixtureObject {
   async fetch(request: Request): Promise<Response> {
     if (!this.isObserver) return super.fetch(request);
     const path = new URL(request.url).pathname;
+    // No storage read/write or session allocation. A previous class returns 404.
+    if (path === `${CONTROL}/ready` && request.method === "GET") return json({ ready: true, protocol: HANDLER });
     const eventRequest = request.url === EVENT && request.method === "POST";
     let input: unknown;
     if (eventRequest || path === CONTROL && request.method === "POST") {
@@ -120,7 +124,7 @@ export class SearchSemanticsObject extends FixtureObject {
     }
     return this.observationState.storage.transaction(async storage => {
       let value = await active(storage);
-      let response = absent();
+      let response = identified(absent());
       const id = path.match(new RegExp(`^${CONTROL}/(${UUID})$`))?.[1];
       if (eventRequest) {
         if (value) {

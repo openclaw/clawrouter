@@ -512,6 +512,21 @@ API inventory was refreshed for this batch. A Safari focus change interrupted
 read-only rule-inventory refresh; the latest browser rule observation remains
 the earlier inspection. No browser settings were changed.
 
+### Local follow-up: mixed-version reproduction and readiness gate
+
+Read-only inventory matched the restored deployment. Actual Wrangler bundle
+passed an in-place normal/observed/normal upgrade locally. Pairing the new Worker
+with the old Durable Object reproduced creation 404 and collection 404, showing
+why empty-state checks alone were insufficient. Historical root cause remains
+unconfirmed because the failed HTTP status was lost.
+
+Prepared locally: authenticated no-session observation readiness GET, fixed
+object-handler response marker, helper readiness gate before any creation POST,
+and numeric HTTP status in helper failures. No normal-fixture/main-router or
+configuration changes. Regression tests cover the mixed-version boundary and
+prevent a readiness failure from reaching POST; readiness stores no session or
+alarm. Nothing deployed. See [diagnosis and retry requirements](search-semantics-request-observation.md#local-diagnosis-and-prepared-readiness-correction).
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.
