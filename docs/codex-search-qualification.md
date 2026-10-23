@@ -88,9 +88,10 @@ and [rollout history](codex-search-rollout.md) use this narrower qualification.
 
 ## Retained environment and handoff
 
-The user confirmed browser inspection complete. Core FakeCo cleanup completed;
-KV/R2, the dedicated service token, GitHub Environment and 1Password items remain
-for separately approved cleanup. The [current cleanup handoff](codex-search-cleanup-20261023.md)
+The user confirmed browser inspection complete. Core FakeCo cleanup and approved
+KV/R2/GitHub Environment removal completed. Manual dedicated Access-token deletion
+and subsequent disposal of two dedicated 1Password items remain. The
+[current cleanup handoff](codex-search-cleanup-20261023.md)
 records exact identities and approval batches. Approved batch 1 completed
 at 2026-10-23 09:28:51 UTC: bootstrap revoked, fixture route removed, fixture
 namespace deleted through its migration, and empty fixture Worker deleted.
@@ -135,6 +136,20 @@ receipts. Five management DELETEs, no retry beyond the approved single core retr
 no DNS repair and no paid call. Spend/revocation evidence is historical; no live
 application checks after removal. Success supports the consumer-dependency
 explanation without establishing the original refusal or DNS-loss cause.
+
+Approved retained-resource cleanup completed at **09:47:08 UTC**, with seven
+checks passed: exact empty R2 bucket and owned KV namespace deleted; exclusively
+run-owned GitHub Environment removed with its nine secrets/four variables.
+Direct GETs and complete inventories confirm absence. Production/shared
+infrastructure, unrelated storage, other Environments, repository-level settings
+and candidate deployment/tag/workflow history preserved. No active FakeCo runs.
+Receipt: `cleanup-batch3-verification-20261023.json`, pinning preflight/execution
+receipts and fresh complete S3 listings. Two Cloudflare DELETEs and one GitHub
+DELETE, no paid call. Safari shows the dedicated Access token still Enabled but
+with zero associated applications; its context menu is open at **Delete token**
+for the user's manual action. No browser mutation, service-token API request or
+1Password change. Keep both dedicated credential items until revocation is
+verified. See `cleanup-batch3-manual-token-handoff-20261023.json`.
 
 Read-only reconciliation at 2026-10-23 09:24:19 UTC passed 14 checks: main/fixture
 restoration fingerprints match, all 36 Worker dependencies and 27 Access apps'

@@ -1,12 +1,14 @@
 # FakeCo cleanup handoff — 2026-10-23
 
-Browser inspection: complete, confirmed by the user. **Batches 1 and 2 completed**
-after separate approvals. Final core verification completed at **2026-10-23
-09:42:59 UTC**, with eight checks passed. Both FakeCo Workers, all six namespaces,
-serving routes/domain, both queues and the owned Access app/policies are absent.
-Production/shared infrastructure preserved. KV/R2, the dedicated service token,
-GitHub Environment and 1Password items remain for separately approved cleanup.
-No credential switch, DNS repair, paid probe, PR or push.
+Browser inspection: complete, confirmed by the user. **Approved automated cleanup
+through batch 3 completed.** Core verification passed eight checks at 09:42:59 UTC;
+retained-resource verification passed seven at **2026-10-23 09:47:08 UTC**. Both
+FakeCo Workers, all six namespaces, serving routes/domain, queues, owned Access
+app/policies, KV namespace, R2 bucket and GitHub Environment are absent.
+Production/shared infrastructure and deployment history preserved. **Manual
+Access-token deletion remains:** Safari shows the exact token with its context
+menu open. The two dedicated 1Password items remain until that revocation is
+verified. No credential switch, DNS repair, paid probe, PR or push.
 This handoff supersedes historical cleanup identities, not the search qualification
 limits in the [campaign assessment](codex-search-qualification.md).
 
@@ -189,7 +191,57 @@ consumer-dependency explanation; it does not recover the original error message
 or establish the cause of the earlier DNS loss. Last router spend $3.614986 is
 historical evidence, not a post-deletion usage reading or upstream bill total.
 
-## Exact remote ownership and remaining deletion set
+## Approved retained-resource cleanup completed
+
+The user approved the remaining cleanup. Preflight passed six checks at
+**09:45:41 UTC**: core resources absent, all 34 remaining Worker settings inspected
+with no owned-storage references, exact KV/R2 identities and unchanged lifecycle,
+no bucket locks/notifications/custom domains/public managed domain, and complete
+fresh S3 lists with zero objects and zero multipart uploads. No object bodies or
+keys persisted. GitHub Environment ID, nine secret names/timestamps, four
+variable names/timestamps and pinned history unchanged; no active FakeCo runs.
+
+Executed once each, journaled before dispatch:
+
+1. Deleted empty R2 bucket `clawrouter-content-fakeco` (HTTP 200).
+2. Deleted KV namespace `ca69a07938214acf9fae2bfea2ee2e8d` (HTTP 200), including
+   its remaining stored key/value pairs; no values read or logged.
+3. Deleted `openclaw/clawrouter` Environment `fakeco`, ID `25093378320`
+   (HTTP 204), removing its nine secret copies and four variables.
+
+Final read-only verification passed **seven checks at 09:47:08 UTC**. Storage
+resources return 404 and are absent from complete KV/cursor-paginated R2 lists;
+unrelated storage inventory preserved. Environment and scoped secret/variable
+GETs return 404; other Environments and repository-level secret/variable metadata
+unchanged. Candidate deployment `7269515560`, tag and workflow run history
+preserved. Core resources remain absent; production/shared routing/Access and
+production settings/deployments match their baselines.
+
+Receipt: `cleanup-batch3-verification-20261023.json`, hashing
+`cleanup-batch3-preflight-20261023.json` and `cleanup-batch3-execution-20261023.json`.
+The preflight pins `cleanup-batch3-r2-preflight-20261023.json`. Two Cloudflare
+DELETEs and one GitHub DELETE; no fallback or replay. The documented
+[bucket deletion](https://developers.cloudflare.com/r2/buckets/delete-buckets/),
+[namespace deletion](https://developers.cloudflare.com/api/resources/kv/subresources/namespaces/methods/delete/)
+and [Environment deletion](https://docs.github.com/en/rest/deployments/environments#delete-an-environment)
+endpoints define this batch's mutation scope; no workflow/tag/deployment deletion.
+
+## Manual token handoff and credential disposal
+
+Safari, read-only, confirms account OpenClaw and token
+`f6264117-b130-4b39-a4f9-4b01a17b4ffa`, name
+`clawrouter-fakeco-codex-search-20261022`, still Enabled with 24-hour duration.
+It now shows zero associated applications, no associated policies and no
+applications in use. Context menu open with **Delete token** visible. No
+delete/disable/refresh/rotate action selected; the user performs deletion and any
+confirmation. No API service-token request or 1Password change.
+
+Receipt: `cleanup-batch3-manual-token-handoff-20261023.json`; identifiers and UI
+state only, no credential values persisted. After the user completes deletion,
+verify absence in the browser before disposing of the two dedicated 1Password
+items. Keep shared Cloudflare/OpenAI/Tailscale items, Wrangler login and evidence.
+
+## Exact ownership and completed deletion set
 
 Account `91b59577e757131d68d55a471fe32aca` (OpenClaw), zone
 `72b20df9e990ac41365dadace6499187` (openclaw.ai). IDs, not name prefixes, define
@@ -211,13 +263,13 @@ resources belong to later cleanup batches.
 | Worker custom domain — deleted | `38664e272d7e218f4f84dfe42a9b268c60fd1fa7`; `clawrouter-fakeco.openclaw.ai` |
 | Usage queue — deleted | `bd6016244cd749f78e916e50a2ac7dd9`; sole consumer disconnected first |
 | DLQ — deleted | `2843acdd30004177a6c3a092f13d9ee3` |
-| KV — retained | `ca69a07938214acf9fae2bfea2ee2e8d`; `clawrouter-policy-fakeco` |
-| R2 — retained | `clawrouter-content-fakeco`; jurisdiction `default` |
+| KV — deleted | `ca69a07938214acf9fae2bfea2ee2e8d`; `clawrouter-policy-fakeco` |
+| R2 — deleted | `clawrouter-content-fakeco`; jurisdiction `default` |
 | Access application — deleted | `beac7325-b743-4eef-982f-117bb7d27cce`; `ClawRouter FakeCo Console` |
 | Application policies — absent | `4a44c524-2d85-48ee-bdeb-3f1f5bd43913` and `63650e41-619d-40cc-a3fe-d2d28e7286d6` |
 | Service token — manual browser deletion | `f6264117-b130-4b39-a4f9-4b01a17b4ffa`; `clawrouter-fakeco-codex-search-20261022` |
-| Router records | Main Durable Object storage deleted; any copies in retained KV remain for later disposal. Historical policy IDs: `fakeco_bootstrap_20261022`, `codex_search_canary_20261022`, `ui_dollars_smoke_20261022` |
-| GitHub configuration — later approval | `openclaw/clawrouter` Environment `fakeco`, ID `25093378320`; exact names in `cleanup-readonly-github-20261023.json` |
+| Router records — owned storage deleted | Main Durable Object storage and KV deleted. Historical policy IDs: `fakeco_bootstrap_20261022`, `codex_search_canary_20261022`, `ui_dollars_smoke_20261022` |
+| GitHub configuration — deleted | `openclaw/clawrouter` Environment `fakeco`, ID `25093378320`; nine secrets and four variables; history retained |
 
 ## Separate approval batches
 
@@ -237,11 +289,9 @@ resources belong to later cleanup batches.
    executed once after revised precondition approval. Main Worker, five
    namespaces, custom domain, queues and Access app/policies absent; all deletion
    gates verified. KV retained for later disposal. Do not replay the teardown.
-3. **Retained resources, after another approval.** Once every writer is gone,
-   re-list R2 objects/uploads, locks and notifications. If still empty, delete the
-   exact R2 bucket and KV namespace. Unexpected content/integrations require
-   review. Remove the exclusively run-owned GitHub Environment after rechecking
-   its exact entry set. The user deletes the dedicated Access token through the
+3. **Automated batch 3 completed; manual token step pending.** Exact empty R2
+   bucket, KV namespace and exclusively run-owned GitHub Environment deleted and
+   verified as above. The user deletes the dedicated Access token through the
    browser; verify its absence there. No service-token API deletion attempt.
 4. **Final verification and local credentials.** Re-list every recorded remote ID
    and compare production settings/deployments and shared routing with the saved
