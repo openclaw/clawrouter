@@ -674,3 +674,33 @@ Record partial cleanup failures and stop on any ownership/binding mismatch.
 Delete permissions cannot be exercised read-only. Do not delete the existing FakeCo custom domain,
 router Worker, shared Access app/service token/IdP, or original canary resources.
 Those remain under their separate campaign cleanup record and user approval.
+
+
+## Observation transition follow-up, preparation only
+
+Runtime `d3af38c` reproduces a post-readiness transition to the actual normal
+object handler locally: capture/control 404s leave an active session with a
+missing trailing-slash request. This is a possible failure mechanism, not proof
+of the historical hosted cause. Prepared v2 instrumentation separates private
+Worker/object protocol identities, validates explicit capture acknowledgements,
+and exposes bounded isolate-local failure counts without changing public replies.
+
+The new runner requires three matching readiness checks, resets on an old-handler
+404, and checks the durable counter prefix after every public request. A later
+transition or missing capture cannot qualify the experiment. Readiness samples
+and isolate-local counters do not prove deployment-wide consistency.
+
+Thirty focused tests, Worker type checking and the observation Wrangler dry run
+pass; twelve offline runner scenarios pass. Runtime autoreview is scoped-clean
+through P2. New preparation details, operator review and read-only preflight are
+recorded in [Temporary request observations](search-semantics-request-observation.md#local-transition-reproduction-and-stability-preparation).
+No new hosted calibration or paid comparison; hosted counters, retrieval semantics
+and upstream billing remain unqualified. Current ownership stays with the normal
+version/route and readiness-restoration receipt above.
+
+Read-only preflight passed 2026-10-23T07:45:28.992Z: current normal deployment,
+route, three bindings, namespace/main identity, Access, BIC and robots baselines
+match the restoration receipt. Operator review found one inventory-evidence P2;
+`5bf1ed4` corrects it and is scoped-clean through P2. No Cloudflare writes, hosted
+session creation/deletion or paid calls. Preparation receipt:
+`request-observation-stability-preparation-receipt.json` in the campaign artifacts.

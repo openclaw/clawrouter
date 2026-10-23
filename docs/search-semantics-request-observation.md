@@ -8,6 +8,8 @@ Current version `e5e5231c-4477-4e4a-b95c-0f9c9e2b7101`; prefix route ID
 `148cbb6483b4421dbf8b25301a325865`. Temporary robots route/service binding removed.
 No paid search calls. Hosted observation counters remain unqualified; further
 Cloudflare mutations and paid comparisons require separate approval.
+Local transition diagnostics and a stricter runner are prepared below; the new
+wrapper is not deployed.
 
 ## Read-only follow-up
 
@@ -81,11 +83,22 @@ overflow count and saturation flag. Each bucket holds:
   exhausted numeric capacity sets saturation. Overflow/saturation means partial
   measurement and must prevent claims of complete coverage.
 
-The observation object marks its control responses with fixed
-`x-clawrouter-observation-handler: observations-v1`. Readiness returns exactly
-`{ "ready": true, "protocol": "observations-v1" }`. Authentication/URL denials and
-the normal/older class have no marker. This identifies a compatible object
-handler, not an exact deployment version. It exposes no session or credential.
+The prepared observation object marks controls and capture acknowledgements with
+`x-clawrouter-observation-handler: observations-v2`. Readiness returns exactly
+`{ "ready": true, "protocol": "observations-v2" }`. Authenticated observation
+controls also carry `x-clawrouter-observation-worker: observations-worker-v2`.
+A current Worker forwarding to an older object can therefore return a Worker
+marker without the object marker. These identify protocol implementations,
+not exact deployment versions. Authentication/URL denials expose neither marker.
+
+Private `x-clawrouter-observation-captures` contains four capped counters:
+`recorded`, `inactive`, `rejected`, `transport`. Capture acceptance requires HTTP
+204, the object identity and an explicit recorded/inactive acknowledgement.
+A returned old-handler 404 or unmarked 204 is rejected. Diagnostics contain no
+request data; they describe only the responding Worker isolate, reset with that
+isolate, and cannot establish complete deployment-wide capture. Public responses
+carry none of these diagnostics. Durable session counters remain authoritative
+for the calibration gate.
 
 No raw URL/path/query, headers, IP, user agent, cookie, body, prompt, completion,
 marker or request identifier is retained. Private controls are excluded, including
@@ -125,9 +138,12 @@ Hosted calibration, if included in that approval:
 1. Require public diagnostic absent and unauthorized controls denied. Compare
    forwarded robots responses with baseline before starting counted sessions.
    Before any session POST, require authenticated `observations/ready` 200 with
-   the exact payload and handler marker. Allow bounded readiness GET polling for
-   deployment propagation; never retry a session POST. Record every response's
-   numeric status and marker-match boolean before validation, without raw bodies.
+   the exact payload, both identities and valid private diagnostics on three
+   consecutive checks spaced five seconds apart. An unmarked object 404 resets
+   the streak; unexpected responses stop. Poll for at most 120 seconds/25 checks;
+   never retry a session POST. This samples stability, not global propagation.
+   Record numeric status, separate identity booleans and validated counters before
+   validation, without raw bodies.
    Then require marked observation collection 404 and diagnostic collection 404.
 2. Create one observation and one diagnostic session, both five minutes; record
    response status before validation and each owned ID immediately on 201.
@@ -135,8 +151,10 @@ Hosted calibration, if included in that approval:
 3. Seven accounted public requests: robots GET/HEAD; diagnostic GET/HEAD;
    diagnostic query GET; diagnostic trailing-slash GET; fixture health GET.
    Expect robots baseline statuses, diagnostic 200/empty HEAD with correct marker,
-   query/slash 404, health 200. Require seven exact observation counts, diagnostic
-   counts 1/1, no overflow/saturation and unchanged session expiry. Keep markers
+   query/slash 404, health 200. After each public request require the exact expected
+   counter prefix, stopping before another public request if capture is missing.
+   Finally require seven exact observation counts, diagnostic counts 1/1,
+   no overflow/saturation and unchanged session expiry. Keep markers
    in memory. No matrix run or provider call.
 4. Snapshot metadata. In `finally`, delete only the owned observation ID first,
    then the owned diagnostic ID; verify both collection/generation controls 404
@@ -417,3 +435,59 @@ All are in the campaign artifact directory. Both batch runners now have exclusiv
 execution receipts and must not be replayed. Further investigation should explain
 or stabilize handler identity and capture before another hosted calibration;
 paid comparisons remain gated on a successful calibration.
+
+
+## Local transition reproduction and stability preparation
+
+Prepared source `d3af38c`; not deployed. A workerd test starts with compatible
+readiness and successful creation, then dispatches capture/control calls to the
+actual normal/older object implementation while preserving the same storage.
+The trailing-slash public request still returns 404; the capture and owned-ID
+read also return old-handler 404. Switching back reveals the same active session
+with no recorded request. This reproduces a mechanism consistent with the hosted
+failure; it does not prove that code propagation caused that historical failure.
+
+The prepared v2 wrapper checks explicit capture acknowledgements and exposes
+separate private Worker/object identities plus bounded isolate-local diagnostics.
+Tests cover valid/inactive acknowledgements, old-handler 404, unmarked 204 and
+transport errors. Public forwarding, auth denials, bounded storage and independent
+fixture/observer alarms remain covered. Worker type checking and 30 focused
+fixture/observation/matrix/probe tests pass; Wrangler dry run passes. Runtime
+commit review is scoped-clean through P2:
+`/Users/joshavant/.codex/review-results/search-observation-transition-20261023/status.json`.
+
+Fresh ignored operator `run-request-observation-stability-calibration.mjs` pins
+this runtime and the current normal version/route. Its distinct receipt/preflight
+names preserve both historical attempts. Twelve offline scenarios exercise
+read-only mode, delayed/reset readiness, late old handlers, missing trailing-slash
+capture, ambiguous creation/deletion/restoration, partial inventory and source
+changes. Creation/deletion remain single-attempt; unqualified cleanup prevents
+restoration. No new deployment or paid call is authorized by this preparation.
+
+
+Operator review: frozen `7c8d7b9` found one P2 in the inventory helper: a failed
+unrelated read could discard successfully read ownership. Correction `5bf1ed4`
+uses a separate `search-observation-stability-operations.mjs` and journals each
+available version/route result before rejecting incomplete inventory. A test calls
+the real helper with Access failure and deployment-read failure independently.
+All twelve operator scenarios pass. Correction review is scoped-clean through P2:
+`/Users/joshavant/.codex/review-results/search-observation-stability-inventory-fix-20261023/status.json`.
+Historical operator source hashes remain unchanged; its receipts must not be
+replayed. The new source/hash manifest is
+`request-observation-stability-runner-review.json`; mutation approval is null.
+
+
+Fresh read-only preflight passed at 2026-10-23T07:45:28.992Z against the current
+restoration receipt. Normal version `e5e5231c-4477-4e4a-b95c-0f9c9e2b7101`,
+prefix `adf4daadf3f0489ba46a5084f2193688`, namespace and main version unchanged.
+Exactly three normal bindings; temporary robots route/service absent. Qualified
+inventory hashes, four robots baselines, private/public absence, non-creating
+literal-null auth check (400), Access challenge and BIC verified. Browser rules
+were not refreshed. No denied-endpoint retry or authentication fallback.
+
+Current preparation receipts: `request-observation-stability-preflight.json` and
+`request-observation-stability-preparation-receipt.json`. Cloudflare writes,
+session creations/DELETEs and paid search calls: zero. No PR or push. The new
+wrapper remains undeployed; the next hosted calibration requires separate
+approval and a fresh preflight. Retrieval semantics and hosted observation
+coverage remain unqualified until that calibration succeeds.
