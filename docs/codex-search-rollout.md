@@ -9,6 +9,10 @@ the admin production build. It exposed two shared-pricing imports whose `.ts`
 suffixes failed the admin compiler; those now follow the existing extensionless
 admin import convention. The compiler check and all 229 admin tests then passed.
 This local bundle does not verify remote bindings or authorize a deployment.
+Wrangler emitted a conditional `node:string_decoder` dependency warning. A
+separate workerd fixture loaded the actual packaged bundle under the existing
+compatibility flags, parsed synthetic JSON, and settled its expected 600 microUSD
+token charge. The dependency's TextDecoder fallback worked in that check.
 
 ## Retrieval investigation — October 22, 2026
 
@@ -112,15 +116,34 @@ records and a subsequent original-reference open. The native harness also checks
 usage receipts and both budget ledgers, excluding direct replay probes from router
 accounting.
 
-The October 22 native rerun passed Sol → Astra with cached search and WebSocket
+The October 22 native rerun with stricter HTTP-200 fetch-error checks passed
+Sol → Astra with cached search and WebSocket
 inference: two completed automatic compactions, original-reference reuse, one
 search namespace, and all upstream operations successful. Sixteen usage receipts
 agreed with both SQL ledgers: five search requests charged 5,000 microUSD, plus
-969,699 microUSD of model-token charges, totaling 974,699 microUSD. Those are
+972,180 microUSD of model-token charges, totaling 977,180 microUSD. Those are
 router accounting values, not an upstream invoice. An earlier attempt failed the
 strict WebSocket fixture check and did not qualify; it is not included in these
 figures. The deterministic regression separately checks known token counts/rates
 and exact tariff totals without a paid API dependency.
+
+A three-pass autoreview through P2 covered the branch from its pre-campaign base
+through commit `3069f85`, with source context for accounting, continuation state,
+WebSocket sessions and setup. It reported one P2 harness finding: normal
+navigation could accept HTTP-200 fetch errors. No P0/P1 findings or suspected real
+credentials were reported. The finding is fixed: ordinary qualification rejects
+known fetch/reference/internal errors, and the live adapter retains a failed check
+across a successful retry. Six focused tests passed, including the actual adapter
+retry path; the native rerun above passed the stricter output checks. The review
+outcome was `findings`, not a clean review of the subsequent fix.
+
+Validation before that focused review correction: 2,568 Worker tests, 229 admin
+tests, and 791 passing script tests with 18 skips. The script suite passed when
+run independently; running it concurrently with the full Worker suite initially
+failed three unrelated cadence/deadline checks. The admin compiler, production
+build, Wrangler packaging dry run, and packaged-parser smoke also passed. No
+production request-path code changed in this follow-up campaign; the admin import
+fix and diagnostic/regression work are local commits.
 
 ```sh
 node --test test/standalone-search-probe.test.mjs test/standalone-search-workerd.test.mjs

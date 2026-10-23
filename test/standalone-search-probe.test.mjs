@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { directSearchProbe, searchProbeSummary } from "../scripts/standalone-search-probe.mjs";
+import { assertSearchToolSuccess, directSearchProbe, searchProbeSummary } from "../scripts/standalone-search-probe.mjs";
+import { liveUpstream } from "../scripts/smoke-codex-search-upstream.mjs";
 
 test("probe replay uses only the direct search endpoint and reports closed metadata across UTF-8 boundaries", async () => {
   const body = { id: "fixture-session", model: "gpt-6.1-sol", commands: { open: [{ ref_id: "https://example.com/" }] }, settings: { external_web_access: true } };
@@ -29,4 +30,24 @@ test("probe bounds response bytes and rejects non-JSON without echoing provider 
   const request = { key: "fixture-only-key", body: {} };
   await assert.rejects(directSearchProbe({ ...request, fetcher: async () => new Response("x".repeat(2 * 1024 * 1024 + 1)) }), /response limit exceeded/);
   await assert.rejects(directSearchProbe({ ...request, fetcher: async () => new Response("private provider text") }), error => error.message === "direct search response is not JSON");
+});
+test("normal qualification rejects HTTP-200 navigation errors without rejecting generic page vocabulary", () => {
+  for (const output of ["Internal Error", "Failed to fetch https://example.com/", "URL is not safe to open", "Error fetching page", "403 Forbidden", "404 Not Found", "Invalid reference: turn0search0", "Unable to resolve click call"]) {
+    assert.throws(() => assertSearchToolSuccess({ output }), /tool error/, output);
+  }
+  for (const value of [null, {}, { output: "" }]) assert.throws(() => assertSearchToolSuccess(value), /returns text output/);
+  assert.doesNotThrow(() => assertSearchToolSuccess({ output: "A normal page discussing error handling, robots, and blocked permissions." }));
+});
+test("the actual live adapter retains a navigation failure after a successful native retry", async t => {
+  t.mock.method(console, "error", () => {});
+  let output = "Failed to fetch https://example.com/";
+  t.mock.method(globalThis, "fetch", async () => Response.json({ output, encrypted_output: "fixture-ciphertext" }));
+  const upstream = liveUpstream({ key: "fixture-only-key", models: ["gpt-6.1-sol"], mode: "cached", transport: "http" });
+  const request = () => new Request("https://api.openai.com/v1/alpha/search", { method: "POST", body: JSON.stringify({ id: "fixture-session", model: "gpt-6.1-sol", commands: { open: [{ ref_id: "https://example.com/" }] }, settings: { external_web_access: false } }) });
+  try {
+    await assert.rejects(upstream.outbound(request()), /fetch tool error/);
+    output = "A normal successful page";
+    assert.equal((await upstream.outbound(request())).status, 200);
+    assert.throws(() => upstream.check(), /fetch tool error/, "a recovered retry cannot qualify a failed operation");
+  } finally { upstream.close(); }
 });
