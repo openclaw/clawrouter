@@ -3,8 +3,10 @@
 Browser inspection: complete, confirmed by the user. **Batch 1 completed** at
 2026-10-23 09:28:51 UTC after the user's separate approval. Batch 2 was separately
 approved, but its first Worker DELETE returned HTTP 403/code `10064`; execution
-stopped. No core resource was removed. Main FakeCo remains available; corrective
-consumer removal and a retry await separate approval. No credential switch.
+stopped. The user then approved consumer removal and one guarded retry. Neither
+was dispatched: fresh preflight found authoritative DNS `NXDOMAIN` for FakeCo.
+Worker/domain metadata remain; current application availability and revocations
+cannot be rechecked. Revised preconditions require approval. No credential switch.
 This handoff supersedes historical cleanup identities, not the search qualification
 limits in the [campaign assessment](codex-search-qualification.md).
 
@@ -89,7 +91,7 @@ the failed request, not its server message. The current guarded command does not
 disconnect consumers before its Worker deletion; do not rerun it unchanged against
 the same attached consumer.
 
-Prepared correction, not executed:
+The user approved this correction; preflight stopped before either action:
 
 1. Refresh ownership, zero-backlog and revoked-key checks. Disconnect only
    `0d6d0b30a9a94cbe9efbbf7b0ccaa7aa` from usage queue
@@ -109,9 +111,44 @@ Prepared correction, not executed:
 Receipts: `cleanup-batch2-preflight-20261023.json`,
 `cleanup-batch2-core-execution-20261023.json`,
 `cleanup-batch2-refusal-reconciliation-20261023.json`, and
-`cleanup-batch2-consumer-correction-plan-20261023.json`. This correction requires
-fresh approval under the user's per-batch boundary; successful consumer reads do
-not exercise its deletion permission. No source-code changes or paid probes.
+`cleanup-batch2-consumer-correction-plan-20261023.json`. Successful consumer reads
+do not exercise its deletion permission. No source-code changes or paid probes.
+
+## Approved correction stopped before dispatch: DNS precondition
+
+Read-only reconciliation completed **09:39:27 UTC**, with five checks passed.
+Cloudflare's authoritative nameserver and public resolver `1.1.1.1` both return
+`NXDOMAIN` for `clawrouter-fakeco.openclaw.ai`. Production's hostname resolves.
+The main Worker, its settings/deployments, all five namespaces, custom-domain
+binding, queues/sole consumer and Access app/policies still match the recorded
+baseline. Both queues are empty; KV/R2 remain. Production settings/deployments and
+all other Worker/namespace/domain/route inventories are unchanged.
+
+No consumer DELETE or core retry was dispatched; no Cloudflare/application writes
+or paid calls in this correction attempt. The first preflight comparisons also
+needed metadata normalization: Access inventory formatting and the direct
+consumer response's additional queue/timestamp fields. Those comparisons passed
+after correction; they did not identify remote changes.
+
+The cause and timing of DNS loss are unconfirmed. The earlier refused DELETE is
+not proven atomic, and unchanged custom-domain metadata does not establish DNS
+reachability. The earlier 09:34:03 health/revocation/spend checks are historical,
+not current availability evidence. Token access to DNS-record metadata was
+unavailable; no alternate credential or DNS repair was attempted.
+
+Prepared revised execution: refresh management ownership/dependencies and empty
+queues, then perform the same exact consumer removal and single guarded retry,
+using the last successful revocation/spend receipt instead of fresh application,
+key and health checks. **This changes the agreed precondition and needs approval**
+under the user's instruction to stop on unexpected state. It creates no DNS
+record, public re-exposure or alternate-host/IP path. Keep the same token/account
+and all existing deletion gates; stop on another refusal or residue. KV/R2,
+service token, GitHub and 1Password remain outside this batch.
+
+Receipts: `cleanup-batch2-dns-reconciliation-20261023.json` and
+`cleanup-batch2-dns-correction-plan-20261023.json`; the reconciliation hashes all
+three read-only preflight attempts. Do not replay exclusive receipts or treat
+the old application's historical health result as a current result.
 
 ## Exact remote ownership and remaining deletion set
 
@@ -155,8 +192,8 @@ The three fixture entries below are completed deletions, retained as evidence.
    only the empty fixture Worker. Verify main FakeCo health and Access unchanged.
    This permanently deletes fixture data. Do not redeploy the normal fixture
    config afterward. Local Wrangler 4.147.0 dry-run passed: no bindings, no upload.
-2. **Core teardown: approved attempt stopped; correction pending.** Use the
-   corrective approval sequence above before resuming. Recheck no serving fixture route or
+2. **Core teardown: approved correction stopped on DNS; revised approval pending.**
+   Use the revised precondition sequence above before resuming. Recheck no serving fixture route or
    outside dependencies, settled accounting and empty queues. Use the existing
    [guarded teardown](fakeco.md#guarded-teardown), locked to FakeCo, with both
    irreversible-storage confirmations. It removes the main Worker/storage, queues

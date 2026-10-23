@@ -104,10 +104,21 @@ Twelve read-only reconciliation checks passed at 09:34:03 UTC: no core resources
 removed, main FakeCo and production unchanged, keys revoked, queues empty and
 spend unchanged. The attached queue consumer is a plausible dependency blocker;
 the exact server message was not retained, so permission failure and root cause
-are not established. The handoff prepares exact consumer disconnection and one
-guarded retry for separate approval. No retry, credential switch or further
-mutation. See `cleanup-batch2-refusal-reconciliation-20261023.json` and
+are not established. See `cleanup-batch2-refusal-reconciliation-20261023.json` and
 `cleanup-batch2-consumer-correction-plan-20261023.json`.
+
+The user approved exact consumer disconnection and one guarded retry. Preflight
+stopped before either mutation: FakeCo now returns authoritative DNS `NXDOMAIN`,
+so live application/key/health checks cannot run. Read-only reconciliation at
+09:39:27 UTC confirms Worker/settings/deployments, all five namespaces, domain
+binding, queues/sole consumer and Access unchanged; queues empty, KV/R2 retained,
+production and unrelated infrastructure preserved. DNS loss timing/cause remain
+unconfirmed; the prior refused DELETE is not proven atomic. Earlier health,
+revocation and spend checks remain historical evidence. No DNS repair, alternate
+host/IP path, credential switch or paid probe. The handoff prepares the same
+deletion sequence using historical revocation/spend evidence, requiring approval
+for that changed precondition. Receipts: `cleanup-batch2-dns-reconciliation-20261023.json`
+and `cleanup-batch2-dns-correction-plan-20261023.json`.
 
 Read-only reconciliation at 2026-10-23 09:24:19 UTC passed 14 checks: main/fixture
 restoration fingerprints match, all 36 Worker dependencies and 27 Access apps'
@@ -138,7 +149,8 @@ experiment receipts must not be reused. The earlier release assessment itself
 made no live credential reads or remote queries; the later read-only inventory
 used targeted credential reads. Neither step changed remote state. The later
 approved batch 1 made only the mutations listed above; batch 2's sole attempt was
-rejected and reconciled without observed resource changes. No PR, push or live provider
+rejected. Its inspected management resources remain, but subsequent DNS loss
+prevents a claim of unchanged availability. No PR, push or live provider
 probe. The fixture cleanup build passed a local Wrangler dry run before approval;
 the approved deletion migration subsequently deployed once and was verified.
 
