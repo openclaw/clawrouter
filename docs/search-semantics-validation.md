@@ -1,11 +1,14 @@
 # FakeCo search semantics validation
 
-A [Responses/alpha comparison](search-semantics-endpoint-comparison.md) is prepared
-and its separately approved public calibration passed at
-`2026-10-23T08:41:49.924Z`: exact calibration marker and one origin GET. Marker
-rotated, generation 1 armed with zero counters. The bounded paid pair still needs
-separate approval; no experimental API POST or Cloudflare writes in this batch.
-Exposure expires `08:50:45.942Z`; the pair must start before `08:46:35.942Z`.
+The approved [Responses/alpha comparison](search-semantics-endpoint-comparison.md#authorized-pair-and-verified-cleanup)
+completed at `2026-10-23T08:43:52.742Z`: `neither-observed`. Public calibration
+passed first with the exact marker and one origin GET. After rotation/reset,
+Responses reported one completed exact-target `open_page` action; alpha returned
+HTTP-200 tool-level `Internal Error`. Neither returned its fresh marker or
+produced any origin request, immediately or 15 seconds late. Both windows
+completed. Two API POSTs, no retries; live positive control absent and broader
+semantics remain unqualified. Cleanup independently verified at `08:45:20.683Z`:
+Funnel/Serve `{}`, port 18765 free. No Cloudflare writes; alpha billing unqualified.
 
 The independent [Tailscale Funnel experiment](search-semantics-funnel.md) passed
 authorized public calibration at `2026-10-23T08:16:48.420Z`: returned fixture marker

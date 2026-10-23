@@ -1,16 +1,18 @@
 # Responses and alpha retrieval comparison
 
-Status: exposure approved and fresh public calibration passed; generation 1 armed,
-all counters zero. Paid pair still requires separate approval. No credential read,
-experimental API POST, Cloudflare mutation, PR or push in this new batch.
+Status: approved pair completed at `2026-10-23T08:43:52.742Z`;
+`neither-observed`. Neither endpoint returned its fresh marker or produced an
+origin request. Both measurement windows completed; broader semantics remain
+unqualified. Cleanup independently verified at `08:45:20.683Z`: Funnel/Serve `{}`,
+port 18765 free. Two API POSTs, no retries or Cloudflare writes. No PR or push.
 The previous [Funnel batch](search-semantics-funnel.md) is complete; its approvals
 are consumed and its exposure is closed.
 
 ## Authorized exposure and public calibration
 
-New exposure began `2026-10-23T08:40:45.942Z`; deadline
-`2026-10-23T08:50:45.942Z`. The paid pair requires more than 250 seconds remaining,
-so it must start before `2026-10-23T08:46:35.942Z`. No automatic renewal.
+Exposure began `2026-10-23T08:40:45.942Z`; original deadline
+`2026-10-23T08:50:45.942Z`. The approved pair started before its
+`08:46:35.942Z` cutoff and closed the exposure early. No renewal.
 
 Anonymous Jina Reader fetched the public URL with `X-No-Cache: true`. The first
 attempt returned HTTP 422 at `08:41:20.470Z`, no marker and zero origin requests;
@@ -25,11 +27,54 @@ Generation 1 armed, all counters zero, first/last GET timestamps null. No operat
 public requests after arming. Foreground ownership and loopback-only listener
 verified; existing authenticated node used without enrollment or fallback key.
 
-Current ownership/calibration receipt:
+Historical ownership/calibration receipt:
 `.artifacts/fakeco-codex-search-20261022/endpoint-comparison-exposure-receipt.json`.
 Authorization: `endpoint-comparison-exposure-authorization.json` in that directory.
-This is a time-stamped active-exposure snapshot; cleanup remains pending under
-the original deadline, and elapsed time does not authorize the paid pair.
+This records the active exposure before the later paid authorization and cleanup;
+the execution receipt below records the final state. Completed approvals do not
+authorize replay.
+
+## Authorized pair and verified cleanup
+
+Separate paid-pair/cleanup approval recorded at `2026-10-23T08:43:12.984Z`.
+Frozen runtime `01baae4f096b799e02df0958d5cabace575fafd7`; source hashes
+matched preparation. Credential metadata rechecked; no `ACCESS_INSTRUCTIONS`
+field. Same key read once into memory. No operator public fixture requests after
+arming or during either window; no measurement marker in either request.
+
+| Endpoint | Dispatch → 15-second-late finish (UTC) | Provider result | Fresh marker / origin GET |
+| --- | --- | --- | --- |
+| Responses | `08:43:15.375` → `08:43:37.011` | HTTP 200, completed; one completed `open_page` action for the exact target | No / 0 |
+| Alpha | `08:43:37.011` → `08:43:52.742` | HTTP 200, tool-level `Internal Error` | No / 0 |
+
+Responses met the structural tool-success gate: no response error, incomplete
+state, refusal, unexpected output or tool-limit violation. It reported zero
+search/find actions and one exact-target open action. That metadata records a
+completed tool action; it does not establish a successful origin fetch.
+Reported token usage: 4631 input, 67 output, 4698 total. Request ID:
+`req_caa2b96243694b79b1e0d3e0fec9a60a`.
+
+Alpha reported no usage and included encrypted output; raw content was not
+persisted. Request ID: `req_3b097af0425c4c00b5e3f8fb25f481b3`.
+Its charges remain unqualified; absent usage does not establish no charge.
+
+Both immediate and late snapshots had all counters zero, no overflow and null
+GET timestamps. Separate generations 1/2, both measurement windows complete.
+Result `neither-observed`, stop reason `complete`: no live positive control.
+Public calibration established reachability through Jina, but the provider
+observations do not identify a failure cause or prove no upstream network attempt.
+Stop hosting retries; broader cached/live semantics remain gated.
+
+Runner exited 0 after closing its fixture and foreground child. Independent
+verification at `2026-10-23T08:45:20.683Z` confirmed both status configurations
+`{}` and no listener on port 18765. No active Funnel exposure or pending cleanup;
+certificate state not revoked. No enrollment, fallback-key access, router calls,
+Cloudflare writes or broader FakeCo teardown.
+
+Final receipt:
+`.artifacts/fakeco-codex-search-20261022/endpoint-comparison-execution-receipt.json`.
+Paid authorization: `endpoint-comparison-paid-authorization.json` in that directory.
+Earlier exposure/preparation receipts remain historical and unchanged.
 
 ## Question and bounds
 
@@ -154,5 +199,6 @@ regression cases for cancellation during alpha's request and late window.
 Original review status remains `findings`; do not describe it as a clean review.
 Results: `~/.codex/review-results/search-endpoint-comparison-20261023/`.
 Independent preparation checks found both real Serve/Funnel configurations `{}`
-and port 18765 free. The later approved exposure/calibration is recorded above;
-paid-run approval remains pending.
+and port 18765 free. Approved exposure, calibration, paid pair and final cleanup
+are recorded above. No runtime changes during execution; the 51-test result
+applies to the frozen runtime.
