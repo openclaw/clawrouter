@@ -24,8 +24,7 @@ auth:
         ChatGPT-Account-ID: "${grant.accountId}"
         OpenAI-Beta: responses=experimental
         originator: clawrouter
-baseUrls:
-  default: https://api.openai.com
+baseUrls: { default: https://api.openai.com }
 routing:
   nativePrefixes: [clawrouter-openai, openai]
   modelPrefixes: [openai/]
@@ -106,6 +105,7 @@ capabilities:
   - { id: models.list, endpoint: models_list, methods: [GET] }
   - { id: models.retrieve, endpoint: models_retrieve, methods: [GET] }
   - {"id":"audio.realtime","endpoint":"realtime","methods":["GET"]}
+  - { id: search.web, endpoint: standalone_search, methods: [POST] }
   - { id: llm.responses.compact, endpoint: responses_compact, methods: [POST] }
   - { id: llm.decisions, endpoint: decisions, methods: [POST] }
   - { id: llm.count_tokens, endpoint: responses_input_tokens, methods: [POST] }
@@ -116,6 +116,7 @@ capabilities:
   - {id: audio.speech, endpoint: speech, methods: [POST]}
   - {id: image.generation, endpoint: images_generations, methods: [POST]}
 endpoints:
+  standalone_search: { path: /v1/alpha/search, requestHeaders: [originator, x-codex-turn-metadata, X-Client-Request-Id], requestFormat: openai.standalone_search, responseFormat: openai.standalone_search, timeoutMs: 120000 }
   moderations: {path: /v1/moderations, requestHeaders: [X-Client-Request-Id], requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
   models_list: { method: GET, path: /v1/models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000, requestHeaders: [X-Client-Request-Id] }
   models_retrieve: { method: GET, path: "/v1/models/${model_id}", pathParams: [model_id], pathParamStyles: { model_id: opaque_segment }, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000, requestHeaders: [X-Client-Request-Id] }
@@ -234,7 +235,7 @@ models:
       upstream: gpt-5.6
       # The public API documents gpt-5.6 as the Sol alias.
       codexModel: gpt-5.6-sol
-      capabilities: [llm.responses, llm.chat, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
         responses:
@@ -303,7 +304,7 @@ models:
               outputMicrosPerMillion: 15000000
     - id: openai/gpt-6-astra
       upstream: gpt-6-astra
-      capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens, search.web]
       nativeCapabilities:
         version: clawrouter.native-capabilities.v1
         endpoints:
@@ -374,7 +375,7 @@ models:
               outputMicrosPerMillion: 37500000
     - id: openai/gpt-6.1-sol
       upstream: gpt-6.1-sol
-      capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens, search.web]
       nativeCapabilities:
         version: clawrouter.native-capabilities.v1
         endpoints:
@@ -456,7 +457,7 @@ models:
               outputMicrosPerMillion: 90000000
     - id: openai/gpt-6-sol
       upstream: gpt-6-sol
-      capabilities: [llm.responses, llm.chat, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       nativeCapabilities:
         version: clawrouter.native-capabilities.v1
         endpoints:
@@ -527,7 +528,7 @@ models:
               outputMicrosPerMillion: 7500000
     - id: openai/gpt-6-luna
       upstream: gpt-6-luna
-      capabilities: [llm.responses, llm.chat, llm.decisions, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.decisions, llm.count_tokens, search.web]
       nativeCapabilities:
         version: clawrouter.native-capabilities.v1
         endpoints:
@@ -627,7 +628,7 @@ models:
               outputMicrosPerMillion: 375000
     - id: openai/gpt-5.6-sol
       upstream: gpt-5.6-sol
-      capabilities: [llm.responses, llm.chat, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
         responses:
@@ -647,7 +648,7 @@ models:
       pricing: *openaiGpt56Pricing
     - id: openai/gpt-5.6-terra
       upstream: gpt-5.6-terra
-      capabilities: [llm.responses, llm.chat, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
         responses:
@@ -716,7 +717,7 @@ models:
               outputMicrosPerMillion: 9000000
     - id: openai/gpt-5.6-luna
       upstream: gpt-5.6-luna
-      capabilities: [llm.responses, llm.chat, llm.count_tokens]
+      capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
         responses:

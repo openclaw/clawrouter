@@ -1,3 +1,4 @@
+import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
 import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
 import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
 import { validateImageGeneration } from "./image-generation.ts";
@@ -18,6 +19,11 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (isStandaloneSearch(selection.endpoint)) {
+    if (!selection.model) throw new HttpError(400, "model_required", "standalone search requires a qualified registered model");
+    validateStandaloneSearch(requestObject(selection.body));
+    return;
+  }
   if (selection.endpoint.request_format === "openai.responses_input_tokens") {
     validateResponsesInputTokens(requestObject(selection.body));
     if (!selection.model) throw new HttpError(400, "model_required", "a registered Responses model is required for input token counting");

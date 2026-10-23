@@ -36,7 +36,7 @@ in the issued key's catalog. Provider readiness, session access, and model-less
 operation forms do not qualify a model. Use a router version that publishes
 operation offers; older catalogs fail setup before any files change.
 
-The profile disables hosted web search and enables WebSockets only when every
+By default the profile disables web search and enables WebSockets only when every
 exported model has a matching WebSocket offer for the same endpoint, route,
 policy, and generation. Codex applies that flag to the whole provider, including
 internal models. Catalog observations do not reserve budget or probe upstream;
@@ -45,6 +45,70 @@ budget again. `--service-tier` defaults to
 `default`; request `priority` explicitly for Fast. A missing native descriptor
 or unqualified priority tier fails before installation. Use a producer that
 contains the selected model, such as Codex 0.155.0 for Astra.
+
+## Opt in to built-in CLI web search
+
+With Codex CLI 0.163.0 or newer, add `--web-search live` or `--web-search cached`
+to `connect`. Qualification covers the models below, HTTP inference, and
+text search/navigation (`search_query`, `open`, `click`, `find`). The helper
+enables `supports_standalone_web_search`, disables WebSockets, and narrows the
+exported catalog to eligible standalone-search models. Search stays disabled
+without this option. Desktop, media commands, feeds, and account-pool failover
+are outside this qualification.
+
+Live qualification with Codex CLI 0.163.0 on 2026-10-22 passed search, open,
+find, a cited answer, and resume opening the exact original search reference
+for each model:
+
+- `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`.
+- `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`.
+
+Enablement is declared per model; forwarding, session ownership and accounting
+share one implementation. The helper also requires the native Codex descriptor
+to use Responses Lite. Models outside this list, including `gpt-5.5`, remain
+unqualified for this standalone integration.
+
+```sh
+pnpm codex:connect connect --profile clawrouter-search \
+  --router-url https://router.example.com --provider openai \
+  --model gpt-6-astra --web-search live
+```
+
+The key's policy must declare a fixed `requestCostMicros` tariff, and the route
+must resolve to one public OpenAI API account without fallback. This tariff is
+the router's configured per-request charge, including each standalone search
+request; it is not a measured upstream bill. Standalone responses currently lack
+qualified usage data. Ordinary model token rates and hosted Responses search
+fees do not price this endpoint. The same policy's fixed tariff also applies to
+its inference requests. Use a dedicated policy if that is not appropriate for
+an existing key.
+
+Codex sends search commands to `/v1/alpha/search` relative to its provider base.
+ClawRouter forwards them through `/v1/native/openai/v1/alpha/search`, isolates
+session IDs by caller, and stores one metadata owner binding per session.
+Results, references, ciphertext, and citations pass through unchanged. Search
+state stays upstream. Owner changes require a fresh Codex session; resuming an
+old session cannot migrate its references to another account. Local bindings
+use the existing bounded 30-day continuation store; this does not promise an
+upstream reference lifetime. Invalid upstream references can return HTTP 200
+with a tool error in the output. Domain filters restrict search results and
+must not be treated as an egress allowlist for explicit page opens.
+
+`verify` and `update` retain the selected search mode and refuse a lost eligible
+offer. Remove and reconnect to change modes. Workspace and managed Codex search
+restrictions still apply. Standalone search remains under development upstream;
+see the [official search documentation](https://learn.chatgpt.com/docs/web-search).
+
+The optional live qualification command is
+`CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs --model gpt-6.1-sol`, with
+`OPENAI_API_KEY` injected through the credential helper. It runs an isolated
+local workerd instance and real Codex CLI session in live mode, checks the selected
+upstream model, search/open/find and a cited answer, then resumes the session and
+opens its exact original reference. It rejects reference errors even when upstream
+returns HTTP 200. Omit `--model` to use `gpt-6-astra`. Each invocation makes at most
+16 upstream requests, caps each request's output at 4096 tokens, and removes the
+temporary Codex home. Logs contain protocol metadata only. Strict cache-only
+retrieval is outside this qualification; cached mode forwards Codex's preference.
 
 ```sh
 pnpm codex:connect verify --codex /path/to/codex

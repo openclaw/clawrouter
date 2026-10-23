@@ -81,6 +81,31 @@ else process.exit(2);\n`);
     run: (command, ...args) => manageCodex([command, ...common, ...args], env) };
 }
 
+test("standalone search opt-in survives verify/update and refuses a lost offer", async t => {
+  const f = await fixture(t), provider = f.state.catalog.providers[0];
+  await writeFile(f.binary, (await readFile(f.binary, "utf8")).replace("0.155.0", "0.163.0"));
+  provider.models[0].capabilities.push("search.web");
+  provider.routes.push({ endpoint: "search", path: "/v1/alpha/search", methods: ["POST"], requestFormat: "openai.standalone_search", responseFormat: "openai.standalone_search" });
+  provider.offers.push({ ...provider.offers[0], endpoint: "search", route: "/v1/native/fixture/v1/alpha/search" });
+  await manageCodex([...f.connect, "--web-search", "live"], f.env);
+  const config = await f.read();
+  assert.equal(config.web_search, "live");
+  assert.equal(config.model_providers.clawrouter_clawrouter.supports_standalone_web_search, true);
+  assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, false);
+  await f.run("verify"); await f.run("update");
+  const before = await readFile(f.profile, "utf8");
+  provider.offers.at(-1).eligible = false;
+  await assert.rejects(f.run("update"), /no qualified native standalone search offer/);
+  assert.equal(await readFile(f.profile, "utf8"), before);
+  await f.run("remove");
+});
+
+test("standalone opt-in rejects an older producer before writing configuration", async t => {
+  const f = await fixture(t);
+  await assert.rejects(manageCodex([...f.connect, "--web-search", "cached"], f.env), /0.163.0/);
+  await assert.rejects(readFile(f.profile), { code: "ENOENT" });
+});
+
 test("fixture cleanup closes the listener and active connection when directory removal fails", async (t) => {
   const cleanups = [];
   const f = await fixture({ after: (cleanup) => cleanups.push(cleanup) });

@@ -329,6 +329,7 @@ function validateManifest(manifest) {
         responseControls.add(controlId);
       }
     }
+    if (endpoint.requestFormat === "openai.standalone_search" && (manifest.id !== "openai" || endpoint.path !== "/v1/alpha/search" || (endpoint.method ?? "POST") !== "POST" || endpoint.responseFormat !== "openai.standalone_search" || endpoint.streaming || endpoint.websocket || endpoint.modelPassthrough || endpoint.nativeProxy === false || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "search.web") || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST")))) throw new Error("standalone search requires the native unary OpenAI search endpoint");
     if (endpoint.requestFormat === "openai.responses_compact") {
       if (manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) throw new Error(`provider ${manifest.id} endpoint ${id} compact is POST-only`);
       const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id).map(capability => capability.id);
