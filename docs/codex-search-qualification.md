@@ -152,3 +152,6 @@ skipped. Coverage includes default-enabled installation and catalog narrowing,
 explicit disable on older or search-ineligible producers, refusal before file
 writes, and preservation of explicit-disabled/legacy modes through verify/update.
 No new live qualification or deployment is part of the default change.
+
+Autoreview of `178ce56` completed `scoped-clean` through P2, with no actionable
+findings. Outputs: `~/.codex/review-results/codex-connect-default-search-20261023/`.
