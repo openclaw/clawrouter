@@ -47,10 +47,10 @@ resolve them. No OpenAI clarification is assumed available.
 Original deployment ownership receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-deployment-receipt.json`.
 Current deployment ownership receipt:
-`.artifacts/fakeco-codex-search-20261022/request-observation-readiness-restoration-receipt.json`.
-Active normal fixture version: `e5e5231c-4477-4e4a-b95c-0f9c9e2b7101` at 100%.
-Current route ID: `adf4daadf3f0489ba46a5084f2193688` (Wrangler recreated the
-prefix route during the approved observation attempt/restoration;
+`.artifacts/fakeco-codex-search-20261022/request-observation-stability-calibration-receipt.json`.
+Active normal fixture version: `f5e2791a-196f-4a8a-a990-590c9bd12891` at 100%.
+Current route ID: `e636ada557fd4550a4abb64edd03e3df` (Wrangler recreated the
+prefix route during the approved v2 observation calibration/restoration;
 semantics unchanged).
 SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
 Readiness returns 200 with `cache-control: no-store`; unauthorized controls return
@@ -694,9 +694,9 @@ Thirty focused tests, Worker type checking and the observation Wrangler dry run
 pass; twelve offline runner scenarios pass. Runtime autoreview is scoped-clean
 through P2. New preparation details, operator review and read-only preflight are
 recorded in [Temporary request observations](search-semantics-request-observation.md#local-transition-reproduction-and-stability-preparation).
-No new hosted calibration or paid comparison; hosted counters, retrieval semantics
-and upstream billing remain unqualified. Current ownership stays with the normal
-version/route and readiness-restoration receipt above.
+At that preparation stage, no new hosted calibration or paid comparison had run;
+hosted counters, retrieval semantics and upstream billing remained unqualified.
+The approved v2 calibration below supersedes that instrumentation status.
 
 Read-only preflight passed 2026-10-23T07:45:28.992Z: current normal deployment,
 route, three bindings, namespace/main identity, Access, BIC and robots baselines
@@ -704,3 +704,23 @@ match the restoration receipt. Operator review found one inventory-evidence P2;
 `5bf1ed4` corrects it and is scoped-clean through P2. No Cloudflare writes, hosted
 session creation/deletion or paid calls. Preparation receipt:
 `request-observation-stability-preparation-receipt.json` in the campaign artifacts.
+
+
+## V2 observation calibration passed
+
+Approved 2026-10-23 07:46:25–07:47:09 UTC batch passed all seven expected public
+responses and all seven exact durable counters, checked after every request.
+Three consecutive readiness checks matched both private protocol identities.
+The previously missing trailing-slash request was captured. No overflow or
+saturation; diagnostic GET/HEAD durable counts 1/1, marker checked only in memory.
+Both owned sessions deleted exactly once and marked absence verified before
+restoration. Normal code bytes, three bindings, namespace, main Worker, unrelated
+infrastructure, Access and BIC preserved. Temporary robots route/service removed.
+Current version/route/receipt above supersede previous ownership records.
+
+[Calibration evidence](search-semantics-request-observation.md#approved-v2-hosted-calibration-and-normal-restoration).
+This qualifies the tested synthetic instrumentation only. Historical failure cause,
+provider retrieval semantics and upstream billing remain unresolved. No paid call,
+inference, router write, secret change, security relaxation or broader cleanup.
+A paired known-content/FakeCo retrieval comparison now requires its own approval,
+freshly pinned operator/preflight and qualified cleanup/restoration plan.

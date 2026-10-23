@@ -1,15 +1,16 @@
 # Temporary request observations
 
-Status: approved readiness deployment completed; all seven public responses passed,
-but only six requests were observed. Calibration incomplete. Both owned sessions
-cleared; normal fixture restored at 2026-10-23 07:35:04 UTC.
-Current version `e5e5231c-4477-4e4a-b95c-0f9c9e2b7101`; prefix route ID
-`adf4daadf3f0489ba46a5084f2193688`; namespace
+Status: approved v2 hosted calibration passed all seven public requests and
+all seven exact durable counters. Both owned sessions cleared; normal fixture
+restored and verified 2026-10-23T07:47:09.295Z.
+Current version `f5e2791a-196f-4a8a-a990-590c9bd12891`; prefix route ID
+`e636ada557fd4550a4abb64edd03e3df`; namespace
 `148cbb6483b4421dbf8b25301a325865`. Temporary robots route/service binding removed.
-No paid search calls. Hosted observation counters remain unqualified; further
-Cloudflare mutations and paid comparisons require separate approval.
-Local transition diagnostics and a stricter runner are prepared below; the new
-wrapper is not deployed.
+No paid search calls. Observation coverage is calibrated for this synthetic
+request plan/source/config/time; provider retrieval semantics and upstream billing
+remain unqualified. Further Cloudflare mutation batches and paid comparisons
+require separate approval. Current ownership receipt:
+`request-observation-stability-calibration-receipt.json` (exclusive; do not replay).
 
 ## Read-only follow-up
 
@@ -43,8 +44,8 @@ request or response. It does not create an allow/disallow robots policy.
 See [route matching](https://developers.cloudflare.com/workers/configuration/routing/routes/)
 and [HTTP service forwarding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/http/).
 The service binding avoids recursion through the added public route. No public
-fetch fallback if forwarding fails. Four hosted response comparisons passed;
-observation counters still need calibration.
+fetch fallback if forwarding fails. Four hosted robots comparisons and the seven-request synthetic observation
+calibration passed; provider retrieval remains unqualified.
 
 One additional fixed object, `request-observations-v1`, uses the existing
 `SearchSemanticsObject` class/namespace. It has its own storage and alarm;
@@ -474,7 +475,8 @@ All twelve operator scenarios pass. Correction review is scoped-clean through P2
 `/Users/joshavant/.codex/review-results/search-observation-stability-inventory-fix-20261023/status.json`.
 Historical operator source hashes remain unchanged; its receipts must not be
 replayed. The new source/hash manifest is
-`request-observation-stability-runner-review.json`; mutation approval is null.
+`request-observation-stability-runner-review.json`. Mutation approval was null
+at preparation; the approved batch below supersedes that state.
 
 
 Fresh read-only preflight passed at 2026-10-23T07:45:28.992Z against the current
@@ -485,9 +487,74 @@ inventory hashes, four robots baselines, private/public absence, non-creating
 literal-null auth check (400), Access challenge and BIC verified. Browser rules
 were not refreshed. No denied-endpoint retry or authentication fallback.
 
-Current preparation receipts: `request-observation-stability-preflight.json` and
+Historical preparation receipts: `request-observation-stability-preflight.json` and
 `request-observation-stability-preparation-receipt.json`. Cloudflare writes,
-session creations/DELETEs and paid search calls: zero. No PR or push. The new
-wrapper remains undeployed; the next hosted calibration requires separate
-approval and a fresh preflight. Retrieval semantics and hosted observation
-coverage remain unqualified until that calibration succeeds.
+session creations/DELETEs and paid search calls: zero. No PR or push. At that preparation stage the new
+wrapper remained undeployed and the next hosted calibration required separate
+approval and a fresh preflight. The approved result follows below.
+
+
+## Approved v2 hosted calibration and normal restoration
+
+User approved the bounded deployment, seven synthetic requests, owned-session
+cleanup and qualified restoration. No paid provider call included. Fresh read-only
+preflight passed against the previous normal version/route, review/hash guards
+passed, and the runner executed exactly once. Batch 2026-10-23
+07:46:25–07:47:09 UTC, reviewed runtime `d3af38c`, frozen operator `5bf1ed4`.
+Temporary version `6999a8a1-3138-43c0-a1a6-21a90882e5e0`; temporary prefix route
+`36010a73441f4e118b3c26a679ac69f6`; added robots route
+`ca3a2dbd80214dfba97494f559cecba8`.
+
+Readiness returned both expected Worker/object identities and the exact v2 body
+three times, 07:46:38.915, 07:46:44.176 and 07:46:49.505 UTC. No streak reset or
+unexpected response. Initial marked collection 404, then observation and diagnostic
+creation each returned 201. Observation `7af96b87-3a3d-4b98-b2fb-47987657d9d2`;
+diagnostic `f97c74a3-53d2-4908-b9c0-44d6edc32beb`. Initial counters zero.
+
+| Public request | HTTP | Durable count |
+| --- | --- | --- |
+| `/robots.txt` GET | 404 | 1 |
+| `/robots.txt` HEAD | 404 | 1 |
+| `/search-semantics/diagnostic` GET | 200 | 1 |
+| `/search-semantics/diagnostic` HEAD | 200 | 1 |
+| `/search-semantics/diagnostic?calibration=1` GET | 404 | 1 |
+| `/search-semantics/diagnostic/` GET | 404 | 1 |
+| `/search-semantics/health` GET | 200 | 1 |
+
+Each exact durable counter prefix verified immediately before the next public
+request; final snapshot again contained all seven expected buckets, count one,
+zero overflow, no saturation and unchanged expiry. Diagnostic durable counts 1/1
+with ordered GET/HEAD timestamps and unchanged expiry. HTML marker matched only
+in memory; HEAD empty; diagnostic content/no-store headers correct. Robots body
+hashes/stable headers matched baseline. All post-readiness observation controls
+through cleanup had both identities. Sampled private diagnostics showed zero
+rejections/transport failures; isolate-local counters varied across responses and
+must not be summed or treated as deployment-wide totals.
+
+Each owned session DELETE was attempted once and returned 200. Owned-ID and
+collection absence verified; observation absence carried both v2 identities.
+Public diagnostic GET/HEAD absent. State cleanup verified 07:46:55.414 UTC before
+restoration. Only added robots route `ca3a2dbd80214dfba97494f559cecba8` was deleted,
+then normal config redeployed. Final version/route at top; restored 07:47:09.295
+UTC. Normal code bytes match the pre-batch normal fixture. Exactly three normal
+bindings remain; temporary robots route and service binding absent. Namespace,
+base runtime/settings/bindings, main version `3d669069-fb9e-45e0-a71b-bded66c5b7b2`,
+unrelated routes/domains/namespaces, Access and BIC unchanged. Dashboard challenge
+intact. No active owned sessions; fixed objects/namespace remain allocated for
+later separately approved campaign teardown. No secret change, router application
+write, new namespace, security relaxation, paid search, inference, PR or push.
+Browser rule inventory not refreshed.
+
+The run qualifies instrumentation for the seven tested synthetic requests. It
+does not establish the cause of either previous failed attempt, global propagation
+stability, provider retrieval behavior or upstream charges. A paired IANA/FakeCo
+retrieval experiment is now eligible for separate approval, including its temporary
+wrapper deployment/session lifecycle/restoration and at most two paid search calls.
+Known-content control must pass before attempting FakeCo.
+
+Current ownership and full safe metadata:
+`request-observation-stability-calibration-receipt.json`. Compact summary:
+`request-observation-stability-batch-summary.json`. The execution receipt exists;
+this runner must not be replayed. Previous readiness/restoration/preparation
+receipts are historical. Future work must pin the current normal version/route
+and refresh read-only inventory before another approved mutation batch.
