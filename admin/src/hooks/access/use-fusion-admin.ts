@@ -1,4 +1,4 @@
-import { policyRequestCost } from "../../../../shared/request-pricing.ts";
+import { policyRequestCost } from "../../../../shared/request-pricing";
 import { type FormEvent, type SetStateAction, useRef, useState } from "react";
 import { errorMessage } from "../../domain";
 import { defaultFusion, demo } from "../../ui-config";
