@@ -1,7 +1,9 @@
 # Alpha response-shape comparison
 
-Status: preparation only. Paid execution requires separate approval. No new
-hosting, fixture sessions, Cloudflare changes, inference calls or router changes.
+Status: approved two-request batch completed 2026-10-23 08:59:46 UTC. IANA passed;
+FakeCo reproduced its tool-level error. Both responses omitted `results`; no
+additional structured diagnostic evidence. Experiment stopped. No new hosting,
+fixture sessions, Cloudflare changes, inference calls or router changes.
 
 Question: does a failing Alpha open return structured `results` alongside its
 textual `Internal Error`? The preceding [source audit](codex-alpha-source-audit.md)
@@ -99,3 +101,39 @@ not a clean verdict on the follow-up fix. Outputs:
 `~/.codex/review-results/alpha-response-shape-comparison-20261023/`.
 Preparation receipt and source hashes:
 `.artifacts/fakeco-codex-search-20261022/alpha-response-shape-comparison-preparation.json`.
+
+## Approved execution and outcome
+
+The user approved the exact prepared batch. All six preparation source hashes
+matched committed revision `2c052c1`; the exclusive execution receipt was absent.
+Authorization was recorded before execution. The operator completed
+2026-10-23T08:59:42.626Z–08:59:46.919Z, exit 0, with exactly two direct Alpha calls
+and no retries. The second call followed the passing control. Separate fresh
+sessions; model and settings unchanged.
+
+| Request | Dispatch UTC | HTTP | Text outcome | Structured `results` |
+| --- | --- | --- | --- | --- |
+| IANA | 08:59:45.417 | 200 | Expected content; all three checks passed; 1,963 characters | Absent |
+| FakeCo health | 08:59:46.245 | 200 | `Internal Error`; expected health content failed; 273 characters | Absent |
+
+Request IDs: IANA `req_ae33c8af89d6421b8d0d99898fb12c35`; FakeCo
+`req_1ae65f2c3b914885a784cde0b7fa4e61`. Both responses had encrypted output and
+no reported usage. Raw output and ciphertext remained in memory; only closed
+metadata was saved. Absence of usage does not establish no charge.
+
+The tested failing response supplied no structured results alongside its internal
+error. The successful control also omitted results, so this comparison exposed no
+additional structured evidence to distinguish the failure. It does not identify
+the cause or qualify result contents, fresh retrieval, cache/live semantics,
+general model support or billing. No origin measurements were made. Stop here;
+no larger matrix or further probes were run or authorized by this batch.
+
+Campaign artifacts, retained without replay:
+
+- `alpha-response-shape-comparison-paid-authorization.json`
+- `alpha-response-shape-comparison-execution.jsonl` (six complete metadata snapshots)
+- `alpha-response-shape-comparison-outcome.json` (validated outcome and receipt hashes)
+
+No Cloudflare operations, fixture session creation/deletion, public exposure,
+deployment, router application changes or broader cleanup. Existing campaign
+resources and ownership receipts remain unchanged. No PR or push.

@@ -797,3 +797,17 @@ absent/null/invalid/empty results alongside a tool-level error. It cannot qualif
 result contents, fresh retrieval, cache/live behavior, billing or the failure cause.
 Preparation is offline; execution remains separately gated. Existing receipts
 and resource ownership records remain unchanged.
+
+## Response-shape comparison completed; no additional evidence
+
+The separately approved pair completed 2026-10-23T08:59:46.919Z. Exactly two
+direct Sol Alpha calls, no retries: IANA passed all expected-content checks, then
+FakeCo health returned HTTP 200 with tool-level `Internal Error`. The `results`
+field was absent in both responses. No additional structured diagnostic evidence;
+no failure cause identified. Both reported no usage, which does not establish
+no charge. Fresh retrieval, cache/live semantics and billing remain unqualified.
+
+[Execution details and receipts](search-response-shape-comparison.md#approved-execution-and-outcome).
+No Cloudflare operations, hosted sessions, new exposure, deployment or router
+change. Experiment stopped; no larger matrix or follow-up probe. Resource
+ownership unchanged; no PR or push.
