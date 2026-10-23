@@ -479,6 +479,9 @@ fixed object of the existing namespace; independent alarm and owned deletion.
 Temporary robots route and main-Worker service binding have deployment/restoration
 steps prepared. Normal fixture and main router source stay unchanged. No hosted
 session, deployment, new live route/binding or further search probe in this batch.
+Worker TypeScript and 24 focused fixture/observation/matrix/probe tests passed.
+Autoreview of `c1a1ae2` completed with no actionable P0–P2 findings. Hosted
+equivalence still requires separately approved calibration.
 
 ## Secret and credential preparation
 
