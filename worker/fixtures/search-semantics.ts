@@ -1,15 +1,27 @@
 // Standalone synthetic fixture. Never imported by the router Worker.
 const HOST = "clawrouter-fakeco.openclaw.ai";
 const PREFIX = "/search-semantics/";
+const DIAGNOSTIC = `${PREFIX}diagnostic`;
+const DIAGNOSTIC_CONTROL = `${PREFIX}_control/diagnostic`;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const NAMES = ["cached", "live", "warm", "child"] as const;
 type PageName = typeof NAMES[number];
 type Page = { id: string; marker: string; revision: number; gets: number; heads: number; revisionGets: number };
 type Run = { id: string; expiresAt: number; pages: Record<PageName, Page> };
+type Diagnostic = { id: string; marker: string; expiresAt: number; gets: number; heads: number; lastGetAt: number | null; lastHeadAt: number | null };
 type Env = { SEARCH_SEMANTICS_ENVIRONMENT?: string; SEARCH_SEMANTICS_CONTROL_SHA256?: string; SEARCH_SEMANTICS: DurableObjectNamespace };
 const marker = () => `ClawRouterProbe${crypto.randomUUID().replaceAll("-", "")}`;
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "cache-control": "no-store" } });
 const absent = () => new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
+
+async function saveRegistry(storage: DurableObjectTransaction, runs: Run[], diagnostic?: Diagnostic): Promise<void> {
+  await storage.put("runs", runs);
+  if (diagnostic) await storage.put("diagnostic", diagnostic);
+  else await storage.delete("diagnostic");
+  const expiries = [...runs.map(run => run.expiresAt), ...(diagnostic ? [diagnostic.expiresAt] : [])];
+  if (expiries.length) await storage.setAlarm(Math.min(...expiries));
+  else await storage.deleteAlarm();
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -22,7 +34,7 @@ export default {
       if (!token || !expected || !/^[a-f0-9]{64}$/.test(expected)) return absent();
       const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map(byte => byte.toString(16).padStart(2, "0")).join("");
       if (digest !== expected) return absent();
-    } else if (!["GET", "HEAD"].includes(request.method) || !new RegExp(`^${PREFIX}${UUID}/${UUID}$`).test(url.pathname)) return absent();
+    } else if (!["GET", "HEAD"].includes(request.method) || (url.pathname !== DIAGNOSTIC && !new RegExp(`^${PREFIX}${UUID}/${UUID}$`).test(url.pathname))) return absent();
     // One bounded registry: unknown public IDs cannot allocate new objects.
     return env.SEARCH_SEMANTICS.get(env.SEARCH_SEMANTICS.idFromName("fixture-v1")).fetch(request);
   },
@@ -34,15 +46,15 @@ export class SearchSemanticsObject {
   async alarm(): Promise<void> {
     await this.state.storage.transaction(async storage => {
       const runs = (await storage.get<Run[]>("runs") ?? []).filter(run => run.expiresAt > Date.now());
-      await storage.put("runs", runs);
-      if (runs.length) await storage.setAlarm(Math.min(...runs.map(run => run.expiresAt)));
+      const diagnostic = await storage.get<Diagnostic>("diagnostic");
+      await saveRegistry(storage, runs, diagnostic && diagnostic.expiresAt > Date.now() ? diagnostic : undefined);
     });
   }
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    let ttl = 3600;
-    if (path === `${PREFIX}_control/runs` && request.method === "POST") {
+    let ttl = path === DIAGNOSTIC_CONTROL ? 300 : 3600;
+    if ([`${PREFIX}_control/runs`, DIAGNOSTIC_CONTROL].includes(path) && request.method === "POST") {
       // Small fixed input; no arbitrary text, HTML, URLs or markers accepted.
       const reader = request.body?.getReader();
       let bytes = 0, text = "";
@@ -64,8 +76,31 @@ export class SearchSemanticsObject {
     }
     return this.state.storage.transaction(async storage => {
       const runs = (await storage.get<Run[]>("runs") ?? []).filter(run => run.expiresAt > Date.now());
+      let diagnostic = await storage.get<Diagnostic>("diagnostic");
+      if (diagnostic && diagnostic.expiresAt <= Date.now()) diagnostic = undefined;
       let response: Response = absent();
-      if (path === `${PREFIX}_control/runs` && request.method === "POST") {
+      const diagnosticControl = path.match(new RegExp(`^${DIAGNOSTIC_CONTROL}/(${UUID})$`));
+      if (path === DIAGNOSTIC_CONTROL && request.method === "POST") {
+        if (diagnostic) response = json({ error: "capacity" }, 409);
+        else {
+          diagnostic = { id: crypto.randomUUID(), marker: marker(), expiresAt: Date.now() + ttl * 1000, gets: 0, heads: 0, lastGetAt: null, lastHeadAt: null };
+          response = json(diagnostic, 201);
+        }
+      } else if (path === DIAGNOSTIC_CONTROL && request.method === "GET") {
+        response = diagnostic ? json(diagnostic) : absent();
+      } else if (diagnostic && diagnosticControl?.[1] === diagnostic.id) {
+        if (request.method === "GET") response = json(diagnostic);
+        if (request.method === "DELETE") { diagnostic = undefined; response = json({ deleted: true }); }
+      } else if (path === DIAGNOSTIC && diagnostic && ["GET", "HEAD"].includes(request.method)) {
+        if (request.method === "GET") { diagnostic.gets++; diagnostic.lastGetAt = Date.now(); }
+        else { diagnostic.heads++; diagnostic.lastHeadAt = Date.now(); }
+        const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FakeCo retrieval diagnostic</title></head><body><h1>FakeCo retrieval diagnostic</h1><p>Synthetic content for a short-lived retrieval test.</p><p>Marker: ${diagnostic.marker}</p></body></html>`;
+        response = new Response(request.method === "HEAD" ? null : html, { headers: {
+          "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
+          "cloudflare-cdn-cache-control": "no-store", "cdn-cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        } });
+      } else if (path === `${PREFIX}_control/runs` && request.method === "POST") {
         if (runs.length >= 16) response = json({ error: "capacity" }, 409);
         else {
           const run: Run = { id: crypto.randomUUID(), expiresAt: Date.now() + ttl * 1000, pages: Object.fromEntries(NAMES.map(name => [name, { id: crypto.randomUUID(), marker: marker(), revision: 1, gets: 0, heads: 0, revisionGets: 0 }])) as Run["pages"] };
@@ -99,9 +134,7 @@ export class SearchSemanticsObject {
           }
         }
       }
-      await storage.put("runs", runs);
-      if (runs.length) await storage.setAlarm(Math.min(...runs.map(run => run.expiresAt)));
-      else await storage.deleteAlarm();
+      await saveRegistry(storage, runs, diagnostic);
       return response;
     });
   }

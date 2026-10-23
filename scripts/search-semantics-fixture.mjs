@@ -20,10 +20,10 @@ export function prepareSemanticsCredential(adminToken, id = "codex_search_semant
   } };
 }
 
-export async function createSemanticsFixture({ token, fetcher = fetch, ttlSeconds = 3600 }) {
+function fixtureControl(token, fetcher) {
   assert.match(token ?? "", /^[a-zA-Z0-9_-]{40,128}$/, "inject SEARCH_SEMANTICS_CONTROL_TOKEN");
-  async function control(path, method = "GET", body) {
-    assert.match(path, /^runs(?:\/[a-f0-9-]{36}(?:\/pages\/warm)?)?$/);
+  return async function control(path, method = "GET", body) {
+    assert.match(path, /^(?:runs(?:\/[a-f0-9-]{36}(?:\/pages\/warm)?)?|diagnostic(?:\/[a-f0-9-]{36})?)$/);
     const response = await fetcher(`${fixtureOrigin}${prefix}_control/${path}`, {
       method, headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       ...(body ? { body: JSON.stringify(body) } : {}), redirect: "error", signal: AbortSignal.timeout(15_000),
@@ -35,7 +35,11 @@ export async function createSemanticsFixture({ token, fetcher = fetch, ttlSecond
     }
     let value; try { value = JSON.parse(text); } catch { throw new Error("fixture response is invalid JSON"); }
     return value;
-  }
+  };
+}
+
+export async function createSemanticsFixture({ token, fetcher = fetch, ttlSeconds = 3600 }) {
+  const control = fixtureControl(token, fetcher);
   const initial = await control("runs", "POST", { ttlSeconds });
   const id = initial.id;
   assert.match(id ?? "", /^[a-f0-9-]{36}$/, "fixture run ID is valid");
@@ -57,6 +61,32 @@ export async function createSemanticsFixture({ token, fetcher = fetch, ttlSecond
     snapshot: async () => valid(await control(`runs/${id}`)),
     rotate: async () => valid(await control(`runs/${id}/pages/warm`, "POST")),
     close: async () => { assert.equal((await control(`runs/${id}`, "DELETE")).deleted, true, "fixture run cleanup confirmed"); },
+  };
+}
+
+// Stable public URL; one bounded generation, created only by authenticated control.
+// Keep initial/snapshot markers in memory. Public requests alone never create it.
+export async function createDiagnosticFixture({ token, fetcher = fetch, ttlSeconds = 300 }) {
+  const control = fixtureControl(token, fetcher);
+  const initial = await control("diagnostic", "POST", { ttlSeconds });
+  const id = initial.id;
+  assert.match(id ?? "", /^[a-f0-9-]{36}$/, "diagnostic generation ID valid");
+  const valid = value => {
+    assert.equal(value.id, id, "diagnostic generation identity preserved");
+    assert.match(value.marker ?? "", /^ClawRouterProbe[a-f0-9]{32}$/, "diagnostic marker valid");
+    assert.ok(Number.isSafeInteger(value.expiresAt) && value.expiresAt > Date.now() + 30_000, "diagnostic has at least 30 seconds remaining");
+    assert.ok([value.gets, value.heads].every(count => Number.isSafeInteger(count) && count >= 0), "diagnostic counters valid");
+    for (const [count, time] of [[value.gets, value.lastGetAt], [value.heads, value.lastHeadAt]]) {
+      assert.ok(count === 0 ? time === null : Number.isSafeInteger(time) && time > 0, "diagnostic request timestamp valid");
+    }
+    return value;
+  };
+  valid(initial);
+  return {
+    initial,
+    url: `${fixtureOrigin}${prefix}diagnostic`,
+    snapshot: async () => valid(await control(`diagnostic/${id}`)),
+    close: async () => { assert.equal((await control(`diagnostic/${id}`, "DELETE")).deleted, true, "diagnostic cleanup confirmed"); },
   };
 }
 

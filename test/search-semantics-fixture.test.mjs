@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSemanticsFixture, fixtureControlToken, fixtureOrigin, prepareSemanticsCredential, startHostedSearchOrigin } from "../scripts/search-semantics-fixture.mjs";
+import { createDiagnosticFixture, createSemanticsFixture, fixtureControlToken, fixtureOrigin, prepareSemanticsCredential, startHostedSearchOrigin } from "../scripts/search-semantics-fixture.mjs";
 
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
@@ -20,12 +20,21 @@ async function runtime(t) {
     export class SearchSemanticsObject extends RealObject {
       constructor(state) { super(state); this.fixtureStorage = state.storage; }
       async fetch(request) {
-        if (new URL(request.url).pathname === "/fixture-expire") {
+        const path = new URL(request.url).pathname;
+        if (path === "/fixture-expire") {
           const runs = await this.fixtureStorage.get("runs");
           runs[0].expiresAt = Date.now() - 1;
           await this.fixtureStorage.put("runs", runs);
           return new Response(null);
         }
+        if (path === "/fixture-expire-diagnostic") {
+          const diagnostic = await this.fixtureStorage.get("diagnostic");
+          diagnostic.expiresAt = Date.now() - 1;
+          await this.fixtureStorage.put("diagnostic", diagnostic);
+          return new Response(null);
+        }
+        if (path === "/fixture-fire-alarm") { await super.alarm(); return new Response(null); }
+        if (path === "/fixture-registry") return Response.json({ alarm: await this.fixtureStorage.getAlarm(), diagnosticStored: !!(await this.fixtureStorage.get("diagnostic")) });
         return super.fetch(request);
       }
     }`, resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
@@ -98,6 +107,98 @@ test("expired runs are inaccessible even before their scheduled alarm executes",
   await namespace.get(namespace.idFromName("fixture-v1")).fetch("https://fixture/fixture-expire");
   assert.equal((await fetcher(fixture.url("live"))).status, 404);
   await assert.rejects(fixture.snapshot(), /control request succeeds/);
+});
+
+test("stable HTML diagnostic: unprimed marker, concurrent GET/HEAD counters, timestamps and cleanup", async t => {
+  const { fixture, fetcher } = await runtime(t);
+  const diagnostic = await createDiagnosticFixture({ token, fetcher });
+  assert.equal(diagnostic.url, `${fixtureOrigin}/search-semantics/diagnostic`);
+  assert.ok(!diagnostic.url.includes(diagnostic.initial.id));
+  assert.ok(!diagnostic.url.includes(diagnostic.initial.marker));
+  assert.deepEqual([diagnostic.initial.gets, diagnostic.initial.heads, diagnostic.initial.lastGetAt, diagnostic.initial.lastHeadAt], [0, 0, null, null]);
+  assert.deepEqual(await diagnostic.snapshot(), diagnostic.initial, "private reads do not prime the public page");
+  const heads = await Promise.all(Array.from({ length: 3 }, () => fetcher(diagnostic.url, { method: "HEAD" })));
+  for (const response of heads) { assert.equal(response.status, 200); assert.equal(await response.text(), ""); }
+  assert.equal((await diagnostic.snapshot()).gets, 0, "HEAD alone does not establish content retrieval");
+  const responses = await Promise.all(Array.from({ length: 25 }, () => fetcher(diagnostic.url)));
+  const html = await responses[0].text();
+  assert.match(html, /<!doctype html>/);
+  assert.match(html, /<title>FakeCo retrieval diagnostic<\/title>/);
+  assert.ok(html.includes(diagnostic.initial.marker));
+  assert.ok(!html.includes(diagnostic.initial.id));
+  for (const response of [...heads, ...responses]) {
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+    for (const header of ["cache-control", "cloudflare-cdn-cache-control", "cdn-cache-control"]) assert.equal(response.headers.get(header), "no-store");
+    assert.equal(response.headers.get("x-robots-tag"), null, "ordinary synthetic HTML control has no noindex variable");
+    assert.ok(!JSON.stringify([...response.headers]).includes(diagnostic.initial.marker));
+  }
+  const observed = await diagnostic.snapshot();
+  assert.equal(observed.gets, 25); assert.equal(observed.heads, 3);
+  assert.ok(observed.lastGetAt >= observed.lastHeadAt);
+  assert.equal(observed.marker, diagnostic.initial.marker);
+  assert.equal((await fixture.snapshot()).pages.live.gets, 0, "existing matrix run remains independent");
+  await diagnostic.close();
+  for (const method of ["GET", "HEAD"]) assert.equal((await fetcher(diagnostic.url, { method })).status, 404);
+  await assert.rejects(diagnostic.snapshot(), /control request succeeds/);
+});
+
+test("diagnostic requires authenticated bounded creation and generation-scoped deletion", async t => {
+  const { fetcher } = await runtime(t);
+  const url = `${fixtureOrigin}/search-semantics/diagnostic`;
+  const control = `${fixtureOrigin}/search-semantics/_control/diagnostic`;
+  const headers = { authorization: `Bearer ${token}` };
+  for (const method of ["GET", "HEAD", "POST", "PUT", "DELETE"]) assert.equal((await fetcher(url, { method })).status, 404);
+  assert.equal((await fetcher(control, { headers })).status, 404, "public requests cannot provision a generation");
+  for (const body of ["{}", '{"ttlSeconds":60}']) assert.equal((await fetcher(control, { method: "POST", body })).status, 404);
+  for (const body of ["null", "{}".repeat(100), '{"ttlSeconds":59}', '{"ttlSeconds":7201}', '{"marker":"override"}']) {
+    assert.equal((await fetcher(control, { method: "POST", headers, body })).status, 400);
+  }
+  const first = await createDiagnosticFixture({ token, fetcher });
+  assert.equal((await fetcher(control, { headers })).status, 200);
+  await assert.rejects(createDiagnosticFixture({ token, fetcher }), /control request succeeds/);
+  assert.equal((await fetcher(`${control}/00000000-0000-0000-0000-000000000000`, { method: "DELETE", headers })).status, 404);
+  assert.equal((await fetcher(control, { method: "DELETE", headers })).status, 404, "collection deletion is never allowed");
+  for (const target of [url.replace("clawrouter-fakeco", "clawrouter"), url.replace("https:", "http:"), `${url}?q=1`, `${url}/`]) {
+    assert.equal((await fetcher(target)).status, 404);
+  }
+  for (const method of ["POST", "PUT", "DELETE"]) assert.equal((await fetcher(url, { method })).status, 404);
+  assert.deepEqual(await first.snapshot(), first.initial, "rejected requests and failed creation leave the owned generation unchanged");
+  await first.close();
+  const second = await createDiagnosticFixture({ token, fetcher });
+  assert.equal(second.url, first.url);
+  assert.notEqual(second.initial.id, first.initial.id);
+  assert.notEqual(second.initial.marker, first.initial.marker);
+  await assert.rejects(first.close(), /control request succeeds/, "stale cleanup cannot delete a replacement generation");
+  await assert.rejects(first.snapshot(), /control request succeeds/);
+  assert.deepEqual(await second.snapshot(), second.initial);
+  await second.close();
+});
+
+test("diagnostic expiry and the shared alarm preserve existing runs and clear both registries", async t => {
+  const { mf, fixture, fetcher } = await runtime(t);
+  const namespace = await mf.getDurableObjectNamespace("SEARCH_SEMANTICS", "fixture");
+  const object = namespace.get(namespace.idFromName("fixture-v1"));
+  const inspect = async () => (await object.fetch("https://fixture/fixture-registry")).json();
+  const first = await createDiagnosticFixture({ token, fetcher, ttlSeconds: 60 });
+  await fixture.snapshot();
+  assert.equal((await inspect()).alarm, first.initial.expiresAt, "reading an existing run cannot postpone diagnostic expiry");
+  await object.fetch("https://fixture/fixture-expire-diagnostic");
+  assert.equal((await fetcher(first.url, { method: "HEAD" })).status, 404, "expired content is unavailable before an alarm");
+  await assert.rejects(first.snapshot(), /control request succeeds/);
+  assert.deepEqual(await inspect(), { alarm: fixture.initial.expiresAt, diagnosticStored: false });
+  const second = await createDiagnosticFixture({ token, fetcher, ttlSeconds: 60 });
+  await object.fetch("https://fixture/fixture-expire-diagnostic");
+  await object.fetch("https://fixture/fixture-fire-alarm");
+  assert.equal((await fetcher(second.url)).status, 404);
+  assert.deepEqual(await fixture.snapshot(), fixture.initial);
+  assert.deepEqual(await inspect(), { alarm: fixture.initial.expiresAt, diagnosticStored: false });
+  await fixture.close();
+  assert.equal((await inspect()).alarm, null);
+  const alone = await createDiagnosticFixture({ token, fetcher });
+  assert.equal((await inspect()).alarm, alone.initial.expiresAt, "diagnostic expires even without matrix runs");
+  await alone.close();
+  assert.deepEqual(await inspect(), { alarm: null, diagnosticStored: false });
 });
 
 test("native adapter counts HEAD as origin activity and derives a purpose-separated control token", async t => {

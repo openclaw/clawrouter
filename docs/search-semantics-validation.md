@@ -372,6 +372,29 @@ in this zone; token API write permissions remain unqualified. No Worker, route,
 DNS, Access, credential, budget or namespace changes in this experiment. Stop
 here; any further paid probe or Cloudflare mutation needs separate approval.
 
+## Read-only follow-up and locally prepared HTML diagnostic
+
+After the BIC comparison, Safari Security Events filtered to exact host
+`clawrouter-fakeco.openclaw.ai`, 2026-10-23 06:36–06:39 UTC, showed no matching
+firewall events and no summary data. This includes the 06:37:40 UTC provider
+attempt. Sampling/excluded-request limits remain; it is not proof of no fetch
+or no edge rejection.
+
+The fixture Worker overview explicitly showed Workers Logs and Workers Traces
+disabled. Its Observability view showed `Workers Observability is Disabled`.
+The main `clawrouter-edge-fakeco` Worker Observability view showed the same
+disabled message; it handles the root robots path. No retained invocation data
+was available through either view. Neither Enable Observability button was
+clicked. No Cloudflare settings changed, credentials read or paid calls made.
+Safari was returned to the filtered Security Events result.
+
+Prepared locally: [stable HTML diagnostic and rollout/cleanup](search-semantics-diagnostic.md).
+Adds one authenticated, expiring generation at a fixed public URL, transactional
+GET/HEAD counters and timestamps, and generation-specific deletion. Existing
+health/matrix behavior, routes, bindings and migration configuration stay intact.
+No deployment or hosted generation creation in this preparation. Worker
+TypeScript check and 18 focused workerd fixture/matrix/probe tests passed.
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.
