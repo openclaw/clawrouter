@@ -1,8 +1,20 @@
 # Codex search FakeCo canary runbook
 
-Prepared locally; none of the deployment, registration, paid deployed smoke,
-cap-denial, or rollback operations below has run. No PR, push, or provider
-message is part of this preparation. Desktop and non-Lite models are excluded.
+Current campaign status (2026-10-23): use the [qualification and release assessment](codex-search-qualification.md).
+Deployment, native canary qualification and credential revocation completed.
+Fresh retrieval, cache/live semantics and upstream billing remain unqualified.
+The final response-shape pair returned no `results` in either response; the Alpha
+investigation is stopped. Earlier readiness/preparation instructions below are
+historical and do not authorize replay, credential revival or another paid batch.
+Retain FakeCo for the user's browser inspection; cleanup still needs separate
+approval. No remote operations are performed by this local assessment.
+
+The procedure snapshots below retain their original campaign stage.
+
+Original pre-deployment snapshot, superseded by the current assessment above:
+at that stage deployment, registration, paid deployed smoke and denial/revocation
+checks had not run. They subsequently completed with separate approvals.
+Desktop and non-Lite models remain excluded; no PR or provider message was sent.
 Fresh-origin retrieval, strict cache-only semantics, and upstream pricing remain
 unqualified. A limited canary must explicitly accept those limits.
 
@@ -59,9 +71,11 @@ Require its target, Access/admin, credential, and provider smoke gates to pass.
 
 ## Dedicated canary policy and credential
 
-Use a new policy/credential ID, `codex_search_canary_20261022`, and a newly generated
-secret stored through the credential manager. Do not reuse a revoked key or reset
-spend. Inject `CLAWROUTER_ADMIN_TOKEN`, `CF_ACCESS_CLIENT_ID`,
+The completed batch used policy/credential ID `codex_search_canary_20261022`.
+For a separately approved future run, choose a fresh policy/credential ID and
+secret through the credential manager, and update every reference below. The
+historical ID and secret must not be reused or revived; never reset spend.
+Inject `CLAWROUTER_ADMIN_TOKEN`, `CF_ACCESS_CLIENT_ID`,
 `CF_ACCESS_CLIENT_SECRET`, and `CLAWROUTER_SEARCH_CANARY_SECRET` only into the
 operator command. Set `CLAWROUTER_BASE_URL=https://clawrouter-fakeco.openclaw.ai`.
 Never put their values in command arguments or commit them.

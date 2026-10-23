@@ -1,5 +1,11 @@
 # Codex 0.163.0 Alpha source audit
 
+Current campaign decision: [qualification and release assessment](codex-search-qualification.md).
+The subsequent [response-shape pair](search-response-shape-comparison.md#approved-execution-and-outcome)
+completed with `results` absent in both successful IANA and failing FakeCo replies.
+No new client-side remedy or structured diagnostic distinction emerged.
+The source audit and preparation descriptions below retain their dated scope.
+
 Read-only investigation, 2026-10-23. No client-side fix identified for the fresh
 origin failures. The live-mode boolean matches Codex. Native completion events
 do not prove successful retrieval. Existing exact-native request replays remain

@@ -2,6 +2,13 @@
 
 Local draft only. Not submitted. Observed October 22, 2026.
 
+Historical provider-report draft; no provider outreach is part of this campaign.
+The user cannot obtain endpoint-owner clarification. Current evidence and release
+limits are consolidated in the [qualification report](codex-search-qualification.md).
+Later calibrated-origin experiments remained inconclusive; the final two-call
+pair had `results` absent in both successful and failing responses. The questions
+and reproduction below are archival, not a new probe authorization.
+
 Direct public API requests to `POST https://api.openai.com/v1/alpha/search`
 with `gpt-6.1-sol` could search, open a returned reference, and open
 `https://openai.com/`. Opening fresh synthetic URLs instead returned HTTP 200

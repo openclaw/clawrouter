@@ -81,18 +81,28 @@ else process.exit(2);\n`);
     run: (command, ...args) => manageCodex([command, ...common, ...args], env) };
 }
 
-test("standalone search opt-in survives verify/update and refuses a lost offer", async t => {
+for (const mode of ["live", "cached"]) test(`standalone ${mode} opt-in surfaces qualification limits through dry-run/verify/update and refuses a lost offer`, async t => {
   const f = await fixture(t), provider = f.state.catalog.providers[0];
   await writeFile(f.binary, (await readFile(f.binary, "utf8")).replace("0.155.0", "0.163.0"));
   provider.models[0].capabilities.push("search.web");
   provider.routes.push({ endpoint: "search", path: "/v1/alpha/search", methods: ["POST"], requestFormat: "openai.standalone_search", responseFormat: "openai.standalone_search" });
   provider.offers.push({ ...provider.offers[0], endpoint: "search", route: "/v1/native/fixture/v1/alpha/search" });
-  await manageCodex([...f.connect, "--web-search", "live"], f.env);
+  const args = [...f.connect, "--web-search", mode];
+  const planned = await manageCodex([...args, "--dry-run"], f.env);
+  assert.equal(planned.warnings.length, 2);
+  assert.match(planned.warnings[0], /experimental.*fresh-page.*strict cache-only.*unqualified/);
+  assert.match(planned.warnings[1], /router tariff per HTTP request.*HTTP-200 tool errors.*upstream billing.*unqualified/);
+  assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+  const applied = await manageCodex(args, f.env);
+  assert.deepEqual(applied.warnings, planned.warnings);
+  assert.ok(!JSON.stringify(applied).includes(secret));
   const config = await f.read();
-  assert.equal(config.web_search, "live");
+  assert.equal(config.web_search, mode);
   assert.equal(config.model_providers.clawrouter_clawrouter.supports_standalone_web_search, true);
   assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, true);
-  await f.run("verify"); await f.run("update");
+  assert.deepEqual((await f.run("verify")).warnings, planned.warnings);
+  assert.deepEqual((await f.run("update", "--dry-run")).warnings, planned.warnings);
+  assert.deepEqual((await f.run("update")).warnings, planned.warnings);
   provider.offers = provider.offers.filter(offer => offer.transport !== "websocket");
   await f.run("update");
   assert.equal((await f.read()).model_providers.clawrouter_clawrouter.supports_websockets, false);
@@ -101,7 +111,7 @@ test("standalone search opt-in survives verify/update and refuses a lost offer",
   provider.offers.at(-1).eligible = false;
   await assert.rejects(f.run("update"), /no qualified native standalone search offer/);
   assert.equal(await readFile(f.profile, "utf8"), before);
-  await f.run("remove");
+  assert.equal(Object.hasOwn(await f.run("remove"), "warnings"), false);
 });
 
 test("standalone opt-in rejects an older producer before writing configuration", async t => {
@@ -173,9 +183,11 @@ test("connect dry-run, verify, update, and remove preserve base/auth/key and com
   const args = [...f.connect, "--key-file", keyFile];
   const dry = await manageCodex([...args, "--dry-run"], { ...f.env, CLAWROUTER_API_KEY: undefined });
   assert.equal(dry.status, "planned");
+  assert.equal(Object.hasOwn(dry, "warnings"), false);
   assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
   const applied = await manageCodex(args, { ...f.env, CLAWROUTER_API_KEY: undefined });
   assert.equal(applied.status, "applied");
+  assert.equal(Object.hasOwn(applied, "warnings"), false);
   assert.equal(applied.launch, `CODEX_HOME='${f.home}' '${f.binary}' --profile clawrouter`);
   const config = await f.read();
   assert.equal(config.model_provider, "clawrouter_clawrouter");

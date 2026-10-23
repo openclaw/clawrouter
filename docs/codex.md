@@ -49,8 +49,13 @@ contains the selected model, such as Codex 0.155.0 for Astra.
 ## Opt in to built-in CLI web search
 
 With Codex CLI 0.163.0 or newer, add `--web-search live` or `--web-search cached`
-to `connect`. Qualification covers the models below, HTTP and WebSocket
-inference, and text search/navigation (`search_query`, `open`, `click`, `find`). The helper
+to `connect`. This is an experimental opt-in. Fresh-page retrieval, strict
+cache-only behavior and upstream billing remain unqualified; see the current
+[qualification and release assessment](codex-search-qualification.md).
+The minimum supported version is enforced by setup; empirical CLI qualification
+is pinned to 0.163.0, not every later release. Tests cover the models below,
+HTTP and WebSocket inference, and text search/navigation (`search_query`, `open`,
+`click`, `find`), without qualifying every combination. The helper
 enables `supports_standalone_web_search` and narrows the
 exported catalog to eligible standalone-search models. WebSockets follow the
 authorized inference offers; search uses unary HTTP in either case. Search stays disabled
@@ -85,9 +90,11 @@ to one public OpenAI API account without fallback. Prefer a capability tariff:
 ```
 
 This example charges 1,000 microUSD per standalone search request while inference
-uses model token rates. Configure it through the policy API, the admin policy
-form, or `cf:key:put --request-costs-micros '{"search.web":1000}'`. Capability
-prices override the legacy policy-wide `requestCostMicros`, including explicit
+uses model token rates. The admin form uses dollars: enter `{"search.web":0.001}`
+in **Price per request by capability ($) · JSON object**, and leave **Fixed request
+cost ($)** blank for token-priced inference. Policy API/storage and
+`cf:key:put --request-costs-micros '{"search.web":1000}'` still use integer micros.
+Capability prices override the legacy policy-wide `requestCostMicros`, including explicit
 zero; unspecified capabilities retain the legacy tariff or manifest pricing.
 Omitted capability maps survive policy API updates; `null` clears the map. Free
 counting/discovery/moderation operations remain free.
@@ -96,6 +103,9 @@ These are configured router charges, not measured upstream bills. Standalone
 responses currently lack qualified usage data. Ordinary model token rates and
 hosted Responses search fees do not price this endpoint. A legacy policy-wide
 fixed tariff still works, but applies to inference too.
+An HTTP-200 response with a tool-level error still incurs the router search
+tariff. Search-enabled connect/dry-run/verify/update summaries include notices
+about the experimental retrieval/cache limits and unqualified upstream billing.
 
 Codex sends search commands to `/v1/alpha/search` relative to its provider base.
 ClawRouter forwards them through `/v1/native/openai/v1/alpha/search`, isolates
@@ -152,7 +162,7 @@ nonzero when retrieval cannot be qualified; a normal workflow's `qualified`
 result does not qualify its optional `originCheck`.
 
 Direct-API reproductions, unresolved billing terms, deterministic regressions,
-and the proposed canary/rollback checks are recorded in the
+and completed canary budget-denial/credential-revocation checks are recorded in the
 [search rollout candidate](codex-search-rollout.md). `--origin-only --direct-replay`
 compares the native forwarded request with direct API requests; these bypass
 router billing. The native harness separately verifies usage receipts and both
@@ -401,10 +411,12 @@ account and model before use.
 
 Fusion discovery applies the same Chat model eligibility to its configured
 synthesizer and advisers; unavailable advisers remain optional.
-Hosted search is rejected before dispatch under measured policy or provider
-budgets unless a fixed policy tariff is configured. Full hosted-tool fee metering
-remains separate. Keep this setup's hosted web search disabled: token rates do not
-cover its tool fees or repeated search input. Dispatched requests retain their
+Responses-hosted search is separate from the opt-in standalone Alpha route above.
+Reserve-mode hosted search needs a fixed policy tariff; token rates alone do not
+cover its tool fees or repeated search input. Keep Responses-hosted search disabled
+for this setup; [SOFT-mode hosted-tool metering](openai-hosted-search-metering.md)
+has its own limits. This restriction does not disable an explicitly configured
+standalone search profile. Dispatched requests retain their
 budget charge across the 15-minute admission lease; late settlement uses the
 original ledger receipt within its 45-day retention period.
 

@@ -1,13 +1,21 @@
 # FakeCo search semantics validation
 
+Current outcome: investigation stopped as inconclusive after the
+[final response-shape pair](search-response-shape-comparison.md#approved-execution-and-outcome).
+IANA passed; FakeCo returned a tool-level error; neither response had `results`.
+Fresh retrieval, wider cache/live semantics and upstream billing remain
+unqualified. Use the [current qualification report](codex-search-qualification.md)
+for release decisions. Dated preparations below are historical, not authorization
+to repeat hosted mutations or paid calls.
+
 A [source audit pinned to Codex CLI 0.163.0](codex-alpha-source-audit.md) confirms
 the live boolean and ordinary provider request/auth path. No client-side fix
 identified. Native completion/action events do not prove page retrieval; reviewed
 upstream tests mock Alpha. Subsequent local
 [metadata-only instrumentation](codex-alpha-source-audit.md#subsequent-local-results-diagnostics)
 addresses the optional structured `results` summary gap, with 62 focused synthetic
-tests passing. No deployment or additional paid probes; fresh retrieval and wider
-semantics remain unqualified.
+tests passing. Instrumentation preparation used no deployment or paid probes;
+the later separately approved two-call comparison is recorded above.
 
 The approved [Responses/alpha comparison](search-semantics-endpoint-comparison.md#authorized-pair-and-verified-cleanup)
 completed at `2026-10-23T08:43:52.742Z`: `neither-observed`. Public calibration

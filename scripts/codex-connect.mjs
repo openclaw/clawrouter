@@ -17,6 +17,13 @@ const marker = (profile) => profile === null ? DESKTOP_MARKER : MARKER;
 const rootFields = ["model", "model_provider", "model_catalog_json", "service_tier", "web_search"];
 const providerFields = ["name", "base_url", "wire_api", "env_key", "requires_openai_auth", "supports_websockets", "supports_standalone_web_search"];
 
+function searchWarnings(mode) {
+  return mode && mode !== "disabled" ? { warnings: [
+    "Standalone search is experimental: fresh-page retrieval and strict cache-only behavior remain unqualified.",
+    "Search uses the configured router tariff per HTTP request, including HTTP-200 tool errors; upstream billing remains unqualified.",
+  ] } : {};
+}
+
 function document(text) {
   let ast;
   try { ast = parseTOML(text, { tomlVersion: "1.0.0" }); }
@@ -287,7 +294,8 @@ export async function manageCodex(args, env = process.env) {
     nextCatalog = join(home, catalogName(profile, nextState.catalogSha256));
     if (command === "verify") {
       if (nextState.catalogSha256 !== state.catalogSha256 || JSON.stringify(fields) !== JSON.stringify(state.fields)) throw new Error("authorized catalog or transport changed; run update then restart Codex");
-      return { command, target, profile, status: "verified", inferenceProbed: false, producer: catalog.producer };
+      return { command, target, profile, status: "verified", inferenceProbed: false, producer: catalog.producer,
+        ...searchWarnings(settings.webSearch) };
     }
   }
   const changed = command === "remove" ? state.fields.map(([path]) => path.join(".")).filter((field) => !retained.includes(field))
@@ -295,7 +303,8 @@ export async function manageCodex(args, env = process.env) {
   const summary = { command, target, profile, status: dryRun ? "planned" : "applied", changed, retained,
     ...(command === "remove" ? { revoked: false } : { catalogSha256: nextState.catalogSha256, restartRequired: true,
       ...(desktop ? { scope: "Desktop and unprofiled CLI root defaults", launch: "Fully quit and restart Desktop, then start a new thread; load CLAWROUTER_API_KEY from the interactive login shell." } : { launch: `CODEX_HOME=${shellQuote(home)} ${shellQuote(options.codex ?? "codex")} --profile ${profile}` }),
-      credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment" }) };
+      credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment",
+      ...searchWarnings(nextState.webSearch) }) };
   if (dryRun) return summary;
 
   await mkdir(home, { recursive: true, mode: 0o700 });

@@ -1,15 +1,25 @@
 # Codex CLI search rollout candidate
 
-Local branch: `feat/codex-standalone-search`. No PR, push, staging change, or
-production deployment. Desktop and non-Lite models remain outside this campaign.
-Qualified CLI/model/transport scope: [Codex setup](codex.md#opt-in-to-built-in-cli-web-search).
+Current decision and evidence: [qualification and release assessment](codex-search-qualification.md).
+Keep search disabled by default; experimental opt-in only within the tested
+workflow scope. General rollout remains pending upstream billing qualification.
+Fresh retrieval and strict cache-only behavior remain unqualified. Desktop and
+non-Lite models remain outside this campaign.
 
-Prepared follow-up artifacts: [unsent upstream report](codex-search-upstream-report.md)
-and [exact FakeCo canary runbook](codex-search-canary.md). The native harness now
-also supports a deployed router with a dedicated bounded key, without local
-upstream-key interception. Its remote usage check covers policy-authority spend
-and public receipts; provider-authority inspection remains a separate canary step.
-No paid deployed smoke or remote mutation has run.
+FakeCo deployment, ordinary inference smoke, both native Sol/Astra search modes,
+provider/policy/reporting reconciliation, cap denial and credential revocation
+completed with separate approvals. Initial deployment:
+[run 39895613643](https://github.com/openclaw/clawrouter/actions/runs/39895613643).
+The reviewed canary tag was published; no PR or production deployment. Later
+direct retrieval experiments did not qualify a fresh origin fetch. The latest
+[two-request comparison](search-response-shape-comparison.md#approved-execution-and-outcome)
+found `results` absent in both successful IANA and failing FakeCo responses.
+The investigation stopped; consumed approvals do not authorize another run.
+
+The [unsent upstream draft](codex-search-upstream-report.md) and
+[canary runbook](codex-search-canary.md) retain history and gated procedures.
+The packaging and October 22 checks below are historical, not current deployment
+instructions or fresh upstream qualification.
 
 The local Wrangler packaging dry run passed, including manifest compilation and
 the admin production build. It exposed two shared-pricing imports whose `.ts`
@@ -61,7 +71,10 @@ distinguish an upstream bug from account restrictions or URL/fetch policy.
 Fresh-origin retrieval and strict cache-only behavior remain unqualified.
 No provider report has been sent.
 
-Reproduce with the already-authorized credential injected through 1Password:
+Historical reproduction commands, not a current authorization. Another paid run
+requires a specific new hypothesis or a working fresh-fetch control, separately
+approved scope and a fresh ownership/source check. Completed receipts must not
+be replayed. Inject only the approved credential through the existing helper:
 
 ```sh
 CLAWROUTER_SEARCH_LIVE=1 node scripts/probe-codex-search.mjs --model gpt-6.1-sol
@@ -95,13 +108,13 @@ upstream invoice estimate. An HTTP-200 tool error still incurs that router tarif
 Inference retains model token pricing. In-flight settlement freezes the tariff
 used at admission, even if a policy map changes while upstream is running.
 
-Before choosing a production tariff, obtain provider confirmation of endpoint
-availability, charging unit, navigation/multi-command/failure charges, content
-token treatment, and an authoritative usage/cost source. Alternatively, compare
-an isolated project/time-window sample against authorized billing records, with
-control traffic and a documented attribution delay. An ordinary inference API key
-does not establish billing-record access; no administrative credential was sought
-and no organization-wide billing query was made for this campaign.
+Production qualification would need endpoint-specific charging terms or an
+isolated project/time-window billing sample with control traffic and a documented
+attribution delay. Neither is available here. The user chose to leave upstream
+pricing unqualified; no provider clarification is assumed available and no billing
+credential or organization-wide query is sought. An ordinary inference key does
+not establish billing-record access. The configured router tariff can still be
+tested independently of the upstream invoice.
 
 The documented administrative [web-search usage endpoint](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/web_search_calls)
 supports API-key/project/time filters and exposes request counts. The
@@ -111,7 +124,7 @@ These are candidate reconciliation sources, not evidence that standalone calls
 appear there. A billing export or an explicitly authorized admin read path is
 still needed; a zero/missing bucket alone would not prove the endpoint is free.
 
-## Regression and staging plan
+## Regression evidence and canary history
 
 The deterministic workerd regression covers interleaved WS inference and HTTP
 search, a model switch/reconnect carrying a synthetic compaction summary, original
@@ -183,5 +196,8 @@ For a future authorized canary:
    Worker code does not undo settled spend; never reset budget authority or reuse
    an old key to make the canary look clean.
 
-The actual remote readiness, deployment, monitoring, and rollback drill are future
-operations, not claims of this local qualification.
+The completed FakeCo canary exercised remote readiness, deployment, monitoring,
+budget denial and credential revocation. A main-Worker release rollback remains
+a procedure, not a completed drill claim. Any future batch needs fresh inventory
+and explicit approval; retain FakeCo for the user's browser inspection before
+separately authorized cleanup. This assessment performs no remote operation.
