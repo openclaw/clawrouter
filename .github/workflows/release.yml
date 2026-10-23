@@ -36,6 +36,6 @@ jobs:
       ci-check-events: '["push"]'
       source-archives: true
       test-command: >-
-        npx --yes --package=node@24.15.0 --package=pnpm@11.28.4
+        npx --yes --package=node@24.22.1 --package=pnpm@11.28.4
         --call 'bash scripts/verify-release.sh'
       release-name: ClawRouter
