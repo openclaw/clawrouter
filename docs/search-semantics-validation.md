@@ -3,7 +3,9 @@
 Fixture deployment approved and verified at 2026-10-23 04:45:59 UTC from
 `77bf4ac4fa1f155861b2415648242178ec17089b`. One separately approved synthetic
 calibration run has since been created, checked, and deleted. No router credential
-registered, budget changed, paid probe run, or existing canary cleaned up.
+registered, budget changed, or existing canary cleaned up. A separately approved
+direct Sol probe ran two standalone search calls and deleted its fresh fixture run;
+the result was inconclusive, as detailed below. No inference ran.
 
 ## What this can establish
 
@@ -55,8 +57,8 @@ no Workers Cache opt-in; allowed Worker settings/version reads also contain no
 cache/exports opt-in. Cloudflare documents that [omitting the cache block disables
 Workers Cache](https://developers.cloudflare.com/workers/cache/configuration/).
 This is configuration evidence, not an empirical guarantee of every request.
-The separately approved counter calibration below passed; OpenAI search semantics
-remain unqualified pending fresh controlled provider probes.
+The separately approved counter calibration below passed; the subsequent direct
+Sol probe failed its live positive control. OpenAI search semantics remain unqualified.
 The default-cache configuration page was not inspected after the user began
 using other Safari windows; further browser actions stopped. Evidence receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-cache-inspection.json`.
@@ -111,6 +113,31 @@ No OpenAI calls or router application writes ran. Receipt:
 This validates counter and rotation behavior for these HTTP requests. It does not
 qualify provider live/cache-only semantics or all possible client/edge behavior.
 Next: separately approved direct Sol probing using a fresh run and hidden markers.
+
+## Direct Sol probe: inconclusive
+
+The approved run completed at 2026-10-23 06:19:59 UTC. Direct
+`/v1/alpha/search` calls for `gpt-6.1-sol` used separate sessions and unique
+registered cached/live pages. Both returned HTTP 200 with tool-level
+`Internal Error`, no hidden marker and no reported usage. All page GET/HEAD
+counters remained zero. The live positive control failed, so the matrix stopped
+after two calls; warm-cache, rotation, navigation, Astra, routed and native
+follow-ups did not run. No cache-only semantics can be inferred from this result.
+
+The fresh run was deleted. Its authenticated lookup and all four public pages
+then returned 404; fixture/main deployments, settings and routes matched baseline.
+No inference, router key registration or budget mutation ran. Upstream search
+billing remains unqualified: absence of reported usage does not establish no charge.
+Receipt: `.artifacts/fakeco-codex-search-20261022/search-semantics-direct-sol-receipt.json`.
+
+Request IDs: `req_b54c32a071fb40cbac57fa50b71e7ab0` (cached),
+`req_ff15d09ec74943c29324de26d26d982b` (live).
+A read-only Cloudflare GraphQL security-event query scoped to this run/time/path
+returned a permission error, so it supplied no usable edge evidence. Receipt:
+`.artifacts/fakeco-codex-search-20261022/search-semantics-direct-sol-edge-events.json`.
+Zero Worker counters leave both upstream no-fetch and pre-Worker edge rejection
+possible. Next: inspect that window's Security Events read-only in Safari before
+more paid probes or any security/configuration change.
 
 ## Secret and credential preparation
 
