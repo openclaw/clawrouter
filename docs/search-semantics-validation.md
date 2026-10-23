@@ -309,6 +309,14 @@ approval. No zone-wide disable, inference, fixture deployment or broader
 semantics matrix is justified by this inspection. A failed comparison would
 remain inconclusive, not rule out all Cloudflare/provider restrictions.
 
+Prepared follow-up: [exact BIC rule, one-call comparison and cleanup](search-semantics-bic-probe.md).
+Read-only API refresh at 2026-10-23 06:32 UTC confirmed zone BIC `on`, but the
+Configuration Rules phase read returned 403/code 10000. No auth fallback.
+Safari inspection qualified the existing Catalog rule as BIC off for only
+`catalog.openclaw.ai`; its editor was cancelled unchanged. A separate narrow
+FakeCo form is populated but unsaved. No Cloudflare writes or paid calls in
+this preparation; browser create/delete permissions remain unproven.
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.
