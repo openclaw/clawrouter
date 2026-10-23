@@ -1,7 +1,8 @@
 # FakeCo search semantics validation
 
-Local candidate only. No fixture deployed, credential registered, budget changed,
-paid call made, or existing canary cleaned up by this preparation.
+Fixture deployment approved and verified at 2026-10-23 04:45:59 UTC from
+`77bf4ac4fa1f155861b2415648242178ec17089b`. No synthetic pages created, router
+credential registered, budget changed, paid probe run, or existing canary cleaned up.
 
 ## What this can establish
 
@@ -27,7 +28,7 @@ resolve them. No OpenAI clarification is assumed available.
 `91b59577e757131d68d55a471fe32aca`, zone
 `72b20df9e990ac41365dadace6499187`.
 
-| Resource | Candidate |
+| Resource | Deployed |
 | --- | --- |
 | Worker | `clawrouter-search-semantics-fakeco` |
 | Route | `https://clawrouter-fakeco.openclaw.ai/search-semantics/*` |
@@ -35,13 +36,29 @@ resolve them. No OpenAI clarification is assumed available.
 | Secret binding | `SEARCH_SEMANTICS_CONTROL_SHA256` |
 | Public readiness | `/search-semantics/health` |
 
+Deployment ownership receipt:
+`.artifacts/fakeco-codex-search-20261022/search-semantics-deployment-receipt.json`.
+Active fixture version: `7c4bb07f-e01e-42f1-a784-7e58de842462` at 100%.
+Route ID: `3027364f1df44bcfa2b39ce11a1fea14`.
+New SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
+Readiness returns 200 with `cache-control: no-store`; unauthorized controls return
+404. The existing router remains on `3d669069-fb9e-45e0-a71b-bded66c5b7b2`;
+its settings, deployments, custom domains, Access app, and all prior routes are
+unchanged. All 36 prior namespaces remain present.
+
+Cache Rules and Page Rules API inspection returned 403 with the management token.
+Their effective behavior remains unqualified. Resolve this through read-only
+dashboard inspection and/or separately approved counter calibration before
+claiming cache-only semantics. No credential/auth-mode fallback was attempted.
+
 Cloudflare supports a path route in front of an existing custom-domain Worker;
 the route takes precedence for matching requests. See [Workers routes](https://developers.cloudflare.com/workers/configuration/routing/routes/).
 No router source imports the fixture. No existing Worker, Access policy, custom
 domain, queue, R2 bucket, KV namespace, or Durable Object is modified by fixture
 deployment. The public prefix is outside the existing FakeCo Access destinations;
 the control endpoints enforce their own bearer authentication. Recheck that
-baseline before deployment. Route creation write permission remains unexercised.
+baseline before later changes. Exact path-route creation is now exercised;
+route deletion and the destructive namespace migration remain untested.
 
 The fixed registry has at most 16 runs with four unique synthetic pages each.
 Run expiry defaults to one hour, bounded to 60 seconds–two hours. Storage alarm
@@ -92,7 +109,7 @@ outer authorization; router tariffs/caps do not qualify alpha/search billing.
    cache rules and relevant credential metadata. Require exact existing FakeCo
    ownership, new fixture Worker absent and no overlapping route. Read-only
    permission evidence cannot guarantee writes or later deletion.
-2. **First proposed write batch:** deploy the dedicated Worker + new DO migration
+2. **Completed approved write batch:** deploy the dedicated Worker + new DO migration
    and exact path route, then install its control digest through stdin. A missing
    digest fails closed for all controls; no pages exist before authenticated run
    creation. Record Worker version, route ID and namespace ID immediately, even
