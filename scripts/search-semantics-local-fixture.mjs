@@ -75,7 +75,7 @@ export async function startLocalSearchFixture({ port = 18765, maxMeasurements = 
       await settle();
       const late = snapshot(), withinLifetime = phase === "measuring";
       if (withinLifetime) phase = "complete";
-      return { dispatchedAt, finishedAt: new Date().toISOString(), probeFailed, summary, immediate, late,
+      return { dispatchedAt, finishedAt: new Date().toISOString(), measurementComplete: withinLifetime, probeFailed, summary, immediate, late,
         freshRetrieval: withinLifetime && !probeFailed && summary?.status === 200 && summary.markerReturned && summary.toolSuccess !== false && !summary.internalError && !summary.referenceError && !summary.fetchError && counts.rootGet > 0 && !counts.overflow };
     },
     close() {

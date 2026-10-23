@@ -12,7 +12,7 @@ const responseValue = marker => ({ status: "completed", output: [
   { type: "message", content: [{ type: "output_text", text: marker ?? "Internal Error" }] },
 ], usage: { input_tokens: 10, output_tokens: 20, total_tokens: 30 } });
 
-async function harness(t, { scenario = "both", responseFailure, settle = async () => {}, signal } = {}) {
+async function harness(t, { scenario = "both", responseFailure, settle = async () => {}, signal, onAlphaResponse = async () => {} } = {}) {
   let config = {}, keyReads = 0, fixture, localUrl;
   const calls = [], markers = [], child = new EventEmitter();
   child.exitCode = child.signalCode = null;
@@ -38,6 +38,7 @@ async function harness(t, { scenario = "both", responseFailure, settle = async (
       assert.ok(!init.body.includes(marker));
     }
     if (endpoint === "responses") return Response.json(responseValue(marker), { headers: { "x-request-id": "req_responses_fixture" } });
+    await onAlphaResponse();
     return Response.json({ output: successful ? marker : scenario === "responses-only" ? markers[0] : "Internal Error", encrypted_output: "fixture-private-ciphertext" }, { headers: { "x-request-id": "req_alpha_fixture" } });
   });
   const experiment = await startEndpointComparison({ approved: true, startExperiment, readKey: async () => { keyReads++; return "fixture-only-key"; }, settle, signal });
@@ -62,6 +63,7 @@ test("actual helpers compare independent generations, reuse one key, cap request
   assert.equal(h.calls[0].body.max_tool_calls, 3); assert.equal(h.calls[0].body.max_output_tokens, 2048);
   assert.deepEqual(result.rows.map(row => row.late.counts.rootGet), [1, 1]);
   assert.deepEqual(result.rows.map(row => row.late.generation), [1, 2]);
+  assert.deepEqual(result.rows.map(row => row.measurementComplete), [true, true]);
   assert.deepEqual(result.cleanup, { fixtureClosed: true, funnelEmpty: true, serveEmpty: true });
   assert.equal(h.fixture.snapshot().phase, "closed"); assert.equal(h.child.signalCode, "SIGTERM");
   for (const marker of h.markers) assert.ok(!JSON.stringify(result).includes(marker));
@@ -123,7 +125,25 @@ test("cancellation during the first observation window prevents the second endpo
   const result = await h.experiment.measure({ approved: true });
   assert.equal(h.calls.length, 1); assert.equal(result.rows.length, 1);
   assert.equal(result.outcome, "incomplete"); assert.equal(result.rows[0].freshRetrieval, false);
+  assert.equal(result.rows[0].measurementComplete, false); assert.equal(result.stopReason, "measurement-interrupted");
   assert.equal(result.cleanup.fixtureClosed, true); assert.equal(result.cleanup.funnelEmpty, true);
+});
+
+test("cancellation during alpha's request or late window cannot become negative endpoint evidence", async t => {
+  for (const stage of ["request", "late-window"]) await t.test(stage, async t => {
+    const controller = new AbortController();
+    let windows = 0;
+    const h = await harness(t, { signal: controller.signal,
+      onAlphaResponse: async () => { if (stage === "request") controller.abort(); },
+      settle: async () => { if (++windows === 2 && stage === "late-window") controller.abort(); },
+    });
+    const result = await h.experiment.measure({ approved: true });
+    assert.equal(h.calls.length, 2); assert.equal(result.rows.length, 2);
+    assert.equal(result.rows[0].freshRetrieval, true); assert.equal(result.rows[0].measurementComplete, true);
+    assert.equal(result.rows[1].measurementComplete, false);
+    assert.equal(result.outcome, "incomplete"); assert.equal(result.stopReason, "measurement-interrupted");
+    assert.equal(result.cleanup.fixtureClosed, true); assert.equal(result.cleanup.funnelEmpty, true);
+  });
 });
 
 test("classification never promotes a partial pair into endpoint comparison evidence", () => {

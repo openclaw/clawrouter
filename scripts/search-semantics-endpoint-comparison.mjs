@@ -5,7 +5,7 @@ import { directResponsesSearchProbe } from "./responses-search-probe.mjs";
 import { startFunnelExperiment, loadProbeKey, runFunnelSession } from "./search-semantics-funnel.mjs";
 
 export function comparisonOutcome(rows) {
-  if (rows.length !== 2) return "incomplete";
+  if (rows.length !== 2 || rows.some(row => row.measurementComplete !== true)) return "incomplete";
   const [responses, alpha] = rows.map(row => row.freshRetrieval === true);
   return responses ? (alpha ? "both-observed" : "responses-only-observed") : (alpha ? "alpha-only-observed" : "neither-observed");
 }
@@ -31,6 +31,7 @@ export async function startEndpointComparison({ startExperiment = startFunnelExp
           if (name === "alpha") experiment.arm();
           const result = await experiment.measure({ approved: true });
           rows.push({ endpoint: name, ...result });
+          if (!result.measurementComplete) { stopReason = "measurement-interrupted"; break; }
           if (name === "responses" && (result.probeFailed || result.summary?.status !== 200 || result.summary.toolSuccess !== true)) {
             stopReason = "responses-control-unavailable"; break;
           }

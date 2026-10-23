@@ -91,7 +91,9 @@ No raw measurement marker is printed. Abort handling is installed before startup
 
 Fresh content requires successful HTTP/tool response, exact new marker and an
 origin GET in that generation's measurement window; no overflow or expiration.
-Record both snapshots and each endpoint's action/error metadata.
+Record both snapshots, each endpoint's action/error metadata and the explicit
+`measurementComplete` flag. An interrupted window on either endpoint makes the
+pair incomplete, including cancellation after alpha has returned HTTP output.
 
 - `both-observed`: fresh retrieval observed through both paths in this batch.
 - `responses-only-observed`: inspect native alpha/Codex request/session/reference
@@ -118,3 +120,12 @@ mock provider transport. Exercise actual decoders/probes together with independe
 generations, stale-marker rejection, same-key reuse, request/tool bounds, partial
 pairs, contamination, deadline/cancellation, default single-probe compatibility
 and cleanup. They do not expose Funnel or call either provider endpoint.
+
+Preparation verification: 51 focused tests passed. Autoreview of `1309676`
+identified one P2: an interrupted alpha window could be classified as completed
+negative evidence. Fixed with an explicit measurement-completion flag and
+regression cases for cancellation during alpha's request and late window.
+Original review status remains `findings`; do not describe it as a clean review.
+Results: `~/.codex/review-results/search-endpoint-comparison-20261023/`.
+Independent preparation checks found both real Serve/Funnel configurations `{}`
+and port 18765 free. New exposure and paid-run approvals remain pending.
