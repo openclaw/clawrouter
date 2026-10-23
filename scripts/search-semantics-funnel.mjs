@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { startLocalSearchFixture } from "./search-semantics-local-fixture.mjs";
 
 export const tailscale = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+// Reserved placeholder; a future live experiment needs a separately approved host.
 export const hostname = "funnel-fixture.example.invalid";
 export const target = "http://127.0.0.1:18765";
 const execute = promisify(execFile);

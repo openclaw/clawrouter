@@ -9,10 +9,14 @@ remain unchanged.
 
 ## Hosting and boundary
 
+The hostname in this record and its examples is a reserved placeholder. The
+historical fixture address is omitted for privacy; calibration/results describe
+that original fixture. A future experiment requires a separately approved host.
+
 Use the authenticated Mac and installed Tailscale 1.102.4:
 
 - CLI: `/Applications/Tailscale.app/Contents/MacOS/Tailscale`.
-- Public URL: `https://funnel-fixture.example.invalid/`.
+- Fixture URL (redacted): `https://funnel-fixture.example.invalid/`.
 - Dedicated origin: `http://127.0.0.1:18765`.
 - Initial read-only preflight: connected, MagicDNS enabled, certificate eligible,
   Funnel/HTTPS capabilities present, Serve/Funnel configuration `{}`, port free.

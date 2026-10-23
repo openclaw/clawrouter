@@ -108,6 +108,9 @@ search support for Sol in Responses. These do not establish an alpha contract.
 
 Responses POST to `https://api.openai.com/v1/responses`:
 
+Fixture addresses below are reserved placeholders; the historical host is
+omitted for privacy. They are not live retrieval targets.
+
 ```json
 {
   "model": "gpt-6.1-sol",

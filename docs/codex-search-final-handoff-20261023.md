@@ -130,6 +130,19 @@ retrieval/cache guarantee or upstream-billing qualification follows from this
 review. This result entry is a subsequent documentation-only update, outside the
 reviewed candidate; runtime source remains unchanged.
 
+## Publication privacy correction
+
+The historical Funnel host is replaced with `funnel-fixture.example.invalid` in
+the diagnostic script and examples. The reserved placeholder deliberately cannot
+identify an operator's machine; a future live experiment requires a separately
+approved host. The PR branch history is sanitized as part of this correction.
+Original source/review commit identifiers above describe the pre-redaction
+evidence and are retained as historical provenance, not current branch identities.
+
+All 41 focused Funnel and endpoint-comparison tests passed after the correction.
+No provider request, Tailscale command, exposure, Cloudflare change or deployment
+was performed. Core Worker, pricing, admin and CLI-setup behavior is unchanged.
+
 ## Evidence index
 
 | Record | Purpose |
