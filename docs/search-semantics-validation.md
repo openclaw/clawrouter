@@ -47,14 +47,15 @@ resolve them. No OpenAI clarification is assumed available.
 Original deployment ownership receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-deployment-receipt.json`.
 Current deployment ownership receipt:
-`.artifacts/fakeco-codex-search-20261022/search-diagnostic-deployment-receipt.json`.
-Active fixture version: `d29dd6b3-ceed-4d2c-93f5-c60fe791df26` at 100%.
-Current route ID: `a7df3050ed59443aa1b2f96362ecdd94` (Wrangler replaced the
-original ID during the approved diagnostic update; route semantics unchanged).
+`.artifacts/fakeco-codex-search-20261022/request-observation-calibration-receipt.json`.
+Active normal fixture version: `5739c9d6-c696-4358-ba31-5b4054cb5ba8` at 100%.
+Current route ID: `edc2e346c12c4d1d880a20fd91c9e0d6` (Wrangler recreated the
+prefix route during the approved observation attempt/restoration;
+semantics unchanged).
 SQLite namespace ID: `148cbb6483b4421dbf8b25301a325865`.
 Readiness returns 200 with `cache-control: no-store`; unauthorized controls return
 404. The existing router remains on `3d669069-fb9e-45e0-a71b-bded66c5b7b2`;
-its settings, deployments, custom domains, Access app, and all prior routes are
+its settings, deployments, custom domains, Access app, and unrelated routes are
 unchanged. All 36 prior namespaces remain present.
 
 Cache Rules and Page Rules API inspection returned 403 with the management token.
@@ -415,8 +416,8 @@ the existing fixture Worker as version
 `3027364f1df44bcfa2b39ce11a1fea14` is absent. Read-only reconciliation proved
 the route inventory differs only by that ID, and Worker settings only by the
 reviewed deployment annotations. Bindings/runtime, namespace, main Worker,
-domains and Access stayed unchanged; BIC remains on. Record the new route ID
-for later cleanup; do not use the historical deployment receipt's ID.
+domains and Access stayed unchanged; BIC remains on. This section's version and
+route ID are historical; use the current ownership record above for cleanup.
 
 One five-minute diagnostic generation produced matching HTML on two GETs,
 empty HEAD output, exact durable counters 2/1 and correct timestamps. Private
@@ -482,6 +483,34 @@ session, deployment, new live route/binding or further search probe in this batc
 Worker TypeScript and 24 focused fixture/observation/matrix/probe tests passed.
 Autoreview of `c1a1ae2` completed with no actionable P0–P2 findings. Hosted
 equivalence still requires separately approved calibration.
+
+### Approved request-observation attempt and restoration
+
+Completed 2026-10-23 07:11:24 UTC. Temporary version
+`e0e2c851-3f43-4062-94af-ec0c47715b77` deployed successfully; four robots
+response comparisons matched the main-Worker baseline. Observation-session
+creation returned non-2xx, with no ID recorded. HTTP status was not retained;
+root cause remains unresolved. No diagnostic creation or seven-request counter
+calibration ran. No paid search/inference calls or router writes.
+
+Temporary robots route `0d2f713b00354801882592550300ace4` deleted; temporary
+service binding removed. Normal source bytes restored, with current resource
+IDs above. Base settings/runtime, main Worker, namespaces, unrelated routes,
+domains, Access and BIC preserved. Private collection and public diagnostic checks
+returned 404 before restoration; this does not independently prove execution or
+cleanup of the observation handler. No owned session ID; retain the namespace
+for its existing class-deletion cleanup.
+
+Post-restoration control POST with invalid literal `null` returned 400
+`invalid_input` at 07:13:14 UTC. Current authentication works; no generation
+created. Temporary handler/version issues remain possible. Operator status
+journaling corrected locally; no automatic retry or redeploy. Hosted counters
+remain unqualified. Further mutation/probe batches require approval. See
+[full evidence and restoration](search-semantics-request-observation.md#approved-deployment-attempt-and-restoration).
+
+API inventory was refreshed for this batch. A Safari focus change interrupted
+read-only rule-inventory refresh; the latest browser rule observation remains
+the earlier inspection. No browser settings were changed.
 
 ## Secret and credential preparation
 

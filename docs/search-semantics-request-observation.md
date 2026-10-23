@@ -1,11 +1,12 @@
 # Temporary request observations
 
-Status: prepared locally only. No deployment, hosted session, new route/binding,
-security change or search probe in this preparation. The active fixture remains
-version `d29dd6b3-ceed-4d2c-93f5-c60fe791df26`; existing route ID
-`a7df3050ed59443aa1b2f96362ecdd94`; namespace
-`148cbb6483b4421dbf8b25301a325865`. Deployment and paid comparisons require
-separate user approval.
+Status: approved temporary deployment completed; hosted calibration stopped at
+observation-session creation. Normal fixture restored at 2026-10-23 07:11:24 UTC.
+Current version `5739c9d6-c696-4358-ba31-5b4054cb5ba8`; prefix route ID
+`edc2e346c12c4d1d880a20fd91c9e0d6`; namespace
+`148cbb6483b4421dbf8b25301a325865`. Temporary robots route and service binding
+removed. No paid calls. Observation counters remain unqualified; further
+Cloudflare mutations and paid comparisons require separate user approval.
 
 ## Read-only follow-up
 
@@ -39,7 +40,8 @@ request or response. It does not create an allow/disallow robots policy.
 See [route matching](https://developers.cloudflare.com/workers/configuration/routing/routes/)
 and [HTTP service forwarding](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/http/).
 The service binding avoids recursion through the added public route. No public
-fetch fallback if forwarding fails. Hosted equivalence still needs calibration.
+fetch fallback if forwarding fails. Four hosted response comparisons passed;
+observation counters still need calibration.
 
 One additional fixed object, `request-observations-v1`, uses the existing
 `SearchSemanticsObject` class/namespace. It has its own storage and alarm;
@@ -91,9 +93,9 @@ existing accepted-page counters; it is not a complete network trace.
 
 ## Prepared deployment and calibration sequence
 
-Nothing below has run. Before requesting deployment approval, refresh read-only
-inventory: exact account/zone, active fixture and main versions, all bindings and
-routes, namespace/class ownership, Access scope, health and normal security state.
+The first approved attempt is recorded below. Before another deployment approval,
+refresh read-only inventory: exact account/zone, active fixture and main versions,
+all bindings and routes, namespace/class ownership, Access scope, health and normal security state.
 Require the added robots route and service binding absent, no overlapping route
 owned by another operator, and no active diagnostic/observation session.
 
@@ -115,8 +117,8 @@ Hosted calibration, if included in that approval:
 1. Require public diagnostic absent and unauthorized controls denied. Compare
    forwarded robots responses with baseline before starting counted sessions.
 2. Create one observation and one diagnostic session, both five minutes; record
-   each owned ID immediately on 201, before helper validation. Private snapshots
-   must show no observed requests and zero diagnostic counters.
+   response status before validation and each owned ID immediately on 201.
+   Private snapshots must show no observed requests and zero diagnostic counters.
 3. Seven accounted public requests: robots GET/HEAD; diagnostic GET/HEAD;
    diagnostic query GET; diagnostic trailing-slash GET; fixture health GET.
    Expect robots baseline statuses, diagnostic 200/empty HEAD with correct marker,
@@ -183,6 +185,44 @@ procedure; no new namespace or class-deletion migration is introduced here.
 
 Local verification: Worker TypeScript check and 24 focused fixture/observation/
 matrix/probe tests passed. Autoreview of preparation commit `c1a1ae2` completed
-with no actionable P0–P2 findings. Hosted routing/forwarding, deployment and
-cleanup behavior remain unqualified until their approved calibration. Review
+with no actionable P0–P2 findings. Hosted deployment, four robots forwarding
+comparisons and infrastructure restoration passed in the batch below. Observation
+creation, counting and owned-session deletion remain unqualified. Review
 status: `/Users/joshavant/.codex/review-results/search-request-observation-preparation-20261023/status.json`.
+
+## Approved deployment attempt and restoration
+
+Batch 2026-10-23 07:10:54–07:11:24 UTC deployed reviewed source `c1a1ae2`
+as temporary version `e0e2c851-3f43-4062-94af-ec0c47715b77`. Added robots route
+`0d2f713b00354801882592550300ace4` and the main-Worker service binding.
+Robots GET, HEAD, query GET and lookalike GET matched the original 404 status,
+body hash and selected stable headers. Main Worker stayed on
+`3d669069-fb9e-45e0-a71b-bded66c5b7b2`.
+
+Observation creation returned non-2xx before any ID was recorded. The operator
+failed to retain that response's HTTP status; its cause is unresolved. No
+diagnostic generation was attempted, and none of the seven counted calibration
+requests ran. Private collection checks and public diagnostic GET/HEAD returned
+404 before restoration. These checks do not independently establish that the
+new observation handler ran or cleared storage. No owned session ID exists for
+later deletion; retain the namespace in the existing class-deletion cleanup.
+
+The added robots route was deleted and the normal config redeployed. Current
+version/route are at the top of this document. Normal code bytes match the prior
+normal deployment; exactly the three normal bindings remain. Runtime/base
+settings, namespace, unrelated routes, main Worker, domains, Access and BIC were
+preserved. Dashboard remains Access-protected. No router writes, secret changes,
+security relaxation, paid calls, PR or push.
+
+A post-restoration authentication check at 07:13:14 UTC sent literal `null` to
+the diagnostic control POST. It returned 400 `invalid_input`, proving current
+control authentication works without creating a generation. This rules out a
+current credential mismatch, not a temporary version/handler issue. No replay or
+automatic redeploy. The ignored operator now journals every control response's
+status before helper validation; the lost status cannot be recovered.
+
+Receipt: ignored
+`.artifacts/fakeco-codex-search-20261022/request-observation-calibration-receipt.json`.
+Before another attempt, prepare status and handler/version evidence sufficient
+to distinguish authentication, old-handler routing and runtime failure; obtain
+fresh mutation approval. Paid search remains gated on hosted counter calibration.

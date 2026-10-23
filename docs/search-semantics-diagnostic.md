@@ -3,12 +3,15 @@
 Status: deployed and calibrated. One approved Sol retrieval comparison completed
 2026-10-23 06:56:12 UTC: tool-level `Internal Error`, no marker, zero GET/HEAD
 activity; result inconclusive. Active fixture version
-`d29dd6b3-ceed-4d2c-93f5-c60fe791df26`, source `12b5383`. The owned diagnostic
+`5739c9d6-c696-4358-ba31-5b4054cb5ba8`, normal source `12b5383` restored
+following the temporary observation attempt. The owned diagnostic
 generation was deleted; private controls and public GET/HEAD return 404.
 Provider retrieval remains unqualified.
 
-Prepared next, without deployment or another probe:
-[temporary request observations and restoration](search-semantics-request-observation.md).
+The [temporary request-observation attempt](search-semantics-request-observation.md#approved-deployment-attempt-and-restoration)
+passed robots response comparisons but stopped at session creation. Normal
+configuration restored; observation counters remain unqualified. No further paid
+probe ran.
 
 Purpose: replace the uncounted, GET-only JSON health comparison with ordinary
 HTML and durable GET/HEAD evidence at a stable URL. The health endpoint and
@@ -94,6 +97,10 @@ Any additional hosted write/probe batch requires separate user approval.
    generation. No search retry or security relaxation follows automatically.
 
 ## Completed deployment and calibration
+
+The version and route IDs in this historical section were superseded by normal
+restoration; use [current ownership](search-semantics-validation.md#isolated-fixture)
+for cleanup.
 
 Reviewed source `12b53838cfb8c27a71d67ee2f5a7ad0c2cc3d7d9` deployed once to
 the existing fixture Worker. Previous version:
