@@ -527,6 +527,22 @@ configuration changes. Regression tests cover the mixed-version boundary and
 prevent a readiness failure from reaching POST; readiness stores no session or
 alarm. Nothing deployed. See [diagnosis and retry requirements](search-semantics-request-observation.md#local-diagnosis-and-prepared-readiness-correction).
 
+### Reviewed runner and fresh read-only preflight
+
+Completed 2026-10-23T07:28:15.575Z. Reviewed frozen operator commit `5fc8431`
+(runtime source `593a2fa`) scoped-clean through P2; eight offline operator scenarios
+passed, including read-only mode, readiness delay, ambiguous writes and cleanup/
+restoration failure. Local operator bytes match the reviewed copy. No main-router,
+fixture runtime or configuration change in this step.
+
+Fresh preflight passed: current normal version/route/namespace above, three normal
+bindings, no temporary robots route/service binding, main Worker and unrelated
+infrastructure hashes unchanged. Authentication validation with literal `null`
+returned 400 `invalid_input`; no session created. Access challenge intact. No
+Cloudflare resource writes or paid search calls. Browser rule inventory remains
+historical. Hosted counters remain unqualified; next mutation batch needs approval.
+See [review, exact runner and failure custody](search-semantics-request-observation.md#reviewed-runner-and-fresh-read-only-preflight).
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.

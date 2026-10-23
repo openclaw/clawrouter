@@ -286,5 +286,64 @@ upgrade/readiness checks. Autoreview completed scoped-clean through P2; report
 status: `/Users/joshavant/.codex/review-results/search-observation-readiness-20261023/status.json`.
 An initial review found no issues but failed report publication; the completed
 rerun produced the valid status above. No hosted deployment in this follow-up.
-The ignored retry operator is a blocked draft, pending its own review and fresh
-source/ownership pins before any deployment approval.
+The original ignored `.draft.mjs` retry operator is historical and remains
+blocked. Its reviewed replacement and fresh preflight are recorded below.
+
+
+## Reviewed runner and fresh read-only preflight
+
+Completed 2026-10-23T07:28:15.575Z. No Cloudflare resource mutation, hosted
+session creation or paid search call. Normal fixture/version/route/namespace at
+the top of this document remain current; no robots route or temporary binding.
+
+Reviewed runner: ignored
+`.artifacts/fakeco-codex-search-20261022/run-request-observation-readiness-calibration.mjs`.
+Runtime source remains `593a2fa`. Four source-only operator/dependency/test files
+were frozen in an isolated detached worktree as commit `5fc8431`; their exact
+bytes were reviewed through P2, scoped-clean. Three executable operator/dependency
+SHA-256 hashes are verified by the runner before preflight, deployment and route
+removal. Review manifest: `request-observation-runner-review.json`. Review status:
+`/Users/joshavant/.codex/review-results/search-observation-runner-20261023/status.json`.
+The isolated review worktree contains source only; no live receipts or secrets
+were copied into its commit or added to the feature branch.
+
+Eight offline operator checks passed: read-only mode; delayed-ready successful
+calibration/owned cleanup/restoration; bounded old-handler rejection; ambiguous
+creation; ambiguous deletion; partial deployment inventory; failed restoration;
+and source/hash changes. These run the actual operator with simulated network,
+filesystem and deployment dependencies; no live mutation. The live preflight
+uses the real inventory helper and credentials, without deployment.
+
+The runner accepts only explicit `--preflight-only` or `--deploy-approved` modes.
+Source protection accepts documentation descendants of `593a2fa` while requiring
+all protected runtime/helper/test/config files unchanged. Preflight verifies exact
+restored resource identities and infrastructure hashes, Access challenge, absent
+diagnostic, four robots baselines, and current authentication using literal `null`
+(400 `invalid_input`, rejected before session storage). Secrets stay in memory.
+Preflight writes a local timestamped receipt and latest pointer; it never launches
+Wrangler or creates a session. Refresh it if more than ten minutes old before an
+approved deployment. The deployment receipt is exclusive; do not replay a batch.
+
+Readiness polls GET only, at most 25 attempts within 120 seconds; unexpected
+responses stop. Session POST and owned-ID DELETE are attempted once per kind,
+with attempts/status recorded before further validation. A marked observation
+collection 404 is required before treating cleanup as qualified and before normal
+restoration. If readiness/cleanup is unresolved, or deployment/restoration has an
+ambiguous outcome, stop with recorded ownership for read-only reconciliation.
+Do not blindly restore, redeploy or delete an unknown session. No broader matrix,
+secret rotation, security relaxation, router writes or upstream search in this
+runner.
+
+Fresh live preflight at 2026-10-23T07:27:32.734Z passed. Account/zone,
+normal fixture, main Worker, three normal bindings, namespace/class ownership,
+route inventory, domains, Access and BIC matched the restored baseline.
+Authentication returned 400 `invalid_input`; public diagnostic absent and Access
+challenge intact. Normal-mode unmarked observation 404 is expected and does not
+qualify observation storage/counters. Browser rule inventory was not refreshed;
+the prior Catalog-only browser inspection remains historical.
+
+Current local receipts: `request-observation-readiness-preflight.json` and
+`request-observation-runner-preparation-receipt.json` in the campaign artifact
+directory. The reviewed operator and dependencies remain ignored on the feature
+branch. Temporary deployment, seven-request hosted calibration and qualified
+cleanup/restoration still require fresh user approval. No paid calls included.
