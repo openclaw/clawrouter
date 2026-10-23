@@ -3,7 +3,7 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { startLocalSearchFixture } from "../scripts/search-semantics-local-fixture.mjs";
-import { hostname, target, ownedFunnel, startFunnelExperiment, loadProbeKey } from "../scripts/search-semantics-funnel.mjs";
+import { hostname, target, ownedFunnel, checkConnectedNode, startFunnelExperiment, loadProbeKey } from "../scripts/search-semantics-funnel.mjs";
 
 const markerFrom = text => text.match(/ClawRouterFunnel[a-f0-9]{48}/)?.[0];
 const mapping = () => ({ Foreground: { "fixture-session": { TCP: { "443": { HTTPS: true } }, Web: { [`${hostname}:443`]: { Handlers: { "/": { Proxy: target } } } }, AllowFunnel: { [`${hostname}:443`]: true } } } });
@@ -173,6 +173,18 @@ test("disconnected or different node fails before fixture startup or mutation", 
     assert.equal(fixtureStarted, false);
     assert.equal(fake.calls.length, 0);
   }
+});
+
+test("certificate eligibility requires an array containing the exact approved hostname", async () => {
+  const run = CertDomains => async () => ({ stdout: JSON.stringify({ ...connectedNode, CertDomains }) });
+  for (const domains of [
+    hostname, `https://unrelated.invalid/${hostname}`,
+    [`${hostname}.unrelated.invalid`], [`unrelated.${hostname}`],
+    [], null, {},
+  ]) {
+    await assert.rejects(checkConnectedNode(run(domains)), /certificate eligibility/);
+  }
+  await checkConnectedNode(run(["other.invalid", hostname]));
 });
 
 test("cancellation during read-only preflight prevents fixture acquisition and child launch", async () => {

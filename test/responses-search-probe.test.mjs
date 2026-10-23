@@ -21,7 +21,8 @@ test("Responses probe pins endpoint/model, live tool and cost bounds, and expose
     assert.deepEqual(body.tool_choice, { type: "web_search" });
     assert.equal(body.max_tool_calls, 3); assert.equal(body.max_output_tokens, 2048);
     assert.equal(body.parallel_tool_calls, false); assert.deepEqual(body.reasoning, { effort: "low" });
-    assert.ok(body.input.includes(url)); assert.ok(!init.body.includes(marker)); assert.ok(!init.body.includes("fixture-only-key"));
+    assert.equal(body.input, `Use web search to open ${url} and report the exact value labeled "Current retrieval marker" on that page. Retrieve the page itself. If unavailable, say so; do not guess.`);
+    assert.ok(!init.body.includes(marker)); assert.ok(!init.body.includes("fixture-only-key"));
     return Response.json(successful(), { headers: { "x-request-id": "req_fixture" } });
   } });
   assert.equal(result.summary.toolSuccess, true); assert.equal(result.summary.markerReturned, true);

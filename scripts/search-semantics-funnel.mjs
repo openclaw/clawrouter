@@ -33,7 +33,8 @@ export async function checkConnectedNode(run = execute) {
   const status = JSON.parse((await run(tailscale, ["status", "--json"], { timeout: 10_000, maxBuffer: 2 * 1024 * 1024 })).stdout);
   assert.equal(status.BackendState, "Running", "use the existing authenticated Tailscale connection");
   assert.equal(status.Self?.DNSName?.replace(/\.$/, ""), hostname, "current node must match the approved hostname");
-  assert.ok(status.CurrentTailnet?.MagicDNSEnabled && status.CertDomains?.includes(hostname), "MagicDNS and certificate eligibility required");
+  assert.ok(status.CurrentTailnet?.MagicDNSEnabled && Array.isArray(status.CertDomains) &&
+    status.CertDomains.some(domain => domain === hostname), "MagicDNS and certificate eligibility required");
   assert.ok(status.Self?.Capabilities?.includes("funnel") && status.Self?.Capabilities?.includes("https"), "existing Funnel and HTTPS permissions required");
 }
 
