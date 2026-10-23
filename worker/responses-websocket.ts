@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { HttpContinuation } from "./http-continuation";
@@ -55,7 +56,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
         const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
         if (upstream.continuation) continuation?.bind(upstream.continuation);
-        const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+        const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
         accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: upstream.grantKey, grantLane: upstream.grantLane });
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();

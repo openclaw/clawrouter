@@ -63,3 +63,13 @@ test("policy model scopes validate known IDs, bound input, deduplicate and prese
   for (const models of [["anthropic/unknown"], [42], "all", Array(1025).fill(id)]) assert.throws(() => normalizePolicy({ ...base, models }, undefined, false), { code: "invalid_policy" });
   assert.throws(() => normalizePolicy({ ...base, poolStatus: "public" }, undefined, false), { code: "invalid_policy" });
 });
+
+test("operation tariffs validate, preserve omitted updates and clear explicitly", () => {
+  const body = { providers: ["openai"], requestCostMicros: 9, requestCostsMicros: { "search.web": 0, "llm.responses": 17 } };
+  const selected = normalizePolicy(body, undefined, false);
+  assert.deepEqual(selected.requestCostsMicros, body.requestCostsMicros);
+  assert.deepEqual(normalizePolicy({ providers: ["openai"] }, selected, false).requestCostsMicros, body.requestCostsMicros);
+  assert.equal(normalizePolicy({ providers: ["openai"], requestCostsMicros: null }, selected, false).requestCostsMicros, null);
+  for (const value of [[], 3, { "search.web": null }, { "search.web": -1 }, { "search.web": 0.1 }, { "search.web": Number.MAX_SAFE_INTEGER + 1 }, { "search.web": "1" }, { bad: 1 }, Object.fromEntries(Array.from({ length: 65 }, (_, n) => [`test.op${n}`, n]))])
+    assert.throws(() => normalizePolicy({ providers: ["openai"], requestCostsMicros: value }, undefined, false), { code: "invalid_policy" });
+});

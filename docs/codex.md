@@ -74,14 +74,25 @@ pnpm codex:connect connect --profile clawrouter-search \
   --model gpt-6-astra --web-search live
 ```
 
-The key's policy must declare a fixed `requestCostMicros` tariff, and the route
-must resolve to one public OpenAI API account without fallback. This tariff is
-the router's configured per-request charge, including each standalone search
-request; it is not a measured upstream bill. Standalone responses currently lack
-qualified usage data. Ordinary model token rates and hosted Responses search
-fees do not price this endpoint. The same policy's fixed tariff also applies to
-its inference requests. Use a dedicated policy if that is not appropriate for
-an existing key.
+The key's policy must declare a fixed search tariff, and the route must resolve
+to one public OpenAI API account without fallback. Prefer a capability tariff:
+
+```json
+{"requestCostMicros":null,"requestCostsMicros":{"search.web":1000}}
+```
+
+This example charges 1,000 microUSD per standalone search request while inference
+uses model token rates. Configure it through the policy API, the admin policy
+form, or `cf:key:put --request-costs-micros '{"search.web":1000}'`. Capability
+prices override the legacy policy-wide `requestCostMicros`, including explicit
+zero; unspecified capabilities retain the legacy tariff or manifest pricing.
+Omitted capability maps survive policy updates; `null` clears the map. Free
+counting/discovery/moderation operations remain free.
+
+These are configured router charges, not measured upstream bills. Standalone
+responses currently lack qualified usage data. Ordinary model token rates and
+hosted Responses search fees do not price this endpoint. A legacy policy-wide
+fixed tariff still works, but applies to inference too.
 
 Codex sends search commands to `/v1/alpha/search` relative to its provider base.
 ClawRouter forwards them through `/v1/native/openai/v1/alpha/search`, isolates

@@ -263,6 +263,7 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
     tokenRole: policy.tokenRole,
     monthlyBudgetMicros: policy.monthlyBudgetMicros,
     requestCostMicros: policy.requestCostMicros,
+    requestCostsMicros: policy.requestCostsMicros,
     budgetScope: policy.budgetScope ?? "policy",
     budget: {
       configured: !unmetered,

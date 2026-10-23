@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
@@ -340,7 +341,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
       prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
     }
-    const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       accounting.fail(500, "provider_error", reservedBudget.reservation);
@@ -487,7 +488,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Price inspection reads delivery bytes, not initial-response headers.
     // Retire only the timer; caller cancellation remains connected through EOF.
     operation.retireDeadline();
-    if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && auth.policy.requestCostMicros == null) {
+    if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
       priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }

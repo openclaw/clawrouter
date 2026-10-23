@@ -331,6 +331,7 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     serviceTierModels: key.serviceTiers?.models ? JSON.stringify(key.serviceTiers.models, null, 2) : "",
     limitHint: key.limitHint ?? "",
     requestCostMicros: key.requestCostMicros?.toString() ?? "",
+    requestCostsMicros: key.requestCostsMicros ? JSON.stringify(key.requestCostsMicros, null, 2) : "",
     budgetScope: key.budgetScope ?? "policy",
     budgetMode: key.budgetMode ?? "reserve",
     providers: key.providers,

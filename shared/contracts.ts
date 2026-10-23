@@ -92,6 +92,7 @@ export interface AccessPolicy {
   limitHint?: string | null;
   serviceTiers?: import("./service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
+  requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
   retainRequestContent: boolean;
@@ -341,7 +342,7 @@ export interface AdminTenantSummary {
 
 export interface BudgetPrincipalStatus extends BudgetStatus { principal: string }
 export interface BudgetStatus { override?: boolean; resetsAt?: string; weekly?: BudgetStatus & { resetsAt: string }; daily?: BudgetStatus & { resetsAt: string }; configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
-export interface AdminUsageRow { dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
+export interface AdminUsageRow { dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; requestCostsMicros?: Record<string, number> | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
 export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
