@@ -86,11 +86,13 @@ Worker's own five namespace bindings, and no tail producers.
 This does **not establish a permission failure**. Cloudflare's own
 [Workers SDK issue](https://github.com/cloudflare/workers-sdk/issues/3370) records
 `10064` when a Worker is still a queue consumer and recommends disconnecting that
-consumer before deleting the Worker. FakeCo has that attachment. This is a
+consumer before deleting the Worker. FakeCo had that attachment. This is a
 plausible cause, not a confirmed diagnosis: only status/code were persisted from
-the failed request, not its server message. The current guarded command does not
-disconnect consumers before its Worker deletion; do not rerun it unchanged against
-the same attached consumer.
+the failed request, not its server message. The guarded command used during this
+cleanup did not disconnect consumers before Worker deletion. Subsequent local
+hardening adds empty-queue/ownership preflight, exact consumer disconnection and
+absence checks before Worker deletion; see [guarded teardown](fakeco.md#guarded-teardown).
+That change is tested with synthetic API responses, not by replaying this cleanup.
 
 The user approved this correction; preflight stopped before either action:
 
