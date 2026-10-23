@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -9,14 +9,15 @@ import { parseArgs } from "./cli-args.mjs";
 import { startSearchOrigin } from "./smoke-codex-search-origin.mjs";
 import { liveUpstream } from "./smoke-codex-search-upstream.mjs";
 import { checkSearchAccounting } from "./smoke-codex-search-accounting.mjs";
+import { deployedSearch, deployedSearchOptions } from "./smoke-codex-search-deployed.mjs";
 import { manageCodex } from "./codex-connect.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
-  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only] [--direct-replay]\nRequires injected OPENAI_API_KEY. At most 32 upstream operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
+  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only] [--direct-replay]\nLocal fixture requires injected OPENAI_API_KEY. Deployed mode: --router-url ORIGIN --expected-environment NAME, injected CLAWROUTER_SMOKE_KEY; optional --search-cost-micros (default 1000), --max-budget-micros (default 5000000). Deployed mode excludes origin probes/replay. At most 32 routed operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
   process.exit(0);
 }
-for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only", "direct-replay"].includes(name), "unknown qualification option");
+for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only", "direct-replay", "router-url", "expected-environment", "search-cost-micros", "max-budget-micros"].includes(name), "unknown qualification option");
 for (const name of ["compact", "origin-check", "origin-only", "direct-replay"]) assert.ok(args[name] === undefined || args[name] === true, "qualification flags do not accept values");
 assert.ok(!args["direct-replay"] || args["origin-only"], "direct replay requires --origin-only");
 const model = args.model ?? "gpt-6-astra", switchedModel = args["switch-model"] ?? model, mode = args["web-search"] ?? "live", transport = args.transport ?? "http";
@@ -26,14 +27,20 @@ assert.ok(["live", "cached"].includes(mode)); assert.ok(["http", "websocket"].in
 // neither the Worker fixture nor Codex receives the real upstream credential.
 if (process.env.CLAWROUTER_SEARCH_LIVE !== "1") throw new Error("set CLAWROUTER_SEARCH_LIVE=1 to authorize bounded live OpenAI inference/search requests");
 const upstreamKey = process.env.OPENAI_API_KEY;
-if (!upstreamKey?.trim()) throw new Error("inject OPENAI_API_KEY through the credential helper");
+const deployedOptions = args["router-url"] === undefined ? null : deployedSearchOptions(args);
+if (deployedOptions) assert.ok(!args["origin-check"] && !args["origin-only"] && !args["direct-replay"], "deployed smoke excludes origin probes and direct replay");
+else {
+  assert.ok(["expected-environment", "search-cost-micros", "max-budget-micros"].every(name => args[name] === undefined), "deployed options require --router-url");
+  if (!upstreamKey?.trim()) throw new Error("inject OPENAI_API_KEY through the credential helper");
+}
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
 const { build } = require("esbuild");
 const temporary = await mkdtemp(join(tmpdir(), "clawrouter-search-live-")), home = join(temporary, "codex");
-const key = "clawrouter-live-fixture-search-fixture-secret";
+const clientSecret = randomUUID(), key = `clawrouter-live-fixture-${clientSecret}`;
 const digest = value => createHash("sha256").update(value).digest("hex");
-const probeState = { replay: !!args["direct-replay"] }, events = [], upstream = liveUpstream({ probe: probeState, key: upstreamKey, models: [...new Set([model, switchedModel])], mode, transport });
+const probeState = { replay: !!args["direct-replay"] }, events = [], models = [...new Set([model, switchedModel])];
+const upstream = deployedOptions ? deployedSearch({ ...deployedOptions, models, mode, transport, clientKey: key }) : liveUpstream({ probe: probeState, key: upstreamKey, models, mode, transport });
 const { calls, sessions } = upstream;
 let mf, origin, originCheck = null, compactionEvidence = null, qualification;
 const codex = process.env.CLAWROUTER_CODEX_BIN ?? "codex";
@@ -72,6 +79,11 @@ async function checkOrigin(threadId) {
 
 try {
   await mkdir(home);
+  if (deployedOptions) {
+    console.error(JSON.stringify({ phase: "deployed-preflight", ...await upstream.preflight() }));
+    mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, host: "127.0.0.1", port: 0, workers: [{ name: "router", modules: true,
+      script: "export default { fetch(request) { return fetch(request); } };", compatibilityDate: "2026-06-05", outboundService: upstream.outbound }] }));
+  } else {
   const bundle = await build({ stdin: { contents: `
     export {default,PolicyBindingIndexObject,UsageLedgerObject,GrantCredentialObject} from "./worker/index.ts";
     import { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
@@ -89,11 +101,14 @@ try {
     queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: { maxBatchSize: 1, maxBatchTimeout: 0 } },
     outboundService: upstream.outbound,
   }] }));
-  const base = (await mf.ready).origin, kv = await mf.getKVNamespace("POLICY_KV", "router");
+  await mf.ready;
+  const kv = await mf.getKVNamespace("POLICY_KV", "router");
   console.error(JSON.stringify({ phase: "worker-ready" }));
   await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], models: [...new Set([model, switchedModel])].map(slug => `openai/${slug}`), tenantId: "default", monthlyBudgetMicros: 100000000, requestCostMicros: null, requestCostsMicros: { "search.web": 1000 }, retainRequestContent: false }));
-  await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: digest("search-fixture-secret"), policyId: "fixture", policyGeneration: "g1" }));
+  await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: digest(clientSecret), policyId: "fixture", policyGeneration: "g1" }));
   await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: 100000000 }));
+  }
+  const base = (await mf.ready).origin;
   await manageCodex(["connect", "--profile", "search", "--router-url", base, "--provider", "openai", "--model", model, "--web-search", mode, "--codex-home", home, "--codex", codex], clientEnv);
   const { producer } = await manageCodex(["verify", "--profile", "search", "--codex-home", home, "--codex", codex], clientEnv);
   console.error(JSON.stringify({ phase: "profile-ready", model, producer }));
@@ -136,7 +151,8 @@ try {
     assert.ok(calls.every(call => call.status === 200), "upstream requests succeed");
     qualification = { qualified: true, model, switchedModel, mode, transport, automaticCompaction: !!args.compact, compactions: compacted, originCheck, producer, calls, resumed: true, searchNamespaces: sessions.size, searchNamespaceSha256: upstream.searchNamespace, nativeWebSearchItems: events.filter(event => event.type === "item.completed" && /web.*search/i.test(event.item?.type ?? "")).length, citedAnswer: true };
   }
-  qualification.accounting = await checkSearchAccounting(mf, key, calls);
+  qualification.accounting = deployedOptions ? await upstream.accounting() : await checkSearchAccounting(mf, key, calls);
+  qualification.target = deployedOptions ? { kind: "deployed", environment: deployedOptions.environment } : { kind: "local-fixture" };
 } catch (error) {
   qualification = undefined;
   // Never print raw model output, credentialed transport diagnostics, or secrets.

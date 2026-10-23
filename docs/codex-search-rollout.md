@@ -4,6 +4,13 @@ Local branch: `feat/codex-standalone-search`. No PR, push, staging change, or
 production deployment. Desktop and non-Lite models remain outside this campaign.
 Qualified CLI/model/transport scope: [Codex setup](codex.md#opt-in-to-built-in-cli-web-search).
 
+Prepared follow-up artifacts: [unsent upstream report](codex-search-upstream-report.md)
+and [exact FakeCo canary runbook](codex-search-canary.md). The native harness now
+also supports a deployed router with a dedicated bounded key, without local
+upstream-key interception. Its remote usage check covers policy-authority spend
+and public receipts; provider-authority inspection remains a separate canary step.
+No paid deployed smoke or remote mutation has run.
+
 The local Wrangler packaging dry run passed, including manifest compilation and
 the admin production build. It exposed two shared-pricing imports whose `.ts`
 suffixes failed the admin compiler; those now follow the existing extensionless
@@ -153,9 +160,10 @@ node --test worker/test/standalone-search.test.mjs worker/test/request-pricing.t
 For a future authorized canary:
 
 1. Pin the reviewed full commit SHA. Use the locked [FakeCo staging](fakeco.md)
-   target and its dedicated credentials/workflow. Verify resource identities with
-   `CLAWROUTER_DEPLOY_ENV=fakeco pnpm cf:target`; it requires the scoped account/KV
-   inputs and performs reads. The ordinary deployment preflight can write probes;
+   target and its dedicated credentials/workflow. Print the locked local target with
+   `CLAWROUTER_DEPLOY_ENV=fakeco pnpm cf:target`; it does not inspect remote resources.
+   The canary runbook supplies a separate read-only namespace identity check using
+   scoped account/KV inputs. The ordinary deployment preflight can write probes;
    do not treat it as a read-only command. No deployment commands run here.
 2. Use a dedicated low-budget key, explicit non-null `search.web` tariff, token
    inference pricing, retention off, and one public API account without fallback.
