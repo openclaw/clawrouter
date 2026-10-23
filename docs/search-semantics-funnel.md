@@ -1,7 +1,7 @@
 # Independent retrieval experiment: Tailscale Funnel
 
-Prepared locally, 2026-10-23. Public exposure and paid retrieval remain separately
-pending authorization. No Cloudflare mutation required. Existing FakeCo resources
+Public exposure approved and external calibration passed, 2026-10-23. One paid
+retrieval remains separately pending authorization. No Cloudflare mutation required. Existing FakeCo resources
 and the inconclusive [paired retrieval result](search-semantics-paired-retrieval.md)
 remain unchanged.
 
@@ -23,8 +23,32 @@ in the [versioned configuration source](https://github.com/tailscale/tailscale/b
 
 Do not enroll, read the fallback enrollment key, change tailnet policy, use
 `--bg`, or use global `reset`. Unexpected node identity or existing configuration
-blocks startup. Certificate issuance, public reachability and real cleanup remain
-untested until exposure is authorized.
+blocks startup. Public HTTPS reachability has now been observed as recorded below;
+certificate issuer/state was not inspected. Real cleanup remains pending.
+
+## Authorized exposure and calibration result
+
+Exposure began at `2026-10-23T08:16:18.680Z`; automatic deadline
+`2026-10-23T08:26:18.680Z`. Foreground ownership and the loopback-only listener
+were verified. The enrollment fallback was not used; no Cloudflare writes.
+
+The remote web tool reported the URL inaccessible, with no origin requests.
+An anonymous [Jina Reader](https://docs.jina.ai/) request then fetched the public
+HTTPS URL outside this Mac's tailnet client. HTTP 200 at
+`2026-10-23T08:16:48.420Z`; the response contained the current calibration marker.
+Exactly one origin GET at `2026-10-23T08:16:47.701Z`, within that request's
+`08:16:43.052Z`–`08:16:48.420Z` window. No operator origin requests or other
+counted activity. Private witness confirmation matched the returned marker.
+
+The marker was then rotated; generation 1 armed, all counters zero, timestamps
+null. No further operator public requests. This qualifies public reachability
+for calibration; it does not qualify OpenAI search semantics. Paid retrieval
+calls: zero. Exposure remains bounded by the original deadline while awaiting
+separate approval; elapsed time does not authorize retrieval or renewal.
+
+Ownership/calibration receipt:
+`.artifacts/fakeco-codex-search-20261022/funnel-exposure-receipt.json`.
+Authorization: `funnel-exposure-authorization.json` in the same directory.
 
 ## First authorization: exposure and public calibration
 
@@ -158,5 +182,5 @@ startup and could leave the child alive if the parent terminated during readines
 Fixed by installing signal handlers before startup, propagating cancellation,
 and covering all three startup stages with regression tests. Review result:
 `~/.codex/review-results/search-funnel-preparation-20261023/`. The original review
-reports that finding; do not describe it as a clean review. Live certificate,
-outside-client reachability and foreground teardown remain pending authorization.
+reports that finding; do not describe it as a clean review. Public HTTPS calibration
+has since passed as recorded above; foreground teardown remains pending.
