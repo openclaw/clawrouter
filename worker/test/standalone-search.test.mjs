@@ -138,6 +138,22 @@ test("tool-level HTTP 200 errors are preserved instead of rewritten as success t
   f.response = () => Response.json({ encrypted_output: "fixture", output: "Invalid reference: turn0search0" });
   const output = JSON.parse(await expect(f, await f.search({ commands: { find: [{ ref_id: "turn0search0", pattern: "fixture" }] } }), 200));
   assert.match(output.output, /Invalid reference/);
+  assert.equal(f.events[1].actual_cost_micros, 7, "a successful HTTP request retains its configured tariff even when the tool reports an error");
+});
+
+test("an in-flight search settles its admitted tariff when the policy map changes", async t => {
+  const f = await setup(t, { fixedCost: null });
+  f.policy.requestCostsMicros = { "search.web": 7 };
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.response = async () => { entered.resolve(); await release.promise; return new Response(wire, { headers: { "content-type": "application/json" } }); };
+  const pending = f.search(); await entered.promise;
+  f.policy.requestCostsMicros = { "search.web": 19 };
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  release.resolve(); await expect(f, await pending, 200);
+  assert.equal(f.events[0].reserved_cost_micros, 7); assert.equal(f.events[0].actual_cost_micros, 7);
+  await expect(f, await f.search(), 200);
+  assert.equal(f.events[1].reserved_cost_micros, 19); assert.equal(f.events[1].actual_cost_micros, 19);
 });
 for (const body of [{ id: "" }, { id: {} }, { commands: {} }, { commands: { screenshot: [{ ref_id: "https://example.com", pageno: 0 }] } }, { commands: { click: [{ ref_id: "turn0search0", id: -1 }] } }, { model: "gpt-5.5" }]) test(`invalid or unqualified search is rejected before dispatch: ${JSON.stringify(body)}`, async t => {
   const f = await setup(t); const response = await f.search(body);
