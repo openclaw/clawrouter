@@ -49,11 +49,13 @@ export async function loadProbeKey(run = execute) {
   return key;
 }
 
-export async function startFunnelExperiment({ approved = false, run = execute, launch = spawn, startFixture = startLocalSearchFixture, ttlMs = 600_000, readKey = loadProbeKey, probe, settle } = {}) {
+export async function startFunnelExperiment({ approved = false, run = execute, launch = spawn, startFixture = startLocalSearchFixture, ttlMs = 600_000, readKey = loadProbeKey, probe, settle, signal } = {}) {
   assert.equal(approved, true, "public exposure requires explicit authorization");
   assert.ok(Number.isInteger(ttlMs) && ttlMs >= 120_000 && ttlMs <= 600_000, "exposure limited to at most ten minutes");
+  signal?.throwIfAborted();
   await checkConnectedNode(run);
   assert.ok(empty(await tailscaleStatus(run)), "Serve/Funnel configuration must be empty");
+  signal?.throwIfAborted();
   const fixture = await startFixture();
   let child, stopping, sessionId, stopped = false, ready = false, deadlineTimer;
   const expiresAt = Date.now() + ttlMs;
@@ -61,6 +63,7 @@ export async function startFunnelExperiment({ approved = false, run = execute, l
     if (stopping) return stopping;
     stopped = true;
     clearTimeout(deadlineTimer);
+    signal?.removeEventListener("abort", autoStop);
     stopping = (async () => {
       // Closing the fixture first removes the content even if CLI cleanup fails.
       let fixtureClosed = false;
@@ -83,7 +86,10 @@ export async function startFunnelExperiment({ approved = false, run = execute, l
   const cleaned = new Promise(resolve => { cleanupResult = resolve; });
   const autoStop = () => { stop().then(cleanupResult, () => cleanupResult({ cleanupFailed: true })); };
   deadlineTimer = setTimeout(autoStop, ttlMs);
+  signal?.addEventListener("abort", autoStop, { once: true });
   try {
+    // Covers cancellation while the fixture listener was being acquired.
+    signal?.throwIfAborted();
     child = launch(tailscale, ["funnel", "--https=443", target], { stdio: ["ignore", "ignore", "ignore"] });
     child.once("error", autoStop);
     child.once("exit", () => { if (!stopped) autoStop(); });
@@ -116,7 +122,21 @@ export async function startFunnelExperiment({ approved = false, run = execute, l
 
 async function main() {
   assert.deepEqual(process.argv.slice(2), ["--expose-approved"], "run only after public-exposure approval");
-  const experiment = await startFunnelExperiment({ approved: true });
+  const abort = new AbortController();
+  const onSignal = () => abort.abort();
+  // Install before the first startup await: a foreground child must not outlive
+  // an ordinary parent termination during readiness/certificate setup.
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
+  try { await runInteractiveExperiment(abort.signal); }
+  finally {
+    process.removeListener("SIGTERM", onSignal);
+    process.removeListener("SIGINT", onSignal);
+  }
+}
+
+async function runInteractiveExperiment(signal) {
+  const experiment = await startFunnelExperiment({ approved: true, signal });
   const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
   emit({ event: "exposed", url: experiment.url, expiresAt: experiment.expiresAt });
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -125,8 +145,6 @@ async function main() {
     if (!result.fixtureClosed || !result.funnelEmpty || !result.serveEmpty) process.exitCode = 1;
   };
   const finish = async () => { input.close(); reportCleanup("cleanup", await experiment.stop()); };
-  process.once("SIGTERM", () => { finish().catch(() => { process.exitCode = 1; }); });
-  process.once("SIGINT", () => { finish().catch(() => { process.exitCode = 1; }); });
   experiment.cleaned.then(result => { reportCleanup("automatic-cleanup", result); input.close(); });
   try {
     for await (const line of input) {

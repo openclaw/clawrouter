@@ -147,3 +147,16 @@ transport. Cover rotation, no public controls, contamination, marker/GET pairing
 one attempt, errors, expiration, independent gates, ownership, foreground cleanup,
 disconnected/wrong node, port collision and credential metadata checks. These
 checks do not issue certificates or demonstrate public exposure.
+
+Preparation verification: 26 focused tests passed, including cancellation during
+preflight, fixture acquisition and foreground readiness. A separate local-only
+rehearsal used the exact port 18765: HTTP 200, marker present, one origin GET,
+then listener closed. Both real Serve/Funnel configurations remain `{}`.
+
+Autoreview of `7daf3c4` found one P2: termination handling was installed after
+startup and could leave the child alive if the parent terminated during readiness.
+Fixed by installing signal handlers before startup, propagating cancellation,
+and covering all three startup stages with regression tests. Review result:
+`~/.codex/review-results/search-funnel-preparation-20261023/`. The original review
+reports that finding; do not describe it as a clean review. Live certificate,
+outside-client reachability and foreground teardown remain pending authorization.

@@ -175,6 +175,42 @@ test("disconnected or different node fails before fixture startup or mutation", 
   }
 });
 
+test("cancellation during read-only preflight prevents fixture acquisition and child launch", async () => {
+  const controller = new AbortController(), fake = fakeOperator();
+  const run = fake.options.run;
+  let started = false;
+  await assert.rejects(startFunnelExperiment({ ...fake.options, signal: controller.signal,
+    startFixture: async () => { started = true; },
+    run: async (...args) => { controller.abort(); return run(...args); },
+  }), { name: "AbortError" });
+  assert.equal(started, false);
+  assert.equal(fake.calls.some(call => call.args.includes(target)), false);
+});
+
+test("cancellation while fixture is acquired closes it before launching Funnel", async () => {
+  const controller = new AbortController(), fake = fakeOperator();
+  const startFixture = fake.options.startFixture;
+  await assert.rejects(startFunnelExperiment({ ...fake.options, signal: controller.signal,
+    startFixture: async () => { const fixture = await startFixture(); controller.abort(); return fixture; },
+  }), /startup failed/);
+  assert.equal(fake.fixtureClosed, true);
+  assert.equal(fake.calls.some(call => call.args.includes(target)), false);
+});
+
+test("termination during foreground readiness closes fixture and terminates the owned child", async () => {
+  const controller = new AbortController(), fake = fakeOperator();
+  const run = fake.options.run;
+  let started = false;
+  await assert.rejects(startFunnelExperiment({ ...fake.options, signal: controller.signal,
+    launch: (...args) => { started = true; return fake.options.launch(...args); },
+    run: async (...args) => { if (started) controller.abort(); return run(...args); },
+  }), /startup failed/);
+  assert.equal(fake.fixtureClosed, true);
+  assert.equal(fake.child.signalCode, "SIGTERM");
+  assert.equal(fake.calls.at(-1).args[0], "serve");
+  assert.equal(fake.keyReads, 0);
+});
+
 test("deadline and child exit independently trigger automatic cleanup", async t => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const fake = fakeOperator();
