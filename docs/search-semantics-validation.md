@@ -317,6 +317,61 @@ Safari inspection qualified the existing Catalog rule as BIC off for only
 FakeCo form is populated but unsaved. No Cloudflare writes or paid calls in
 this preparation; browser create/delete permissions remain unproven.
 
+## Approved temporary BIC health comparison
+
+User approved the prepared exception, one Sol search call and removal of the
+named disposable rule. Preflight at 2026-10-23 06:35:44 UTC confirmed zone BIC
+`on`, fixture health 200 with expected identity, and the unchanged sole Catalog
+rule. Safari showed `Rule validation passed` before deployment.
+
+The exact [prepared payload](../config/search-semantics-bic-probe.json) was
+deployed once through Safari. Rule ID
+`9111c95048fc49808b65af773c1476b5`; submission recorded at 06:36:18 UTC,
+active verification recorded at 06:36:32 UTC. It appeared second/last, active,
+with the exact host/method/path/empty-query expression and only BIC off. Global
+BIC and the Catalog rule were not changed. Public health remained 200 with
+expected fixture JSON, root robots 404, neither challenged nor redirected.
+Allowed over 60 seconds after active verification before the provider call;
+this does not independently establish propagation to the provider's edge.
+
+Exactly one direct `gpt-6.1-sol` `/v1/alpha/search` call, fresh session,
+`external_web_access: true`, short output, opening the existing public health
+URL. Attempt 2026-10-23 06:37:40 UTC, complete 06:37:41 UTC:
+
+- HTTP 200; request ID `req_752aecefcc0d49bfb3e20898a80dc1bc`.
+- 273 output characters, `Internal Error`; no fixture identity or `ok: true`.
+  A search reference and the `fakeco` substring did not establish retrieval.
+- No usage field. Billing remains unqualified; no inference, retries, fixture
+  runs, router registrations or broader matrix.
+- Health has no origin counter: no origin-hit or no-hit conclusion is possible.
+  No raw or encrypted output or secret values persisted.
+
+Receipt: ignored operator artifact
+`.artifacts/fakeco-codex-search-20261022/search-fixture-health-bic-sol-receipt.json`.
+Ownership/cleanup journal:
+`.artifacts/fakeco-codex-search-20261022/search-bic-experiment-ownership.json`.
+
+Cleanup followed immediately. Reopened and matched the new rule's recorded ID,
+name, exact expression and BIC-only action; deleted only that disposable rule
+through its row menu and named confirmation dialog. Deletion observed at
+06:38:16 UTC. A fresh dashboard load showed one active Configuration Rule:
+original Catalog ID `a260a98b2a824554a8eacbb7eabcb095`, original hostname-only
+expression and BIC off, inspected read-only and cancelled unchanged. Security
+Settings showed zone-wide BIC still on. Final public checks at 06:38:49 UTC:
+fixture health 200/expected JSON, main health 200/FakeCo/version
+`3d669069-fb9e-45e0-a71b-bded66c5b7b2`, robots expected 404. Safari was left on
+the Configuration Rules inventory with only Catalog present. Dashboard absence
+qualifies configuration cleanup, not instantaneous global edge propagation.
+
+The exception did not resolve retrieval in this comparison. Result remains
+inconclusive about cause; it neither proves nor rules out a BIC-related failure,
+provider/robots caching, propagation, inherited restrictions or other fetch
+failures. Live-origin fetching and cached/live semantics remain unqualified.
+Browser creation/deletion is now empirically qualified for this temporary rule
+in this zone; token API write permissions remain unqualified. No Worker, route,
+DNS, Access, credential, budget or namespace changes in this experiment. Stop
+here; any further paid probe or Cloudflare mutation needs separate approval.
+
 ## Secret and credential preparation
 
 The operator reads the existing FakeCo `ADMIN_TOKEN` from 1Password in memory.

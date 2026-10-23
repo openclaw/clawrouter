@@ -1,7 +1,11 @@
 # Temporary FakeCo BIC comparison
 
-Status: prepared only; user approval required before deployment. No Cloudflare
-changes or new OpenAI search calls made during preparation.
+Status: completed with user approval, 2026-10-23 06:36–06:38 UTC. One search
+attempt returned Internal Error; result inconclusive. Temporary rule deleted,
+absence and original configuration verified. The temporary FakeCo exception
+is no longer deployed.
+The procedure below is the approved experiment record, not standing permission
+to repeat it. See [results](search-semantics-validation.md#approved-temporary-bic-health-comparison).
 
 Purpose: test whether retrieval of the existing public fixture health URL starts
 working while a narrow Browser Integrity Check (BIC) exception is active. BIC is
@@ -59,12 +63,13 @@ Only added setting: Browser Integrity Check off
 Order: first (only rule)
 ```
 
-The proposed new form was populated in Safari, including BIC off and last order.
-Neither Deploy nor Save as Draft was clicked. A populated form does not prove
+During preparation, the proposed new form was populated in Safari, including
+BIC off and last order. Neither Deploy nor Save as Draft was clicked then.
+A populated form does not prove
 server acceptance or create/delete permission. The phase ruleset ID remains
 unknown; the existing editor URL identifies a rule, not a ruleset. API execution
-is unavailable with the qualified token. Browser deployment and cleanup are
-the proposed route, subject to authorization and visible server acceptance.
+is unavailable with the qualified token. Subsequent approved browser creation
+and deletion succeeded for this rule; this does not qualify API permissions.
 Do not switch to Wrangler OAuth or another credential to bypass the 403.
 
 Cloudflare documents a [non-persisting Rulesets API dry run](https://developers.cloudflare.com/ruleset-engine/rulesets-api/dry-run/).
