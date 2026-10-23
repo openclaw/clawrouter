@@ -156,9 +156,10 @@ Worker/admin behavior. Hosted Responses retains its separate summary and does
 not acquire Alpha result classifications.
 
 Diagnostic only: result counts do not affect existing text-error detection,
-success assertions or fresh-marker/origin-GET qualification. No provider calls,
-deployment, credential read or exposure in this preparation. Earlier receipts
-remain historical; new source digests would be required for any future run.
+success assertions or fresh-marker/origin-GET qualification. No live provider
+probes, deployment, 1Password read or public exposure in this preparation.
+Earlier receipts remain historical; new source digests would be required for any
+future run.
 
 Validation: 62 focused synthetic tests passed:
 
@@ -169,7 +170,12 @@ node --test test/standalone-search-probe.test.mjs test/responses-search-probe.te
 Coverage includes absent/null/empty/invalid results, unknown and malformed entries,
 prototype-related type names, private nested content, unchanged HTTP-200 error
 handling, bounded decoding and existing retrieval/cancellation/cleanup behavior.
-Independent autoreview is required before handoff.
+Autoreview of `5fb72e3` completed `scoped-clean` through P2, using GPT-6.1 Sol
+with high reasoning. No actionable findings. Reviewed diff and source context;
+the reviewer did not execute tests. Review outputs:
+`~/.codex/review-results/alpha-results-diagnostics-20261023/`.
+Local preparation receipt:
+`.artifacts/fakeco-codex-search-20261022/alpha-results-diagnostics-preparation.json`.
 
 [schema]: https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/codex-api/src/search.rs
 [tool]: https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/ext/web-search/src/tool.rs#L97
