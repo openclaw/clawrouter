@@ -8,15 +8,17 @@ import { join } from "node:path";
 import { parseArgs } from "./cli-args.mjs";
 import { startSearchOrigin } from "./smoke-codex-search-origin.mjs";
 import { liveUpstream } from "./smoke-codex-search-upstream.mjs";
+import { checkSearchAccounting } from "./smoke-codex-search-accounting.mjs";
 import { manageCodex } from "./codex-connect.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
-  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only]\nRequires injected OPENAI_API_KEY. At most 32 upstream operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
+  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only] [--direct-replay]\nRequires injected OPENAI_API_KEY. At most 32 upstream operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
   process.exit(0);
 }
-for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only"].includes(name), "unknown qualification option");
-for (const name of ["compact", "origin-check", "origin-only"]) assert.ok(args[name] === undefined || args[name] === true, "qualification flags do not accept values");
+for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only", "direct-replay"].includes(name), "unknown qualification option");
+for (const name of ["compact", "origin-check", "origin-only", "direct-replay"]) assert.ok(args[name] === undefined || args[name] === true, "qualification flags do not accept values");
+assert.ok(!args["direct-replay"] || args["origin-only"], "direct replay requires --origin-only");
 const model = args.model ?? "gpt-6-astra", switchedModel = args["switch-model"] ?? model, mode = args["web-search"] ?? "live", transport = args.transport ?? "http";
 assert.ok([model, switchedModel].every(value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value)));
 assert.ok(["live", "cached"].includes(mode)); assert.ok(["http", "websocket"].includes(transport));
@@ -31,7 +33,7 @@ const { build } = require("esbuild");
 const temporary = await mkdtemp(join(tmpdir(), "clawrouter-search-live-")), home = join(temporary, "codex");
 const key = "clawrouter-live-fixture-search-fixture-secret";
 const digest = value => createHash("sha256").update(value).digest("hex");
-const probeState = {}, events = [], upstream = liveUpstream({ probe: probeState, key: upstreamKey, models: [...new Set([model, switchedModel])], mode, transport });
+const probeState = { replay: !!args["direct-replay"] }, events = [], upstream = liveUpstream({ probe: probeState, key: upstreamKey, models: [...new Set([model, switchedModel])], mode, transport });
 const { calls, sessions } = upstream;
 let mf, origin, originCheck = null, compactionEvidence = null, qualification;
 const codex = process.env.CLAWROUTER_CODEX_BIN ?? "codex";
@@ -59,16 +61,32 @@ async function checkOrigin(threadId) {
   assert.ok(probeCalls.some(call => call.opensControlledOrigin), "native CLI opened the controlled origin");
   const result = { nativeOpen: true, externalWebAccess: mode === "live", originRequests: await origin.count(), robotsRequests: origin.robots(), contentReturned: probeCalls.some(call => call.probeContentReturned), fetchError: probeCalls.some(call => call.probeFetchError) };
   result.retrieved = result.originRequests > 0 && result.contentReturned;
+  if (args["direct-replay"]) {
+    const beforeReplay = origin.count();
+    result.directReplay = await upstream.replayOrigin();
+    result.directReplayOriginRequests = origin.count() - beforeReplay;
+  }
   console.error(JSON.stringify({ phase: "origin-checked", ...result }));
   return result;
 }
 
 try {
   await mkdir(home);
-  const bundle = await build({ stdin: { contents: 'export {default,PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from "./worker/index.ts";', resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  const bundle = await build({ stdin: { contents: `
+    export {default,PolicyBindingIndexObject,UsageLedgerObject,GrantCredentialObject} from "./worker/index.ts";
+    import { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
+    export class BudgetLedgerObject extends RealBudgetLedger {
+      constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
+      async fetch(request) {
+        if (new URL(request.url).pathname === "/fixture-search-charges") return Response.json([...this.fixtureSql.exec("SELECT settled, reserved_micros FROM budget_reservations")]);
+        return super.fetch(request);
+      }
+    }
+  `, resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, host: "127.0.0.1", port: 0, workers: [{ name: "router", modules: true, script: bundle.outputFiles[0].text,
     compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"], bindings: { OPENAI_API_KEY: "fixture-upstream-only" }, kvNamespaces: ["POLICY_KV"],
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([name,className]) => [name,{className,useSQLite:true,unsafePreventEviction:true}])),
+    queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: { maxBatchSize: 1, maxBatchTimeout: 0 } },
     outboundService: upstream.outbound,
   }] }));
   const base = (await mf.ready).origin, kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -118,9 +136,11 @@ try {
     assert.ok(calls.every(call => call.status === 200), "upstream requests succeed");
     qualification = { qualified: true, model, switchedModel, mode, transport, automaticCompaction: !!args.compact, compactions: compacted, originCheck, producer, calls, resumed: true, searchNamespaces: sessions.size, searchNamespaceSha256: upstream.searchNamespace, nativeWebSearchItems: events.filter(event => event.type === "item.completed" && /web.*search/i.test(event.item?.type ?? "")).length, citedAnswer: true };
   }
+  qualification.accounting = await checkSearchAccounting(mf, key, calls);
 } catch (error) {
+  qualification = undefined;
   // Never print raw model output, credentialed transport diagnostics, or secrets.
-  console.error(JSON.stringify({ qualified: false, model, category: error.name, check: error instanceof assert.AssertionError ? error.message.split("\n")[0] : "runtime_failure", compactionEvidence, originCheck, calls }));
+  console.error(JSON.stringify({ qualified: false, model, category: error.name, check: error instanceof assert.AssertionError ? error.message.split("\n")[0] : /^live WebSocket (?:handshake failed|frame validation failed|response validation failed|transport failed|time limit)$/.test(error.message) ? error.message : "runtime_failure", compactionEvidence, originCheck, calls }));
   process.exitCode = 1;
 } finally {
   upstream.close();

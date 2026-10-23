@@ -151,6 +151,13 @@ not a strict cache-only guarantee. `--origin-only` isolates this check and exits
 nonzero when retrieval cannot be qualified; a normal workflow's `qualified`
 result does not qualify its optional `originCheck`.
 
+Direct-API reproductions, unresolved billing terms, deterministic regressions,
+and the proposed canary/rollback checks are recorded in the
+[search rollout candidate](codex-search-rollout.md). `--origin-only --direct-replay`
+compares the native forwarded request with direct API requests; these bypass
+router billing. The native harness separately verifies usage receipts and both
+policy/provider SQL budget ledgers for routed operations.
+
 ```sh
 pnpm codex:connect verify --codex /path/to/codex
 pnpm codex:connect update --codex /path/to/codex --dry-run

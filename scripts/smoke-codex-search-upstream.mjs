@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { directSearchProbe } from "./standalone-search-probe.mjs";
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Response: WorkerResponse, WebSocketPair } = require("miniflare");
 const NodeWebSocket = require("ws");
@@ -14,7 +15,7 @@ export async function boundedText(response, limit = 2 * 1024 * 1024) {
 // native client, diagnostic output, or filesystem.
 export function liveUpstream({ key, models, mode, transport, probe = {} }) {
   const calls = [], sessions = new Set(), sockets = new Set();
-  let attempts = 0, firstReference, searchNamespace, failure;
+  let attempts = 0, firstReference, searchNamespace, failure, originRequest;
   function entry(model, path, extra = {}) {
     assert.ok(++attempts <= 32, "live qualification request ceiling");
     assert.ok(models.includes(model), "upstream uses an allowed qualification model");
@@ -49,7 +50,8 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
           const frame = JSON.parse(data.toString());
           if (["response.completed", "response.failed", "response.incomplete", "error"].includes(frame.type)) {
             const call = pending.shift(); assert.ok(call);
-            call.status = frame.type === "response.completed" ? 200 : frame.status ?? 502; report(call);
+            call.status = frame.type === "response.completed" ? 200 : frame.status ?? 502;
+            call.terminal = frame.type; report(call);
           }
           pair[1].send(data.toString());
         } catch { failure = new Error("live WebSocket response validation failed"); ws.terminate(); }
@@ -68,6 +70,7 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
       assert.equal(body.settings?.external_web_access, mode === "live", "native search mode reaches upstream unchanged");
     }
     const call = entry(body.model, url.pathname, { transport: "http", ...(search ? { externalWebAccess: body.settings.external_web_access, commands: Object.keys(body.commands ?? {}).filter(name => name !== "response_length"), opensControlledOrigin: !!probe.url && !!body.commands?.open?.some(operation => operation.ref_id === probe.url), opensOriginalReference: !!firstReference && !!body.commands?.open?.some(operation => operation.ref_id === firstReference) } : {}) });
+    if (call.opensControlledOrigin && probe.replay && !originRequest) originRequest = { body: structuredClone(body), headers: new Headers(headers) };
     if (!search && !url.pathname.endsWith("/compact")) body.max_output_tokens = Math.min(body.max_output_tokens ?? 4096, 4096);
     let response;
     try { response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), redirect: "error", signal: AbortSignal.timeout(90000) }); }
@@ -92,5 +95,17 @@ export function liveUpstream({ key, models, mode, transport, probe = {} }) {
     }
     return new Response(text, { status: response.status, headers: responseHeaders });
   }
-  return { outbound, calls, sessions, get firstReference() { return firstReference; }, get searchNamespace() { return searchNamespace; }, check() { if (failure) throw failure; }, close() { for (const ws of sockets) ws.terminate(); } };
+  async function replayOrigin() {
+    assert.ok(originRequest, "native origin request captured for direct replay");
+    const results = [];
+    for (const kind of ["native-payload", "minimal-payload"]) {
+      const original = originRequest.body;
+      const body = kind === "native-payload" ? original : { id: original.id, model: original.model, commands: original.commands, settings: original.settings };
+      const call = entry(body.model, "/v1/alpha/search", { transport: "http", directReplay: kind });
+      const { summary } = await directSearchProbe({ key, body, headers: originRequest.headers, marker: probe.marker });
+      Object.assign(call, summary); report(call); results.push({ kind, ...summary });
+    }
+    return results;
+  }
+  return { outbound, replayOrigin, calls, sessions, get firstReference() { return firstReference; }, get searchNamespace() { return searchNamespace; }, check() { if (failure) throw failure; }, close() { for (const ws of sockets) ws.terminate(); } };
 }
