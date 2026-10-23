@@ -1,3 +1,5 @@
+import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
+import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
@@ -312,6 +314,10 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         if (!available.length) {
           if (selected.candidates.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
           assertOperationConfiguration(requirement, null, env);
+        }
+        if (isStandaloneSearch(endpoint)) {
+          assertSearchTariff(auth);
+          await assertSingleOpenAiAccount(auth, env, { transport: null, grantKey: available[0]?.key ?? null, grant: available[0]?.grant ?? null }, "search");
         }
         configured = true;
       } catch (error) {

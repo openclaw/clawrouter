@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
@@ -33,6 +34,8 @@ import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
+import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
+import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -95,7 +98,7 @@ interface PreparedUpstream {
   backgroundRecovery: boolean;
   failedGrantKey?: string;
   continuation?: ContinuationOwner;
-  revalidateCompactAccount?: () => Promise<void>;
+  revalidateAccount?: () => Promise<void>;
 }
 
 interface ReservedProxyBudget {
@@ -326,13 +329,19 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
+  let search: SearchSession | undefined;
   let grantFailover = false;
   try {
+    if (isStandaloneSearch(selection.endpoint)) search = await SearchSession.resolve(env, auth, selection.body as Record<string, unknown>, selection.endpoint.id);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, continuation?.pinned, "http", true);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, search?.pinned ?? continuation?.pinned, "http", true);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
-    const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+    if (search) {
+      if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
+      prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
+    }
+    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       accounting.fail(500, "provider_error", reservedBudget.reservation);
@@ -342,7 +351,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
   }
   catch (error) {
-    let failure = selectedFailure(continuation?.preflightError(error) ?? error);
+    let failure = selectedFailure(search?.preflightError(error) ?? continuation?.preflightError(error) ?? error);
     if (isModelDiscovery(selection.endpoint) && failure.status === 400 && failure.code === "grant_transport_unavailable")
       failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
@@ -399,10 +408,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const operation = new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
-  // Compact alone requalifies after budget/retention awaits, under the same
+  // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
-  if (prepared.revalidateCompactAccount) {
-    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateCompactAccount()); }
+  if (prepared.revalidateAccount) {
+    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateAccount()); }
     catch (error) {
       const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
       const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
@@ -429,7 +438,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await operation.wait(pending, "upstream", discard);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!grantFailover && !isModelDiscovery(selection.endpoint) && !background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -479,7 +488,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Price inspection reads delivery bytes, not initial-response headers.
     // Retire only the timer; caller cancellation remains connected through EOF.
     operation.retireDeadline();
-    if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && auth.policy.requestCostMicros == null) {
+    if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
       priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
@@ -590,7 +599,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || isStandaloneSearch(selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -609,6 +618,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
   const compact = selection.endpoint.request_format === "openai.responses_compact";
+  const search = isStandaloneSearch(selection.endpoint);
+  if (search && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_search_query", "search options must be in JSON, not query parameters");
   if (compact && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
@@ -619,6 +630,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
+    if (search) await assertSingleOpenAiAccount(auth, env, upstream, "search");
     assertPolicyModel(auth.policy, selection);
     assertServiceTier(auth, selection, upstream.transport);
     const lifecycle = { provider: selection.provider, endpoint: selection.endpoint, mode: transport, responsesLifecycle: true };
@@ -650,7 +662,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
     if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
-    if (selection.capability === "llm.responses" || compact) {
+    if (selection.capability === "llm.responses" || compact || search) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
       if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
@@ -665,7 +677,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(compact ? { revalidateCompactAccount: () => assertCompactAccount(auth, env, upstream) } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

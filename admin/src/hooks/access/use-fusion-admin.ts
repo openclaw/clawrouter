@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../../../../shared/request-pricing";
 import { type FormEvent, type SetStateAction, useRef, useState } from "react";
 import { errorMessage } from "../../domain";
 import { defaultFusion, demo } from "../../ui-config";
@@ -116,8 +117,8 @@ function demoReadiness(config: FusionConfig, policy?: AccessPolicy): FusionReadi
       verified: policyAllowed,
       status: policyAllowed ? "verified" : "blocked",
       reasons: policyAllowed ? [] : [`Policy does not allow ${provider}.`],
-      estimatedReservationMicros: policy.requestCostMicros ?? 1,
-      estimateBasis: policy.requestCostMicros != null ? "policy_fixed" as const : "flat_fallback" as const,
+      estimatedReservationMicros: policyRequestCost(policy, "llm.chat") ?? 1,
+      estimateBasis: policyRequestCost(policy, "llm.chat") != null ? "policy_fixed" as const : "flat_fallback" as const,
     };
   });
   const executable = calls.at(-1)?.executable === true;
@@ -135,7 +136,7 @@ function demoReadiness(config: FusionConfig, policy?: AccessPolicy): FusionReadi
     budgetLedger: policy.monthlyBudgetMicros != null ? "demo" : "unmetered",
     remainingBudgetMicros: policy.monthlyBudgetMicros ?? null,
     budgetSufficientForAll: policy.monthlyBudgetMicros == null ? null : calls.reduce((sum, call) => sum + call.estimatedReservationMicros, 0) <= policy.monthlyBudgetMicros,
-    estimateNote: policy.requestCostMicros != null ? "Exact configured price for currently eligible calls; fail-open adviser reservations may be lower." : "Demo estimate; live request preflight remains authoritative.",
+    estimateNote: policyRequestCost(policy, "llm.chat") != null ? "Exact configured price for currently eligible calls; fail-open adviser reservations may be lower." : "Demo estimate; live request preflight remains authoritative.",
     calls,
   };
 }

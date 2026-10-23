@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { emptyReservation, finalizeAccounting, markBudgetDispatched, reserveBudget, type BudgetReservation } from './accounting';
 import { createProxyAccounting } from './proxy-accounting';
 import { softBudget } from './soft-budget';
@@ -29,7 +30,7 @@ export async function fundRealtimeUnit(o: {
   const soft = o.auth.policy.budgetMode === 'soft';
   if (o.input && !soft) throw new HttpError(400, 'pricing_required', 'Input transcription has no qualified hard-budget envelope');
   const cost = soft ? { reserveMicros: 0, basis: 'unpriced_request', inputTokens: null, outputTokens: null }
-    : { reserveMicros: Math.max(REALTIME.reservation, o.auth.policy.requestCostMicros ?? 0), basis: 'realtime_full_context_bound', inputTokens: REALTIME.context, outputTokens: REALTIME.output };
+    : { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(o.auth.policy, o.selection.capability) ?? 0), basis: 'realtime_full_context_bound', inputTokens: REALTIME.context, outputTokens: REALTIME.output };
   const accounting = createProxyAccounting({ ...o, cost });
   let reservation = emptyReservation();
   try {
@@ -62,7 +63,7 @@ export async function fundRealtimeUnit(o: {
       const scaled = input ? input.input! * 5 + input.output! * 20 : NaN;
       const measured = input ? Number.isSafeInteger(scaled) ? Math.ceil(scaled / 4) : undefined : output?.cost;
       const billable = sent && !rejected;
-      const fixed = o.auth.policy.requestCostMicros;
+      const fixed = policyRequestCost(o.auth.policy, o.selection.capability);
       // No hard fixed-zero bypass for uncertain response execution. Soft unknown
       // ASR/response usage is explicitly unpriced, NOT evidence of free execution.
       const actual = !billable ? 0 : measured === undefined ? soft ? 0 : cost.reserveMicros : o.input ? measured : fixed ?? measured;

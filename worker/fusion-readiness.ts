@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import type { CatalogOffer, FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
 import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals, prepareAdviserBody } from "./fusion.ts";
@@ -37,7 +38,7 @@ export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Rec
     // Dispatch reserves synthesis first. Only an exact fixed reservation can be
     // subtracted from a request-free observation; variable calls remain conditional.
     if (synthesizer && synthesis.status !== "exact-blocked" && selection.availability.status !== "exact-blocked" && selection.observation) {
-      const reserved = synthesizer.auth.policy.requestCostMicros ?? 0;
+      const reserved = policyRequestCost(synthesizer.auth.policy, "llm.chat") ?? 0;
       const observation = {
         dailyRemaining: remainingAfter(selection.observation.dailyRemaining ?? null, samePolicyLedger(selection, synthesizer) ? reserved : 0),
         weeklyRemaining: remainingAfter(selection.observation.weeklyRemaining ?? null, samePolicyLedger(selection, synthesizer) ? reserved : 0),
@@ -53,8 +54,8 @@ export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Rec
   if (synthesizer && synthesis.status === "exact-covered") {
     const calls = [synthesizer, ...eligible.flatMap(({ selection }) => selection ? [selection] : [])];
     const compoundCovered = eligible.every(({ availability }) => availability.status === "exact-covered") && calls.every((call) => {
-      const policyCost = calls.filter((other) => samePolicyLedger(call, other)).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
-      const providerCost = calls.filter((other) => call.providerId === other.providerId).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
+      const policyCost = calls.filter((other) => samePolicyLedger(call, other)).reduce((total, other) => total + (policyRequestCost(other.auth.policy, "llm.chat") ?? 0), 0);
+      const providerCost = calls.filter((other) => call.providerId === other.providerId).reduce((total, other) => total + (policyRequestCost(other.auth.policy, "llm.chat") ?? 0), 0);
       return (policyCost === 0 || call.auth.policy.monthlyBudgetMicros == null || (call.observation?.policyRemaining ?? -1) >= policyCost)
         && (policyCost === 0 || call.auth.policy.dailyBudgetMicros == null || (call.observation?.dailyRemaining ?? -1) >= policyCost)
         && (policyCost === 0 || call.auth.policy.weeklyBudgetMicros == null || (call.observation?.weeklyRemaining ?? -1) >= policyCost)
@@ -148,7 +149,7 @@ export function fusionReadiness(config: FusionConfig, entry: AccessPolicyEntry, 
     budgetLedger: budget.ledger,
     remainingBudgetMicros: budget.remainingMicros,
     budgetSufficientForAll,
-    estimateNote: entry.policy.requestCostMicros != null
+    estimateNote: policyRequestCost(entry.policy, "llm.chat") != null
       ? "Exact configured price for currently eligible calls; fail-open adviser reservations may be lower."
       : calls.some((call) => call.executable && call.estimateBasis === "unpriced_request") ? "Complete prices are unavailable for some eligible calls. Token rates do not cover their request fees or hosted work."
       : "Advisers use configured bounds; the synthesizer uses manifest maximum input and default output. Live request parameters can reserve more.",
@@ -192,7 +193,7 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
     ...parameters.unknown.map(({ message }) => message),
     ...(stage === "adviser" && !("temperature" in body) ? ["Adviser temperature preference omitted; using the provider default because support is unknown or restricted."] : []),
   ];
-  const cost = estimateCost(route.model, body, entry.policy.requestCostMicros, "llm.chat", route.endpoint);
+  const cost = estimateCost(route.model, body, policyRequestCost(entry.policy, "llm.chat"), "llm.chat", route.endpoint);
   const call: FusionReadinessCall = {
     stage,
     index,

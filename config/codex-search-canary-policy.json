@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "providers": ["openai"],
+  "models": ["openai/gpt-6.1-sol", "openai/gpt-6-astra"],
+  "tenantId": "fakeco",
+  "monthlyBudgetMicros": 5000000,
+  "dailyBudgetMicros": 5000000,
+  "weeklyBudgetMicros": 5000000,
+  "budgetScope": "policy",
+  "budgetMode": "reserve",
+  "requestCostMicros": null,
+  "requestCostsMicros": { "search.web": 1000 },
+  "retainRequestContent": false,
+  "poolStatus": "hidden",
+  "grantRouting": { "failover": false, "environmentFallback": false }
+}

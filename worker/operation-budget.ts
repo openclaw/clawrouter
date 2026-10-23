@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { validateBudgetReservation } from "./accounting";
 import { modelForEndpoint } from "./model-pricing.ts";
@@ -19,7 +20,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   // allowance is not a claim that every real request fits the observed balance.
   const realtime = endpoint.request_format === "openai.realtime";
   if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
-  const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, auth.policy.requestCostMicros ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, auth.policy.requestCostMicros, capability, endpoint);
+  const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint);
   try {
     if (auth.policy.budgetMode === "soft" && !isModelDiscovery(endpoint)) {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };

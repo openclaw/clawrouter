@@ -15,7 +15,14 @@ const providerId = (profile) => profile === null ? "clawrouter.desktop" : `clawr
 const catalogName = (profile, digest) => `${profile ?? ".clawrouter-desktop"}.${digest}.models.json`;
 const marker = (profile) => profile === null ? DESKTOP_MARKER : MARKER;
 const rootFields = ["model", "model_provider", "model_catalog_json", "service_tier", "web_search"];
-const providerFields = ["name", "base_url", "wire_api", "env_key", "requires_openai_auth", "supports_websockets"];
+const providerFields = ["name", "base_url", "wire_api", "env_key", "requires_openai_auth", "supports_websockets", "supports_standalone_web_search"];
+
+function searchWarnings(mode) {
+  return mode && mode !== "disabled" ? { warnings: [
+    "Standalone search is experimental: fresh-page retrieval and strict cache-only behavior remain unqualified.",
+    "Search uses the configured router tariff per HTTP request, including HTTP-200 tool errors; upstream billing remains unqualified.",
+  ] } : {};
+}
 
 function document(text) {
   let ast;
@@ -35,13 +42,16 @@ function document(text) {
 }
 
 function fieldsFor(profile, options, catalog) {
+  // Legacy receipts without a search mode stay disabled. New-connection
+  // defaults are resolved in parse; refresh must not change saved preferences.
   return [
     [["model"], options.model], [["model_provider"], providerId(profile)],
     [["model_catalog_json"], catalogName(profile, hash(`${JSON.stringify(catalog.catalog)}\n`))],
-    ...(profile === null ? [] : [[["service_tier"], options.serviceTier]]), [["web_search"], "disabled"],
+    ...(profile === null ? [] : [[["service_tier"], options.serviceTier]]), [["web_search"], options.webSearch ?? "disabled"],
     ...Object.entries({ name: "ClawRouter", base_url: catalog.baseUrl, wire_api: "responses",
       env_key: "CLAWROUTER_API_KEY", requires_openai_auth: false,
-      supports_websockets: catalog.supportsWebsockets })
+      supports_websockets: catalog.supportsWebsockets,
+      ...((options.webSearch ?? "disabled") !== "disabled" ? { supports_standalone_web_search: true } : {}) })
       .map(([name, value]) => [["model_providers", providerId(profile), name], value]),
   ];
 }
@@ -165,9 +175,10 @@ function receipt(text, profile) {
   catch { throw new Error("profile ownership receipt is invalid"); }
   const allowed = new Set([
     ...rootFields.filter((name) => profile !== null || name !== "service_tier").map((name) => key([name])),
-    ...providerFields.map((name) => key(["model_providers", providerId(profile), name])),
+    ...providerFields.filter(name => name !== "supports_standalone_web_search" || state.webSearch != null && state.webSearch !== "disabled").map((name) => key(["model_providers", providerId(profile), name])),
   ]);
   if (state.version !== 1 || state.profile !== profile || typeof state.routerUrl !== "string" || typeof state.provider !== "string" || typeof state.model !== "string" || !["default", "priority"].includes(state.serviceTier)
+    || state.webSearch !== undefined && !["disabled", "cached", "live"].includes(state.webSearch)
     || !/^[a-f0-9]{64}$/.test(state.catalogSha256) || !Array.isArray(state.fields)
     || !Array.isArray(state.catalogs) || !state.catalogs.includes(state.catalogSha256)
     || state.catalogs.some((digest) => !/^[a-f0-9]{64}$/.test(digest))
@@ -207,7 +218,7 @@ function parse(args, env) {
   for (let index = 0; index < rest.length; index++) {
     const name = rest[index];
     if (name === "--dry-run") { options.dryRun = true; continue; }
-    if (!["--target", "--router-url", "--provider", "--model", "--service-tier", "--profile", "--codex-home", "--codex", "--key-file"].includes(name)
+    if (!["--target", "--router-url", "--provider", "--model", "--service-tier", "--web-search", "--profile", "--codex-home", "--codex", "--key-file"].includes(name)
       || !rest[index + 1] || rest[index + 1].startsWith("--")) throw new Error("invalid arguments; use --help");
     if (Object.hasOwn(options, name)) throw new Error("duplicate argument; use --help");
     options[name] = rest[++index];
@@ -217,8 +228,11 @@ function parse(args, env) {
   if (target === "desktop" && (options["--profile"] || options["--service-tier"])) throw new Error("Desktop uses root configuration; --profile and --service-tier are CLI-only");
   const profile = target === "desktop" ? null : options["--profile"] ?? "clawrouter";
   if (profile !== null && (!/^[a-zA-Z0-9_-]{1,64}$/.test(profile) || profile === "config")) throw new Error("profile must be 1–64 letters, digits, underscores, or hyphens, excluding config");
-  if (command !== "connect" && ["--router-url", "--provider", "--model", "--service-tier"].some((name) => options[name])) throw new Error("connection settings belong to connect; remove and reconnect to change them");
-  return { command, target, profile, home: resolve(options["--codex-home"] ?? env.CODEX_HOME ?? join(homedir(), ".codex")),
+  if (command !== "connect" && ["--router-url", "--provider", "--model", "--service-tier", "--web-search"].some((name) => options[name])) throw new Error("connection settings belong to connect; remove and reconnect to change them");
+  const webSearch = options["--web-search"] ?? (target === "cli" ? "cached" : "disabled");
+  if (!["disabled", "cached", "live"].includes(webSearch)) throw new Error("--web-search must be disabled, cached, or live");
+  if (target === "desktop" && webSearch !== "disabled") throw new Error("standalone search is currently qualified for CLI profiles only");
+  return { command, target, profile, webSearch, home: resolve(options["--codex-home"] ?? env.CODEX_HOME ?? join(homedir(), ".codex")),
     routerUrl: options["--router-url"], provider: options["--provider"], model: options["--model"],
     serviceTier: options["--service-tier"] ?? "default", codex: options["--codex"],
     keyFile: options["--key-file"], dryRun: options.dryRun === true };
@@ -260,13 +274,19 @@ export async function manageCodex(args, env = process.env) {
     const settings = state ?? options;
     const catalog = await readCodexCatalog({ routerUrl: settings.routerUrl, providerId: settings.provider, codex: options.codex,
       env: { ...env, CLAWROUTER_API_KEY: keyValue } });
+    if ((settings.webSearch ?? "disabled") !== "disabled") {
+      const version = /^codex-cli (\d+)\.(\d+)\.(\d+)(?:$|[-+])/.exec(catalog.producer);
+      if (!version || Number(version[1]) === 0 && Number(version[2]) < 163) throw new Error("standalone search requires Codex CLI 0.163.0 or newer; connect with --web-search disabled for inference-only setup");
+      if (!catalog.standaloneSearchModels.includes(settings.model)) throw new Error("selected model has no qualified native standalone search offer; check the search.web capability tariff and single API account, or connect with --web-search disabled for inference-only setup");
+      catalog.catalog.models = catalog.catalog.models.filter(model => catalog.standaloneSearchModels.includes(model.slug));
+    }
     const selected = catalog.catalog.models.find((model) => model.slug === settings.model);
     if (!selected) throw new Error("selected model has no authorized native descriptor");
     if (settings.serviceTier === "priority" && !selected.service_tiers?.some((tier) => tier.id === "priority")) throw new Error("selected model does not advertise a qualified priority tier");
     nextBytes = `${JSON.stringify(catalog.catalog)}\n`;
     const fields = fieldsFor(profile, settings, catalog);
     nextState = { version: 1, profile, routerUrl: catalog.routerUrl, provider: settings.provider, model: settings.model,
-      serviceTier: settings.serviceTier, catalogSha256: hash(nextBytes),
+      serviceTier: settings.serviceTier, webSearch: settings.webSearch ?? "disabled", catalogSha256: hash(nextBytes),
       catalogs: [...new Set([...(state?.catalogs ?? []), hash(nextBytes)])].sort(), fields };
     const installed = desktop && !state ? installDesktop(original ?? "", fields) : null;
     if (desktop) Object.assign(nextState, { originals: state?.originals ?? installed.originals, rootExisted: state?.rootExisted ?? original !== null });
@@ -276,7 +296,8 @@ export async function manageCodex(args, env = process.env) {
     nextCatalog = join(home, catalogName(profile, nextState.catalogSha256));
     if (command === "verify") {
       if (nextState.catalogSha256 !== state.catalogSha256 || JSON.stringify(fields) !== JSON.stringify(state.fields)) throw new Error("authorized catalog or transport changed; run update then restart Codex");
-      return { command, target, profile, status: "verified", inferenceProbed: false, producer: catalog.producer };
+      return { command, target, profile, status: "verified", inferenceProbed: false, producer: catalog.producer,
+        ...searchWarnings(settings.webSearch) };
     }
   }
   const changed = command === "remove" ? state.fields.map(([path]) => path.join(".")).filter((field) => !retained.includes(field))
@@ -284,7 +305,8 @@ export async function manageCodex(args, env = process.env) {
   const summary = { command, target, profile, status: dryRun ? "planned" : "applied", changed, retained,
     ...(command === "remove" ? { revoked: false } : { catalogSha256: nextState.catalogSha256, restartRequired: true,
       ...(desktop ? { scope: "Desktop and unprofiled CLI root defaults", launch: "Fully quit and restart Desktop, then start a new thread; load CLAWROUTER_API_KEY from the interactive login shell." } : { launch: `CODEX_HOME=${shellQuote(home)} ${shellQuote(options.codex ?? "codex")} --profile ${profile}` }),
-      credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment" }) };
+      credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment",
+      ...searchWarnings(nextState.webSearch) }) };
   if (dryRun) return summary;
 
   await mkdir(home, { recursive: true, mode: 0o700 });
@@ -342,7 +364,7 @@ export async function manageCodex(args, env = process.env) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   if (process.argv.includes("--help")) {
-    process.stdout.write("Usage: node scripts/codex-connect.mjs <connect|verify|update|remove> [--target cli|desktop] [--profile clawrouter] [--codex-home DIR] [--codex PATH] [--key-file PATH] [--dry-run]\nconnect requires --router-url ORIGIN --provider ID --model UPSTREAM_SLUG [--service-tier default|priority for CLI only].\nUses CLAWROUTER_API_KEY unless --key-file supplies it for this command. No key is stored. Start Codex with the environment key exported.\nCLI creates a separate profile. Desktop edits root routing defaults, also affecting unprofiled CLI; fully quit the app before changing them. Auth, sandbox, shell startup, and key files are untouched. Verify makes no inference calls. Remove does not revoke a key.\n");
+    process.stdout.write("Usage: node scripts/codex-connect.mjs <connect|verify|update|remove> [--target cli|desktop] [--profile clawrouter] [--codex-home DIR] [--codex PATH] [--key-file PATH] [--dry-run]\nconnect requires --router-url ORIGIN --provider ID --model UPSTREAM_SLUG [--service-tier default|priority for CLI only] [--web-search disabled|cached|live for CLI only].\nNew CLI profiles default to cached web search; use --web-search disabled for inference-only setup. Desktop stays disabled. Verify/update preserve the saved mode.\nUses CLAWROUTER_API_KEY unless --key-file supplies it for this command. No key is stored. Start Codex with the environment key exported.\nCLI creates a separate profile. Desktop edits root routing defaults, also affecting unprofiled CLI; fully quit the app before changing them. Auth, sandbox, shell startup, and key files are untouched. Verify makes no inference calls. Remove does not revoke a key.\n");
   } else {
     manageCodex(process.argv.slice(2)).then((summary) => process.stdout.write(`${JSON.stringify(summary)}\n`)).catch((error) => {
       process.stderr.write(`Codex setup failed: ${error.code ? "filesystem operation failed" : error.message}\n`);

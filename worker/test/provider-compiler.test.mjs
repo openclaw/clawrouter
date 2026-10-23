@@ -53,7 +53,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.providers.find((provider) => provider.id === "azure-openai").endpoints.find((endpoint) => endpoint.id === "responses").websocket, undefined);
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
-  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"]);
+  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens", "search.web"]);
   assert.deepEqual(astra.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index[astra.id], { provider: "openai", ...Object.fromEntries(Object.entries(astra).filter(([key]) => key !== "id")) });
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
@@ -68,7 +68,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
     assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(model.upstream));
     assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   }
-  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat", "llm.count_tokens"]);
+  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat", "llm.count_tokens", "search.web"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
   const gpt55 = openai.models.find((model) => model.id === "openai/gpt-5.5");
@@ -129,6 +129,22 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(anthropic.quota.probes[0].requiresRefreshToken, true);
   assert.equal(compiled.model_index["local/default"].provider, "local-openai");
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
+});
+
+test("standalone search cannot broaden its qualified provider, method, or transport", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  withManifest(path => {
+    for (const changes of [{ path: "/v1/responses" }, { method: "GET" }, { responseFormat: "openai.responses" }, { streaming: "sse" }, { modelPassthrough: {} }, { nativeProxy: false }]) {
+      const manifest = structuredClone(valid);
+      Object.assign(manifest.endpoints.standalone_search, changes);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /standalone search requires/);
+    }
+    const manifest = structuredClone(valid);
+    manifest.capabilities.find(capability => capability.id === "search.web").methods.push("GET");
+    writeFileSync(path, JSON.stringify(manifest));
+    assert.throws(() => compile(path), /standalone search requires/);
+  });
 });
 
 test("endpoint pricing is normalized, indexed, and limited to supported endpoints", () => {

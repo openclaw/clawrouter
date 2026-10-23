@@ -36,7 +36,13 @@ in the issued key's catalog. Provider readiness, session access, and model-less
 operation forms do not qualify a model. Use a router version that publishes
 operation offers; older catalogs fail setup before any files change.
 
-The profile disables hosted web search and enables WebSockets only when every
+New CLI profiles enable cached web search by default. Use `--web-search disabled`
+for inference-only setup. Search requires CLI 0.163.0 or newer and an eligible
+search offer; an older producer or missing offer fails before writing files.
+Existing profiles keep their saved search mode through `verify` and `update`;
+remove and reconnect to change it. Desktop setup keeps search disabled.
+
+The profile enables WebSockets only when every
 exported model has a matching WebSocket offer for the same endpoint, route,
 policy, and generation. Codex applies that flag to the whole provider, including
 internal models. Catalog observations do not reserve budget or probe upstream;
@@ -44,7 +50,141 @@ token-priced offers remain request-dependent, and dispatch checks access and
 budget again. `--service-tier` defaults to
 `default`; request `priority` explicitly for Fast. A missing native descriptor
 or unqualified priority tier fails before installation. Use a producer that
-contains the selected model, such as Codex 0.155.0 for Astra.
+contains the selected model. Default search-enabled CLI setup needs 0.163.0 or
+newer; older producers require `--web-search disabled`.
+
+<a id="opt-in-to-built-in-cli-web-search"></a>
+
+## Built-in CLI web search
+
+With Codex CLI 0.163.0 or newer, `codex:connect connect` defaults to
+`--web-search cached` for new CLI profiles. Use `--web-search live` for live mode
+or `--web-search disabled` to turn search off. The integration remains experimental.
+Fresh-page retrieval, strict
+cache-only behavior and upstream billing remain unqualified; see the current
+[qualification and release assessment](codex-search-qualification.md).
+The minimum supported version is enforced by setup; empirical CLI qualification
+is pinned to 0.163.0, not every later release. Tests cover the models below,
+HTTP and WebSocket inference, and text search/navigation (`search_query`, `open`,
+`click`, `find`), without qualifying every combination. The helper
+enables `supports_standalone_web_search` and narrows the
+exported catalog to eligible standalone-search models. WebSockets follow the
+authorized inference offers; search uses unary HTTP in either case. Desktop,
+media commands, feeds, and account-pool failover
+are outside this qualification.
+
+Qualification against the public API with Codex CLI 0.163.0 on 2026-10-22
+passed search, open,
+click, find, a cited answer, and resume opening the exact original search
+reference for each model. The matrix includes cached search with WebSocket
+inference:
+
+- `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`.
+- `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`.
+
+Enablement is declared per model; forwarding, session ownership and accounting
+share one implementation. The helper also requires the native Codex descriptor
+to use Responses Lite. Models outside this list, including `gpt-5.5`, remain
+unqualified for this standalone integration.
+
+```sh
+pnpm codex:connect connect --profile clawrouter-search \
+  --router-url https://router.example.com --provider openai \
+  --model gpt-6-astra --web-search live
+```
+
+The key's policy must explicitly declare a `search.web` capability tariff, and the
+route must resolve to one public OpenAI API account without fallback:
+
+```json
+{"requestCostMicros":null,"requestCostsMicros":{"search.web":1000}}
+```
+
+This example charges 1,000 microUSD per standalone search request while inference
+uses model token rates. The admin form uses dollars: enter `{"search.web":0.001}`
+in **Price per request by capability ($) · JSON object**, and leave **Fixed request
+cost ($)** blank for token-priced inference. Policy API/storage and
+`cf:key:put --request-costs-micros '{"search.web":1000}'` still use integer micros.
+Capability prices override the legacy policy-wide `requestCostMicros`, including
+explicit zero. Standalone search requires its own entry; a policy-wide price or
+a price for another capability does not enable it. Other unspecified capabilities
+retain the legacy tariff or manifest pricing.
+Omitted capability maps survive policy API updates; `null` clears the map. Free
+counting/discovery/moderation operations remain free.
+
+These are configured router charges, not measured upstream bills. Standalone
+responses currently lack qualified usage data. Ordinary model token rates and
+hosted Responses search fees do not price this endpoint. Removing the `search.web`
+entry disables standalone search in discovery and dispatch without changing
+inference pricing. An explicit zero entry enables free router search; it does
+not disable search or establish that the upstream is free.
+An HTTP-200 response with a tool-level error still incurs the router search
+tariff. Search-enabled connect/dry-run/verify/update summaries include notices
+about the experimental retrieval/cache limits and unqualified upstream billing.
+The [production pilot proposal](codex-search-production-pilot.md) carries this
+search price into a dedicated $25 shared monthly allowance; it requires separate
+deployment and application-write authorization.
+
+Codex sends search commands to `/v1/alpha/search` relative to its provider base.
+ClawRouter forwards them through `/v1/native/openai/v1/alpha/search`, isolates
+session IDs by caller, and stores one metadata owner binding per session.
+Results, references, ciphertext, and citations pass through unchanged. Search
+state stays upstream. Owner changes require a fresh Codex session; resuming an
+old session cannot migrate its references to another account. Local bindings
+use the existing bounded 30-day continuation store; this does not promise an
+upstream reference lifetime. Invalid upstream references can return HTTP 200
+with a tool error in the output. Domain filters restrict search results and
+must not be treated as an egress allowlist for explicit page opens.
+
+`verify` and `update` retain the selected search mode and refuse a lost eligible
+offer. Remove and reconnect to change modes. Workspace and managed Codex search
+restrictions still apply. Standalone search remains under development upstream;
+see the [official search documentation](https://learn.chatgpt.com/docs/web-search).
+
+The live qualification harness runs an isolated local workerd instance and real
+Codex CLI sessions. Inject `OPENAI_API_KEY` through the credential helper, then run:
+
+```sh
+CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs \
+  --model gpt-6.1-sol --switch-model gpt-6-astra \
+  --web-search cached --transport websocket --compact
+```
+
+It checks the selected upstream models, search/open/click/find, a cited answer,
+and resume opening the exact original reference. `--compact` lowers Codex's
+automatic threshold and requires a completed native compaction record followed
+by reuse of the reference. For this custom provider, native automatic compaction
+uses inference by default; this test does not enable remote `/responses/compact`.
+Model changes between Astra and Sol preserved references in both directions.
+
+`--origin-check` additionally starts an ephemeral public synthetic page through
+`cloudflared`, counts page and robots requests, and asks native search
+to retrieve a marker that was never given to the model. Readiness uses a separate
+URL and verifies public DNS and HTTPS. No production deployment or account
+configuration changes are made. The tunnel and server close at teardown.
+
+Defaults are `gpt-6-astra`, live search, and HTTP inference. Each invocation makes
+at most 32 upstream operations and caps each inference output at 4096 tokens.
+WebSocket qualification rejects silent HTTP fallback. Logs contain protocol
+metadata only; temporary Codex homes are removed. Cached mode forwards
+`external_web_access=false`.
+
+Controlled-origin checks on 2026-10-22 remain **unqualified**: with Sol, both
+cached and live mode returned upstream HTTP 200 with an `Internal Error` in the
+tool output, made no page or robots requests, and failed to return the hidden
+marker. The public origin had passed DNS and HTTPS readiness, including an
+explicit robots allow rule. Since the live control also failed, this does not
+establish whether cached mode forbids origin fetches. Treat it as a preference,
+not a strict cache-only guarantee. `--origin-only` isolates this check and exits
+nonzero when retrieval cannot be qualified; a normal workflow's `qualified`
+result does not qualify its optional `originCheck`.
+
+Direct-API reproductions, unresolved billing terms, deterministic regressions,
+and completed canary budget-denial/credential-revocation checks are recorded in the
+[search rollout candidate](codex-search-rollout.md). `--origin-only --direct-replay`
+compares the native forwarded request with direct API requests; these bypass
+router billing. The native harness separately verifies usage receipts and both
+policy/provider SQL budget ledgers for routed operations.
 
 ```sh
 pnpm codex:connect verify --codex /path/to/codex
@@ -289,10 +429,12 @@ account and model before use.
 
 Fusion discovery applies the same Chat model eligibility to its configured
 synthesizer and advisers; unavailable advisers remain optional.
-Hosted search is rejected before dispatch under measured policy or provider
-budgets unless a fixed policy tariff is configured. Full hosted-tool fee metering
-remains separate. Keep this setup's hosted web search disabled: token rates do not
-cover its tool fees or repeated search input. Dispatched requests retain their
+Responses-hosted search is separate from the standalone Alpha route above.
+Reserve-mode hosted search needs a fixed policy tariff; token rates alone do not
+cover its tool fees or repeated search input. Keep Responses-hosted search disabled
+for this setup; [SOFT-mode hosted-tool metering](openai-hosted-search-metering.md)
+has its own limits. This restriction does not disable an explicitly configured
+standalone search profile. Dispatched requests retain their
 budget charge across the 15-minute admission lease; late settlement uses the
 original ledger receipt within its 45-day retention period.
 

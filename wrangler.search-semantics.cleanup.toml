@@ -1,0 +1,15 @@
+# Destructive cleanup candidate. Only after exact resource ownership checks and approval.
+name = "clawrouter-search-semantics-fakeco"
+account_id = "91b59577e757131d68d55a471fe32aca"
+main = "worker/fixtures/search-semantics-cleanup.ts"
+compatibility_date = "2026-06-05"
+workers_dev = false
+preview_urls = false
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SearchSemanticsObject"]
+
+[[migrations]]
+tag = "v2-delete-fixture"
+deleted_classes = ["SearchSemanticsObject"]

@@ -1,6 +1,34 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, AdminUsageRow, PolicyBinding, UsageSnapshot } from "../src/ui-types";
 
+test("request prices display dollars and save existing and edited values as microdollars", async ({ page }) => {
+  const state = await fixture(page);
+  Object.assign(state.policies[0], { requestCostMicros: 1000, requestCostsMicros: { "search.web": 1000, "llm.responses": 0 } });
+  await open(page);
+  const fixed = page.getByRole("textbox", { name: "Fixed request cost ($)", exact: true });
+  const capabilities = page.getByRole("textbox", { name: "Price per request by capability ($) · JSON object", exact: true });
+  await expect(fixed).toHaveValue("0.001");
+  await expect(capabilities).toHaveValue('{\n  "search.web": 0.001,\n  "llm.responses": 0\n}');
+  await tenant(page).fill("price-roundtrip");
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].request().postDataJSON()).toMatchObject({ requestCostMicros: 1000, requestCostsMicros: { "search.web": 1000, "llm.responses": 0 } });
+  await state.commit(0);
+  await expect(save(page)).toBeEnabled();
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  await fixed.fill("0.000001");
+  await capabilities.fill('{"search.web":0.0015,"llm.responses":0}');
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().postDataJSON()).toMatchObject({ requestCostMicros: 1, requestCostsMicros: { "search.web": 1500, "llm.responses": 0 } });
+  await state.commit(1);
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  await fixed.fill("0.0000001");
+  await save(page).click();
+  await expect(page.getByRole("tabpanel", { name: /^Policies/ }).getByText(/six decimal places/)).toBeVisible();
+  expect(state.writes).toHaveLength(2);
+});
+
 for (const draft of ["selected policy", "New policy"] as const) {
   test(`Catalog Add opens Policies from Bindings and Upstream while preserving the ${draft} draft`, async ({ page }) => {
     const state = await fixture(page);
