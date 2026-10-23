@@ -9,7 +9,7 @@ const { WebSocketServer } = require("ws");
 const key = "clawrouter-live-deployed-fixture-secret", clientKey = "fixture-client-only";
 const options = { key, clientKey, environment: "fakeco", searchCostMicros: 1000, maxBudgetMicros: 5_000_000, models: ["gpt-6.1-sol", "gpt-6-astra"], mode: "cached", transport: "websocket" };
 
-async function fixture(t) {
+async function fixture(t, extra = {}) {
   t.mock.method(console, "error", () => {});
   const events = [], requests = [], sockets = new Set();
   const state = { report: true, output: "Official site 【turn0search0】 OpenAI", retained: false, extraSpend: 0, limitMicros: 5_000_000, environment: "fakeco" };
@@ -51,7 +51,7 @@ async function fixture(t) {
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const routerUrl = `http://127.0.0.1:${server.address().port}`;
-  const adapter = deployedSearch({ ...options, routerUrl });
+  const adapter = deployedSearch({ ...options, routerUrl, ...extra });
   let mf;
   t.after(async () => { adapter.close(); await mf?.dispose(); for (const ws of sockets) ws.terminate(); wss.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   return { state, events, requests, inspection, adapter, async relay() {
@@ -91,6 +91,19 @@ test("deployed preflight refuses uncapped, globally fixed-price, or wrong-target
   f.state.limitMicros = 5_000_001; await assert.rejects(f.adapter.preflight(), /dedicated budget/);
   f.state.limitMicros = 5_000_000; f.state.environment = "production"; await assert.rejects(f.adapter.preflight(), /environment matches/);
   assert.equal(f.events.length, 0);
+});
+
+test("deployed native origin probe shares late-bound metadata and keeps markers out of receipts", async t => {
+  const probe = {};
+  const f = await fixture(t, { probe }); await f.adapter.preflight();
+  probe.url = "https://synthetic.invalid/fresh"; probe.marker = "fixture-hidden-marker";
+  f.state.output = `Synthetic page ${probe.marker} 【turn0view0】`;
+  const request = new Request("https://relay/v1/native/openai/v1/alpha/search", { method: "POST", headers: { authorization: `Bearer ${clientKey}` }, body: JSON.stringify({ id: "native-origin-session", model: "gpt-6.1-sol", commands: { open: [{ ref_id: probe.url }] }, settings: { external_web_access: false } }) });
+  await f.adapter.outbound(request);
+  assert.equal(f.adapter.calls[0].opensControlledOrigin, true);
+  assert.equal(f.adapter.calls[0].probeContentReturned, true);
+  assert.doesNotMatch(JSON.stringify(f.adapter.calls), /fixture-hidden-marker|synthetic\.invalid/);
+  assert.equal((await f.adapter.accounting(100)).receipts, 1);
 });
 
 test("deployed accounting fails on missing queue receipts, retained content, and concurrent policy spend", async t => {

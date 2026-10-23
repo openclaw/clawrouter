@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "./cli-args.mjs";
 import { startSearchOrigin } from "./smoke-codex-search-origin.mjs";
+import { startHostedSearchOrigin } from "./search-semantics-fixture.mjs";
 import { liveUpstream } from "./smoke-codex-search-upstream.mjs";
 import { checkSearchAccounting } from "./smoke-codex-search-accounting.mjs";
 import { deployedSearch, deployedSearchOptions } from "./smoke-codex-search-deployed.mjs";
@@ -14,11 +15,12 @@ import { manageCodex } from "./codex-connect.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
-  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only] [--direct-replay]\nLocal fixture requires injected OPENAI_API_KEY. Deployed mode: --router-url ORIGIN --expected-environment NAME, injected CLAWROUTER_SMOKE_KEY; optional --search-cost-micros (default 1000), --max-budget-micros (default 5000000). Deployed mode excludes origin probes/replay. At most 32 routed operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
+  console.log("Usage: CLAWROUTER_SEARCH_LIVE=1 node scripts/smoke-codex-search.mjs [--model SLUG] [--switch-model SLUG] [--web-search live|cached] [--transport http|websocket] [--compact] [--origin-check] [--origin-only] [--direct-replay] [--hosted-origin]\nLocal fixture requires injected OPENAI_API_KEY. Deployed mode: --router-url ORIGIN --expected-environment NAME, injected CLAWROUTER_SMOKE_KEY; optional --search-cost-micros (default 1000), --max-budget-micros (default 5000000). Deployed origin checks require --origin-only --hosted-origin and SEARCH_SEMANTICS_CONTROL_TOKEN; no direct replay. Hosted runs create/delete synthetic fixture data. At most 32 routed operations, at most 4096 output tokens per inference. Defaults: gpt-6-astra, live, HTTP.");
   process.exit(0);
 }
-for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only", "direct-replay", "router-url", "expected-environment", "search-cost-micros", "max-budget-micros"].includes(name), "unknown qualification option");
-for (const name of ["compact", "origin-check", "origin-only", "direct-replay"]) assert.ok(args[name] === undefined || args[name] === true, "qualification flags do not accept values");
+for (const name of Object.keys(args)) assert.ok(["model", "switch-model", "web-search", "transport", "compact", "origin-check", "origin-only", "direct-replay", "hosted-origin", "router-url", "expected-environment", "search-cost-micros", "max-budget-micros"].includes(name), "unknown qualification option");
+for (const name of ["compact", "origin-check", "origin-only", "direct-replay", "hosted-origin"]) assert.ok(args[name] === undefined || args[name] === true, "qualification flags do not accept values");
+assert.ok(!args["hosted-origin"] || args["origin-only"] && !args["direct-replay"], "hosted origin requires --origin-only without direct replay");
 assert.ok(!args["direct-replay"] || args["origin-only"], "direct replay requires --origin-only");
 const model = args.model ?? "gpt-6-astra", switchedModel = args["switch-model"] ?? model, mode = args["web-search"] ?? "live", transport = args.transport ?? "http";
 assert.ok([model, switchedModel].every(value => typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(value)));
@@ -28,7 +30,10 @@ assert.ok(["live", "cached"].includes(mode)); assert.ok(["http", "websocket"].in
 if (process.env.CLAWROUTER_SEARCH_LIVE !== "1") throw new Error("set CLAWROUTER_SEARCH_LIVE=1 to authorize bounded live OpenAI inference/search requests");
 const upstreamKey = process.env.OPENAI_API_KEY;
 const deployedOptions = args["router-url"] === undefined ? null : deployedSearchOptions(args);
-if (deployedOptions) assert.ok(!args["origin-check"] && !args["origin-only"] && !args["direct-replay"], "deployed smoke excludes origin probes and direct replay");
+if (deployedOptions) {
+  assert.ok(!args["direct-replay"] && !args["origin-check"] && (!args["origin-only"] || args["hosted-origin"]), "deployed origin checks require the hosted fixture and exclude replay");
+  if (args["hosted-origin"]) assert.equal(deployedOptions.routerUrl, "https://clawrouter-fakeco.openclaw.ai", "hosted origin deployed target is FakeCo");
+}
 else {
   assert.ok(["expected-environment", "search-cost-micros", "max-budget-micros"].every(name => args[name] === undefined), "deployed options require --router-url");
   if (!upstreamKey?.trim()) throw new Error("inject OPENAI_API_KEY through the credential helper");
@@ -40,7 +45,7 @@ const temporary = await mkdtemp(join(tmpdir(), "clawrouter-search-live-")), home
 const clientSecret = randomUUID(), key = `clawrouter-live-fixture-${clientSecret}`;
 const digest = value => createHash("sha256").update(value).digest("hex");
 const probeState = { replay: !!args["direct-replay"] }, events = [], models = [...new Set([model, switchedModel])];
-const upstream = deployedOptions ? deployedSearch({ ...deployedOptions, models, mode, transport, clientKey: key }) : liveUpstream({ probe: probeState, key: upstreamKey, models, mode, transport });
+const upstream = deployedOptions ? deployedSearch({ ...deployedOptions, models, mode, transport, clientKey: key, probe: probeState }) : liveUpstream({ probe: probeState, key: upstreamKey, models, mode, transport });
 const { calls, sessions } = upstream;
 let mf, origin, originCheck = null, compactionEvidence = null, qualification;
 const codex = process.env.CLAWROUTER_CODEX_BIN ?? "codex";
@@ -61,13 +66,19 @@ async function run(args) {
   } finally { clearTimeout(timeout); clearTimeout(forceKill); if (child.exitCode === null) child.kill("SIGKILL"); }
 }
 async function checkOrigin(threadId) {
-  origin = await startSearchOrigin(temporary); Object.assign(probeState, origin);
+  origin = args["hosted-origin"] ? await startHostedSearchOrigin(mode, { token: process.env.SEARCH_SEMANTICS_CONTROL_TOKEN }) : await startSearchOrigin(temporary); Object.assign(probeState, origin);
   const before = calls.length;
   await run(["exec", ...(threadId ? ["resume"] : []), "--model", switchedModel, "--json", "--skip-git-repo-check", ...(threadId ? [threadId] : []), `Use web.run to open this controlled synthetic page: ${origin.url} . Find the word ClawRouterProbe on that page and report the full generated marker shown there. Do not run local commands. Report whether it was found, with a source URL.`]);
   const probeCalls = calls.slice(before).filter(call => call.commands);
   assert.ok(probeCalls.some(call => call.opensControlledOrigin), "native CLI opened the controlled origin");
   const result = { nativeOpen: true, externalWebAccess: mode === "live", originRequests: await origin.count(), robotsRequests: origin.robots(), contentReturned: probeCalls.some(call => call.probeContentReturned), fetchError: probeCalls.some(call => call.probeFetchError) };
   result.retrieved = result.originRequests > 0 && result.contentReturned;
+  if (args["hosted-origin"]) {
+    const counters = await origin.observations();
+    result.originRequests = counters.requests;
+    result.retrieved = counters.gets > 0 && result.contentReturned && !result.fetchError && !probeCalls.some(call => call.probeInternalError);
+    result.semantics = mode === "cached" ? counters.requests > 0 || result.contentReturned ? "violation" : "inconclusive" : result.retrieved ? "observed" : "inconclusive";
+  }
   if (args["direct-replay"]) {
     const beforeReplay = origin.count();
     result.directReplay = await upstream.replayOrigin();
@@ -114,7 +125,7 @@ try {
   console.error(JSON.stringify({ phase: "profile-ready", model, producer }));
   if (args["origin-only"]) {
     originCheck = await checkOrigin(); upstream.check();
-    qualification = { qualified: originCheck.retrieved, model, mode, transport, originCheck, producer, calls };
+    qualification = { qualified: originCheck.retrieved && (!args["hosted-origin"] || mode === "live"), model, mode, transport, originCheck, producer, calls };
     if (!qualification.qualified) process.exitCode = 1;
   } else {
     const first = await run(["exec", "--json", "--skip-git-repo-check", "Use web.run to search for the official OpenAI homepage, open a returned search reference, then click a numbered link in the opened page, then find the word OpenAI in the clicked page. Perform each operation, then answer one sentence with a source link. Use only web.run; do not run local commands."]);

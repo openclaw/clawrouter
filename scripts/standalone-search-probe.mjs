@@ -25,16 +25,18 @@ export function assertSearchToolSuccess(value) {
   assert.ok(!summary.internalError && !summary.fetchError, "upstream search/navigation has no internal or fetch tool error");
 }
 
-export async function directSearchProbe({ key, body, headers = {}, marker, fetcher = fetch }) {
+export async function directSearchProbe({ key, body, headers = {}, marker, routerUrl, fetcher = fetch }) {
   assert.ok(key?.trim(), "inject OPENAI_API_KEY through the credential helper");
+  assert.ok(routerUrl === undefined || routerUrl === "https://clawrouter-fakeco.openclaw.ai", "search probe router must be FakeCo");
   const outgoing = new Headers(headers);
   outgoing.set("authorization", `Bearer ${key}`);
   outgoing.set("content-type", "application/json");
   outgoing.delete("host"); outgoing.delete("content-length");
-  const response = await fetcher("https://api.openai.com/v1/alpha/search", {
+  const response = await fetcher(routerUrl ? `${routerUrl}/v1/native/openai/v1/alpha/search` : "https://api.openai.com/v1/alpha/search", {
     method: "POST", headers: outgoing, body: JSON.stringify(body),
     redirect: "error", signal: AbortSignal.timeout(90_000),
   });
+  if (routerUrl && response.ok) assert.equal(response.headers.get("x-clawrouter-content-retention"), "off", "routed probe retention is off");
   let text = "", size = 0;
   const decoder = new TextDecoder();
   for await (const chunk of response.body) {

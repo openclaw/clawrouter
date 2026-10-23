@@ -19,9 +19,9 @@ export function deployedSearchOptions(args, env = process.env) {
 
 // Parent-process relay: the isolated native client sees only a synthetic key.
 // No upstream secret is needed. No fixture-only SQL route is exposed remotely.
-export function deployedSearch({ routerUrl, key, environment, searchCostMicros, maxBudgetMicros, models, mode, transport, clientKey, fetcher = fetch, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+export function deployedSearch({ routerUrl, key, environment, searchCostMicros, maxBudgetMicros, models, mode, transport, clientKey, probe, fetcher = fetch, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
   const sessionId = `codex-search-smoke-${randomUUID()}`;
-  const live = liveUpstream({ key, models, mode, transport, routerUrl, sessionId });
+  const live = liveUpstream({ key, models, mode, transport, routerUrl, sessionId, probe });
   let baseline, failure;
   async function read(path, authenticated = true) {
     const response = await fetcher(new URL(path, routerUrl), { headers: authenticated ? { authorization: `Bearer ${key}` } : {}, redirect: "error", signal: AbortSignal.timeout(10_000) });
