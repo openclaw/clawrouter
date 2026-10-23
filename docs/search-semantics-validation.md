@@ -136,8 +136,27 @@ A read-only Cloudflare GraphQL security-event query scoped to this run/time/path
 returned a permission error, so it supplied no usable edge evidence. Receipt:
 `.artifacts/fakeco-codex-search-20261022/search-semantics-direct-sol-edge-events.json`.
 Zero Worker counters leave both upstream no-fetch and pre-Worker edge rejection
-possible. Next: inspect that window's Security Events read-only in Safari before
-more paid probes or any security/configuration change.
+possible.
+
+### Completed read-only Safari Security Events inspection
+
+At 2026-10-23 06:23 UTC, Safari showed the OpenClaw account and `openclaw.ai`
+zone. Security > Analytics > Events was filtered to 2026-10-23 06:18–06:21 UTC,
+covering both calls. The zone-wide view showed two Browser Integrity Check block
+events, both for `docs.openclaw.ai`. Adding `Host equals
+clawrouter-fakeco.openclaw.ai` produced `No firewall events found matching your
+filters`; all summary panels showed no data. A host-only filter covers every
+fixture path without a narrower path filter.
+
+This supplies no affirmative evidence of a Cloudflare security block for the
+probe. It does not establish that the provider attempted a fetch, nor exclude
+pre-Worker rejection: [Security Events may use sampled data](https://developers.cloudflare.com/waf/analytics/security-events/#sampling).
+The dashboard also states that Worker subrequests are not included. The Sol
+semantics result remains inconclusive. No Cloudflare settings/resources changed,
+no credentials were read, and no additional OpenAI calls ran. Safari remains on
+the filtered result. Next candidate: a separately approved bounded direct live
+positive control against a stable public page, to distinguish general endpoint
+failure from fresh-fixture retrieval failure before repeating the hosted matrix.
 
 ## Secret and credential preparation
 
