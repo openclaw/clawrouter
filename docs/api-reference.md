@@ -27,8 +27,12 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 | `GET` | `/v1/key/inspect` | Proxy-credential verification and readiness status |
 
 Usage summaries, provider totals, and daily totals remain shared across each
-authorized policy. The budget follows the policy's configured policy or principal
-scope. Recent `usage.events` on `/v1/usage` and `/v1/session/usage` contain only
+authorized policy. `usage.personal` on `/v1/usage` and `/v1/session/usage`
+repeats those summary, provider, and daily totals for the caller's own events
+only, using the same ownership rule as recent events below. `usage.principals`
+on `/v1/admin/usage` lists thirty-day summary totals per principal; events
+without a principal are grouped by credential ID (`principalId: null`). The
+budget follows the policy's configured policy or principal scope. Recent `usage.events` on `/v1/usage` and `/v1/session/usage` contain only
 events attributed to the authenticated principal. A service key without a
 principal sees only events with its exact credential ID and no principal.
 Unattributed historical events without that credential ID remain admin-only;
