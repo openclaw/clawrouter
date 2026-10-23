@@ -1,14 +1,13 @@
 # FakeCo cleanup handoff — 2026-10-23
 
-Browser inspection: complete, confirmed by the user. **Approved automated cleanup
-through batch 3 completed.** Core verification passed eight checks at 09:42:59 UTC;
-retained-resource verification passed seven at **2026-10-23 09:47:08 UTC**. Both
-FakeCo Workers, all six namespaces, serving routes/domain, queues, owned Access
-app/policies, KV namespace, R2 bucket and GitHub Environment are absent.
-Production/shared infrastructure and deployment history preserved. **Manual
-Access-token deletion remains:** Safari shows the exact token with its context
-menu open. The two dedicated 1Password items remain until that revocation is
-verified. No credential switch, DNS repair, paid probe, PR or push.
+**FakeCo cleanup complete and verified**, closed at **2026-10-23 09:54:00 UTC**.
+Both FakeCo Workers, all six namespaces, serving routes/domain, queues, owned
+Access app/policies, KV namespace, R2 bucket and GitHub Environment are absent.
+The user deleted the dedicated Access token and both dedicated 1Password items;
+browser and metadata checks confirm absence. Eight fresh Cloudflare checks passed
+at 09:52:28 UTC after the shared credential item was restored. Production/shared
+infrastructure and deployment history preserved. No planned cleanup remains.
+No credential switch, DNS repair, paid probe, PR or push during closeout.
 This handoff supersedes historical cleanup identities, not the search qualification
 limits in the [campaign assessment](codex-search-qualification.md).
 
@@ -226,28 +225,68 @@ DELETEs and one GitHub DELETE; no fallback or replay. The documented
 and [Environment deletion](https://docs.github.com/en/rest/deployments/environments#delete-an-environment)
 endpoints define this batch's mutation scope; no workflow/tag/deployment deletion.
 
-## Manual token handoff and credential disposal
+## Manual token handoff and completed credential disposal
 
-Safari, read-only, confirms account OpenClaw and token
+The earlier read-only Safari handoff confirmed account OpenClaw and token
 `f6264117-b130-4b39-a4f9-4b01a17b4ffa`, name
-`clawrouter-fakeco-codex-search-20261022`, still Enabled with 24-hour duration.
-It now shows zero associated applications, no associated policies and no
-applications in use. Context menu open with **Delete token** visible. No
-delete/disable/refresh/rotate action selected; the user performs deletion and any
-confirmation. No API service-token request or 1Password change.
+`clawrouter-fakeco-codex-search-20261022`, then Enabled with 24-hour duration.
+It showed zero associated applications, no associated policies and no
+applications in use. Context menu was open with **Delete token** visible. The
+agent selected no delete/disable/refresh/rotate action. The user subsequently
+reported completing token deletion and manually deleting both dedicated
+1Password items. No service-token API request or agent credential-manager write.
 
 Receipt: `cleanup-batch3-manual-token-handoff-20261023.json`; identifiers and UI
-state only, no credential values persisted. After the user completes deletion,
-verify absence in the browser before disposing of the two dedicated 1Password
-items. Keep shared Cloudflare/OpenAI/Tailscale items, Wrangler login and evidence.
+state only, no credential values persisted. Final verification below supersedes
+its pending state.
+
+## Final verification and closure
+
+Safari reload showed the complete, unfiltered **1–7 of 7** service-token list in
+OpenClaw, with the dedicated token absent. Both dedicated 1Password items are
+absent from accessible Agent Secrets metadata including Archive. This confirms
+their removal from that inventory; no Recently Deleted purge is claimed or
+required, and none was attempted.
+
+The shared `Clawrouter Cloudflare API Token` item was also initially absent. The
+user confirmed its removal intentional, then restored it. No alternative vault,
+credential or auth method was used. Restored-item field metadata contained no
+`ACCESS_INSTRUCTIONS`; the same configured reference was used for fresh checks.
+The shared token is active; deleting its credential-manager item did not itself
+establish remote token revocation. Shared Cloudflare/OpenAI/Tailscale items are
+present in the final metadata view. Neither dedicated item was restored.
+
+Fresh Cloudflare verification passed **eight checks at 09:52:28 UTC**: exact
+account/zone and active token, all recorded resource absences, preserved unrelated
+inventories and production settings/deployments, all 26 remaining Access apps and
+12 reusable policies retained with no owned-policy/dedicated-token references,
+and all 34 remaining Worker settings inspected with no dangling owned-resource
+bindings. The account retains exactly the baseline's 34 unrelated Workers and
+31 namespaces. Known unavailable service-token API views were not retried.
+
+GitHub recheck at **09:51:39 UTC** confirms Environment/scoped secrets/variables
+still absent; other Environments and repository metadata unchanged; candidate
+deployment, tag and workflow history retained; no active FakeCo deployment runs.
+Funnel/Serve configurations empty and no listener on port 18765. Current
+`CODEX_HOME` config/profiles TOML has no FakeCo hostname reference; no auth/key
+files read or installed config changed.
+
+Authoritative aggregate: `cleanup-final-verification-20261023.json`, closed at
+**09:54:00 UTC**. It hashes `cleanup-final-closeout-20261023.json`,
+`cleanup-final-cloudflare-restored-verification-20261023.json`, and
+`cleanup-final-onepassword-restored-metadata-20261023.json`. The earlier closeout
+receipt explicitly used dated Cloudflare evidence while the shared item was
+absent; the restored-credential verification supersedes that limitation. Final
+closure made no Cloudflare, GitHub, 1Password or browser writes and no paid calls.
+Evidence/history and shared credentials retained; no PR or push. Search
+retrieval/cache and upstream billing qualification limits remain unchanged.
 
 ## Exact ownership and completed deletion set
 
 Account `91b59577e757131d68d55a471fe32aca` (OpenClaw), zone
 `72b20df9e990ac41365dadace6499187` (openclaw.ai). IDs, not name prefixes, define
 ownership. All five main namespaces and the fixture namespace are deleted.
-Completed entries below are retained as evidence; only explicitly retained
-resources belong to later cleanup batches.
+Completed entries below are retained as evidence. No planned cleanup remains.
 
 | Resource | Identity |
 | --- | --- |
@@ -267,7 +306,8 @@ resources belong to later cleanup batches.
 | R2 — deleted | `clawrouter-content-fakeco`; jurisdiction `default` |
 | Access application — deleted | `beac7325-b743-4eef-982f-117bb7d27cce`; `ClawRouter FakeCo Console` |
 | Application policies — absent | `4a44c524-2d85-48ee-bdeb-3f1f5bd43913` and `63650e41-619d-40cc-a3fe-d2d28e7286d6` |
-| Service token — manual browser deletion | `f6264117-b130-4b39-a4f9-4b01a17b4ffa`; `clawrouter-fakeco-codex-search-20261022` |
+| Service token — deleted by user, browser verified | `f6264117-b130-4b39-a4f9-4b01a17b4ffa`; `clawrouter-fakeco-codex-search-20261022` |
+| Dedicated 1Password items — deleted by user, metadata verified | `ClawRouter FakeCo canary credentials 20261022` and `clawrouter-fakeco-codex-search-20261022`; Agent Secrets |
 | Router records — owned storage deleted | Main Durable Object storage and KV deleted. Historical policy IDs: `fakeco_bootstrap_20261022`, `codex_search_canary_20261022`, `ui_dollars_smoke_20261022` |
 | GitHub configuration — deleted | `openclaw/clawrouter` Environment `fakeco`, ID `25093378320`; nine secrets and four variables; history retained |
 
@@ -289,17 +329,14 @@ resources belong to later cleanup batches.
    executed once after revised precondition approval. Main Worker, five
    namespaces, custom domain, queues and Access app/policies absent; all deletion
    gates verified. KV retained for later disposal. Do not replay the teardown.
-3. **Automated batch 3 completed; manual token step pending.** Exact empty R2
+3. **Batch 3 and manual token deletion completed.** Exact empty R2
    bucket, KV namespace and exclusively run-owned GitHub Environment deleted and
-   verified as above. The user deletes the dedicated Access token through the
-   browser; verify its absence there. No service-token API deletion attempt.
-4. **Final verification and local credentials.** Re-list every recorded remote ID
-   and compare production settings/deployments and shared routing with the saved
-   baseline. Record partial failures; 403/network errors never establish absence.
-   After remote credentials are revoked, separately confirm disposal of the two
-   dedicated 1Password items and any remaining canary client profiles. Preserve
-   metadata receipts, experiment evidence and Git history. Do not delete local
-   artifacts as a substitute for revoking remote credentials.
+   verified as above. User deleted dedicated token; refreshed complete browser
+   list confirms absence. No service-token API deletion attempt.
+4. **Final verification and credential disposal completed.** User deleted both
+   dedicated 1Password items; accessible active/archive metadata confirms absence.
+   Final Cloudflare/GitHub/local checks passed as above. Evidence, experiment
+   artifacts and Git history retained. Do not replay any consumed operation.
 
 The existing teardown is only one phase, not a complete cleanup command. Each
 batch requires fresh user approval. A failed batch does not authorize broader
@@ -308,7 +345,7 @@ deletion, retries with another account/token, spend reset or credential revival.
 Preserve production `clawrouter-edge`, its storage/domain/Access resources, the
 zone, shared GitHub IdP `32ade06d-f190-4da6-985d-6d1ebc5617da`, all other service
 tokens, shared Cloudflare/OpenAI/Tailscale credentials, Wrangler login, and the
-published candidate tag/workflow history. The dedicated credential items are
+published candidate tag/workflow history. The deleted dedicated credential items were
 `ClawRouter FakeCo canary credentials 20261022` and
 `clawrouter-fakeco-codex-search-20261022` in Agent Secrets.
 

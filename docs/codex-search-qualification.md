@@ -88,9 +88,9 @@ and [rollout history](codex-search-rollout.md) use this narrower qualification.
 
 ## Retained environment and handoff
 
-The user confirmed browser inspection complete. Core FakeCo cleanup and approved
-KV/R2/GitHub Environment removal completed. Manual dedicated Access-token deletion
-and subsequent disposal of two dedicated 1Password items remain. The
+The user confirmed browser inspection complete. **FakeCo cleanup complete and
+verified at 2026-10-23 09:54:00 UTC**, including manual dedicated Access-token and
+1Password-item deletion. Production/shared resources and history retained. The
 [current cleanup handoff](codex-search-cleanup-20261023.md)
 records exact identities and approval batches. Approved batch 1 completed
 at 2026-10-23 09:28:51 UTC: bootstrap revoked, fixture route removed, fixture
@@ -145,11 +145,30 @@ infrastructure, unrelated storage, other Environments, repository-level settings
 and candidate deployment/tag/workflow history preserved. No active FakeCo runs.
 Receipt: `cleanup-batch3-verification-20261023.json`, pinning preflight/execution
 receipts and fresh complete S3 listings. Two Cloudflare DELETEs and one GitHub
-DELETE, no paid call. Safari shows the dedicated Access token still Enabled but
-with zero associated applications; its context menu is open at **Delete token**
-for the user's manual action. No browser mutation, service-token API request or
-1Password change. Keep both dedicated credential items until revocation is
-verified. See `cleanup-batch3-manual-token-handoff-20261023.json`.
+DELETE, no paid call. The earlier Safari handoff showed the dedicated Access
+token Enabled with zero associated applications and its **Delete token** menu
+open; no agent browser mutation, service-token API request or 1Password change.
+See `cleanup-batch3-manual-token-handoff-20261023.json` for that historical stage.
+
+The user then deleted the token and both dedicated 1Password items. A refreshed
+complete unfiltered Safari list confirms token absence; accessible Agent Secrets
+metadata including Archive confirms both item names absent. No Recently Deleted
+purge claimed or attempted. The shared Cloudflare credential item was also
+initially removed, confirmed intentional, then restored by the user. The same
+configured reference passed fresh token/account/zone verification; no auth
+fallback. Shared Cloudflare/OpenAI/Tailscale items present in final metadata.
+
+Eight fresh Cloudflare checks passed at **09:52:28 UTC**: all owned resources
+absent, production/shared inventories preserved, no dangling owned bindings in
+34 remaining Worker settings, no owned-policy/dedicated-token references in
+26 other Access applications or 12 reusable policies. GitHub recheck at
+09:51:39 UTC preserved other Environments/repository metadata and candidate
+deployment/tag/workflow history, with no active FakeCo runs. Funnel/Serve empty,
+port 18765 free; current installed Codex TOML has no FakeCo hostname reference.
+Final aggregate `cleanup-final-verification-20261023.json` hashes closeout,
+restored-credential Cloudflare and final 1Password metadata receipts. No planned
+cleanup remains. Closeout made no external writes or paid calls; no PR or push.
+Search retrieval/cache and billing qualification limits remain unchanged.
 
 Read-only reconciliation at 2026-10-23 09:24:19 UTC passed 14 checks: main/fixture
 restoration fingerprints match, all 36 Worker dependencies and 27 Access apps'
