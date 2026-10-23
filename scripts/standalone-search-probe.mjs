@@ -37,6 +37,11 @@ export async function directSearchProbe({ key, body, headers = {}, marker, route
     redirect: "error", signal: AbortSignal.timeout(90_000),
   });
   if (routerUrl && response.ok) assert.equal(response.headers.get("x-clawrouter-content-retention"), "off", "routed probe retention is off");
+  const value = await readSearchProbeJson(response);
+  return { summary: searchProbeSummary(response, value, marker), value };
+}
+
+export async function readSearchProbeJson(response) {
   let text = "", size = 0;
   const decoder = new TextDecoder();
   for await (const chunk of response.body) {
@@ -45,7 +50,5 @@ export async function directSearchProbe({ key, body, headers = {}, marker, route
     text += decoder.decode(chunk, { stream: true });
   }
   text += decoder.decode();
-  let value;
-  try { value = JSON.parse(text); } catch { throw new Error("direct search response is not JSON"); }
-  return { summary: searchProbeSummary(response, value, marker), value };
+  try { return JSON.parse(text); } catch { throw new Error("direct search response is not JSON"); }
 }

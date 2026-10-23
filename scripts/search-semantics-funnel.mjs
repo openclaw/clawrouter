@@ -49,14 +49,14 @@ export async function loadProbeKey(run = execute) {
   return key;
 }
 
-export async function startFunnelExperiment({ approved = false, run = execute, launch = spawn, startFixture = startLocalSearchFixture, ttlMs = 600_000, readKey = loadProbeKey, probe, settle, signal } = {}) {
+export async function startFunnelExperiment({ approved = false, run = execute, launch = spawn, startFixture = startLocalSearchFixture, ttlMs = 600_000, readKey = loadProbeKey, probe, settle, signal, maxMeasurements = 1 } = {}) {
   assert.equal(approved, true, "public exposure requires explicit authorization");
   assert.ok(Number.isInteger(ttlMs) && ttlMs >= 120_000 && ttlMs <= 600_000, "exposure limited to at most ten minutes");
   signal?.throwIfAborted();
   await checkConnectedNode(run);
   assert.ok(empty(await tailscaleStatus(run)), "Serve/Funnel configuration must be empty");
   signal?.throwIfAborted();
-  const fixture = await startFixture();
+  const fixture = await startFixture({ maxMeasurements });
   let child, stopping, sessionId, stopped = false, ready = false, deadlineTimer;
   const expiresAt = Date.now() + ttlMs;
   async function stop() {
@@ -122,21 +122,25 @@ export async function startFunnelExperiment({ approved = false, run = execute, l
 
 async function main() {
   assert.deepEqual(process.argv.slice(2), ["--expose-approved"], "run only after public-exposure approval");
+  await runFunnelSession();
+}
+
+export async function runFunnelSession({ start = startFunnelExperiment, measureCommand = "probe-approved" } = {}) {
   const abort = new AbortController();
   const onSignal = () => abort.abort();
   // Install before the first startup await: a foreground child must not outlive
   // an ordinary parent termination during readiness/certificate setup.
   process.once("SIGTERM", onSignal);
   process.once("SIGINT", onSignal);
-  try { await runInteractiveExperiment(abort.signal); }
+  try { await runInteractiveExperiment(abort.signal, start, measureCommand); }
   finally {
     process.removeListener("SIGTERM", onSignal);
     process.removeListener("SIGINT", onSignal);
   }
 }
 
-async function runInteractiveExperiment(signal) {
-  const experiment = await startFunnelExperiment({ approved: true, signal });
+async function runInteractiveExperiment(signal, start, measureCommand) {
+  const experiment = await start({ approved: true, signal });
   const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
   emit({ event: "exposed", url: experiment.url, expiresAt: experiment.expiresAt });
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -152,7 +156,7 @@ async function runInteractiveExperiment(signal) {
         if (line === "snapshot") emit(experiment.snapshot());
         else if (line.startsWith("witness ")) emit(experiment.confirmWitness(line.slice(8)));
         else if (line === "arm") emit(experiment.arm());
-        else if (line === "probe-approved") { emit(await experiment.measure({ approved: true })); break; }
+        else if (line === measureCommand) { emit(await experiment.measure({ approved: true })); break; }
         else if (line === "stop") break;
         else emit({ commandRejected: true });
       } catch { emit({ commandFailed: true }); }

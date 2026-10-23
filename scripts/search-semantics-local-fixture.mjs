@@ -8,7 +8,8 @@ const emptyCounts = () => ({ rootGet: 0, rootHead: 0, robots: 0, rejected: 0, ov
 
 // No HTTP control routes. Controls remain in the owning process, even though
 // Funnel's reverse proxy also connects from loopback. Never retain request data.
-export async function startLocalSearchFixture({ port = 18765 } = {}) {
+export async function startLocalSearchFixture({ port = 18765, maxMeasurements = 1 } = {}) {
+  assert.ok(maxMeasurements === 1 || maxMeasurements === 2, "fixture permits one measurement or one two-endpoint comparison");
   let marker = freshMarker(), counts = emptyCounts(), phase = "calibration";
   let witnessVerified = false, generation = 0, firstGet = null, lastGet = null, closing;
   const increment = category => {
@@ -53,7 +54,7 @@ export async function startLocalSearchFixture({ port = 18765 } = {}) {
       return { witnessVerified };
     },
     arm() {
-      assert.ok(phase === "calibration" && witnessVerified, "confirm outside-tailnet witness first");
+      assert.ok(witnessVerified && (phase === "calibration" || phase === "complete") && generation < maxMeasurements, "confirm outside-tailnet witness first; measurement limit must remain");
       marker = freshMarker(); counts = emptyCounts(); firstGet = lastGet = null;
       generation++; phase = "armed";
       return snapshot();
@@ -75,7 +76,7 @@ export async function startLocalSearchFixture({ port = 18765 } = {}) {
       const late = snapshot(), withinLifetime = phase === "measuring";
       if (withinLifetime) phase = "complete";
       return { dispatchedAt, finishedAt: new Date().toISOString(), probeFailed, summary, immediate, late,
-        freshRetrieval: withinLifetime && !probeFailed && summary?.status === 200 && summary.markerReturned && !summary.internalError && !summary.referenceError && !summary.fetchError && counts.rootGet > 0 && !counts.overflow };
+        freshRetrieval: withinLifetime && !probeFailed && summary?.status === 200 && summary.markerReturned && summary.toolSuccess !== false && !summary.internalError && !summary.referenceError && !summary.fetchError && counts.rootGet > 0 && !counts.overflow };
     },
     close() {
       if (closing) return closing;
