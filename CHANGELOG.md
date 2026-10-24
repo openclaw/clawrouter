@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Coalesce per-grant quota feedback with selection counters into one background flush per 250 ms window, cutting global-authority writes under load from one per request to a few per grant (written per response when the hot cache is disabled). Reuse a proxy key's catalog and model-list inventory within the hot-cache bounds, and bound background work so a hung backend call cannot keep extending later requests.
 - Authenticate each Responses WebSocket create before reporting model or route selection errors, preserving credential revocation and expiry errors without extra successful-admission round trips.
 - Keep Responses WebSocket settlement waits local to their lane so other lanes can admit and send while a prior turn settles.
 - Select Responses WebSocket grants from the shared hot admission snapshot, preserving pinned owners and transport eligibility; warm soft creates need only continuation resolution, while reserve creates retain authoritative budget admission.
