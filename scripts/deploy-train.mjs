@@ -88,7 +88,15 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
     }
     if (!uploaded.some(version => version.id === state.green)) throw new Error('Uploaded version did not appear in the version history');
     if (assertSecretLineage(uploaded, state.blue) !== state.green) throw new Error('Latest upload changed during candidate creation');
-    const version = await api.version(state.green);
+    // The per-version endpoint can 404 for a moment after the history lists it.
+    let version;
+    for (let attempt = 1; ; attempt++) {
+      try { version = await api.version(state.green); break; }
+      catch (error) {
+        if (error?.status !== 404 || attempt > UPLOAD_VISIBILITY_ATTEMPTS) throw error;
+        await wait(UPLOAD_VISIBILITY_STEP_MS * attempt);
+      }
+    }
     if (version.annotations?.['workers/tag'] !== state.sha) throw new Error('Uploaded version does not attest candidate SHA');
     if (state.migration) {
       const deployed = await api.latest();

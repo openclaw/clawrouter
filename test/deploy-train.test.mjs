@@ -17,7 +17,7 @@ import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
-function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false } = {}) {
+function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0 } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
   let versions = [{ id: blue }];
   let time = 1_000_000, smokes = 0, uploads = 0;
@@ -38,7 +38,10 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
       // listLag: the uploaded candidate stays hidden for that many history reads.
       result = { items: uploads && listLag-- > 0 ? versions.filter((version) => version.id !== green) : versions };
     }
-    else if (path.endsWith(`/versions/${green}`)) result = { id: green, annotations: { 'workers/tag': sha } };
+    else if (path.endsWith(`/versions/${green}`)) {
+      if (versionLag-- > 0) return Response.json({ success: false, errors: [{ message: 'version not found' }] }, { status: 404 });
+      result = { id: green, annotations: { 'workers/tag': sha } };
+    }
     else if (path.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: analyticsRows }] } } });
     else throw new Error(`Unexpected API path: ${path}`);
     return Response.json({ success: true, result });
@@ -86,6 +89,12 @@ test('a version history that briefly trails the upload is re-read; a foreign new
   const hidden = fixture({ listLag: 99 });
   await assert.rejects(runTrain(hidden.options), /did not appear in the version history/);
   assert.equal(posts(hidden).length, 0, 'no traffic is assigned to an unverified candidate');
+  const detail = fixture({ versionLag: 2 });
+  await runTrain(detail.options);
+  assert.equal(detail.state.status, 'done', 'a brief per-version 404 is re-read');
+  const missing = fixture({ versionLag: 99 });
+  await assert.rejects(runTrain(missing.options), /404/);
+  assert.equal(posts(missing).length, 0);
   const foreign = fixture({ foreignUpload: true });
   await assert.rejects(runTrain(foreign.options), /Latest upload changed during candidate creation/);
   assert.equal(posts(foreign).length, 0);
