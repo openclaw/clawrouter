@@ -31,7 +31,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
   let pinned: { providerId: string; endpointId: string; key: string | null; revision: string | null } | undefined;
   new ResponsesWebSocketSession(pair[1], {
     waitUntil: (promise) => context.waitUntil(promise),
-    async admit(body, lane, requestId, _pin, signal) {
+    async admit(body, lane, requestId, _pin, signal, witnesses) {
       let selection: ProxySelection;
       try {
         if (typeof body.model !== "string" || !body.model) throw new HttpError(400, "model_required", "each response.create requires a model");
@@ -69,7 +69,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       const reserveOptions = () => ({ dispatched: !retentionRequired(auth, selection.capability) });
       try {
         let cost: ReturnType<typeof estimateCost> | undefined;
-        const resolve = HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
+        const resolve = HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket", { witnesses, pin: pinned });
         const prepare = (pin: Parameters<typeof prepareSelected>[8]) => prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, pin, "websocket");
         // Unpinned selection can refresh auth; only a pinned create can reserve
         // against this admission's connection while materialization is pending.
@@ -122,7 +122,10 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
             Object.assign(reservation, soft.reservation);
             context.waitUntil(soft.check);
           } : undefined,
-          publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
+          publish: async (identities, frame) => {
+            await continuation?.publishFrame(identities, frame);
+            continuation?.rememberWebSocket(witnesses, pinned!);
+          },
           settle: settlement(accounting, reservation, content, observe),
         };
       } catch (error) {

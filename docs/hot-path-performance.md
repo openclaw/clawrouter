@@ -16,7 +16,7 @@ are observed before each leg's I/O. All results finish before rollback; every
 successful leg is released on failure, and the first failure in plan order wins.
 Failed rollback still returns `accounting_unavailable`.
 
-On pinned WebSocket creates, continuation resolution overlaps grant preparation.
+On pinned WebSocket creates without a same-socket witness, continuation resolution overlaps grant preparation.
 Once continuation tool evidence resolves, budget reservation also overlaps the
 remaining preparation. Its provider connection comes from the same request's
 admission result through `assertProviderAccess`, with no extra I/O, whether that
@@ -49,16 +49,23 @@ those counts.
 WebSocket retention, when required, still completes after reservation and before
 dispatch; #326's post-dispatch retention applies to ordinary HTTP. These counts
 exclude the connection handshake, earlier-turn settlement, and continuation
-publication holding `response.created`. In reserve mode, credential preparation,
+publication. In reserve mode, credential preparation,
 budget reservation, required retention and dispatch finish before the frame is sent.
 
 Soft-policy WebSocket turns now omit reserve and dispatch calls. They perform
 local budget preflight and start `/status` reads alongside the send; exhaustion
 never aborts the active turn and instead denies the next create in this isolate.
 Observed usage uses the shared soft charge/recovery path. With local selection,
-the causal fixture asserts one warm round (`continuation`) or two with caching
-disabled (`admission`, then `continuation + materialize`), with zero, one, two or
-four budget legs. Required retention remains ahead of send.
+the causal fixture now asserts zero warm rounds with a committed same-socket
+witness, or two with caching disabled (`admission`, then `materialize`), with
+zero, one, two or four budget legs. Required retention remains ahead of send.
+
+Non-terminal frames (including `response.created`, metadata, deltas and items)
+forward in wire order while identity and pricing evidence writes run in their
+own per-operation FIFO. The terminal frame waits for every write; binding failure
+closes with `continuation_unavailable` before that terminal can reach the client.
+Pending writes and held frames consume the output count/byte limits. Settlement
+waits for both writes and terminal delivery, including on close/timeout races.
 
 After terminal publication, the next same-lane create can begin admission while
 the prior turn settles. Sending and the final soft-budget preflight wait for
@@ -82,6 +89,39 @@ A continuation belonging to another grant returns the actionable
 session's generic `502 provider_unavailable` pin-change close. The fixture also
 proves unsent reservations are released after mismatch or materialization failure;
 materialization-failure fixtures explicitly disable the credential cache.
+
+### Same-socket continuation witnesses (2026-10-24)
+
+Each session holds at most 32 recently committed identities. A witness contains
+the exact committed owner, grant key/revision and final pricing evidence; turn
+state retains routing affinity without inheriting response pricing. It is added
+only after both binding and evidence writes acknowledge success. Pending writes,
+failed writes and lost evidence acknowledgements cannot mint witnesses.
+
+Every supplied identity must match the fresh create's continuation scope,
+policy generation, provider/endpoint and socket grant pin. Otherwise the whole
+lookup goes to the continuation authority with the existing restart semantics.
+HTTP, reconnects and other sockets cannot use these witnesses. Eviction just
+falls back to authority; closing clears the session and prevents late writes
+from repopulating it. No isolate-global cache or additional staleness window is
+introduced. Header/metadata conflicts still reject before either lookup path.
+
+The causal fixture's current counts, excluding handshake, previous settlement,
+publication and required retention, are:
+
+| Policy / budget legs | Warm same-socket witness | Cache off, same-socket witness |
+| --- | ---: | ---: |
+| Soft / 0, 1, 2 or 4 | 0 | 2 |
+| Reserve / none | 0 | 2 |
+| Reserve / 1, 2 or 4 | 1 | 3 |
+
+Warm reserve legs issue parallel reserve-dispatched calls in the sole round.
+Cache-off first performs admission, then materializes credentials, then reserves
+when required. Without a witness, warm creates add a continuation round before
+reservation; cache-off overlaps continuation with materialization. These are
+exact-multiset scheduling proofs, not new production latency measurements.
+The binding-write-held fixture separately proves `response.created` reaches
+the client before the binding commits while terminal delivery stays blocked.
 
 ### Soft turns and combined reserve/dispatch (2026-10-23)
 
@@ -112,11 +152,11 @@ or changed pinned grants return `409 upstream_grant_changed` (or the existing
 continuation restart error), never a different account. First creates with a
 continuation retain the resolved owner's pinned preparation path.
 
-Warm rounds are `continuation`, then all reserve-dispatched legs concurrently
+Before same-socket witnesses, warm rounds were `continuation`, then all reserve-dispatched legs concurrently
 when present. Cache-off performs authoritative admission and selection first,
 then `continuation + materialize`, then reserve-dispatched legs when present.
-Thus warm reserve with legs still takes two rounds: continuation tool evidence
-must resolve before reserving. Soft `/status` reads run alongside send and add
+That warm reserve path took two rounds: continuation tool evidence
+had to resolve before reserving. Soft `/status` reads run alongside send and add
 no foreground round. These are causal scheduling proofs, not production timings.
 No new cache or staleness bound is introduced; the shared fresh/max-age limits
 and `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` authority behavior apply to every
@@ -143,7 +183,7 @@ unbudgeted policies.
 | Concern | Before | After |
 | --- | --- | --- |
 | Admission + grant selection | `/admission/resolve` on the global `policy-bindings` authority every request | Isolate snapshot (`worker/admission-cache.ts`): fresh 10 s, stale-while-revalidate to the 60 s max age, one single-flight background refresh |
-| WebSocket create selection | Per-create KV bulk read → `/grant-pools/select` | Same operation snapshot selector as HTTP, constrained to the pinned key and qualified WebSocket transport; continuation resolution remains foreground |
+| WebSocket create selection | Per-create KV bulk read → `/grant-pools/select` | Same operation snapshot selector as HTTP, constrained to the pinned key and qualified WebSocket transport; committed same-socket witnesses skip continuation lookup |
 | Selection counters | Atomic SQLite update inside admission | Same shared strategy code (`chooseGrantKey`, `selectAdmissionCandidate`) on the snapshot; counters coalesced (25 ms) into one background `/grant-pools/record` |
 | Credential materialization | `/materialize` on the per-grant owner every request | Isolate memory (`worker/credential-cache.ts`), keyed by grant + generation + revision, bounded by max age and the token refresh margin; upstream 401/403 evicts |
 | Quota feedback | Background authority write | Also applied to this isolate's snapshot at once |
@@ -715,7 +755,7 @@ module-level projections; filtering, offers and affordability remain per request
 | Models/catalog with N eligible providers, service key | 3 + N | 1 |
 | Key inspect, me, usage authentication | 2 (+1 owner) | 1 |
 | Pool status authentication | 2 (+1 owner) | 1 |
-| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | Warm caches: 1 global authority RPC (select); cache disabled: 2 (admission + select). Continuation ownership is separate; [full sequential storage counts](#websocket-create-follow-up-2026-10-23). |
+| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | Warm same-socket witnesses: 0 authority reads; cache disabled: admission + credential materialization. Explicit reserve legs add one parallel round; [full sequential storage counts](#same-socket-continuation-witnesses-2026-10-24). |
 | Alternate attempt after provider rejection | 2 (resolve + select) | 2 |
 
 Pool status still scans the caller's scopes and reads statistics/runtime and
@@ -882,7 +922,7 @@ writers. A TTL or matching generation alone does not solve this boundary.
 | Alternate after 401/403/429, projections ready | 2 authority + 1 KV + 1 owner | 1 fresh authority + 1 owner |
 | Environment fallback, projections ready | admission, optional select, KV | 1 authority; no credential owner |
 | Discovery, Access policy selection, HTTP pinned continuations, Fusion preflight | Existing paths | Existing paths |
-| Pinned WebSocket create | 2 authority + 1 KV + 1 credential owner, serial continuation/reserves | Warm caches: 1 authority (select) + 1 KV; cache disabled: 2 authority + 1 KV + 1 credential owner. Continuation and reserves overlap preparation ([round-trip counts](#websocket-create-follow-up-2026-10-23)). |
+| Pinned WebSocket create | 2 authority + 1 KV + 1 credential owner, serial continuation/reserves | Warm same-socket witnesses: 0 reads before send; cache off: admission + materialization. Explicit reserve legs add one parallel round ([round-trip counts](#same-socket-continuation-witnesses-2026-10-24)). |
 
 At this stage the full target of one authority call **plus upstream only was
 not claimed**, and no authorization or credential state was cached between

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reuse committed same-socket continuation ownership and pricing witnesses to remove the warm chained WebSocket authority round trip, with bounded witnesses and authoritative fallback.
+- Forward non-terminal WebSocket frames while continuation bindings commit; hold terminal delivery and same-lane dispatch until publication finishes.
+
 - Add `pnpm cf:health-report` for hourly Worker outcomes per deployed version (client disconnects, exceptions, CPU/memory limits, load shedding), marking version changes and flagging disconnect or failure spikes.
 - Add `pnpm cf:budget-mode` to preview and switch existing policies between soft and reserve budgets, writing back every other field unchanged. Repair legacy routing projections automatically: a proxy-key request that falls back to the legacy read-and-select path asks the grant's owner to republish its projection (at most once per grant per 10 minutes per isolate) so later requests use the local hot path.
 - Coalesce per-grant quota feedback with selection counters into one background flush per 250 ms window, cutting global-authority writes under load from one per request to a few per grant (written per response when the hot cache is disabled). Reuse a proxy key's catalog and model-list inventory within the hot-cache bounds, and bound background work so a hung backend call cannot keep extending later requests.
