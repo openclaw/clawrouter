@@ -31,10 +31,15 @@ export function hotCacheNow(): number { return clock(); }
 export function setHotCacheClock(next?: () => number): void { clock = next ?? (() => Date.now()); }
 
 // Work that must outlive the current response (stale refreshes, coalesced
-// counters). The Worker entry hands the pending set to ctx.waitUntil.
+// counters). The Worker entry hands the pending set to ctx.waitUntil. A hung
+// backend call leaves the set after the bound, so later requests never keep
+// extending their waitUntil for it.
+export const BACKGROUND_WORK_BOUND_MS = 25_000;
 const background = new Set<Promise<unknown>>();
 export function runInBackground(work: Promise<unknown>): void {
-  const tracked: Promise<unknown> = work.catch(() => undefined).finally(() => background.delete(tracked));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, BACKGROUND_WORK_BOUND_MS); });
+  const tracked: Promise<unknown> = Promise.race([work.catch(() => undefined), bound]).finally(() => { clearTimeout(timer); background.delete(tracked); });
   background.add(tracked);
 }
 export function pendingBackgroundWork(): Promise<unknown> | null {
