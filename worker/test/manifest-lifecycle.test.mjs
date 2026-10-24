@@ -1,4 +1,4 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs"; perRequestAuthority(); // swaps the provider snapshot in-process
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";

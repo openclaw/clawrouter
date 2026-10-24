@@ -288,3 +288,55 @@ test('same-isolate invalidation never drops coalesced selection counters', async
   const counts = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
   assert.equal(counts[0].selected_count, 2);
 });
+
+test('a hung background call leaves the pending set after its bound', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { runInBackground, BACKGROUND_WORK_BOUND_MS } = await import('../hot-cache.ts');
+  runInBackground(new Promise(() => {}));
+  const pending = pendingBackgroundWork();
+  assert.ok(pending);
+  t.mock.timers.tick(BACKGROUND_WORK_BOUND_MS);
+  await pending;
+  assert.equal(pendingBackgroundWork(), null);
+});
+
+test('quota feedback and selection counters coalesce into one flush per window', async t => {
+  const { setCoalesceWindowMs } = await import('../admission-cache.ts');
+  setCoalesceWindowMs(200); t.after(() => setCoalesceWindowMs(0));
+  const f = await fixture(); await f.put(keyA, grant());
+  const reset = new Date(Date.now() + 3_600_000).toISOString();
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }, { headers: { 'anthropic-ratelimit-unified-5h-utilization': '0.25', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.parse(reset) / 1000)) } }));
+  await (await f.request()).text(); await Promise.all(f.pending);
+  f.reset();
+  await Promise.all([1, 2, 3, 4].map(async () => { const response = await f.request(); await response.text(); }));
+  await Promise.all(f.pending);
+  assert.deepEqual(f.calls.filter(path => path === '/grant-pools/feedback').length, 1, 'four observations, one authority write');
+  assert.deepEqual(f.calls.filter(path => path === '/grant-pools/record').length, 1, 'four selections, one counter write');
+  const counts = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
+  assert.equal(counts[0].selected_count, 5);
+});
+
+test('with the hot cache disabled quota feedback is written per response', async t => {
+  const f = await fixture({ CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0' }); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }, { headers: { 'anthropic-ratelimit-unified-5h-utilization': '0.25', 'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + 3600) } }));
+  for (let n = 0; n < 2; n++) await f.send();
+  assert.equal(f.calls.filter(path => path === '/grant-pools/feedback').length, 2);
+});
+
+test('warm proxy-key catalog and models reuse the derived inventory without backend reads', async t => {
+  const f = await fixture(); await f.put(keyA, grant());
+  const get = (path) => worker.fetch(new Request(`https://fixture${path}`, { headers: admissionHeaders }), f.env, f.context);
+  const first = await get('/v1/catalog'); assert.equal(first.status, 200); const expected = await first.json(); await Promise.all(f.pending);
+  f.reset();
+  t.mock.method(f.env.POLICY_KV, 'get', () => { throw new Error('warm catalog must not read KV'); });
+  const second = await get('/v1/catalog'); assert.equal(second.status, 200);
+  assert.deepEqual((await second.json()).providers, expected.providers);
+  const models = await get('/v1/models'); assert.equal(models.status, 200);
+  assert.ok((await models.json()).data.some(model => model.id === 'anthropic/claude-sonnet-5'));
+  assert.deepEqual(f.calls, [], 'no authority calls for warm discovery');
+  f.policy.models = []; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  const admin = await worker.fetch(new Request('https://fixture/v1/admin/policies/fixture', { method: 'PUT', body: '{}' }), f.env, f.context); await admin.text();
+  t.mock.restoreAll();
+  const changed = await get('/v1/models'); assert.equal(changed.status, 200);
+  assert.ok(!(await changed.json()).data.some(model => model.id === 'anthropic/claude-sonnet-5'), 'a policy change is a new inventory');
+});

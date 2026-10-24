@@ -118,7 +118,10 @@ export default { async fetch(request) {
     let usageAfter = await usageCount();
     const initialBacklog = usageBefore + expectedUsage - usageAfter;
     while (usageAfter < usageBefore + expectedUsage && performance.now() - deliveryDone < 60000) { await sleep(250); usageAfter = await usageCount(); }
-    const drainMs = performance.now() - deliveryDone, selectedAfter = await selectedCount(), upstreamAfter = await json('/__load/stats');
+    const drainMs = performance.now() - deliveryDone, upstreamAfter = await json('/__load/stats');
+    // Selection counters are flushed asynchronously; wait for them to converge.
+    let selectedAfter = await selectedCount();
+    while (selectedAfter < expectedBefore + expectedUsage && performance.now() - deliveryDone < 60000) { await sleep(250); selectedAfter = await selectedCount(); }
     const usageSnapshot = await json('/v1/usage'), poolSnapshot = await json('/v1/pool');
     const requestIds = new Set(report.requests.map(row => row.requestId));
     const observedSessions = new Map();

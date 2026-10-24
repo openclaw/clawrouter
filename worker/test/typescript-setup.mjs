@@ -13,6 +13,8 @@ registerHooks({
 // Isolate hot caches are module state; every test starts from a cold isolate.
 const { beforeEach } = await import("node:test");
 const { clearHotCaches, setHotCacheClock, overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");
+// Coalescing windows are wall-clock; keep suites fast, a dedicated test covers the real window.
+(await import("../admission-cache.ts")).setCoalesceWindowMs(0);
 if (process.env.CLAWROUTER_TEST_HOT_CACHE === "off") overrideHotCacheConfig(HOT_CACHE_DISABLED);
 beforeEach(() => { clearHotCaches(); setHotCacheClock(); });
 /** Suites that mutate authority state directly between requests test the per-request authority path. */

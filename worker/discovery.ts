@@ -22,6 +22,7 @@ import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, pr
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
+import { HotCache, hotCacheConfig, registerHotCache } from "./hot-cache.ts";
 
 // Only compiled metadata lives across requests. Eligibility, health, balances
 // and policy projections are always rebuilt from this request's observations.
@@ -255,12 +256,20 @@ interface ClientEntitlements {
   scope: Pick<AuthorizedIdentity, "authType" | "credentialId" | "principalId">;
 }
 
+const entitlementCache = registerHotCache(new HotCache<ClientEntitlements>(512));
+
 async function clientEntitlements(request: Request, env: Env): Promise<ClientEntitlements | Response> {
   const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
   if (hasKey) {
     const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
     if (auth instanceof Response) return auth;
-    return entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId });
+    // Authentication above is re-checked per request; the derived inventory
+    // (health, grant eligibility, balances) is reused within the hot-cache bounds.
+    // Any change to the authorized identity or its policy is a different key.
+    const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy]);
+    return (await entitlementCache.get(key, hotCacheConfig(env), async () => ({
+      value: await entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId }), cacheable: true,
+    }))).value;
   }
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);

@@ -17,7 +17,7 @@ import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
-import { applyLocalGrantRuntime } from "./admission-cache.ts";
+import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration } from "./admission-timing.ts";
 import {
@@ -34,7 +34,7 @@ import {
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
-import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
+import { grantRoutingPolicy, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
@@ -719,9 +719,8 @@ export function captureGrantRuntime(context: ExecutionContext, env: Env, key: st
   if (response.status === 401 || response.status === 403) evictGrantCredentials(key);
   const state = observeGrantQuota(response, quota);
   if (!state) return;
-  const runtime = { ...state, grantRevision: revision };
-  applyLocalGrantRuntime(key, runtime);
-  context.waitUntil(recordGrantRuntime(env, key, runtime).catch(() => undefined));
+  const direct = queueGrantRuntime(env, key, { ...state, grantRevision: revision });
+  if (direct) context.waitUntil(direct);
 }
 
 function grantStickyHash(request: Request, auth: AuthorizedIdentity): Promise<string | null> {

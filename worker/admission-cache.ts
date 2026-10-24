@@ -5,6 +5,8 @@ import { credentialExpired } from "./credential-lifecycle.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
 import { HotCache, hotCacheConfig, registerHotCache, runInBackground, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { recordGrantRuntime } from "./grant-selection.ts";
+import { mergeGrantRuntimeState } from "./grant-runtime.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { snapshot } from "./providers.ts";
 import type { Env, GrantRuntimeState } from "./types";
@@ -89,9 +91,12 @@ function chooseLocally(env: Env, snap: AdmissionPoolSnapshot, input: GrantChoice
   return choice;
 }
 
-// Selection counters are advisory statistics; coalesce them into one small
-// background authority write per flush instead of one awaited RPC per request.
-const SELECTION_FLUSH_MS = 25;
+// Selection counters and quota feedback are advisory; coalesce them into one
+// background flush per window instead of one global-authority write per request.
+let flushWindowMs = 250;
+/** Test hook: shorten the coalescing window. */
+export function setCoalesceWindowMs(ms: number): void { flushWindowMs = ms; }
+const pendingRuntime = new Map<string, GrantRuntimeState>();
 const pendingSelections = new Map<string, { poolKey: string; key: string; count: number; lastMs: number; cursorKey?: string | null }>();
 const pendingCursors = new Map<string, string>();
 let flushScheduled = false;
@@ -103,15 +108,37 @@ function recordSelection(env: Env, poolKey: string, key: string, lastMs: number,
   if (pending) { pending.count++; pending.lastMs = lastMs; }
   else pendingSelections.set(id, { poolKey, key, count: 1, lastMs });
   if (cursorKey) pendingCursors.set(poolKey, cursorKey);
+  scheduleFlush(env);
+}
+
+/**
+ * Observed quota/cooldown state: applied to this isolate at once, sent to the
+ * authority coalesced per grant (merged with the authority's own merge rule).
+ * With the hot cache disabled it is written immediately, as before.
+ */
+export function queueGrantRuntime(env: Env, key: string, state: GrantRuntimeState): Promise<void> | undefined {
+  applyLocalGrantRuntime(key, state);
+  if (!hotCacheConfig(env).maxAgeMs) return recordGrantRuntime(env, key, state).catch(() => undefined);
+  const pending = pendingRuntime.get(key);
+  try { pendingRuntime.set(key, pending ? mergeGrantRuntimeState(pending, state) : state); }
+  catch { pendingRuntime.set(key, state); }
+  scheduleFlush(env);
+  return undefined;
+}
+
+function scheduleFlush(env: Env): void {
   if (flushScheduled) return;
   flushScheduled = true;
-  runInBackground(new Promise(resolve => setTimeout(resolve, SELECTION_FLUSH_MS)).then(() => flushSelections(env)));
+  runInBackground(new Promise(resolve => setTimeout(resolve, flushWindowMs)).then(() => flushSelections(env)));
 }
 
 export async function flushSelections(env: Env): Promise<void> {
   flushScheduled = false;
   const records = [...pendingSelections.values()];
   pendingSelections.clear();
+  const runtime = [...pendingRuntime];
+  pendingRuntime.clear();
+  const feedback = Promise.all(runtime.map(([key, state]) => recordGrantRuntime(env, key, state).catch(() => undefined)));
   for (const [poolKey, cursorKey] of pendingCursors) {
     const record = records.find(item => item.poolKey === poolKey && item.key === cursorKey) ?? records.find(item => item.poolKey === poolKey);
     if (record) record.cursorKey = cursorKey;
@@ -121,6 +148,7 @@ export async function flushSelections(env: Env): Promise<void> {
     try { await authorityCall(env, "/grant-pools/record", { records: records.slice(offset, offset + 256) }); }
     catch { /* Advisory counters: a lost flush only skews least-used/round-robin statistics. */ }
   }
+  await feedback;
 }
 
 /** Apply observed quota/cooldown state to this isolate's snapshots immediately. */

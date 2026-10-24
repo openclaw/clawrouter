@@ -193,6 +193,62 @@ issues zero authority, credential-owner and KV calls before upstream, and local
 selection matches the authority across all strategies and stickiness modes.
 Raw reports: [hot-cache-local.json](performance/hot-cache-local.json).
 
+### Stress and hardening (2026-10-23)
+
+Concurrency sweep on the same fixture (400 requests per cell, 20 ms synthetic
+upstream, soft weekly budget, retention on), hot cache off vs on in one build:
+
+| Scenario | Concurrency | TTFB p50 / p95 ms, off → on | Throughput req/s, off → on |
+| --- | ---: | --- | --- |
+| count | 50 | 168 / 208 → 122 / 138 | 291 → 401 |
+| count | 200 | 646 / 892 → 393 / 516 | 257 → 470 |
+| messages | 50 | 206 / 271 → 121 / 141 | 236 → 411 |
+| messages | 200 | 696 / 952 → 443 / 587 | 261 → 366 |
+| stream | 50 | 135 / 368 → 80 / 227 | 181 → 288 |
+| stream | 200 | 635 / 814 → 353 / 607 | 158 → 333 |
+
+Every cell reconciled selections, usage and upstream dispatches exactly. Cache-on
+cells issued 0-1 foreground `/admission/resolve` and 2-5 `/materialize` per 400
+requests. Findings and changes:
+
+- Quota feedback was still one global-authority write per request. It is now
+  merged per grant (`mergeGrantRuntimeState`) and flushed with the selection
+  counters every 250 ms: 400 → 14-57 feedback writes and 2-9 counter writes per
+  400 requests in the follow-up sweep. With the hot cache disabled feedback is
+  written per response, as before.
+- Catalog and model lists stayed CPU/KV-bound with zero authority calls. The
+  derived per-key inventory (health, grant eligibility, balances) is now reused
+  within the hot-cache bounds, keyed by the full authorized identity and policy.
+- Background work is bounded at 25 s so a hung backend call leaves the pending
+  set instead of extending every later request's `waitUntil`.
+- The harness now waits for asynchronous selection counters to converge before
+  reconciling them.
+- Mid-stream aborts at concurrency 200 produced occasional client `ECONNRESET`
+  (0-57 per 400) only with the faster cache-on router. Instrumented runs showed
+  every request that reached the Worker returned 200 and none threw; the resets
+  are local workerd/loopback socket churn under mass client aborts, not router
+  failures.
+- `test/hot-cache-revocation-workerd.test.mjs` runs 16 concurrent clients
+  (~2,000 req/s locally) against the real Worker and SQLite authority, disables
+  the policy at the authority mid-load and requires every request to be denied
+  after the max age. With a 4 s max age, successes stopped 2.94-2.96 s after
+  revocation across three runs, with no 5xx.
+- Pools whose grants still carry legacy (KV-only) projections keep the
+  authority selection path on every request until owner publication repairs them.
+
+Interleaved A/B against the landed hot path (three alternating rounds per side,
+concurrency 50, 400 requests per cell, medians; all cells reconciled with zero
+errors):
+
+| Scenario | TTFB p50 / p95 ms, before → after | Throughput req/s | Feedback writes per 400 |
+| --- | --- | --- | --- |
+| catalog | 107 / 162 → 12 / 22 | 450 → 3,341 | 0 → 0 |
+| messages | 168 / 481 → 184 / 440 | 247 → 207 | 400 → 21-54 |
+| stream | 98 / 237 → 87 / 135 | 206 → 341 | 400 → 28-43 |
+
+Messages differences are within this host's run-to-run noise; the deterministic
+change there is the 10x drop in global-authority writes.
+
 
 ## Soft-budget instrumentation (2026-10-18)
 
