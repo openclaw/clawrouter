@@ -27,10 +27,9 @@ unpinned selection can refresh the snapshot. This change adds no cache of its
 own; admission and credential caching follow [#326's hot-cache bounds](#zero-hop-warm-path-2026-10-23).
 
 For a warm pinned, chained create with a stored grant, no credential refresh,
-and retention disabled, these are **sequential storage round trips before
-upstream send**. The baseline is main at `0f0d455` without this PR's Worker
-changes; its counts follow the sequential awaits in that version. The merged
-counts are asserted by the latency-injected fixture in both modes.
+and retention disabled, these were the **sequential storage round trips before
+upstream send** after #325. The baseline is main at `0f0d455`; its counts follow
+the sequential awaits in that version. The current counts appear below.
 
 | Budget legs | Warm caches: main → merged | Cache disabled: main → merged |
 | --- | ---: | ---: |
@@ -53,8 +52,8 @@ unchanged by this PR; independent waits overlap.
 WebSocket retention, when required, still completes after reservation and before
 dispatch; #326's post-dispatch retention applies to ordinary HTTP. These counts
 exclude the connection handshake, earlier-turn settlement, and continuation
-publication holding `response.created`. Credential preparation, every budget
-check, required retention and dispatch still finish before the frame is sent.
+publication holding `response.created`. In reserve mode, credential preparation,
+budget reservation, required retention and dispatch finish before the frame is sent.
 
 Soft-policy WebSocket turns now omit reserve and dispatch calls. They perform
 local budget preflight and start `/status` reads alongside the send; exhaustion
@@ -67,7 +66,7 @@ budget legs. Required retention remains ahead of send.
 The SQLite-backed Node admission fixture releases each storage round only once
 exactly its expected hops are waiting, so concurrency is proven causally rather
 than by wall-clock timing; a serialized or unexpected hop fails the test. It
-asserts each batch for all eight cells, freezing the cache clock after warm-up
+asserts each batch in both cache and budget modes, freezing the cache clock after warm-up
 so host scheduling cannot expire entries. It also proves that
 `assertProviderAccess` and pinned preparation return the same admitted connection
 without a new connection lookup in both modes. A separate 40 ms-per-reserve test
@@ -78,6 +77,38 @@ A continuation belonging to another grant returns the actionable
 session's generic `502 provider_unavailable` pin-change close. The fixture also
 proves unsent reservations are released after mismatch or materialization failure;
 materialization-failure fixtures explicitly disable the credential cache.
+
+### Soft turns and combined reserve/dispatch (2026-10-23)
+
+Reserve-mode creates without required retention now request dispatch-started
+reservations in the same call per leg. Only an explicit `dispatched: true` reply
+allows the Worker to skip that leg's `/dispatch`; older Durable Objects keep
+the separate call. The causal fixture expects exactly these rounds for a pinned,
+chained create with stored credentials and retention disabled:
+
+| Policy / budget legs | Warm: #325 → now | Cache off: #325 → now |
+| --- | ---: | ---: |
+| Reserve / none | 2 → 2 | 4 → 4 |
+| Reserve / one | 3 → 2 | 5 → 4 |
+| Reserve / policy + provider | 3 → 2 | 5 → 4 |
+| Reserve / monthly + daily + weekly + provider | 3 → 2 | 5 → 4 |
+| Soft / any of the above | 2 | 4 |
+
+Warm rounds are `continuation + KV`, then `select + all reserve legs` in
+reserve mode, or just `select` in soft mode. Cache-off adds admission first and
+materialization last. Soft `/status` reads run alongside send and add no
+foreground round. These are causal scheduling proofs, not production timings;
+at the measured ~72 ms storage latency, removing a reserve dispatch round saves
+approximately one such round trip.
+
+Ordinary HTTP reserve requests also combine the calls after all fallible
+preparation. Fail-closed retention and account revalidation keep two-step
+dispatch; so do durable background owners, Fusion synthesizer reservations,
+transcription and realtime owners. Required WebSocket retention still runs
+between reserve and dispatch. A crash between a combined call and send leaves a
+dispatch-started receipt that is retained/conservatively settled at lease expiry
+instead of refunded. This errs toward over-charge, never under-charge. A known
+unsent failure or multi-leg denial still settles successful legs to zero.
 
 ## Zero-hop warm path (2026-10-23)
 
@@ -95,7 +126,7 @@ unbudgeted policies.
 | Quota feedback | Background authority write | Also applied to this isolate's snapshot at once |
 | Request retention | R2 put before dispatch, fail-closed | R2 put after dispatch in `waitUntil`, best-effort; background jobs and >8 MiB Claude bodies keep the fail-closed write |
 | Soft budgets | Concurrent status + 50 ms post-header grace | Unchanged, plus a 10 s exhausted-scope verdict that denies before dispatch with no ledger call; new policies default to soft |
-| Reserve budgets | reserve + dispatch | Unchanged (authoritative, foreground) |
+| Reserve budgets | reserve + dispatch | Combined reserve/dispatch when no fallible preparation remains; still authoritative and foreground |
 
 Correctness boundaries:
 

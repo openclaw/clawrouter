@@ -367,6 +367,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let upstreamMs = 0;
   const budgetStart = performance.now();
   let reservation = reservedBudget?.reservation;
+  let retention: PreparedContentRetention | null;
+  try { retention = prepareContentRetention(env, auth, selection, requestId); }
+  catch {
+    accounting.fail(503, "provider_error", reservation);
+    return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
+  }
+  const content = retention?.contentRef ?? null;
   if (prepared.backgroundRecovery) {
     try {
       if (!prepared.continuation || !continuation || reservedBudget) throw new HttpError(400, "background_unsupported", "this route cannot own background recovery");
@@ -381,7 +388,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   } else if (!reservation && !useSoft) {
-    try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }
+    try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection, undefined, {
+      // Fail-closed retention and stateful revalidation must finish before the
+      // separate dispatch transition. Durable owners keep their own protocol.
+      dispatched: !retention?.large && !prepared.revalidateAccount,
+    }); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
       accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
@@ -396,11 +407,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
   }
   budgetMs = useSoft || !background && !reservation?.reservations.length ? 0 : performance.now() - budgetStart;
-  let content: string | null;
-  let retention: PreparedContentRetention | null;
   try {
-    retention = prepareContentRetention(env, auth, selection, requestId);
-    content = retention?.contentRef ?? null;
     // Durable background owners read the stored bytes, and expanded bodies must
     // not overlap transport memory: both keep the write ahead of dispatch.
     if (retention && (background || retention.large)) await retention.write();

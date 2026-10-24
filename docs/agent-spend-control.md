@@ -752,6 +752,21 @@ hosted-tool work are not metered; unknown dynamic models require manifest pricin
 
 Reservations have a 15-minute admission lease. Before upstream dispatch, both
 policy and provider ledgers must record that the request may incur charges.
+Ordinary HTTP requests without fail-closed retention or post-reservation account
+revalidation, and Responses WebSocket turns without required retention, request
+`dispatched: true` in `/reserve`. Each ledger writes its reservation and dispatch
+state atomically in one call. The Worker skips `/dispatch` only for individual
+legs whose response acknowledges `dispatched: true`; old ledger versions still
+receive the separate dispatch call. Failed multi-leg admission settles every
+successful leg to zero, including dispatch-started legs.
+
+If a Worker dies between the combined call and the upstream send, its reservation
+is already dispatch-started. It is retained/conservatively settled at lease
+expiry instead of released: this can over-charge unsent work, never under-charge
+potentially dispatched work. Required WebSocket retention, fail-closed HTTP
+retention (background jobs and Claude bodies above 8 MiB), account revalidation,
+and durable/recovery owners keep their two-step ordering.
+
 Expired reservations that never reached this transition settle to zero. Dispatched
 work retains its conservative charge across lease expiry, including long HTTP
 streams and delayed settlement recovery. Complete usage can replace that estimate

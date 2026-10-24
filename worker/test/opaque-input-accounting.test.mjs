@@ -44,7 +44,8 @@ function settled(f, amount) {
     assert.equal(rows[0].settled, 1);
     assert.equal(rows[0].dispatch_started, 1);
     assert.equal(rows[0].reserved_micros, amount);
-    for (const path of ["/reserve", "/dispatch", "/settle"]) {
+    assert.equal(f.operations.filter(op => op.name === owner && op.path === "/dispatch").length, 0);
+    for (const path of ["/reserve", "/settle"]) {
       assert.equal(f.operations.filter(op => op.name === owner && op.path === path).length, 1);
     }
   }
@@ -71,7 +72,7 @@ for (const route of routes) for (const stream of [false, true]) {
         if (rows.length) {
           assert.equal(rows[0].reserved_micros, 0);
           assert.equal(rows[0].settled, 1);
-          assert.equal(rows[0].dispatch_started, 0);
+          assert.equal(rows[0].dispatch_started, 1);
         }
       }
       upstream.mock.restore();

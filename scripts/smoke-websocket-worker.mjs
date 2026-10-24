@@ -222,8 +222,8 @@ try {
   assert.deepEqual(await ledgerFacts(), beforeLanes.map(({ spent }) => ({ spent: spent + 3 * 1_080, unsettled: 0 })));
   laneSocket.close(1000, "named lanes complete");
 
-  // A successful HTTP response without durable dispatch confirmation cannot
-  // admit a WebSocket operation or retain its charge.
+  // An old ledger cannot acknowledge merged dispatch. Its separate dispatch
+  // confirmation must still gate the send and release failed admission.
   const beforeDispatchFailure = await ledgerFacts(), beforeDispatchFrames = (await stateFrames()).length;
   const rejectedDispatch = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": "dispatch", "x-clawrouter-session-id": "dispatch-failure" } });
   assert.equal(rejectedDispatch.status, 101);
@@ -728,6 +728,10 @@ export default { ...handler, async fetch(request, env, context) {
       BUDGET_LEDGER: { idFromName: (name) => ledger.idFromName(name), get: (id) => {
         const stub = ledger.get(id);
         return { async fetch(url, init) {
+          if (fault === "dispatch" && new URL(url).pathname === "/reserve") {
+            const body = JSON.parse(init.body); delete body.dispatched;
+            return stub.fetch(url, { ...init, body: JSON.stringify(body) });
+          }
           if (fault === "dispatch" && new URL(url).pathname === "/dispatch") return Response.json({ dispatched: false });
           if (fault !== "dispatch" && new URL(url).pathname === "/settle") { trace.push({ kind: "rollback_attempted" }); return new Response("fixture ledger outage", { status: 503 }); }
           if (rollback && new URL(url).pathname === "/reserve") {

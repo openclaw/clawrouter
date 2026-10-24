@@ -1,6 +1,6 @@
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
-import { retainRequestContent } from "./content-retention";
+import { retainRequestContent, retentionRequired } from "./content-retention";
 import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting, estimateCost } from "./proxy-accounting";
@@ -53,7 +53,8 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       let accounting: ReturnType<typeof createProxyAccounting> | undefined;
       let reservation = emptyReservation(), content: string | null = null;
       let continuation: HttpContinuation | undefined;
-      const useSoft = softBudgetPolicy(auth.policy);
+      let useSoft = softBudgetPolicy(auth.policy);
+      const reserveOptions = () => ({ dispatched: !retentionRequired(auth, selection.capability) });
       try {
         let cost: ReturnType<typeof estimateCost> | undefined;
         const resolve = HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
@@ -65,7 +66,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, value?.parentTools);
           const connection = await assertProviderAccess(selection.provider, auth, env);
           signal.throwIfAborted();
-          return reserveBudget(env, auth, selection.capability, cost, connection);
+          return reserveBudget(env, auth, selection.capability, cost, connection, undefined, reserveOptions());
         }) : Promise.resolve(undefined);
         const [resolved, prepared, reserved] = await Promise.allSettled([resolve, preparing, reserving]);
         if (reserved.status === "fulfilled" && reserved.value) reservation = reserved.value;
@@ -75,6 +76,8 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         if (reserved.status === "rejected" && reserved.reason instanceof HttpError && reserved.reason.code === "accounting_unavailable") throw reserved.reason;
         if (prepared.status === "rejected") throw prepared.reason;
         const upstream = prepared.value;
+        // Unpinned credential failover can refresh policy during preparation.
+        useSoft = softBudgetPolicy(auth.policy);
         // A foreign continuation used to reach the session's generic pin-change
         // close. Reject it here with the actionable continuation restart error.
         if (pinned && continuation?.pinned && (continuation.pinned.key !== pinned.key || "revision" in continuation.pinned && continuation.pinned.revision !== pinned.revision)) throw continuationRestart();
@@ -88,7 +91,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
           if (denial) throw denial;
           reservation = { reservations: [], reservedMicros: 0, charges: [] };
-        } else if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
+        } else if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection, undefined, reserveOptions());
         try { content = await retainRequestContent(env, auth, selection, requestId); }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
         await markBudgetDispatched(env, reservation);

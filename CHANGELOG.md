@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Combine budget reservation and dispatch marking for ordinary HTTP requests and Responses WebSocket turns without required retention, saving a ledger round trip; older ledgers retain two-step dispatch, and unsent crash outcomes conservatively retain reservations.
 - Honor soft budgets on Responses WebSocket turns with local pre-dispatch denials, parallel status checks and observed charges; exhausted scopes deny the next turn without aborting active lanes.
 - Reduce Responses WebSocket turn latency by overlapping pinned continuation and grant preparation with budget reservation; reserve hard-budget legs concurrently with ordered errors and full rollback, and return a continuation restart error for cross-grant turns.
 - Serve warm proxy-key HTTP inference with zero foreground backend calls before the upstream fetch: admission, grant selection and materialized credentials come from isolate-local caches (fresh 10 s, stale-while-revalidate to a 60 s max age), selection counters and quota feedback are recorded in the background, and an upstream 401/403 evicts the cached credential. Revocation, policy, owner and pool changes reach every isolate within the max age (immediately in the isolate that served the mutation); set `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` to restore per-request authority checks. `Server-Timing` adds `cr-cache;desc=hit|stale|miss|off`.

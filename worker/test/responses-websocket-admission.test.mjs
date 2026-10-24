@@ -83,7 +83,6 @@ for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"
       ["continuation", "kv"],
       [...Array(budgetMode === "soft" ? 0 : budgets).fill("reserve"), "select"],
       ...(cache === "off" ? [["materialize"]] : []),
-      ...(budgets && budgetMode === "reserve" ? [Array(budgets).fill("dispatch")] : []),
     ];
     const rounds = [], waiting = [];
     let measuring = true, problem = null, watchdog;
@@ -305,4 +304,56 @@ test("soft WebSocket missing usage has no invented reservation charge", async t 
   assert.equal(f.events[0].actual_cost_micros, 0);
   assert.equal(f.events[0].reserved_cost_micros, 0);
   assert.equal(f.events[0].cost_basis, "unpriced_usage");
+});
+
+test("retention-required WebSocket keeps reserve, retention, dispatch, send ordering", async t => {
+  const f = await websocketFixture(t, { budgets: 1, retain: true });
+  const order = [], get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
+  f.env.CONTENT_ARCHIVE = { put: async () => { order.push("retention"); } };
+  f.env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+    const path = new URL(url).pathname;
+    if (path === "/reserve") {
+      assert.equal(JSON.parse(init.body).dispatched, undefined);
+      order.push("reserve");
+    }
+    if (path === "/dispatch") order.push("dispatch");
+    return get(name).fetch(url, init);
+  } });
+  f.onSend = () => order.push("send");
+  assert.equal((await f.create()).type, "response.completed");
+  assert.deepEqual(order, ["reserve", "retention", "dispatch", "send"]);
+});
+
+for (const budgetMode of ["soft", "reserve"]) test(`first-turn failover uses refreshed ${budgetMode} policy for reservation and dispatch`, async t => {
+  const f = await websocketFixture(t, { budgets: 1, budgetMode: budgetMode === "soft" ? "reserve" : "soft" });
+  const getGrant = f.env.GRANT_CREDENTIALS.get.bind(f.env.GRANT_CREDENTIALS);
+  let failed = false;
+  f.env.GRANT_CREDENTIALS.get = name => ({ fetch: async (url, init) => {
+    if (!failed && new URL(url).pathname === "/materialize") {
+      failed = true;
+      return Response.json({ error: { code: "grant_credential_missing", message: "fixture failover" } }, { status: 503 });
+    }
+    return getGrant(name).fetch(url, init);
+  } });
+  const getAuthority = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+  let refreshed = false;
+  f.env.ACCESS_CONTROL.get = name => ({ fetch: async (url, init) => {
+    const request = url instanceof Request ? url : new Request(url, init);
+    const response = await getAuthority(name).fetch(request);
+    if (new URL(request.url).pathname === "/admission/resolve" && failed) {
+      const body = await response.json();
+      body.policy.policy.budgetMode = budgetMode;
+      refreshed = true;
+      return Response.json(body);
+    }
+    return response;
+  } });
+  const calls = [], getBudget = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
+  f.env.BUDGET_LEDGER.get = name => ({ fetch: (url, init) => { calls.push(new URL(url).pathname); return getBudget(name).fetch(url, init); } });
+  const result = await f.create();
+  assert.equal(result.type, "response.completed", JSON.stringify(result));
+  assert.equal(refreshed, true);
+  assert.equal(calls.includes("/reserve"), budgetMode === "reserve");
+  assert.equal(calls.includes("/charge"), budgetMode === "soft");
+  assert.equal(calls.includes("/dispatch"), false);
 });

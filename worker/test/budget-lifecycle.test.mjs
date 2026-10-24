@@ -11,6 +11,61 @@ const connection = { providerId: "openai", monthlyBudgetMicros: 100 };
 const cost = { reserveMicros: 75, basis: "manifest_pricing" };
 const event = { id: "fixture-event", type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "fixture", request_id: "fixture-request" };
 
+test("merged reserve persists and acknowledges dispatch atomically, skips dispatch and retains crash debt", async t => {
+  const f = fixture(t);
+  const reserved = await reserveBudget(f.env, auth, "llm.responses", cost, connection, undefined, { dispatched: true });
+  assert.ok(reserved.reservations.every(row => row.dispatched === true));
+  assert.ok(f.calls.every(call => call.path === "/reserve" && call.body.dispatched === true));
+  await markBudgetDispatched(f.env, reserved);
+  assert.equal(f.calls.length, 2);
+  for (const call of f.calls) {
+    const replay = await f.call(call.name, "/reserve", call.body);
+    assert.equal((await replay.json()).dispatched, true);
+    assert.equal(f.rows(call.name)[0].dispatch_started, 1);
+  }
+  f.advance(15 * minute);
+  for (const row of reserved.reservations) {
+    await f.object(row.objectName).ledger.alarm();
+    assert.equal(f.rows(row.objectName)[0].reserved_micros, 75);
+    assert.equal(f.rows(row.objectName)[0].settled, 2);
+  }
+  // Even a conservatively retained dispatch-started receipt can be released
+  // fully by authoritative evidence that the Worker never sent the request.
+  await settleBudget(f.env, reserved, 0);
+  for (const row of reserved.reservations) {
+    assert.equal(f.rows(row.objectName)[0].reserved_micros, 0);
+    assert.equal(f.rows(row.objectName)[0].settled, 1);
+  }
+});
+
+test("mixed rollout marks only legs whose old ledger did not acknowledge dispatched", async t => {
+  const f = fixture(t), get = f.env.BUDGET_LEDGER.get;
+  f.env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+    if (name === "provider:openai" && new URL(url).pathname === "/reserve") {
+      const body = JSON.parse(init.body); delete body.dispatched;
+      return get(name).fetch(url, { ...init, body: JSON.stringify(body) });
+    }
+    return get(name).fetch(url, init);
+  } });
+  const reserved = await reserveBudget(f.env, auth, "llm.responses", cost, connection, undefined, { dispatched: true });
+  assert.equal(reserved.reservations[0].dispatched, true);
+  assert.equal(reserved.reservations[1].dispatched, undefined);
+  await markBudgetDispatched(f.env, reserved);
+  assert.deepEqual(f.calls.filter(call => call.path === "/dispatch").map(call => call.name), ["provider:openai"]);
+  for (const row of reserved.reservations) assert.equal(f.rows(row.objectName)[0].dispatch_started, 1);
+});
+
+test("multi-leg denial releases every successful dispatch-started leg to zero", async t => {
+  const f = fixture(t);
+  const multi = { ...auth, policy: { ...auth.policy, dailyBudgetMicros: 100, weeklyBudgetMicros: 74 } };
+  await assert.rejects(reserveBudget(f.env, multi, "llm.responses", cost, connection, undefined, { dispatched: true }), { code: "weekly_budget_exhausted" });
+  const rows = [...f.rows("tenant:fixture"), ...f.rows("provider:openai")];
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every(row => row.dispatch_started === 1 && row.reserved_micros === 0 && row.settled === 1));
+  assert.equal(f.calls.filter(call => call.path === "/settle").length, 3);
+  await assert.doesNotReject(reserveBudget(f.env, auth, "llm.responses", { ...cost, reserveMicros: 100 }, connection));
+});
+
 test("live work keeps both charges after lease expiry and settles exactly once", async (t) => {
   const f = fixture(t);
   const reserved = await reserveBudget(f.env, auth, "llm.responses", cost, connection);
@@ -159,7 +214,7 @@ function queued(body) {
 function fixture(t, initialNow = Date.parse("2026-09-23T00:00:00Z")) {
   let now = initialNow;
   t.mock.method(Date, "now", () => now);
-  const objects = new Map(), messages = [], failures = new Map(), lostAcks = new Map();
+  const objects = new Map(), messages = [], failures = new Map(), lostAcks = new Map(), calls = [];
   function object(name, seed) {
     if (!objects.has(name)) {
       const db = new DatabaseSync(":memory:");
@@ -172,6 +227,7 @@ function fixture(t, initialNow = Date.parse("2026-09-23T00:00:00Z")) {
   }
   const env = {
     BUDGET_LEDGER: { idFromName: name => name, get: name => ({ fetch: async (url, init) => {
+      calls.push({ name, path: new URL(url).pathname, body: init?.body ? JSON.parse(init.body) : null });
       if (failures.get(name) === new URL(url).pathname) throw new Error("fixture ledger unavailable");
       const response = await object(name).ledger.fetch(new Request(url, init));
       if (lostAcks.get(name) === new URL(url).pathname) throw new Error("fixture acknowledgment lost after write");
@@ -179,5 +235,5 @@ function fixture(t, initialNow = Date.parse("2026-09-23T00:00:00Z")) {
     } }) },
     USAGE_QUEUE: { send: async message => messages.push(message) },
   };
-  return { env, messages, failures, lostAcks, object, advance: delta => { now += delta; }, rows: name => object(name).db.prepare("SELECT * FROM budget_reservations ORDER BY reservation_id").all(), call: (name, path, body) => object(name).ledger.fetch(new Request(`https://budget${path}`, body ? { method: "POST", body: JSON.stringify(body) } : undefined)) };
+  return { env, messages, failures, lostAcks, calls, object, advance: delta => { now += delta; }, rows: name => object(name).db.prepare("SELECT * FROM budget_reservations ORDER BY reservation_id").all(), call: (name, path, body) => object(name).ledger.fetch(new Request(`https://budget${path}`, body ? { method: "POST", body: JSON.stringify(body) } : undefined)) };
 }
