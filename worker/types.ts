@@ -414,6 +414,7 @@ export interface BudgetReserveRequest {
   costMicros: number;
   reservationId: string;
   capability: string;
+  dispatched?: true;
 }
 
 export interface BudgetChargeRequest {

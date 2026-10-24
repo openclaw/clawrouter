@@ -261,7 +261,7 @@ test('explicit reserve budgets stay foreground and authoritative', async t => {
   const response = await f.request();
   assert.equal(response.status, 200, await response.clone().text());
   await response.text(); await f.drain();
-  assert.ok(before.includes('/reserve') && before.includes('/dispatch') && !before.includes('/status'), before.join());
+  assert.ok(before.includes('/reserve') && !before.includes('/dispatch') && !before.includes('/status'), before.join());
 });
 
 test('request content retention is written after dispatch and never fails the request', async t => {

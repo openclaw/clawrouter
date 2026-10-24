@@ -37,6 +37,12 @@ explicit fixed tariff), and records `unpriced_usage` when any price is unknown.
 Missing usage has no invented reservation charge. It is deliberately unsuitable
 for strict spend enforcement or provider invoice caps.
 
+Responses WebSocket turns use the same local pre-dispatch denials, parallel
+status reads and observed charges, without reserve or dispatch RPCs. A shared
+upstream socket cannot cancel just one turn: exhaustion observed during a turn
+marks the scope exhausted for the next create on any socket in this isolate.
+The in-flight turn completes and is charged; no budget check aborts it mid-turn.
+
 The existing backpressured delivery observer delivers actual charges through
 `ctx.waitUntil`, independently of usage publication. Each `/charge` writes an
 already-settled, dispatch-started `budget_reservations` receipt, so existing
@@ -49,9 +55,13 @@ covering the longest monthly window. Failed delivery enqueues `budget_charge`
 through the same queue/retry/DLQ boundary as `budget_settlement`; a failure never
 blocks or fails the already-delivered response. Operators must recover exhausted
 queue retries from the DLQ. Queue acceptance is not proof of a ledger charge.
+WebSockets preserve their persistent-session accounting boundary: if both charge
+delivery and durable recovery fail, or usage publication fails, the socket
+reports `accounting_unavailable` and closes.
 
 Overshoot consists of requests already in flight when a window crosses its limit,
-plus observation/charge-delivery staleness. Fail-open outages or delayed retries
+including in-flight WebSocket turns (up to 16 active lanes per socket), plus normal
+soft observation/charge-delivery staleness. Fail-open outages or delayed retries
 can extend that staleness without a strict monetary bound.
 
 | Path | Soft policy behavior |
@@ -61,12 +71,11 @@ can extend that staleness without a strict monetary bound.
 | Background create on creation-only transports | Ordinary HTTP soft behavior; no durable recovery job |
 | Fusion advisers | Ordinary HTTP soft behavior |
 | Fusion synthesizer | Reserve-only: its coverage is acquired before adviser work and verified against the final request |
-| Responses WebSocket turns, including continuations | Reserve-only: multiple active lanes share one upstream socket; a budget abort cannot safely terminate just one dispatched turn with today's session contract |
+| Responses WebSocket turns, including continuations | Pre-dispatch local denial, parallel check, observed charge; no mid-turn abort — a crossed cap denies the next turn |
 | Durable background admission, collection, recovery and controls | Reserve-only: frozen financial outcome and original reserve/dispatch receipts remain owned by the durable scope; controls never add charges |
 
-WebSocket soft support needs a per-turn cancellation/publication contract that
-preserves other active lanes. Changing durable background recovery needs a
-versioned financial outcome protocol. Neither is enabled by this policy flag.
+Changing durable background recovery needs a versioned financial outcome
+protocol; it is not enabled by this policy flag.
 
 Administrators from the existing configured Access admin model manage caps at
 **Users → Caps**. Policy defaults are edited inline; principal-scoped policies
@@ -743,6 +752,21 @@ hosted-tool work are not metered; unknown dynamic models require manifest pricin
 
 Reservations have a 15-minute admission lease. Before upstream dispatch, both
 policy and provider ledgers must record that the request may incur charges.
+Ordinary HTTP requests without fail-closed retention or post-reservation account
+revalidation, and Responses WebSocket turns without required retention, request
+`dispatched: true` in `/reserve`. Each ledger writes its reservation and dispatch
+state atomically in one call. The Worker skips `/dispatch` only for individual
+legs whose response acknowledges `dispatched: true`; old ledger versions still
+receive the separate dispatch call. Failed multi-leg admission settles every
+successful leg to zero, including dispatch-started legs.
+
+If a Worker dies between the combined call and the upstream send, its reservation
+is already dispatch-started. It is retained/conservatively settled at lease
+expiry instead of released: this can over-charge unsent work, never under-charge
+potentially dispatched work. Required WebSocket retention, fail-closed HTTP
+retention (background jobs and Claude bodies above 8 MiB), account revalidation,
+and durable/recovery owners keep their two-step ordering.
+
 Expired reservations that never reached this transition settle to zero. Dispatched
 work retains its conservative charge across lease expiry, including long HTTP
 streams and delayed settlement recovery. Complete usage can replace that estimate

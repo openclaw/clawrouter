@@ -436,7 +436,14 @@ Send authenticated upgrades to `/v1/responses` or
 `response.create`, so an HTTP 101 alone does not prove model access or upstream
 readiness. Every create rechecks credential, policy, provider, grant, retention,
 and budget before dispatch. The connection pins its provider route and grant
-revision; changing either requires a new connection.
+revision; changing either requires a new connection. Create admission and grant
+selection share HTTP's isolate-local snapshot (fresh 10 s, maximum age 60 s by
+default); `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` restores authoritative checks.
+A pinned grant that is missing, ineligible or changed returns
+`409 upstream_grant_changed`, or the continuation restart error below. Local
+selection never substitutes another grant on an existing socket.
+Credential authentication errors take precedence over per-create model or route
+selection errors, as they do for HTTP requests.
 
 Response IDs and `response.metadata` turn state are bound to each create's fresh
 authorization scope and actual upstream owner before forwarding. Codex can then
@@ -449,27 +456,37 @@ a new connection. The rejected create is not billed and does not close the socke
 An upgrade header alone
 does not create a synthetic metadata event. Metadata may precede
 `response.created`; it identifies the response without proving execution started.
-Pending publication preserves frame order and blocks the next same-lane create
-until publication and settlement finish. Closing the connection suppresses late
-publication acknowledgments and queued output.
+Pending publication preserves frame order. After a terminal outcome is claimed
+and its frame is forwarded, the next same-lane create may begin admission while
+settlement finishes; dispatch and the final soft-budget preflight wait for
+successful settlement on that lane, without blocking other lanes' admission or
+dispatch. An accounting
+failure still closes the connection with `accounting_unavailable` before new
+work is sent. Closing the connection suppresses late publication acknowledgments
+and queued output.
 
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
-grants after dispatch. A terminal response with usable usage settles once;
-sent requests interrupted by disconnects or deadlines without final usage retain
-the reservation. Unsent admitted requests release it; queued requests have no
+grants after dispatch. A terminal response with usable usage settles once.
+Reserve policies retain the reservation when sent requests disconnect or time
+out without final usage; unsent admitted requests release it. Soft policies use
+local pre-dispatch denials and parallel budget checks, then charge observed usage
+or an explicit fixed tariff, marking unknown prices as `unpriced_usage` without
+inventing a missing-usage charge. Budget exhaustion never aborts an in-flight
+soft turn; it denies the next create in this isolate. Queued requests have no
 receipt. The first terminal outcome or close cause owns settlement, including
 when admission finishes after cancellation. A client disconnect records
 `client_error` with `status_code: null`; only the response whose deadline expired
 records `timeout`/504. Other active lanes closed with that connection do not
 inherit its timeout. If budget
-settlement and its durable recovery both fail, or usage publication fails, the
-socket reports `accounting_unavailable` and closes before accepting more work.
+settlement/charge and its durable recovery both fail, or usage publication fails, the
+socket reports `accounting_unavailable` and closes before sending more work.
 
-Limits per connection are 16 active responses, 32 named lanes plus the default
-lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
-bytes, at most 48 output frames/8 MiB awaiting publication, and 16 MiB cumulative
+Limits per connection are 16 active responses (including those still settling),
+32 named lanes plus the default lane, 48 buffered creates, 4 MiB per incoming
+frame, 8 MiB total buffered create bytes, at most 48 output frames/8 MiB awaiting
+publication, and 16 MiB cumulative
 downstream output. The output limit bounds a slow
 reader because Workers' WebSocket API has no supported drain/queue metric.
 Connections last at most 60 minutes; each response uses its endpoint deadline,

@@ -55,7 +55,7 @@ for (const [limit, providerLimit] of [[200_000, 1_000_000], [1_000_000, 200_000]
     const unchangedRows = () => stores.forEach((store, index) => {
       const rows = store.reservations(), before = originalRows[index];
       assert.deepEqual(rows.filter(row => before.some(old => old.reservation_id === row.reservation_id)), before);
-      assert.ok(rows.filter(row => !before.some(old => old.reservation_id === row.reservation_id)).every(row => row.reserved_micros === 0 && row.settled === 1 && row.dispatch_started === 0), "provider denial only adds final-zero policy rollback receipts");
+      assert.ok(rows.filter(row => !before.some(old => old.reservation_id === row.reservation_id)).every(row => row.reserved_micros === 0 && row.settled === 1 && row.dispatch_started === 1), "provider denial only adds final-zero dispatch-started rollback receipts");
     });
     unchangedRows();
 

@@ -452,7 +452,7 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
   assert.equal(ledgerAfter["tenant:fixture"].budget_reservations.reduce((sum, row) => sum + JSON.parse(row).reserved_micros, 0), 300);
   const providerRows = ledgerAfter["provider:openai"].budget_reservations.map(row => JSON.parse(row));
   assert.equal(providerRows.reduce((sum, row) => sum + row.reserved_micros, 0), 500);
-  assert.equal(providerRows.filter(row => row.reserved_micros === 0 && row.dispatch_started === 0).length, 1, "parallel provider reservation rolls back on policy denial");
+  assert.equal(providerRows.filter(row => row.reserved_micros === 0 && row.dispatch_started === 1).length, 1, "parallel dispatch-started provider reservation rolls back on policy denial");
   const usageAfter = await until(usageLedgers, value => value[shards[0]].usage_events.length === 4 && value[shards[1]].usage_events.length === 3);
   const appended = { [shards[0]]: [["denied", 402, "subscription"], ["success", 200, "subscription"]], [shards[1]]: [["client_error", 409, null], ["success", 200, "subscription"]] };
   for (const name of shards) {

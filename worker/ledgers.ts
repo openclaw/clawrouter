@@ -58,18 +58,19 @@ export class BudgetLedgerObject implements DurableObject {
   }
 
   private reserve(request: BudgetReserveRequest): Response {
-    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null; dispatch_started: number; settled: number; created_at_ms: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key, dispatch_started, settled, created_at_ms FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
     if (existing) {
       const spent = this.effectiveSpent(existing.window_key, existing.budget_scope_key);
-      return json({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent) });
+      const dispatched = request.dispatched === true && existing.dispatch_started === 1 && existing.settled === 0 && existing.created_at_ms + reservationLeaseMs > Date.now();
+      return json({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent), ...(dispatched ? { dispatched: true } : {}) });
     }
     const spent = this.effectiveSpent(request.windowKey, request.scopeKey);
     const remaining = Math.max(0, request.limitMicros - spent);
     if (request.costMicros > remaining) return json({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
-    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 0, 0, ?)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now(), request.scopeKey ?? null);
+    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 0, ?, ?)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now(), request.dispatched === true ? 1 : 0, request.scopeKey ?? null);
     void this.scheduleAlarm();
     const next = spent + request.costMicros;
-    return json({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next) });
+    return json({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next), ...(request.dispatched === true ? { dispatched: true } : {}) });
   }
 
   private dispatch(request: { reservationId: string }): Response {

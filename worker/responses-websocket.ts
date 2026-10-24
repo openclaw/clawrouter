@@ -1,14 +1,16 @@
+import { correlationMetadata } from "./correlation";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
-import { retainRequestContent } from "./content-retention";
+import { retainRequestContent, retentionRequired } from "./content-retention";
 import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
-import { assertProviderAccess, modelRoute, providerById } from "./providers";
+import { assertProviderAccess, providerById } from "./providers";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
+import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";
 import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
@@ -30,21 +32,32 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
   new ResponsesWebSocketSession(pair[1], {
     waitUntil: (promise) => context.waitUntil(promise),
     async admit(body, lane, requestId, _pin, signal) {
-      const selectedProvider = provider ?? (typeof body.model === "string" ? modelRoute(body.model, "llm.responses")?.provider : null);
-      const auth = await authenticateProxyKey(request.headers, env, selectedProvider ? [{ id: selectedProvider.id, tokenRef: selectedProvider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? selectedProvider.id }] : []);
-      if (auth instanceof Response) throw await responseError(auth);
-      if (typeof body.model !== "string" || !body.model) throw new HttpError(400, "model_required", "each response.create requires a model");
       let selection: ProxySelection;
-      if (native && provider && endpoint) {
-        const prepared = prepareNativeRequest(provider, endpoint, body, native[2], env);
-        selection = { provider, endpoint, ...prepared, capability: "llm.responses", method: "POST" };
-      } else {
-        const result = concreteOpenAiSelection("/v1/responses", body, env);
-        if (isSelectionFailure(result)) throw await responseError(result.response);
-        selection = result;
+      try {
+        if (typeof body.model !== "string" || !body.model) throw new HttpError(400, "model_required", "each response.create requires a model");
+        if (native && provider && endpoint) {
+          const prepared = prepareNativeRequest(provider, endpoint, body, native[2], env);
+          selection = { provider, endpoint, ...prepared, capability: "llm.responses", method: "POST" };
+        } else {
+          const result = concreteOpenAiSelection("/v1/responses", body, env);
+          if (isSelectionFailure(result)) throw await responseError(result.response);
+          selection = result;
+        }
+        if (selection.endpoint.websocket !== "openai.responses" || !selection.model?.capabilities.includes("llm.responses")) throw new HttpError(400, "websocket_unsupported", "selected model route does not support Responses WebSockets");
+        if (pinned && (pinned.providerId !== selection.provider.id || pinned.endpointId !== selection.endpoint.id)) throw new HttpError(409, "websocket_route_changed", "a WebSocket connection cannot change provider routes; open a new connection");
+      } catch (error) {
+        // Failed selection must still check this create's credential lifecycle.
+        // Successful selection stays on the combined admission/snapshot path.
+        const auth = await authenticateProxyKey(request.headers, env, [], false, correlationMetadata(request).sessionId);
+        if (auth instanceof Response) throw await responseError(auth);
+        throw error;
       }
-      if (selection.endpoint.websocket !== "openai.responses" || !selection.model?.capabilities.includes("llm.responses")) throw new HttpError(400, "websocket_unsupported", "selected model route does not support Responses WebSockets");
-      if (pinned && (pinned.providerId !== selection.provider.id || pinned.endpointId !== selection.endpoint.id)) throw new HttpError(409, "websocket_route_changed", "a WebSocket connection cannot change provider routes; open a new connection");
+      const auth = await authenticateProxyKey(request.headers, env, [{ id: selection.provider.id, tokenRef: selection.provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? selection.provider.id }], false, correlationMetadata(request).sessionId, {
+        providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "websocket",
+        model: !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : null,
+        catalogModelId: selection.model.id, capability: selection.capability, pinnedKey: pinned?.key,
+      });
+      if (auth instanceof Response) throw await responseError(auth);
       const headers = new Headers(request.headers);
       headers.set("x-request-id", requestId);
       const operationRequest = new Request(request.url, { method: "POST", headers, signal });
@@ -52,6 +65,8 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       let accounting: ReturnType<typeof createProxyAccounting> | undefined;
       let reservation = emptyReservation(), content: string | null = null;
       let continuation: HttpContinuation | undefined;
+      let useSoft = softBudgetPolicy(auth.policy);
+      const reserveOptions = () => ({ dispatched: !retentionRequired(auth, selection.capability) });
       try {
         let cost: ReturnType<typeof estimateCost> | undefined;
         const resolve = HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
@@ -59,11 +74,11 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         // Unpinned selection can refresh auth; only a pinned create can reserve
         // against this admission's connection while materialization is pending.
         const preparing = pinned ? prepare(pinned) : resolve.then(value => prepare(value?.pinned));
-        const reserving = pinned ? resolve.then(async value => {
+        const reserving = pinned && !useSoft ? resolve.then(async value => {
           cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, value?.parentTools);
           const connection = await assertProviderAccess(selection.provider, auth, env);
           signal.throwIfAborted();
-          return reserveBudget(env, auth, selection.capability, cost, connection);
+          return reserveBudget(env, auth, selection.capability, cost, connection, undefined, reserveOptions());
         }) : Promise.resolve(undefined);
         const [resolved, prepared, reserved] = await Promise.allSettled([resolve, preparing, reserving]);
         if (reserved.status === "fulfilled" && reserved.value) reservation = reserved.value;
@@ -73,6 +88,8 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         if (reserved.status === "rejected" && reserved.reason instanceof HttpError && reserved.reason.code === "accounting_unavailable") throw reserved.reason;
         if (prepared.status === "rejected") throw prepared.reason;
         const upstream = prepared.value;
+        // Unpinned credential failover can refresh policy during preparation.
+        useSoft = softBudgetPolicy(auth.policy);
         // A foreign continuation used to reach the session's generic pin-change
         // close. Reject it here with the actionable continuation restart error.
         if (pinned && continuation?.pinned && (continuation.pinned.key !== pinned.key || "revision" in continuation.pinned && continuation.pinned.revision !== pinned.revision)) throw continuationRestart();
@@ -82,17 +99,29 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
         if (reserved.status === "rejected") throw reserved.reason;
-        if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
+        if (useSoft) {
+          const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
+          if (denial) throw denial;
+          reservation = { reservations: [], reservedMicros: 0, charges: [] };
+        } else if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection, undefined, reserveOptions());
         try { content = await retainRequestContent(env, auth, selection, requestId); }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
         await markBudgetDispatched(env, reservation);
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
+        const usageId = accounting.facts.event.id;
         return {
           pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
           timeoutMs: selection.endpoint.timeout_ms ?? 120_000,
           connect: upstreamConnection(upstream.url, upstream.headers, signal, observe),
+          beforeSend: useSoft ? () => {
+            const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
+            if (denial) throw denial;
+            const soft = softBudget(env, auth, selection.capability, upstream.connection, usageId);
+            Object.assign(reservation, soft.reservation);
+            context.waitUntil(soft.check);
+          } : undefined,
           publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
           settle: settlement(accounting, reservation, content, observe),
         };
@@ -144,7 +173,8 @@ function settlement(accounting: ReturnType<typeof createProxyAccounting>, reserv
       : outcome === "failed" || outcome === "error" ? { status: "provider_error" as const, statusCode: typeof terminal?.status === "number" ? terminal.status : 502 }
       : closeStatus(outcome);
     // A request-scoped error before a response is rejected work. Once upstream
-    // execution starts, missing usage must retain the estimate, including on close.
+    // execution starts, reserve mode retains its estimate on missing usage;
+    // soft mode charges only observed usage or an explicit fixed tariff.
     const billable = sent && (outcome !== "error" || executionStarted || tokens !== null);
     return requireAccounting(accounting.settle(statusCode, status, billable, tokens, reservation, content));
   };

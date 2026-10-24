@@ -15,6 +15,7 @@ export interface BudgetReservation {
 interface LedgerBudgetReservation {
   reservationId: string;
   objectName: string;
+  dispatched?: true;
 }
 
 export interface BudgetReservationIntent {
@@ -79,10 +80,11 @@ export function planBudgetReservation(auth: AuthorizedIdentity, capability: stri
   return { reservedMicros: cost.reserveMicros, legs };
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void): Promise<BudgetReservation> {
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean } = {}): Promise<BudgetReservation> {
   const plan = planBudgetReservation(auth, capability, cost, connection);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
   const results = await Promise.allSettled(plan.legs.map(async leg => {
+    if (options.dispatched) leg.request.dispatched = true;
     // A caller owning cancellation can retain the exact attempted ID before
     // I/O; a committed reservation can lose its acknowledgement.
     observe?.(leg, "attempted");
@@ -109,11 +111,11 @@ export async function reserveLedgerIntent(env: Env, intent: BudgetReservationInt
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(intent.objectName));
   const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(intent.request), signal });
   if (!response.ok) throw new Error(`budget reserve returned ${response.status}`);
-  const result = await response.json<{ allowed: boolean; chargedMicros: number }>();
+  const result = await response.json<{ allowed: boolean; chargedMicros: number; dispatched?: boolean }>();
   if (typeof result?.allowed !== "boolean") throw new Error("budget reserve was not acknowledged");
   if (!result.allowed) throw new HttpError(402, intent.kind === "weekly" ? "weekly_budget_exhausted" : intent.kind === "daily" ? "daily_budget_exhausted" : intent.kind === "policy" ? "budget_exhausted" : "provider_budget_exhausted",
     withLimitHint(intent.kind === "weekly" ? weeklyBudgetMessage(intent.request.limitMicros) : intent.kind === "daily" ? dailyBudgetMessage(intent.request.limitMicros) : intent.kind === "policy" ? "proxy key budget is exhausted" : `provider ${intent.request.policyId.slice("provider/".length)} monthly budget is exhausted`, intent));
-  return { reservationId: intent.request.reservationId, objectName: intent.objectName };
+  return { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
 }
 
 export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
@@ -130,7 +132,7 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
 }
 
 export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal): Promise<void> {
-  const results = await Promise.allSettled(reservation.reservations.map(async (item) => {
+  const results = await Promise.allSettled(reservation.reservations.filter(item => !item.dispatched).map(async (item) => {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(item.objectName));
     const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }), signal });
     if (!response.ok || (await response.json<{ dispatched: boolean }>()).dispatched !== true) throw new Error("budget dispatch was not acknowledged");

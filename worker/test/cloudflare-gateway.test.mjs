@@ -37,10 +37,11 @@ test("generated gateway smoke reaches the Worker upstream unchanged and settles 
   assert.equal(await response.text(), wire);
   await fixture.drain();
   assert.equal(upstream.mock.callCount(), 1);
-  assert.deepEqual(fixture.budgetCalls.map(({ path }) => path), ["/reserve", "/dispatch", "/settle"]);
+  assert.deepEqual(fixture.budgetCalls.map(({ path }) => path), ["/reserve", "/settle"]);
+  assert.equal(fixture.budgetCalls[0].body.dispatched, true);
   assert.equal(fixture.budgetCalls[0].body.costMicros, 25);
-  assert.equal(fixture.budgetCalls[2].body.actualCostMicros, 25);
-  assert.equal(fixture.budgetCalls[2].body.reservationId, fixture.budgetCalls[0].body.reservationId);
+  assert.equal(fixture.budgetCalls[1].body.actualCostMicros, 25);
+  assert.equal(fixture.budgetCalls[1].body.reservationId, fixture.budgetCalls[0].body.reservationId);
   assert.equal(fixture.events.length, 1);
   const [event] = fixture.events;
   assert.equal(event.provider, providerId);

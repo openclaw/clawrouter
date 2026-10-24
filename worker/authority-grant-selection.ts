@@ -98,7 +98,7 @@ export function selectAdmissionCandidate(
   const routing = grantRoutingPolicy(policy.policy.grantRouting), now = Date.now();
   const requirement = { provider, endpoint, mode: request.mode, model: request.model };
   const candidates = input.candidates.map(({ key, grant }) => ({ key, grant, runtimeState: grant ? currentGrantRuntime(grant, input.states[key]) : null }));
-  const filtered = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, undefined, requirement, now);
+  const filtered = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, request.pinnedKey, requirement, now);
   const { available, hasConfiguredGrant } = filtered;
   const active = activeOperationCandidates(available, env, requirement);
   const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
