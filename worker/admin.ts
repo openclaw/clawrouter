@@ -548,7 +548,8 @@ export function normalizePolicy(
   let requestCostsMicros: AccessPolicy["requestCostsMicros"];
   try { requestCostsMicros = normalizeRequestCosts(body.requestCostsMicros === undefined ? existing?.requestCostsMicros : body.requestCostsMicros); }
   catch (error) { throw new HttpError(400, "invalid_policy", (error as Error).message); }
-  const budgetMode = body.budgetMode === undefined ? existing?.budgetMode : body.budgetMode;
+  // New policies default to soft (no foreground budget RPCs); updates keep the stored mode.
+  const budgetMode = body.budgetMode === undefined ? existing ? existing.budgetMode : "soft" : body.budgetMode;
   if (budgetMode !== undefined && budgetMode !== "reserve" && budgetMode !== "soft") throw new HttpError(400, "invalid_policy", "budgetMode must be reserve or soft");
   const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
   if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");

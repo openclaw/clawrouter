@@ -4,7 +4,7 @@ import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDisco
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
-import { softBudget } from "./soft-budget.ts";
+import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
@@ -17,15 +17,17 @@ import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
-import { admissionDuration } from "./admission-timing.ts";
+import { applyLocalGrantRuntime } from "./admission-cache.ts";
+import { evictGrantCredentials } from "./credential-cache.ts";
+import { admissionCacheState, admissionDuration } from "./admission-timing.ts";
 import {
   concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { retainRequestContent, retentionRequired } from "./content-retention";
-import { correlationMetadata } from "./correlation.ts";
+import { prepareContentRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
+import { correlationMetadata, logCorrelationError } from "./correlation.ts";
 import {
   FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
   fusionMessagesValid, prepareAdviserBody,
@@ -359,7 +361,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const { cost, requestId } = accounting;
-  const useSoft = !isModelDiscovery(selection.endpoint) && auth.policy.budgetMode === "soft" && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
+  const useSoft = !isModelDiscovery(selection.endpoint) && softBudgetPolicy(auth.policy) && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
   let soft: ReturnType<typeof softBudget> | undefined;
   let budgetMs = 0;
   let upstreamMs = 0;
@@ -386,13 +388,33 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
+  if (useSoft) {
+    const denial = softBudgetPreflight(env, auth, selection.capability, prepared.connection);
+    if (denial) {
+      accounting.fail(402, "denied");
+      return errorResponse(denial.code, denial.message, 402);
+    }
+  }
   budgetMs = useSoft || !background && !reservation?.reservations.length ? 0 : performance.now() - budgetStart;
   let content: string | null;
-  try { content = await retainRequestContent(env, auth, selection, requestId); }
+  let retention: PreparedContentRetention | null;
+  try {
+    retention = prepareContentRetention(env, auth, selection, requestId);
+    content = retention?.contentRef ?? null;
+    // Durable background owners read the stored bytes, and expanded bodies must
+    // not overlap transport memory: both keep the write ahead of dispatch.
+    if (retention && (background || retention.large)) await retention.write();
+  }
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", null));
     else accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
+  }
+  if (retention && !background && !retention.large) {
+    // Best-effort and off the critical path: the timer lets dispatch start first,
+    // so serialization and the R2 put overlap the upstream request.
+    const pendingRetention = retention;
+    context.waitUntil(new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).catch(() => logCorrelationError("request content retention failed", requestId)));
   }
   try {
     const dispatchStart = performance.now();
@@ -553,7 +575,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // Header sanitization strips upstream router-code spoofing. Only a verified
   // local JSON replacement may restore this diagnostic; SSE fails after headers.
   if (priceGuard?.failure() && response.status === 502) outputHeaders.set("x-clawrouter-error-code", "pricing_required");
-  outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}`);
+  const cacheState = admissionCacheState(auth);
+  outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}${cacheState ? `, cr-cache;desc=${cacheState}` : ""}`);
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
@@ -685,8 +708,13 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
 
 export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">): void {
   if (!key) return;
+  // A rejected credential must not keep serving from this isolate's cache.
+  if (response.status === 401 || response.status === 403) evictGrantCredentials(key);
   const state = observeGrantQuota(response, quota);
-  if (state) context.waitUntil(recordGrantRuntime(env, key, { ...state, grantRevision: revision }).catch(() => undefined));
+  if (!state) return;
+  const runtime = { ...state, grantRevision: revision };
+  applyLocalGrantRuntime(key, runtime);
+  context.waitUntil(recordGrantRuntime(env, key, runtime).catch(() => undefined));
 }
 
 function grantStickyHash(request: Request, auth: AuthorizedIdentity): Promise<string | null> {

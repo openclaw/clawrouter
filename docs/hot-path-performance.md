@@ -1,5 +1,66 @@
 # Hot-path review and local load evidence
 
+## Zero-hop warm path (2026-10-23)
+
+Directive: the router should add no measurable delay beyond the network path to
+the provider; operations may be asynchronous and small tracking discrepancies are
+acceptable. A warm proxy-key HTTP inference now performs **no foreground backend
+call** (no Durable Object, KV or R2) before the upstream `fetch` on soft or
+unbudgeted policies.
+
+| Concern | Before | After |
+| --- | --- | --- |
+| Admission + grant selection | `/admission/resolve` on the global `policy-bindings` authority every request | Isolate snapshot (`worker/admission-cache.ts`): fresh 10 s, stale-while-revalidate to the 60 s max age, one single-flight background refresh |
+| Selection counters | Atomic SQLite update inside admission | Same shared strategy code (`chooseGrantKey`, `selectAdmissionCandidate`) on the snapshot; counters coalesced (25 ms) into one background `/grant-pools/record` |
+| Credential materialization | `/materialize` on the per-grant owner every request | Isolate memory (`worker/credential-cache.ts`), keyed by grant + generation + revision, bounded by max age and the token refresh margin; upstream 401/403 evicts |
+| Quota feedback | Background authority write | Also applied to this isolate's snapshot at once |
+| Request retention | R2 put before dispatch, fail-closed | R2 put after dispatch in `waitUntil`, best-effort; background jobs and >8 MiB Claude bodies keep the fail-closed write |
+| Soft budgets | Concurrent status + 50 ms post-header grace | Unchanged, plus a 10 s exhausted-scope verdict that denies before dispatch with no ledger call; new policies default to soft |
+| Reserve budgets | reserve + dispatch | Unchanged (authoritative, foreground) |
+
+Correctness boundaries:
+
+- Every request hashes its secret and compares it with `safeEqual`; a mismatch
+  re-asks the authority and never evicts the owner's entry. Only fully admitted
+  outcomes are cached.
+- Revocation, policy, owner, connection and pool changes reach a warm isolate
+  within the max age (typically within 10 s under traffic). A mutation served by
+  the same isolate (admin, session credentials, pool submissions, OAuth callback)
+  clears that isolate's caches immediately. Failover after an upstream rejection
+  always takes a fresh authoritative admission.
+- Credentials stay in isolate memory only: never persisted, logged or returned.
+- `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` restores per-request authority checks.
+  `Server-Timing` reports `cr-cache;desc=hit|stale|miss|off`.
+- Counters can drift slightly across isolates; least-used/round-robin/threshold
+  remain per-isolate exact. Soft caps can overspend by in-flight work.
+
+### Measured local comparison
+
+Same harness and fixture as the soft-budget comparison below (100 measured
+requests per cell, concurrency 1, 200 ms synthetic upstream, weekly window), now
+also counting credential-owner calls and R2 operations
+(`--retention on|off`, `--hot-cache on|off`). Foreground calls are per warm
+request; local Durable Objects run in-process, so the latency columns understate
+production round trips and are noisy (load average 45-65 during both runs).
+
+| Policy | Foreground backend calls, before → after | Messages TTFB added p50 / p95 ms, before → after | Stream TTFB added p50 / p95 ms, before → after |
+| --- | --- | --- | --- |
+| Unbudgeted | 2 → 0 | 7.1 / 63.0 → 9.0 / 123.3 | 6.8 / 13.6 → 5.4 / 54.0 |
+| Soft | 2 → 0 | 13.7 / 214.0 → 7.6 / 76.2 | 11.3 / 195.3 → 5.2 / 15.7 |
+| Soft + retention | 3 → 0 | 20.4 / 124.9 → 8.4 / 80.5 | 12.8 / 32.4 → 6.3 / 71.7 |
+| Reserve | 4 → 2 | 14.5 / 152.2 → 8.4 / 82.1 | 11.0 / 106.8 → 6.4 / 14.9 |
+| Reserve + retention | 5 → 2 | 21.7 / 192.3 → 8.2 / 75.4 | 15.9 / 150.2 → 7.5 / 44.1 |
+
+Per 100 requests the authority received 2-3 `/admission/resolve` (background
+stale refreshes) instead of 100, and the credential owner 14-16 `/materialize`
+(first use of each of the seven pooled grants plus background refreshes) instead
+of 100. Every cell reconciled 100 selections and 100 usage events. The
+deterministic proof is `worker/test/hot-path-cache.test.mjs`: a warm request
+issues zero authority, credential-owner and KV calls before upstream, and local
+selection matches the authority across all strategies and stickiness modes.
+Raw reports: [hot-cache-local.json](performance/hot-cache-local.json).
+
+
 ## Soft-budget instrumentation (2026-10-18)
 
 Ordinary proxied HTTP inference exposes three `Server-Timing` durations in

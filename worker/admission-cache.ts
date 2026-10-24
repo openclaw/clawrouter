@@ -1,0 +1,136 @@
+import { authorityCall, type AdmissionResult } from "./authority.ts";
+import type { AdmissionPoolSnapshot, AdmissionRequest, AdmissionSelection } from "./authority-admission.ts";
+import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
+import { credentialExpired } from "./credential-lifecycle.ts";
+import type { GrantSelectionResult } from "./grant-eligibility.ts";
+import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
+import { HotCache, hotCacheConfig, registerHotCache, runInBackground, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { assertPolicyModel } from "./policy-models.ts";
+import { snapshot } from "./providers.ts";
+import type { Env, GrantRuntimeState } from "./types";
+import { safeEqual } from "./utils.ts";
+
+// Isolate-local admission snapshots for proxy keys. A hit authenticates and
+// selects without contacting the authority; revocation, policy and pool changes
+// reach this isolate within the configured max age (stale-while-revalidate).
+const admissions = registerHotCache(new HotCache<AdmissionResult>(2048));
+
+type CachedAdmissionRequest = AdmissionRequest & { secretSha256: string };
+
+export async function resolveAdmission(env: Env, request: CachedAdmissionRequest): Promise<{ admission: AdmissionResult; cache: HotCacheState }> {
+  const config = hotCacheConfig(env);
+  if (!config.maxAgeMs) return { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", request), cache: "off" };
+  const key = cacheKey(request);
+  // Failover after an upstream rejection is off the hot path: it always takes a
+  // fresh authoritative admission so tenant/pool changes apply to the alternate.
+  const cached = request.selection?.excludedKeys?.length ? undefined : admissions.peek(key, config);
+  // Every request re-verifies its own secret; a mismatch (wrong key or rotation)
+  // always goes back to the authority instead of trusting the cached digest.
+  if (cached && safeEqual(request.secretSha256, cached.value.credential!.credential.secretSha256.toLowerCase())) {
+    const selection = request.selection ? localSelection(env, cached.value, request.selection) : undefined;
+    if (!request.selection || selection) {
+      if (!cached.fresh) admissions.revalidate(key, config, () => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }));
+      return { admission: { ...cached.value, ...(selection ? { selection } : {}) }, cache: cached.fresh ? "hit" : "stale" };
+    }
+  }
+  const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined });
+  if (loaded.cacheable) admissions.set(key, withoutSelection(loaded.value), config, loaded.expiresAt);
+  // A wrong secret must not evict the key owner's entry; only an outcome
+  // observed with the matching secret (revoked, disabled, missing) does.
+  else if (!loaded.value.credential || safeEqual(request.secretSha256, loaded.value.credential.credential.secretSha256.toLowerCase())) admissions.delete(key);
+  return { admission: loaded.value, cache: "miss" };
+}
+
+async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest) {
+  const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", request);
+  const expiresAt = value.credential?.credential.expiresAt ? Date.parse(value.credential.credential.expiresAt) : Number.POSITIVE_INFINITY;
+  return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: config.maxAgeMs > 0 && cacheable(value, request.secretSha256), expiresAt: Number.isFinite(expiresAt) ? expiresAt : Number.POSITIVE_INFINITY };
+}
+
+function cacheKey(request: AdmissionRequest): string {
+  return JSON.stringify([request.credentialId, (request.providers ?? []).map(item => `${item.id}:${item.tokenRef}`).sort(), !!request.allConnections]);
+}
+
+// Only fully admitted outcomes are cached; failures always re-ask the authority.
+function cacheable(result: AdmissionResult, secretSha256: string): boolean {
+  const credential = result.credential?.credential;
+  if (!credential || !result.policy || result.policyUnavailable || result.ownerUnavailable || result.connectionsUnavailable) return false;
+  if (!safeEqual(secretSha256, credential.secretSha256.toLowerCase())) return false;
+  if (!credential.enabled || credentialExpired(credential) || !result.policy.policy.enabled || credential.policyGeneration !== result.policy.policy.generation || result.owner?.record.enabled === false) return false;
+  return !Object.values(result.pools).some(pool => pool.unavailable);
+}
+
+function withoutSelection(result: AdmissionResult): AdmissionResult {
+  const { selection: _selection, ...rest } = result;
+  return rest;
+}
+
+function localSelection(env: Env, admission: AdmissionResult, request: AdmissionSelection): GrantSelectionResult | undefined {
+  const pool = admission.pools[request.providerId], snap = admission.snapshots?.[request.providerId], policy = admission.policy;
+  if (!pool || !snap || !policy) return undefined;
+  const provider = snapshot.providers.find(item => item.id === request.providerId);
+  const endpoint = provider?.endpoints.find(item => item.id === request.endpointId);
+  if (!provider || !endpoint) return undefined;
+  // Mirror the authority's early exits; the Worker then reports the denial itself.
+  if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id) || admission.connections.find(item => item.providerId === provider.id)?.enabled === false) return undefined;
+  try { assertPolicyModel(policy.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint, capability: request.capability }); } catch { return undefined; }
+  const result = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey: snap.poolKey, candidates: snap.candidates, states: pool.states, identityHash: snap.identityHash, fallbackSessionHash: snap.fallbackSessionHash }, choice => chooseLocally(env, snap, choice), key => snap.revisions[key]);
+  // The snapshot is shared by concurrent requests; hand out a private copy.
+  return result.selected ? { ...result, selected: structuredClone(result.selected) } : result;
+}
+
+function chooseLocally(env: Env, snap: AdmissionPoolSnapshot, input: GrantChoiceInput): { selectedKey: string } {
+  const choice = chooseGrantKey(input, normalizedChoiceCandidates(input.candidates), { cursorKey: snap.cursorKey, counts: new Map(Object.entries(snap.counts)) });
+  const now = Date.now();
+  const counter = snap.counts[choice.selectedKey] ??= { count: 0, lastMs: 0 };
+  counter.count++; counter.lastMs = now;
+  if (choice.cursorKey) snap.cursorKey = choice.cursorKey;
+  recordSelection(env, snap.poolKey, choice.selectedKey, now, choice.cursorKey);
+  return choice;
+}
+
+// Selection counters are advisory statistics; coalesce them into one small
+// background authority write per flush instead of one awaited RPC per request.
+const SELECTION_FLUSH_MS = 25;
+const pendingSelections = new Map<string, { poolKey: string; key: string; count: number; lastMs: number; cursorKey?: string | null }>();
+const pendingCursors = new Map<string, string>();
+let flushScheduled = false;
+// Pending counters are writes, not cached state: invalidation never drops them.
+
+function recordSelection(env: Env, poolKey: string, key: string, lastMs: number, cursorKey?: string): void {
+  const id = `${poolKey}\n${key}`;
+  const pending = pendingSelections.get(id);
+  if (pending) { pending.count++; pending.lastMs = lastMs; }
+  else pendingSelections.set(id, { poolKey, key, count: 1, lastMs });
+  if (cursorKey) pendingCursors.set(poolKey, cursorKey);
+  if (flushScheduled) return;
+  flushScheduled = true;
+  runInBackground(new Promise(resolve => setTimeout(resolve, SELECTION_FLUSH_MS)).then(() => flushSelections(env)));
+}
+
+export async function flushSelections(env: Env): Promise<void> {
+  flushScheduled = false;
+  const records = [...pendingSelections.values()];
+  pendingSelections.clear();
+  for (const [poolKey, cursorKey] of pendingCursors) {
+    const record = records.find(item => item.poolKey === poolKey && item.key === cursorKey) ?? records.find(item => item.poolKey === poolKey);
+    if (record) record.cursorKey = cursorKey;
+  }
+  pendingCursors.clear();
+  for (let offset = 0; offset < records.length; offset += 256) {
+    try { await authorityCall(env, "/grant-pools/record", { records: records.slice(offset, offset + 256) }); }
+    catch { /* Advisory counters: a lost flush only skews least-used/round-robin statistics. */ }
+  }
+}
+
+/** Apply observed quota/cooldown state to this isolate's snapshots immediately. */
+export function applyLocalGrantRuntime(key: string, state: GrantRuntimeState): void {
+  for (const admission of admissions.values()) {
+    for (const pool of Object.values(admission.pools)) if (pool.keys.includes(key)) pool.states[key] = state;
+  }
+}
+
+/** Same-isolate invalidation after a mutation; other isolates converge by max age. */
+export function invalidateAdmissions(predicate: (admission: AdmissionResult) => boolean = () => true): void {
+  admissions.deleteWhere((_key, admission) => predicate(admission));
+}

@@ -1,4 +1,5 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -52,7 +53,7 @@ for(const route of routes) test("image "+route+" rejects unbounded/unsupported o
 });
 for(const scenario of ["missing","inconsistent","partial","abort","read-error","fetch-error","rejection","wrong-mime","sse","retention-error","retention-off","fixed-zero","fixed-positive"])test("image lifecycle "+scenario+" preserves conservative accounting",async t=>{
  const f=fixture(t,{retainContent:scenario!=="retention-off",fixedCost:scenario==="fixed-zero"?0:scenario==="fixed-positive"?7:null}),caller=new AbortController();
- if(scenario==="retention-error")f.env.CONTENT_ARCHIVE.put=async()=>{throw Error("fixture archive failure");};
+ if(scenario==="retention-error"){f.env.CONTENT_ARCHIVE.put=async()=>{throw Error("fixture archive failure");};t.mock.method(console,"error",()=>{});}
  let cancels=0;
  const upstream=t.mock.method(globalThis,"fetch",async()=>{
   if(scenario==="fetch-error")throw Error("fixture transport failure");
@@ -65,11 +66,12 @@ for(const scenario of ["missing","inconsistent","partial","abort","read-error","
  else if(scenario==="read-error")await assert.rejects(response.arrayBuffer(),/fixture read failure/);
  else await response.arrayBuffer();
  await Promise.all(f.pending);assert.equal(f.events.length,1);
- const free=["rejection","retention-error"].includes(scenario),qualified=["retention-off","fixed-zero","fixed-positive"].includes(scenario);
+ // Retention is best-effort after dispatch: an archive failure is accounted like delivered work.
+ const free=scenario==="rejection",qualified=["retention-off","retention-error","fixed-zero","fixed-positive"].includes(scenario);
  const expected=free||scenario==="fixed-zero"?0:scenario==="fixed-positive"?7:qualified?3060:reserve;
  const event=f.events[0];assert.equal(event.actual_cost_micros,expected);assert.equal(event.cost_basis,free?"none":scenario.startsWith("fixed-")?"policy_fixed":qualified?"manifest_pricing":"manifest_reservation");
  for(const name of owners){const [row]=f.ledger.get(name).reservations();assert.equal(row.reserved_micros,expected);assert.equal(row.settled,1);}
- assert.equal(upstream.mock.callCount(),scenario==="retention-error"?0:1);
+ assert.equal(upstream.mock.callCount(),1);
  if(["partial","abort"].includes(scenario))assert.equal(cancels,1);
  if(scenario==="retention-off"){assert.equal(f.retained.length,0);assert.equal(response.headers.get("x-clawrouter-content-retention"),"off");}
 });
@@ -104,7 +106,7 @@ for(const scenario of ["measured","missing","cancel","rejection","denied"])test(
  });
  const response=await f.call();if(scenario==="cancel"){const reader=response.body.getReader();await reader.read();await reader.cancel();}else await response.text();await Promise.all(f.pending);
  const expected=["rejection","denied"].includes(scenario)?0:scenario==="measured"?3060:reserve;
- assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,expected);assert.equal(upstream.mock.callCount(),1);
+ assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,expected);assert.equal(upstream.mock.callCount(),scenario==="denied"?0:1,"a zero soft limit denies before dispatch");
  if(scenario==="denied")assert.equal(response.status,402);
  for(const name of owners){const rows=f.ledger.get(name).reservations();if(expected>0)assert.equal(rows.length,1);for(const row of rows){assert.equal(row.reserved_micros,expected);assert.equal(row.settled,1);}}
  if(scenario==="cancel")assert.equal(cancels,1);

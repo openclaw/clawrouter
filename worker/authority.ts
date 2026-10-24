@@ -14,7 +14,7 @@ import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMut
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import type { ResponsesScopeStore } from "./responses-scope.ts";
-import { boundedPercent, selectThresholdGrantKey, stickyScore, weightedRandom } from "./grant-selection-strategies.ts";
+import { chooseGrantKey, normalizedChoiceCandidates } from "./grant-selection-strategies.ts";
 import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
@@ -54,7 +54,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         resolveConnections: ids => this.resolveConnections(ids), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
           getCredential: id => this.getCredential(id), getPolicy: id => this.getPolicy(id), getUser: email => this.getUser(email),
           resolveConnections: ids => this.resolveConnections(ids), resolveGrantPool: request => this.resolveGrantPool(request),
-          grantAttachment: key => this.grantAttachment(key), selectGrant: request => this.selectGrant(request),
+          grantAttachment: key => this.grantAttachment(key), selectGrant: request => this.selectGrant(request), selectionState: poolKey => this.selectionState(poolKey),
         }),
       }));
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
@@ -103,6 +103,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/grant-pools/feedback") { this.putGrantRuntime(await readJson<GrantRuntimeFeedbackRequest>(request)); return new Response("updated"); }
       if (path === "/grant-pools/states") return json({ states: this.grantRuntimeStates((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
       if (path === "/grant-pools/select") return json(this.selectGrant(await readJson<GrantPoolSelectRequest>(request)));
+      if (path === "/grant-pools/record") { this.recordSelections(await readJson<GrantSelectionRecordRequest>(request)); return new Response("recorded"); }
       if (path === "/grant-pools/stats") return json({ stats: this.grantSelectionStats((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
       if (path === "/submission-tickets/put") return json(this.putSubmissionTicket(await readJson<PoolSubmissionTicket>(request)));
       if (path === "/submission-tickets/claim") return json(this.claimSubmissionTicket(await readJson<SubmissionTicketClaimRequest>(request)));
@@ -532,34 +533,43 @@ export class PolicyBindingIndexObject implements DurableObject {
   private selectGrant(input: GrantPoolSelectRequest): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
     const poolKey = grantSelectionPoolKey(input.poolKey);
     if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 66) invalidAuthorityRequest("grant selection candidates must be a bounded array");
-    const candidates = [...new Map(input.candidates.map((candidate) => {
-      const key = grantKey(candidate.key);
-      const weight = typeof candidate.weight === "number" && Number.isFinite(candidate.weight) && candidate.weight > 0 && candidate.weight <= 1_000_000 ? candidate.weight : 1;
-      const remainingRatio = typeof candidate.remainingRatio === "number" && Number.isFinite(candidate.remainingRatio) && candidate.remainingRatio >= 0 && candidate.remainingRatio <= 1 ? candidate.remainingRatio : null;
-      return [key, { key, weight, remainingRatio }];
-    })).values()].sort((a, b) => a.key.localeCompare(b.key));
-    const strategy = ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"].includes(input.strategy) ? input.strategy : "most_remaining";
-    const stickyHash = typeof input.stickyHash === "string" && /^[0-9a-f]{64}$/.test(input.stickyHash) ? input.stickyHash : null;
-    let selected = candidates[0];
-    if (stickyHash) selected = [...candidates].sort((a, b) => stickyScore(stickyHash, a) - stickyScore(stickyHash, b) || a.key.localeCompare(b.key))[0];
-    else if (strategy === "round_robin") {
-      const current = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key;
-      selected = candidates.find((candidate) => candidate.key > (current ?? "")) ?? candidates[0];
-      this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, selected.key);
-    } else if (strategy === "least_used") {
-      const counts = new Map(rows<{ grant_key: string; selected_count: number; last_selected_ms: number }>(this.sql.exec("SELECT grant_key, selected_count, last_selected_ms FROM upstream_grant_selection WHERE pool_key = ?", poolKey)).map((row) => [row.grant_key, row]));
-      selected = [...candidates].sort((a, b) => (counts.get(a.key)?.selected_count ?? 0) - (counts.get(b.key)?.selected_count ?? 0) || (counts.get(a.key)?.last_selected_ms ?? 0) - (counts.get(b.key)?.last_selected_ms ?? 0) || a.key.localeCompare(b.key))[0];
-    } else if (strategy === "most_remaining") selected = [...candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
-    else if (strategy === "threshold") {
-      const currentKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key;
-      const selectedKey = selectThresholdGrantKey(candidates, currentKey ?? null, boundedPercent(input.switchAtUsedPercent, 90), boundedPercent(input.hysteresisPercent, 10));
-      selected = candidates.find((candidate) => candidate.key === selectedKey) ?? candidates[0];
-      this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, selected.key);
-    }
-    else if (strategy === "weighted_random") selected = weightedRandom(candidates);
+    const candidates = normalizedChoiceCandidates(input.candidates, grantKey);
+    const cursorKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
+    const counts = input.strategy === "least_used" ? this.selectionCounts(poolKey) : new Map<string, { count: number; lastMs: number }>();
+    const choice = chooseGrantKey(input, candidates, { cursorKey, counts });
+    if (choice.cursorKey) this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, choice.cursorKey);
     const nowMs = Date.now();
-    const row = rows<{ selected_count: number }>(this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms RETURNING selected_count", poolKey, selected.key, nowMs))[0];
-    return { selectedKey: selected.key, selectedCount: row.selected_count, lastSelectedAt: new Date(nowMs).toISOString() };
+    const row = rows<{ selected_count: number }>(this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms RETURNING selected_count", poolKey, choice.selectedKey, nowMs))[0];
+    return { selectedKey: choice.selectedKey, selectedCount: row.selected_count, lastSelectedAt: new Date(nowMs).toISOString() };
+  }
+
+  /** Pool counters and cursor for an isolate-local selection snapshot. */
+  private selectionState(rawPoolKey: string): { cursorKey: string | null; counts: Record<string, { count: number; lastMs: number }> } {
+    const poolKey = grantSelectionPoolKey(rawPoolKey);
+    return {
+      cursorKey: rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null,
+      counts: Object.fromEntries(this.selectionCounts(poolKey)),
+    };
+  }
+
+  private selectionCounts(poolKey: string): Map<string, { count: number; lastMs: number }> {
+    return new Map(rows<{ grant_key: string; selected_count: number; last_selected_ms: number }>(this.sql.exec("SELECT grant_key, selected_count, last_selected_ms FROM upstream_grant_selection WHERE pool_key = ?", poolKey)).map((row) => [row.grant_key, { count: row.selected_count, lastMs: row.last_selected_ms }]));
+  }
+
+  // Coalesced isolate-local selections. Counters are advisory statistics for
+  // least-used/round-robin/threshold; small cross-isolate drift is accepted.
+  private recordSelections(input: GrantSelectionRecordRequest): void {
+    if (!Array.isArray(input.records) || input.records.length > 256) invalidAuthorityRequest("grant selection records must be a bounded array");
+    this.storage.transactionSync(() => {
+      for (const record of input.records) {
+        const poolKey = grantSelectionPoolKey(record.poolKey);
+        const key = grantKey(record.key);
+        const count = Number.isSafeInteger(record.count) && record.count > 0 && record.count <= 1_000_000 ? record.count : 1;
+        const lastMs = Number.isSafeInteger(record.lastMs) && record.lastMs > 0 ? record.lastMs : Date.now();
+        this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, ?, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + excluded.selected_count, last_selected_ms = MAX(last_selected_ms, excluded.last_selected_ms)", poolKey, key, count, lastMs);
+        if (record.cursorKey != null) this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, grantKey(record.cursorKey));
+      }
+    });
   }
 
   private grantSelectionStats(rawKeys: unknown): Record<string, { selectedCount: number; lastSelectedAt: string | null }> {
@@ -650,6 +660,8 @@ export interface GrantAttachmentResult extends GrantAttachmentSnapshot { outcome
 interface GrantAttachmentMutation { key: string; generation: number; revision: number; admissionRevision?: number; provider: string | null; status: GrantAttachmentStatus | null; projection?: UpstreamGrant }
 interface GrantRuntimeFeedbackRequest { key: string; state: GrantRuntimeState }
 interface GrantRuntimeStatesRequest { keys: string[] }
+interface GrantSelectionRecordRequest { records: Array<{ poolKey: string; key: string; count: number; lastMs: number; cursorKey?: string | null }> }
+
 interface GrantPoolSelectRequest {
   poolKey: string;
   strategy: string;

@@ -23,6 +23,22 @@ export function contentRetentionDefault(env: Env): boolean {
 }
 
 export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string): Promise<string | null> {
+  const retention = prepareContentRetention(env, auth, selection, requestId);
+  if (!retention) return null;
+  await retention.write();
+  return retention.contentRef;
+}
+
+export interface PreparedContentRetention {
+  readonly contentRef: string;
+  /** Above the parser bound the archive streams the body; keep that write sequential. */
+  readonly large: boolean;
+  write(): Promise<void>;
+}
+
+// Allocates the content ref synchronously so usage events can reference it;
+// the R2 write itself can run after the request is dispatched.
+export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string): PreparedContentRetention | null {
   if (!retentionRequired(auth, selection.capability)) return null;
   const contentRef = randomId("content");
   const occurredAtMs = Date.now();
@@ -46,14 +62,19 @@ export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, s
       : selection.body,
   };
   const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(record) : 0;
-  // R2 requires a known-length stream. Counting uses the same serializer as
-  // delivery, including Unicode/escaping and the retention envelope.
-  const body = bytes > maxJsonBodyBytes ? jsonBodyStream(record).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(record);
-  await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), body, {
-    httpMetadata: { contentType: "application/json" },
-    customMetadata: { expiresAt: String(record.expiresAtMs) },
-  });
-  return contentRef;
+  return {
+    contentRef,
+    large: bytes > maxJsonBodyBytes,
+    async write() {
+      // R2 requires a known-length stream. Counting uses the same serializer as
+      // delivery, including Unicode/escaping and the retention envelope.
+      const body = bytes > maxJsonBodyBytes ? jsonBodyStream(record).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(record);
+      await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), body, {
+        httpMetadata: { contentType: "application/json" },
+        customMetadata: { expiresAt: String(record.expiresAtMs) },
+      });
+    },
+  };
 }
 
 export async function readRetainedContent(env: Env, tenant: string, ref: string): Promise<Record<string, unknown> | null> {

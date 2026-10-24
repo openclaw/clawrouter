@@ -8,6 +8,7 @@ import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./prox
 import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, refreshGrantQuota } from "./grant-credentials.ts";
+import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
@@ -371,8 +372,8 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   const resolution = admitted ?? await resolveGrantSelection(provider.id, auth.policyId, auth.policy.tenantId ?? "default", tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
-  try { return { selected: { key, grant: await refreshGrant(key, grant, provider, env, false) }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt }; }
-  catch (error) { throw selectedCredentialFailure(error, key); }
+  try { return { selected: { key, grant: await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false)) }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt }; }
+  catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Serve warm proxy-key HTTP inference with zero foreground backend calls before the upstream fetch: admission, grant selection and materialized credentials come from isolate-local caches (fresh 10 s, stale-while-revalidate to a 60 s max age), selection counters and quota feedback are recorded in the background, and an upstream 401/403 evicts the cached credential. Revocation, policy, owner and pool changes reach every isolate within the max age (immediately in the isolate that served the mutation); set `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` to restore per-request authority checks. `Server-Timing` adds `cr-cache;desc=hit|stale|miss|off`.
+- Write retained request content to R2 in the background after dispatch; a failed archive write is logged and no longer fails the request with `503 content_retention_unavailable` (background Responses jobs and Claude bodies above 8 MiB keep the fail-closed write).
+- Soft budgets deny a scope observed exhausted in the last 10 s before dispatch, without a ledger round trip; concurrent requests can overspend a soft cap by in-flight work. New policies created through the admin API or console default to `budgetMode: "soft"`; stored policies keep their mode, and an omitted mode still means reserve.
 - Report caller-owned request, token, and spend totals as `usage.personal` on personal usage reads and a per-principal breakdown as `usage.principals` on admin usage, alongside the unchanged shared policy totals. Show both in the console.
 
 ## 0.5.0 - 2026-10-22
