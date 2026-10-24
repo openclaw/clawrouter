@@ -10,6 +10,7 @@ import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
+import { recordCredentialWait } from "./admission-timing.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
@@ -381,7 +382,7 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
-  try { materialized = await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false)); }
+  try { materialized = await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's

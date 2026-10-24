@@ -9,7 +9,9 @@ import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { snapshot } from "./providers.ts";
-import type { Env, GrantRuntimeState } from "./types";
+import type { Env, GrantRuntimeState, UpstreamGrant } from "./types";
+import { prefetchGrantCredentials } from "./credential-cache.ts";
+import { materializeGrantCredentials } from "./grant-credentials.ts";
 import { safeEqual } from "./utils.ts";
 
 // Isolate-local admission snapshots for proxy keys. A hit authenticates and
@@ -32,10 +34,13 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
     const selection = request.selection ? localSelection(env, cached.value, request.selection) : undefined;
     if (!request.selection || selection) {
       if (!cached.fresh) admissions.revalidate(key, config, () => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }));
+      rememberSelection(key, request, selection);
       return { admission: { ...cached.value, ...(selection ? { selection } : {}) }, cache: cached.fresh ? "hit" : "stale" };
     }
   }
+  prefetchRememberedCredential(env, key, request);
   const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined });
+  if (loaded.cacheable) rememberSelection(key, request, loaded.value.selection);
   if (loaded.cacheable) admissions.set(key, withoutSelection(loaded.value), config, loaded.expiresAt);
   // A wrong secret must not evict the key owner's entry; only an outcome
   // observed with the matching secret (revoked, disabled, missing) does.
@@ -47,6 +52,31 @@ async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRe
   const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", request);
   const expiresAt = value.credential?.credential.expiresAt ? Date.parse(value.credential.credential.expiresAt) : Number.POSITIVE_INFINITY;
   return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: config.maxAgeMs > 0 && cacheable(value, request.secretSha256), expiresAt: Number.isFinite(expiresAt) ? expiresAt : Number.POSITIVE_INFINITY };
+}
+
+// The last grant each key selected per operation: secretless routing data used
+// only to start that grant's credential load alongside a foreground admission.
+interface SelectionHint { secretSha256: string; key: string; grant: UpstreamGrant }
+const selectionHints = registerHotCache(new Map<string, SelectionHint>());
+const hintKey = (key: string, selection: AdmissionSelection) => `${key}\n${selection.providerId}\n${selection.endpointId}\n${selection.mode}\n${selection.model ?? ""}`;
+
+function rememberSelection(key: string, request: CachedAdmissionRequest, selection: GrantSelectionResult | undefined): void {
+  const selected = selection?.selected;
+  if (!request.selection || !selected) return;
+  const id = hintKey(key, request.selection);
+  selectionHints.delete(id);
+  selectionHints.set(id, { secretSha256: request.secretSha256, key: selected.key, grant: selected.grant });
+  if (selectionHints.size > 2048) selectionHints.delete(selectionHints.keys().next().value!);
+}
+
+function prefetchRememberedCredential(env: Env, key: string, request: CachedAdmissionRequest): void {
+  if (!request.selection || request.selection.excludedKeys?.length || request.selection.pinnedKey) return;
+  const hint = selectionHints.get(hintKey(key, request.selection));
+  // Only the secret that earned the hint may start an owner call.
+  if (!hint || !safeEqual(request.secretSha256, hint.secretSha256)) return;
+  const provider = snapshot.providers.find(item => item.id === request.selection!.providerId);
+  if (!provider) return;
+  prefetchGrantCredentials(env, hint.key, hint.grant, () => materializeGrantCredentials(env, hint.key, hint.grant, provider.id, provider.auth.refresh, false));
 }
 
 function cacheKey(request: AdmissionRequest): string {
