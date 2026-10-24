@@ -18,10 +18,14 @@ metadata-only; request retention requires an explicit policy opt-in.
 - Credentials should identify their owner with `principalId`. Legacy unowned
   credentials follow the policy setting and cannot use a per-user exemption.
 - Authorized LLM request content, speech input and image-generation input JSON
-  are written to
-  `CONTENT_ARCHIVE` after access and budget checks, immediately before the upstream
-  request. If required storage is unavailable, ClawRouter returns
-  `503 content_retention_unavailable` and does not call the provider.
+  are written to `CONTENT_ARCHIVE` best-effort, in the background, right after the
+  upstream request is dispatched. The content ref is allocated first, so usage
+  events still reference it; a failed write is logged (request ID only) and does
+  not fail the request, which can leave a usage row whose archive object is
+  missing. Two cases keep the write before dispatch and still return
+  `503 content_retention_unavailable` without calling the provider: durable
+  background Responses jobs, and Claude bodies above the 8 MiB parser bound
+  (their streamed archive copy must not overlap transport memory).
 - R2 encrypts objects at rest. The `request-content-v1-30-days` lifecycle rule
   schedules deletion under the dedicated `v1/` archive prefix after 30 days without
   affecting unrelated bucket content. Physical deletion is asynchronous. Usage
