@@ -7,7 +7,8 @@ import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./prox
 
 import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
-import { materializeGrantCredentials, refreshGrantQuota } from "./grant-credentials.ts";
+import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
+import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
@@ -379,8 +380,25 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (admitted) assertPinnedGrant(pinned, resolution.selected);
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
-  try { return { selected: { key, grant: await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false)) }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt }; }
+  let materialized: UpstreamGrant;
+  try { materialized = await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false)); }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  // A proxy-key request that could not select from the admission snapshot ran
+  // the legacy read-and-select path. Ask the owner to republish this grant's
+  // routing projection so later requests take the local hot path.
+  if (!admitted && recordSelection && !pinned && !excludedKeys.size && auth.authType === "proxy_key") scheduleProjectionRepair(env, key);
+  return { selected: { key, grant: materialized }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
+}
+
+const PROJECTION_REPAIR_INTERVAL_MS = 10 * 60_000;
+const projectionRepairs = registerHotCache(new Map<string, number>());
+function scheduleProjectionRepair(env: Env, key: string): void {
+  if (!hotCacheConfig(env).maxAgeMs) return;
+  const now = Date.now();
+  if ((projectionRepairs.get(key) ?? -Infinity) > now - PROJECTION_REPAIR_INTERVAL_MS) return;
+  projectionRepairs.delete(key); projectionRepairs.set(key, now);
+  if (projectionRepairs.size > 1024) projectionRepairs.delete(projectionRepairs.keys().next().value!);
+  runInBackground(reconcileGrantAttachment(env, key));
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {
