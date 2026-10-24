@@ -17,7 +17,7 @@ import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
-function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [] } = {}) {
+function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
   let versions = [{ id: blue }];
   let time = 1_000_000, smokes = 0, uploads = 0;
@@ -34,7 +34,10 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
         result = deployment;
         if (lostPost) { lostPost = false; throw new Error('Lost response after mutation'); }
       } else result = { deployments: [deployment] };
-    } else if (path.endsWith('/versions')) result = { items: versions };
+    } else if (path.endsWith('/versions')) {
+      // listLag: the uploaded candidate stays hidden for that many history reads.
+      result = { items: uploads && listLag-- > 0 ? versions.filter((version) => version.id !== green) : versions };
+    }
     else if (path.endsWith(`/versions/${green}`)) result = { id: green, annotations: { 'workers/tag': sha } };
     else if (path.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: analyticsRows }] } } });
     else throw new Error(`Unexpected API path: ${path}`);
@@ -42,7 +45,7 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
   } });
   const options = {
     state, api, now: () => time, wait: async (ms) => { time += ms; }, save: (value) => receipts.push(structuredClone(value)),
-    upload: async () => { uploads++; versions.unshift({ id: green, annotations: { 'workers/tag': sha, 'workers/message': uploadMessage(state) } }); if (migration) deployment = { id: 'migration', versions: [{ version_id: green, percentage: 100 }] }; return green; },
+    upload: async () => { uploads++; versions.unshift({ id: green, annotations: { 'workers/tag': sha, 'workers/message': uploadMessage(state) } }); if (foreignUpload) versions.unshift({ id: '33333333-3333-3333-3333-333333333333', annotations: { 'workers/tag': sha, 'workers/message': uploadMessage(state) } }); if (migration) deployment = { id: 'migration', versions: [{ version_id: green, percentage: 100 }] }; return green; },
     smoke: async () => {
       smokes++;
       smokeObservations.push({ percentage: state.percentage, time });
@@ -74,6 +77,18 @@ test('train observes a five-minute canary with frequent smoke, keeps DO order, f
   assert.equal(f.state.status, 'done');
   assert.equal(deploymentState(f.deployment).status, 'done');
   assert.equal(f.receipts.find((r) => r.percentage === 0).exposed, true, 'exposure journal precedes the first smoke');
+});
+
+test('a version history that briefly trails the upload is re-read; a foreign newer upload still fails', async () => {
+  const lagging = fixture({ listLag: 2 });
+  await runTrain(lagging.options);
+  assert.equal(lagging.state.status, 'done', 'the candidate appears on a later read and the train proceeds');
+  const hidden = fixture({ listLag: 99 });
+  await assert.rejects(runTrain(hidden.options), /did not appear in the version history/);
+  assert.equal(posts(hidden).length, 0, 'no traffic is assigned to an unverified candidate');
+  const foreign = fixture({ foreignUpload: true });
+  await assert.rejects(runTrain(foreign.options), /Latest upload changed during candidate creation/);
+  assert.equal(posts(foreign).length, 0);
 });
 
 test('zero-only success removes candidate and leaves exactly blue100', async () => {
