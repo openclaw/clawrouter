@@ -65,10 +65,15 @@ for (const route of routes) for (const stream of [false, true]) {
       assert.equal(f.events.length, 1);
       assert.equal(f.events[0].reserved_input_tokens, 922_000);
       assert.equal(f.events[0].actual_cost_micros, 0);
-      assert.equal(f.ledger.get(owners[1]).reservations().length, 0);
-      const policyRows = f.ledger.get(owners[0]).reservations();
-      assert.equal(policyRows.length, code === "provider_budget_exhausted" ? 1 : 0);
-      if (policyRows.length) { assert.equal(policyRows[0].reserved_micros, 0); assert.equal(policyRows[0].settled, 1); }
+      for (const [index, owner] of owners.entries()) {
+        const rows = f.ledger.get(owner).reservations();
+        assert.equal(rows.length, index === (code === "budget_exhausted" ? 1 : 0) ? 1 : 0);
+        if (rows.length) {
+          assert.equal(rows[0].reserved_micros, 0);
+          assert.equal(rows[0].settled, 1);
+          assert.equal(rows[0].dispatch_started, 0);
+        }
+      }
       upstream.mock.restore();
     }
   });

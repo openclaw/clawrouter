@@ -443,6 +443,9 @@ authorization scope and actual upstream owner before forwarding. Codex can then
 reconnect with `client_metadata["x-codex-turn-state"]` or fall back to HTTP with
 the same turn state and account. Conflicting header and metadata tokens are
 rejected; every supplied continuation identity must name the same owner.
+A continuation naming a different grant from the connection's pin returns
+`409 continuation_restart_required` before dispatch; restart with full input on
+a new connection. The rejected create is not billed and does not close the socket.
 An upgrade header alone
 does not create a synthetic metadata event. Metadata may precede
 `response.created`; it identifies the response without proving execution started.

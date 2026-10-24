@@ -1,7 +1,7 @@
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
-import { HttpContinuation } from "./http-continuation";
+import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
@@ -53,14 +53,36 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       let reservation = emptyReservation(), content: string | null = null;
       let continuation: HttpContinuation | undefined;
       try {
-        continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
-        const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
+        let cost: ReturnType<typeof estimateCost> | undefined;
+        const resolve = HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
+        const prepare = (pin: Parameters<typeof prepareSelected>[8]) => prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, pin, "websocket");
+        // Unpinned selection can refresh auth; only a pinned create can reserve
+        // against this admission's connection while materialization is pending.
+        const preparing = pinned ? prepare(pinned) : resolve.then(value => prepare(value?.pinned));
+        const reserving = pinned ? resolve.then(async value => {
+          cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, value?.parentTools);
+          const connection = await assertProviderAccess(selection.provider, auth, env);
+          signal.throwIfAborted();
+          return reserveBudget(env, auth, selection.capability, cost, connection);
+        }) : Promise.resolve(undefined);
+        const [resolved, prepared, reserved] = await Promise.allSettled([resolve, preparing, reserving]);
+        if (reserved.status === "fulfilled" && reserved.value) reservation = reserved.value;
+        if (resolved.status === "rejected") throw resolved.reason;
+        continuation = resolved.value;
+        // Failed recovery closes the session even when preparation also failed.
+        if (reserved.status === "rejected" && reserved.reason instanceof HttpError && reserved.reason.code === "accounting_unavailable") throw reserved.reason;
+        if (prepared.status === "rejected") throw prepared.reason;
+        const upstream = prepared.value;
+        // A foreign continuation used to reach the session's generic pin-change
+        // close. Reject it here with the actionable continuation restart error.
+        if (pinned && continuation?.pinned && (continuation.pinned.key !== pinned.key || "revision" in continuation.pinned && continuation.pinned.revision !== pinned.revision)) throw continuationRestart();
         if (upstream.continuation) continuation?.bind(upstream.continuation);
-        const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
+        cost ??= estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
         accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: upstream.grantKey, grantLane: upstream.grantLane });
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
-        reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
+        if (reserved.status === "rejected") throw reserved.reason;
+        if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
         try { content = await retainRequestContent(env, auth, selection, requestId); }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
         await markBudgetDispatched(env, reservation);

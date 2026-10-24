@@ -143,6 +143,61 @@ test("provider admission denial preserves queued rollback but surfaces exhausted
   }
 });
 
+const budgetKinds = ["policy", "daily", "weekly", "provider"];
+const fourLegAuth = { policyId: "fixture", policy: { monthlyBudgetMicros: 100, dailyBudgetMicros: 100, weeklyBudgetMicros: 100, tenantId: "default" } };
+const budgetCost = { reserveMicros: 1, basis: "manifest_pricing" };
+const budgetConnection = { providerId: "openai", monthlyBudgetMicros: 100 };
+
+test("all budget legs overlap and retain plan order, with attempted IDs recorded before I/O", async t => {
+  const observations = [], calls = [];
+  let active = 0, peak = 0;
+  const env = mockEnv(async () => assert.fail("no recovery needed"));
+  env.BUDGET_LEDGER.get = name => ({ fetch: async (_url, init) => {
+    const body = JSON.parse(init.body), index = calls.length;
+    calls.push(body.reservationId);
+    assert.deepEqual(observations[index], [body.reservationId, "attempted"]);
+    peak = Math.max(peak, ++active);
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(observations.length, 4, "every attempt precedes the first completed reserve");
+    active--;
+    return Response.json({ allowed: true, chargedMicros: 1 });
+  } });
+  const start = performance.now();
+  const result = await reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, (leg, state) => observations.push([leg.request.reservationId, state]));
+  t.diagnostic(`four reserves: ${Math.round(performance.now() - start)} ms with 40 ms injected per reserve; peak in flight ${peak}`);
+  assert.equal(peak, 4);
+  assert.deepEqual(result.reservations.map(item => item.reservationId), calls);
+});
+
+for (const rollbackFails of [false, true]) test(`parallel denial waits for late successes and ${rollbackFails ? "reports failed rollback" : "preserves plan-order errors"}`, async () => {
+  const gates = budgetKinds.map(() => Promise.withResolvers()), calls = [], settled = [], observations = [];
+  const env = mockEnv(async () => { throw new Error("recovery unavailable"); });
+  env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (new URL(url).pathname === "/settle") {
+      assert.equal(calls.length, 4);
+      assert.equal(gates.every(gate => gate.done), true, "rollback waits for every reserve");
+      assert.equal(body.actualCostMicros, 0);
+      settled.push(body.reservationId);
+      if (rollbackFails) throw new Error("ledger unavailable");
+      return Response.json({ settled: true });
+    }
+    const index = calls.length;
+    calls.push(body.reservationId);
+    await gates[index].promise;
+    return Response.json({ allowed: index === 0 || index === 3, chargedMicros: 1 });
+  } });
+  const pending = reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, (leg, state) => observations.push([leg.kind, state]));
+  const rejected = assert.rejects(pending, error => error.code === (rollbackFails ? "accounting_unavailable" : "daily_budget_exhausted"));
+  assert.equal(calls.length, 4);
+  assert.deepEqual(observations, budgetKinds.map(kind => [kind, "attempted"]));
+  // Weekly fails first in time; daily must still win by plan order.
+  for (const index of [2, 1, 0, 3]) { gates[index].done = true; gates[index].resolve(); await new Promise(resolve => setImmediate(resolve)); }
+  await rejected;
+  assert.deepEqual(settled, [calls[0], calls[3]]);
+  assert.deepEqual(observations.filter(([, state]) => state === "denied").map(([kind]) => kind), ["weekly", "daily"]);
+});
+
 function mockEnv(send) {
   return {
     BUDGET_LEDGER: {

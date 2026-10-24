@@ -1,5 +1,76 @@
 # Hot-path review and local load evidence
 
+## WebSocket create follow-up (2026-10-23)
+
+Live production baseline, measured **before #326's hot caches**: 15 chained
+`previous_response_id` turns on one Responses WebSocket, using the same model
+on both sides. Direct OpenAI median `response.created` was about **120 ms**,
+versus **810 ms** through ClawRouter; TTFT was about **995 ms**, versus
+**1,550 ms**. The router added roughly 550–700 ms per turn. A warm
+edge-to-global-authority round trip measured about 72 ms (`cr-admission;dur=72`);
+HTTP router overhead was about 130–200 ms.
+
+Budget reservation now starts every configured monthly, daily, weekly and
+provider leg concurrently, including on HTTP hard-budget paths. Attempted IDs
+are observed before each leg's I/O. All results finish before rollback; every
+successful leg is released on failure, and the first failure in plan order wins.
+Failed rollback still returns `accounting_unavailable`.
+
+On pinned WebSocket creates, continuation resolution overlaps grant preparation.
+Once continuation tool evidence resolves, budget reservation also overlaps the
+remaining preparation. Its provider connection comes from the same request's
+admission result through `assertProviderAccess`, with no extra I/O, whether that
+admission came from the hot cache or the authority. Pinned preparation uses that
+same connection object and does not refresh the authorization snapshot. First
+creates retain sequential continuation/preparation/reservation ordering because
+unpinned selection can refresh the snapshot. This change adds no cache of its
+own; admission and credential caching follow [#326's hot-cache bounds](#zero-hop-warm-path-2026-10-23).
+
+For a warm pinned, chained create with a stored grant, no credential refresh,
+and retention disabled, these are **sequential storage round trips before
+upstream send**. The baseline is main at `0f0d455` without this PR's Worker
+changes; its counts follow the sequential awaits in that version. The merged
+counts are asserted by the latency-injected fixture in both modes.
+
+| Budget legs | Warm caches: main → merged | Cache disabled: main → merged |
+| --- | ---: | ---: |
+| None | 3 → 2 | 5 → 4 |
+| One (policy monthly) | 5 → 3 | 7 → 5 |
+| Policy monthly + provider | 6 → 3 | 8 → 5 |
+| Policy monthly + daily + weekly + provider | 8 → 3 | 10 → 5 |
+
+With warm caches, main waits for continuation → KV → select → each reserve →
+parallel dispatch. The merged path overlaps `KV → select` with
+`continuation → parallel reserve`, then awaits parallel dispatch. WebSocket
+creates do not pass an operation selection to admission, so they still read
+KV and call `/grant-pools/select`; the zero-hop HTTP selection path does not
+apply. Disabling `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS` with a value of `0` adds
+foreground admission before those branches and credential materialization after
+select. With any budget legs, the branches converge before dispatch; without
+legs there is no dispatch ledger call. Total calls within each cache mode are
+unchanged by this PR; independent waits overlap.
+
+WebSocket retention, when required, still completes after reservation and before
+dispatch; #326's post-dispatch retention applies to ordinary HTTP. These counts
+exclude the connection handshake, earlier-turn settlement, and continuation
+publication holding `response.created`. Credential preparation, every budget
+check, required retention and dispatch still finish before the frame is sent.
+
+The SQLite-backed Node admission fixture releases each storage round only once
+exactly its expected hops are waiting, so concurrency is proven causally rather
+than by wall-clock timing; a serialized or unexpected hop fails the test. It
+asserts each batch for all eight cells, freezing the cache clock after warm-up
+so host scheduling cannot expire entries. It also proves that
+`assertProviderAccess` and pinned preparation return the same admitted connection
+without a new connection lookup in both modes. A separate 40 ms-per-reserve test
+observes four simultaneous legs completing in roughly one delay. These are
+scheduling proofs, not a new production latency measurement.
+A continuation belonging to another grant returns the actionable
+`409 continuation_restart_required` before dispatch, instead of reaching the
+session's generic `502 provider_unavailable` pin-change close. The fixture also
+proves unsent reservations are released after mismatch or materialization failure;
+materialization-failure fixtures explicitly disable the credential cache.
+
 ## Zero-hop warm path (2026-10-23)
 
 Directive: the router should add no measurable delay beyond the network path to
@@ -446,9 +517,9 @@ partitioning the global authority. `/admission/resolve` reads the credential,
 policy, optional principal, requested provider connections, and scoped pool
 membership/runtime in one invocation of the existing `policy-bindings` object.
 The Worker still computes and compares the secret digest with `safeEqual`.
-Only the current authenticated operation holds the result; every HTTP request
-and WebSocket create resolves again. Nothing caches revocation, policy,
-budget, membership, runtime, or selection state across requests.
+At this stage only the current authenticated operation held the result. This
+historical no-cache behavior was superseded by [#326](#zero-hop-warm-path-2026-10-23);
+current admissions use its bounded isolate cache on HTTP and WebSocket creates.
 
 Cold imports retain the existing family markers, normalization, guarded
 initialization and canonical reread. A disable or migration closure committed
@@ -482,7 +553,7 @@ module-level projections; filtering, offers and affordability remain per request
 | Models/catalog with N eligible providers, service key | 3 + N | 1 |
 | Key inspect, me, usage authentication | 2 (+1 owner) | 1 |
 | Pool status authentication | 2 (+1 owner) | 1 |
-| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | 2 |
+| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | Warm caches: 1 global authority RPC (select); cache disabled: 2 (admission + select). Continuation ownership is separate; [full sequential storage counts](#websocket-create-follow-up-2026-10-23). |
 | Alternate attempt after provider rejection | 2 (resolve + select) | 2 |
 
 Pool status still scans the caller's scopes and reads statistics/runtime and
@@ -648,11 +719,13 @@ writers. A TTL or matching generation alone does not solve this boundary.
 | Legacy/unimportable projection | 2 authority + 1 Worker KV + 1 owner | Same fallback; first read may attempt bounded import |
 | Alternate after 401/403/429, projections ready | 2 authority + 1 KV + 1 owner | 1 fresh authority + 1 owner |
 | Environment fallback, projections ready | admission, optional select, KV | 1 authority; no credential owner |
-| Discovery, Access policy selection, pinned continuations, Fusion preflight, WebSocket creates | Existing paths | Existing paths |
+| Discovery, Access policy selection, HTTP pinned continuations, Fusion preflight | Existing paths | Existing paths |
+| Pinned WebSocket create | 2 authority + 1 KV + 1 credential owner, serial continuation/reserves | Warm caches: 1 authority (select) + 1 KV; cache disabled: 2 authority + 1 KV + 1 credential owner. Continuation and reserves overlap preparation ([round-trip counts](#websocket-create-follow-up-2026-10-23)). |
 
-The full target of one authority call **plus upstream only is not claimed**.
-No authorization, policy, pool, runtime, selection or credential secret is cached
-between requests.
+At this stage the full target of one authority call **plus upstream only was
+not claimed**, and no authorization or credential state was cached between
+requests. [#326](#zero-hop-warm-path-2026-10-23) supersedes that historical cache
+restriction; the WebSocket row above reflects the current merged behavior.
 
 The regression suite compares old and combined outcomes/counters across all six
 strategies, three stickiness modes, priority tiers, reserve, model-scoped
