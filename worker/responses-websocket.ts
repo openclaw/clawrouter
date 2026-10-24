@@ -32,18 +32,26 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
   new ResponsesWebSocketSession(pair[1], {
     waitUntil: (promise) => context.waitUntil(promise),
     async admit(body, lane, requestId, _pin, signal) {
-      if (typeof body.model !== "string" || !body.model) throw new HttpError(400, "model_required", "each response.create requires a model");
       let selection: ProxySelection;
-      if (native && provider && endpoint) {
-        const prepared = prepareNativeRequest(provider, endpoint, body, native[2], env);
-        selection = { provider, endpoint, ...prepared, capability: "llm.responses", method: "POST" };
-      } else {
-        const result = concreteOpenAiSelection("/v1/responses", body, env);
-        if (isSelectionFailure(result)) throw await responseError(result.response);
-        selection = result;
+      try {
+        if (typeof body.model !== "string" || !body.model) throw new HttpError(400, "model_required", "each response.create requires a model");
+        if (native && provider && endpoint) {
+          const prepared = prepareNativeRequest(provider, endpoint, body, native[2], env);
+          selection = { provider, endpoint, ...prepared, capability: "llm.responses", method: "POST" };
+        } else {
+          const result = concreteOpenAiSelection("/v1/responses", body, env);
+          if (isSelectionFailure(result)) throw await responseError(result.response);
+          selection = result;
+        }
+        if (selection.endpoint.websocket !== "openai.responses" || !selection.model?.capabilities.includes("llm.responses")) throw new HttpError(400, "websocket_unsupported", "selected model route does not support Responses WebSockets");
+        if (pinned && (pinned.providerId !== selection.provider.id || pinned.endpointId !== selection.endpoint.id)) throw new HttpError(409, "websocket_route_changed", "a WebSocket connection cannot change provider routes; open a new connection");
+      } catch (error) {
+        // Failed selection must still check this create's credential lifecycle.
+        // Successful selection stays on the combined admission/snapshot path.
+        const auth = await authenticateProxyKey(request.headers, env, [], false, correlationMetadata(request).sessionId);
+        if (auth instanceof Response) throw await responseError(auth);
+        throw error;
       }
-      if (selection.endpoint.websocket !== "openai.responses" || !selection.model?.capabilities.includes("llm.responses")) throw new HttpError(400, "websocket_unsupported", "selected model route does not support Responses WebSockets");
-      if (pinned && (pinned.providerId !== selection.provider.id || pinned.endpointId !== selection.endpoint.id)) throw new HttpError(409, "websocket_route_changed", "a WebSocket connection cannot change provider routes; open a new connection");
       const auth = await authenticateProxyKey(request.headers, env, [{ id: selection.provider.id, tokenRef: selection.provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? selection.provider.id }], false, correlationMetadata(request).sessionId, {
         providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "websocket",
         model: !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : null,

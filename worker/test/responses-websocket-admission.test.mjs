@@ -25,7 +25,7 @@ class Socket extends EventTarget {
 }
 function pair() { const a = new Socket(), b = new Socket(); a.peer = b; b.peer = a; return [a, b]; }
 
-async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "reserve", limit = budgets ? 100_000 : null, fixedCost = 7, retain = false } = {}) {
+async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "reserve", limit = budgets ? 100_000 : null, fixedCost = 7, retain = false, path = "/v1/responses" } = {}) {
   overrideHotCacheConfig();
   // Keep warmed entries fresh independently of host load or the injected waits.
   const now = Date.now();
@@ -55,7 +55,7 @@ async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "r
     provider.send(JSON.stringify({ type: "response.created", response }));
     provider.send(JSON.stringify({ type: "response.completed", response }));
   });
-  const response = await proxyResponsesWebSocket(new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "x-request-id": "fixture-upgrade", "session-id": "fixture-session" } }), f.env, { waitUntil: promise => pending.push(promise) }, "/v1/responses");
+  const response = await proxyResponsesWebSocket(new Request(`https://router.example${path}`, { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "x-request-id": "fixture-upgrade", "session-id": "fixture-session" } }), f.env, { waitUntil: promise => pending.push(promise) }, path);
   const client = response.webSocket;
   client.addEventListener("message", ({ data }) => messages.push(JSON.parse(data)));
   const drainHttp = f.drain;
@@ -73,6 +73,21 @@ async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "r
   t.after(async () => { client.close(); await drain(); });
   return Object.assign(f, { client, create, frames, messages, provider, drain });
 }
+
+for (const native of [false, true]) for (const revoked of [false, true]) test(`${native ? "native create with unsupported model" : "unified create with unknown model"} returns ${revoked ? "revoked-key authentication error" : "selection error for a valid key"}`, async t => {
+  const f = await websocketFixture(t, { cache: "warm", budgets: 0, path: native ? "/v1/native/openai/v1/responses" : "/v1/responses" });
+  assert.equal((await f.create()).type, "response.completed");
+  if (revoked) {
+    await f.mutateCredential({ operation: "revoke", credentialId: "fixture" });
+    invalidateAdmissions();
+  }
+  const result = await f.create({ model: native ? "openai/omni-moderation-latest" : "unknown-model" });
+  assert.equal(result.type, "error");
+  assert.equal(result.status, revoked ? 403 : native ? 400 : 404);
+  assert.equal(result.error.code, revoked ? "proxy_key_revoked" : native ? "model_capability_unsupported" : "model_not_found");
+  assert.equal(f.frames.length, 1);
+  assert.equal(f.client.closed, false);
+});
 
 for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"]) for (const budgets of [0, 1, 2, 4]) {
   test(`warm chained admission: cache ${cache}, ${budgetMode}, ${budgets} budget legs`, async t => {

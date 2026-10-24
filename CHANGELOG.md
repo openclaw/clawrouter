@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Authenticate each Responses WebSocket create before reporting model or route selection errors, preserving credential revocation and expiry errors without extra successful-admission round trips.
 - Keep Responses WebSocket settlement waits local to their lane so other lanes can admit and send while a prior turn settles.
 - Select Responses WebSocket grants from the shared hot admission snapshot, preserving pinned owners and transport eligibility; warm soft creates need only continuation resolution, while reserve creates retain authoritative budget admission.
 

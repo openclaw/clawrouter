@@ -442,6 +442,8 @@ default); `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` restores authoritative checks
 A pinned grant that is missing, ineligible or changed returns
 `409 upstream_grant_changed`, or the continuation restart error below. Local
 selection never substitutes another grant on an existing socket.
+Credential authentication errors take precedence over per-create model or route
+selection errors, as they do for HTTP requests.
 
 Response IDs and `response.metadata` turn state are bound to each create's fresh
 authorization scope and actual upstream owner before forwarding. Codex can then
