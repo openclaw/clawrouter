@@ -8,6 +8,8 @@ export interface AdmissionSelection {
   providerId: string; endpointId: string; mode: "http" | "websocket";
   model?: string | null; catalogModelId?: string | null; capability: string;
   sessionHash?: string; excludedKeys?: string[];
+  // Undefined selects freely; null pins environment auth; a key pins that owner.
+  pinnedKey?: string | null;
 }
 // "select" also returns the pool snapshot after selecting; "only" returns the
 // snapshot without selecting or touching counters (stale-cache refresh).

@@ -436,7 +436,12 @@ Send authenticated upgrades to `/v1/responses` or
 `response.create`, so an HTTP 101 alone does not prove model access or upstream
 readiness. Every create rechecks credential, policy, provider, grant, retention,
 and budget before dispatch. The connection pins its provider route and grant
-revision; changing either requires a new connection.
+revision; changing either requires a new connection. Create admission and grant
+selection share HTTP's isolate-local snapshot (fresh 10 s, maximum age 60 s by
+default); `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` restores authoritative checks.
+A pinned grant that is missing, ineligible or changed returns
+`409 upstream_grant_changed`, or the continuation restart error below. Local
+selection never substitutes another grant on an existing socket.
 
 Response IDs and `response.metadata` turn state are bound to each create's fresh
 authorization scope and actual upstream owner before forwarding. Codex can then
@@ -451,7 +456,8 @@ does not create a synthetic metadata event. Metadata may precede
 `response.created`; it identifies the response without proving execution started.
 Pending publication preserves frame order. After a terminal outcome is claimed
 and its frame is forwarded, the next same-lane create may begin admission while
-settlement finishes; dispatch waits for successful settlement. An accounting
+settlement finishes; dispatch and the final soft-budget preflight wait for
+successful settlement. An accounting
 failure still closes the connection with `accounting_unavailable` before new
 work is sent. Closing the connection suppresses late publication acknowledgments
 and queued output.

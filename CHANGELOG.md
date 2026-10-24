@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Select Responses WebSocket grants from the shared hot admission snapshot, preserving pinned owners and transport eligibility; warm soft creates need only continuation resolution, while reserve creates retain authoritative budget admission.
+
 - Combine budget reservation and dispatch marking for ordinary HTTP requests and Responses WebSocket turns without required retention, saving a ledger round trip; older ledgers retain two-step dispatch, and unsent crash outcomes conservatively retain reservations.
 - Honor soft budgets on Responses WebSocket turns with local pre-dispatch denials, parallel status checks and observed charges; exhausted scopes deny the next turn without aborting active lanes.
 - Admit the next same-lane Responses WebSocket turn after terminal publication while the previous turn settles; gate upstream dispatch on successful settlement and retain conservative active limits and exactly-once accounting.

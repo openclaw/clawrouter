@@ -38,16 +38,13 @@ the sequential awaits in that version. The current counts appear below.
 | Policy monthly + provider | 6 → 3 | 8 → 5 |
 | Policy monthly + daily + weekly + provider | 8 → 3 | 10 → 5 |
 
-With warm caches, main waits for continuation → KV → select → each reserve →
-parallel dispatch. The merged path overlaps `KV → select` with
-`continuation → parallel reserve`, then awaits parallel dispatch. WebSocket
-creates do not pass an operation selection to admission, so they still read
-KV and call `/grant-pools/select`; the zero-hop HTTP selection path does not
-apply. Disabling `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS` with a value of `0` adds
+At #325, warm main waited for continuation → KV → select → each reserve →
+parallel dispatch. That follow-up overlapped `KV → select` with
+`continuation → parallel reserve`, then awaited parallel dispatch. WebSocket
+creates still read KV and called `/grant-pools/select` then. Cache-off added
 foreground admission before those branches and credential materialization after
-select. With any budget legs, the branches converge before dispatch; without
-legs there is no dispatch ledger call. Total calls within each cache mode are
-unchanged by this PR; independent waits overlap.
+select. The local-selection and combined-dispatch improvements below supersede
+those counts.
 
 WebSocket retention, when required, still completes after reservation and before
 dispatch; #326's post-dispatch retention applies to ordinary HTTP. These counts
@@ -58,10 +55,16 @@ budget reservation, required retention and dispatch finish before the frame is s
 Soft-policy WebSocket turns now omit reserve and dispatch calls. They perform
 local budget preflight and start `/status` reads alongside the send; exhaustion
 never aborts the active turn and instead denies the next create in this isolate.
-Observed usage uses the shared soft charge/recovery path. The causal fixture
-asserts two warm rounds (`continuation + KV`, then `select`) or four with caching
-disabled (additional admission and materialization), with zero, one, two or four
-budget legs. Required retention remains ahead of send.
+Observed usage uses the shared soft charge/recovery path. With local selection,
+the causal fixture asserts one warm round (`continuation`) or two with caching
+disabled (`admission`, then `continuation + materialize`), with zero, one, two or
+four budget legs. Required retention remains ahead of send.
+
+After terminal publication, the next same-lane create can begin admission while
+the prior turn settles. Sending and the final soft-budget preflight wait for
+that settlement and recheck cancellation. A cap observed by the previous turn
+therefore denies the next send; an unsent denial settles once without closing
+the socket. Settling operations still count toward the active limit.
 
 The SQLite-backed Node admission fixture releases each storage round only once
 exactly its expected hops are waiting, so concurrency is proven causally rather
@@ -86,20 +89,37 @@ allows the Worker to skip that leg's `/dispatch`; older Durable Objects keep
 the separate call. The causal fixture expects exactly these rounds for a pinned,
 chained create with stored credentials and retention disabled:
 
-| Policy / budget legs | Warm: #325 → now | Cache off: #325 → now |
+| Policy / budget legs | Warm: combined dispatch → local selection | Cache off: combined dispatch → local selection |
 | --- | ---: | ---: |
-| Reserve / none | 2 → 2 | 4 → 4 |
-| Reserve / one | 3 → 2 | 5 → 4 |
-| Reserve / policy + provider | 3 → 2 | 5 → 4 |
-| Reserve / monthly + daily + weekly + provider | 3 → 2 | 5 → 4 |
-| Soft / any of the above | 2 | 4 |
+| Reserve / none | 2 → 1 | 4 → 2 |
+| Reserve / one | 2 → 2 | 4 → 3 |
+| Reserve / policy + provider | 2 → 2 | 4 → 3 |
+| Reserve / monthly + daily + weekly + provider | 2 → 2 | 4 → 3 |
+| Soft / none | 2 → 1 | 4 → 2 |
+| Soft / one | 2 → 1 | 4 → 2 |
+| Soft / policy + provider | 2 → 1 | 4 → 2 |
+| Soft / monthly + daily + weekly + provider | 2 → 1 | 4 → 2 |
 
-Warm rounds are `continuation + KV`, then `select + all reserve legs` in
-reserve mode, or just `select` in soft mode. Cache-off adds admission first and
-materialization last. Soft `/status` reads run alongside send and add no
-foreground round. These are causal scheduling proofs, not production timings;
-at the measured ~72 ms storage latency, removing a reserve dispatch round saves
-approximately one such round trip.
+Each create supplies its provider, endpoint, model, WebSocket requirement and
+hashed session identity to the same admission selector used by HTTP. Warm
+selection uses the existing snapshot and coalesces counters into background
+`/grant-pools/record`; it has no foreground KV read or `/grant-pools/select`.
+A pinned request filters to its key before selection and checks revision or
+lineage against both the snapshot and materialized grant. Missing, ineligible
+or changed pinned grants return `409 upstream_grant_changed` (or the existing
+continuation restart error), never a different account. First creates with a
+continuation retain the resolved owner's pinned preparation path.
+
+Warm rounds are `continuation`, then all reserve-dispatched legs concurrently
+when present. Cache-off performs authoritative admission and selection first,
+then `continuation + materialize`, then reserve-dispatched legs when present.
+Thus warm reserve with legs still takes two rounds: continuation tool evidence
+must resolve before reserving. Soft `/status` reads run alongside send and add
+no foreground round. These are causal scheduling proofs, not production timings.
+No new cache or staleness bound is introduced; the shared fresh/max-age limits
+and `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` authority behavior apply to every
+create. Legacy grant projections retain the existing KV/selection fallback and
+are outside this stored-credential table.
 
 Ordinary HTTP reserve requests also combine the calls after all fallible
 preparation. Fail-closed retention and account revalidation keep two-step
@@ -121,6 +141,7 @@ unbudgeted policies.
 | Concern | Before | After |
 | --- | --- | --- |
 | Admission + grant selection | `/admission/resolve` on the global `policy-bindings` authority every request | Isolate snapshot (`worker/admission-cache.ts`): fresh 10 s, stale-while-revalidate to the 60 s max age, one single-flight background refresh |
+| WebSocket create selection | Per-create KV bulk read → `/grant-pools/select` | Same operation snapshot selector as HTTP, constrained to the pinned key and qualified WebSocket transport; continuation resolution remains foreground |
 | Selection counters | Atomic SQLite update inside admission | Same shared strategy code (`chooseGrantKey`, `selectAdmissionCandidate`) on the snapshot; counters coalesced (25 ms) into one background `/grant-pools/record` |
 | Credential materialization | `/materialize` on the per-grant owner every request | Isolate memory (`worker/credential-cache.ts`), keyed by grant + generation + revision, bounded by max age and the token refresh margin; upstream 401/403 evicts |
 | Quota feedback | Background authority write | Also applied to this isolate's snapshot at once |

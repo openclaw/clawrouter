@@ -228,9 +228,14 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
     catch { throw unavailable(); }
   }
   const grant = selected?.grant ?? null;
-  if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
+  assertPinnedGrant(pinned, selected);
   if (requirement) assertOperationConfiguration(requirement, grant, env);
   return { ...configuredUpstream(provider, grant, env), grantKey: selected?.key ?? null, grantRevision: grant ? grantRevision(grant) : null };
+}
+
+function assertPinnedGrant(pinned: PinnedGrant | undefined, selected: { key: string; grant: UpstreamGrant } | null): void {
+  const grant = selected?.grant;
+  if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
 }
 
 // Selection and credential ownership stay with their callers. Both generation
@@ -367,9 +372,11 @@ function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | unde
 
 async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
-  const admitted = recordSelection && !pinned && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys) : undefined;
+  const admitted = recordSelection && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key) : undefined;
   if (!admitted && excludedKeys.size && auth.authType === "proxy_key") stickyHash = await grantStickyInput(auth, proxySessionHash(auth));
   const resolution = admitted ?? await resolveGrantSelection(provider.id, auth.policyId, auth.policy.tenantId ?? "default", tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
+  // Check the snapshot pin before materialization, then recheck the materialized owner.
+  if (admitted) assertPinnedGrant(pinned, resolution.selected);
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
   try { return { selected: { key, grant: await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false)) }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt }; }

@@ -2,9 +2,11 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
-import { putGrantCredentials } from "../grant-credentials.ts";
-import { overrideHotCacheConfig, setHotCacheClock } from "../hot-cache.ts";
-import { authenticateProxyKey, proxyAdmission } from "../proxy-auth.ts";
+import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
+import { overrideHotCacheConfig, pendingBackgroundWork, setHotCacheClock } from "../hot-cache.ts";
+import { invalidateAdmissions } from "../admission-cache.ts";
+import { sha256Hex } from "../utils.ts";
+import { authenticateProxyKey, proxyAdmission, proxySessionHash } from "../proxy-auth.ts";
 import { assertProviderAccess, providerById } from "../providers.ts";
 const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 const { prepareSelected } = await import("../proxy.ts");
@@ -53,11 +55,11 @@ async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "r
     provider.send(JSON.stringify({ type: "response.created", response }));
     provider.send(JSON.stringify({ type: "response.completed", response }));
   });
-  const response = await proxyResponsesWebSocket(new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), f.env, { waitUntil: promise => pending.push(promise) }, "/v1/responses");
+  const response = await proxyResponsesWebSocket(new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "x-request-id": "fixture-upgrade", "session-id": "fixture-session" } }), f.env, { waitUntil: promise => pending.push(promise) }, "/v1/responses");
   const client = response.webSocket;
   client.addEventListener("message", ({ data }) => messages.push(JSON.parse(data)));
   const drainHttp = f.drain;
-  const drain = async () => { while (pending.length) await Promise.all(pending.splice(0)); await drainHttp(); };
+  const drain = async () => { while (pending.length) await Promise.all(pending.splice(0)); await drainHttp(); await pendingBackgroundWork(); };
   const create = async (body = {}) => {
     const before = messages.length;
     client.send(JSON.stringify({ type: "response.create", model: "openai/gpt-5.6-sol", input: "fixture", ...body }));
@@ -80,9 +82,8 @@ for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"
     assert.equal(first.response.id, "ws_1");
     const expected = [
       ...(cache === "off" ? [["admission"]] : []),
-      ["continuation", "kv"],
-      [...Array(budgetMode === "soft" ? 0 : budgets).fill("reserve"), "select"],
-      ...(cache === "off" ? [["materialize"]] : []),
+      ["continuation", ...(cache === "off" ? ["materialize"] : [])],
+      ...(budgetMode === "reserve" && budgets ? [Array(budgets).fill("reserve")] : []),
     ];
     const rounds = [], waiting = [];
     let measuring = true, problem = null, watchdog;
@@ -135,6 +136,9 @@ for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"
     clearTimeout(watchdog);
     assert.equal(problem, null);
     assert.deepEqual(rounds, expected);
+    assert.equal(f.events.at(-1).session_id, "fixture-session");
+    const counters = f.env.ACCESS_CONTROL.objects.get("policy-bindings").db.prepare("SELECT grant_key, selected_count FROM upstream_grant_selection").all();
+    assert.deepEqual(counters.map(row => [row.grant_key, row.selected_count]), [[f.events[0].grant_key, 2]], "both creates select only the pinned owner; local counters flush in the background");
     t.diagnostic(`cache ${cache}, ${budgetMode}, ${budgets} budget legs: ${rounds.length} sequential storage rounds`);
   });
 }
@@ -144,20 +148,90 @@ for (const cache of ["warm", "off"]) test(`pinned preparation reuses the admitte
   await f.create();
   const provider = providerById("openai");
   const request = new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "x-request-id": "fixture-connection-check" } });
-  const auth = await authenticateProxyKey(request.headers, f.env, [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }]);
+  const key = f.events.at(-1).grant_key;
+  const selection = concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-5.6-sol", input: "fixture" }, f.env);
+  const auth = await authenticateProxyKey(request.headers, f.env, [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }], false, "fixture-session", {
+    providerId: provider.id, endpointId: selection.endpoint.id, mode: "websocket", model: selection.body.model,
+    catalogModelId: selection.model.id, capability: selection.capability, pinnedKey: key,
+  });
   assert.ok(!(auth instanceof Response));
   const admitted = proxyAdmission(auth).connections.find(item => item.providerId === provider.id);
   assert.equal(admitted.monthlyBudgetMicros, 100_000);
-  const selection = concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-5.6-sol", input: "fixture" }, f.env);
+  assert.equal(proxySessionHash(auth), await sha256Hex("session:fixture-session"));
+  assert.equal(proxyAdmission(auth).selection.selected.key, key);
   // Any extra connection lookup would be a scalar KV read or an authority RPC.
-  const get = f.env.POLICY_KV.get.bind(f.env.POLICY_KV);
-  f.env.POLICY_KV.get = key => { assert.ok(Array.isArray(key), "no connection KV lookup"); return get(key); };
-  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => assert.equal(new URL(request.url).pathname, "/grant-pools/select");
+  f.env.POLICY_KV.get = () => assert.fail("no KV lookup during preparation");
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => assert.equal(new URL(request.url).pathname, "/grant-pools/record");
   const connection = await assertProviderAccess(provider, auth, f.env);
-  const key = f.events.at(-1).grant_key;
   const prepared = await prepareSelected(request, f.env, selection, {}, auth, new Set(), true, undefined, { key, revision: grantRevision(f.values.get(key)) }, "websocket");
   assert.equal(connection, admitted);
   assert.equal(prepared.connection, connection);
+});
+
+async function primeAdmission(f, pinnedKey) {
+  const provider = providerById("openai");
+  const selection = concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-5.6-sol", input: "fixture" }, f.env);
+  const auth = await authenticateProxyKey(new Headers({ authorization: "Bearer clawrouter-live-fixture-fixture-secret" }), f.env, [{ id: provider.id, tokenRef: "openai" }], false, "fixture-session", {
+    providerId: provider.id, endpointId: selection.endpoint.id, mode: "websocket", model: selection.body.model,
+    catalogModelId: selection.model.id, capability: selection.capability, pinnedKey,
+  });
+  assert.ok(!(auth instanceof Response));
+  assert.ok(proxyAdmission(auth).snapshots?.openai, "current admission contains a local-selection snapshot");
+  return auth;
+}
+
+function forbidSelectionIO(f) {
+  f.env.POLICY_KV.get = () => assert.fail("warm selection must not read KV");
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    assert.ok(["/grant-pools/record", "/http-continuations"].includes(new URL(request.url).pathname), "warm selection must not call admission or select");
+  };
+}
+
+for (const change of ["missing", "ineligible", "revision", "transport"]) for (const chained of [false, true]) test(`local selection rejects ${change} pinned grant${chained ? " with continuation restart" : " without switching owners"}`, async t => {
+  const f = await websocketFixture(t, { cache: "warm", budgetMode: "soft", budgets: 0 });
+  await f.create();
+  const key = f.events.at(-1).grant_key;
+  if (change === "missing") await revokeGrantCredentials(f.env, key);
+  else if (change === "ineligible") await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, budgetMode: "soft", grantRouting: { ...f.policy.grantRouting, eligibleGrants: { openai: [grantKeys.find(other => other !== key).split("/").at(-1)] } } } });
+  else await putGrantCredentials(f.env, key, change === "transport"
+    ? { provider: "openai", kind: "subscription", enabled: true, accessToken: "synthetic-subscription", accountId: "synthetic-account" }
+    : { provider: "openai", kind: "api_key", enabled: true, credential: "synthetic-replacement" });
+  // Model another isolate observing the changed authority snapshot at refresh.
+  invalidateAdmissions();
+  const auth = await primeAdmission(f, key);
+  if (change !== "revision") assert.equal(proxyAdmission(auth).selection.selected, null);
+  forbidSelectionIO(f);
+  f.env.GRANT_CREDENTIALS.get = () => assert.fail("changed snapshot pin must fail before materialization");
+  const result = await f.create(chained ? { previous_response_id: "ws_1" } : {});
+  assert.equal(result.status, 409, JSON.stringify(result));
+  assert.equal(result.error.code, chained ? "continuation_restart_required" : "upstream_grant_changed");
+  assert.equal(f.frames.length, 1);
+  assert.equal(f.client.closed, false);
+  assert.equal(f.events.length, 2);
+  assert.equal(f.events.at(-1).actual_cost_micros, 0);
+});
+
+test("warm first-create selection cannot use HTTP-only grant transports or environment fallback", async t => {
+  const f = await websocketFixture(t, { cache: "warm", budgetMode: "soft", budgets: 0 });
+  for (const key of grantKeys) await putGrantCredentials(f.env, key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "synthetic-subscription", accountId: "synthetic-account" });
+  invalidateAdmissions();
+  const auth = await primeAdmission(f);
+  assert.equal(proxyAdmission(auth).selection.selected, null);
+  assert.equal(proxyAdmission(auth).selection.hasConfiguredGrant, true);
+  forbidSelectionIO(f);
+  const result = await f.create();
+  assert.equal(result.error.code, "upstream_grant_pool_unavailable");
+  assert.equal(f.frames.length, 0);
+  assert.equal(f.client.closed, false);
+});
+
+test("a continuation-pinned first create keeps its owner despite another local selection", async t => {
+  const f = await websocketFixture(t, { cache: "warm", budgetMode: "soft", budgets: 0 });
+  const parent = JSON.parse(await f.consume(await f.request()));
+  const owner = f.events.at(-1).grant_key;
+  assert.equal((await f.create({ previous_response_id: parent.id })).type, "response.completed");
+  assert.equal(f.events.at(-1).grant_key, owner);
+  assert.equal(f.frames.length, 1);
 });
 
 test("a continuation on another grant returns a restart without sending or retaining reservations", async t => {
