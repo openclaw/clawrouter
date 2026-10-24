@@ -280,6 +280,23 @@ pnpm cf:deploy
 Normal production updates use the automated train, not this immediate-cutover
 command.
 
+## Health report
+
+Hourly invocation outcomes per deployed version, from Cloudflare's
+`workersInvocationsAdaptive` analytics:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=<account> pnpm cf:health-report -- --hours 24
+```
+
+Each line shows requests, the client-disconnect share, the failure share
+(exceptions, CPU/memory limits, load shedding) and the active versions.
+`<- version change` marks a deploy; `FLAG` marks hours above 10% disconnects or
+1% failures. A spike that starts long after a version change and is not shared
+by the previous version points at a client, not the release. The token needs
+Account Analytics Read; without `CLOUDFLARE_API_TOKEN` the command uses the
+local `wrangler auth token`. `--json` prints the summary for scripts.
+
 ## Smoke
 
 The deployed smoke checks health, root-to-dashboard redirect behavior, that the

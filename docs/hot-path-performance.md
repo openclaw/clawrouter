@@ -210,6 +210,30 @@ hit performs no backend round trip. Upstream OpenAI time to headers was ~190 ms;
 the remaining ~10-25 ms above the network floor is request/response transfer and
 Worker CPU.
 
+### Production monitoring (2026-10-24)
+
+Seven minutes of `wrangler tail` on the live hot-cache build (`2473bdd3`) and 36
+hours of per-version invocation analytics:
+
+- About 180 inference requests produced 13 `/admission/resolve` and 12
+  `/materialize` Durable Object calls: roughly a 93% hot-cache hit rate on real
+  traffic. No warning or error logs.
+- Compared with the previous version, hourly `loadShed` fell from 1-29 to about 2
+  and `scriptThrewException` from 1-9 to 0-2.
+- From 18:00Z, 13 hours after the deploy and with no version change, client
+  disconnects rose to 15% and then 46% of requests. 139 of 140 sampled cancels
+  were non-streaming `/v1/responses` calls (200-750 KB bodies) from one client
+  population (`OpenAI/JS 7.35.0`, a single ISP network) that disconnected 1.0-1.7 s
+  after sending, before any response. This is client behavior, not a router
+  regression; `pnpm cf:health-report` now shows this distinction directly.
+- Discovery remains the slowest warm path on that build: `/v1/models` and
+  `/v1/catalog` took about 212 ms against a 28 ms network floor. The per-key
+  discovery reuse from #327 removes those backend reads once deployed.
+- Router CPU before dispatch is small: an in-process chat request with a 600 KB
+  history costs 2.6 ms p50 (1.1 ms at 200 KB). Responses CPU in the tail
+  (162 ms p50 for completed requests) is spent after headers, in delivery
+  inspection and accounting.
+
 ### Stress and hardening (2026-10-23)
 
 Concurrency sweep on the same fixture (400 requests per cell, 20 ms synthetic
