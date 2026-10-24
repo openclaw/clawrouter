@@ -449,9 +449,12 @@ a new connection. The rejected create is not billed and does not close the socke
 An upgrade header alone
 does not create a synthetic metadata event. Metadata may precede
 `response.created`; it identifies the response without proving execution started.
-Pending publication preserves frame order and blocks the next same-lane create
-until publication and settlement finish. Closing the connection suppresses late
-publication acknowledgments and queued output.
+Pending publication preserves frame order. After a terminal outcome is claimed
+and its frame is forwarded, the next same-lane create may begin admission while
+settlement finishes; dispatch waits for successful settlement. An accounting
+failure still closes the connection with `accounting_unavailable` before new
+work is sent. Closing the connection suppresses late publication acknowledgments
+and queued output.
 
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
@@ -469,11 +472,12 @@ when admission finishes after cancellation. A client disconnect records
 records `timeout`/504. Other active lanes closed with that connection do not
 inherit its timeout. If budget
 settlement/charge and its durable recovery both fail, or usage publication fails, the
-socket reports `accounting_unavailable` and closes before accepting more work.
+socket reports `accounting_unavailable` and closes before sending more work.
 
-Limits per connection are 16 active responses, 32 named lanes plus the default
-lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
-bytes, at most 48 output frames/8 MiB awaiting publication, and 16 MiB cumulative
+Limits per connection are 16 active responses (including those still settling),
+32 named lanes plus the default lane, 48 buffered creates, 4 MiB per incoming
+frame, 8 MiB total buffered create bytes, at most 48 output frames/8 MiB awaiting
+publication, and 16 MiB cumulative
 downstream output. The output limit bounds a slow
 reader because Workers' WebSocket API has no supported drain/queue metric.
 Connections last at most 60 minutes; each response uses its endpoint deadline,

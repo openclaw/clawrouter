@@ -66,6 +66,8 @@ export class ResponsesWebSocketSession {
   private limits: typeof DEFAULT_LIMITS;
   private lanes = new Map<string, Array<{ frame: string; bytes: number }>>();
   private active = new Map<string, Operation>();
+  private settling = new Set<Operation>();
+  private dispatched = new Map<string, Operation>();
   private terminalIds = new Map<string, string>();
   private bufferedBytes = 0;
   private bufferedCount = 0;
@@ -137,7 +139,7 @@ export class ResponsesWebSocketSession {
   private schedule(): void {
     if (this.ending) return;
     for (const [lane, queue] of this.lanes) {
-      if (this.active.size >= this.limits.active) break;
+      if (this.active.size + this.settling.size >= this.limits.active) break;
       if (this.active.has(lane) || !queue.length) continue;
       const queued = queue.shift()!;
       const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, publication: Promise.resolve() };
@@ -182,10 +184,13 @@ export class ResponsesWebSocketSession {
       });
       const socket = await this.connecting;
       establishing = false;
+      // Admission may overlap the prior turn's accounting, dispatch may not.
+      await this.dispatched.get(op.lane)?.settling;
       if (this.ending || op.ending) { await this.finish(op, this.ending ?? "router_error", null); return; }
       op.admitted.beforeSend?.();
       socket.send(op.admitted.payload);
       op.sent = true;
+      this.dispatched.set(op.lane, op);
       // Settlement captures only immutable accounting facts, never a request body.
       op.admitted.payload = "";
     } catch (error) {
@@ -211,7 +216,7 @@ export class ResponsesWebSocketSession {
     try { event = JSON.parse(data); } catch { this.close("upstream_protocol_error", 1011); return; }
     if (!event || typeof event !== "object" || Array.isArray(event)) { this.close("upstream_protocol_error", 1011); return; }
     const lane = typeof event.stream_id === "string" ? event.stream_id : "";
-    const op = this.active.get(lane);
+    const op = this.dispatched.get(lane);
     const response = event.response && typeof event.response === "object" ? event.response as Frame : null;
     const responseId = typeof response?.id === "string" ? response.id : typeof event.response_id === "string" ? event.response_id : undefined;
     const outcome = terminalTypes.get(String(event.type));
@@ -277,11 +282,19 @@ export class ResponsesWebSocketSession {
     this.claim(op, outcome, terminal);
     if (!op.admitted) return Promise.resolve();
     const ending = op.ending!;
-    op.settling = op.publication.then(() => op.admitted!.settle(ending.outcome, ending.terminal, op.sent, op.executionStarted)).catch(() => {
+    op.settling = op.publication.then(() => {
+      // Release admission only after terminal publication; retain the wire owner.
+      this.settling.add(op);
+      if (this.active.get(op.lane) === op) this.active.delete(op.lane);
+      this.schedule();
+      return op.admitted!.settle(ending.outcome, ending.terminal, op.sent, op.executionStarted);
+    }).catch(() => {
       this.close("router_error", 1000, { code: "accounting_unavailable", message: "Response accounting could not finish; open a new connection.", status: 503, lane: op.lane });
     }).finally(() => {
       this.releaseFrame(op);
-      this.active.delete(op.lane);
+      this.settling.delete(op);
+      if (this.active.get(op.lane) === op) this.active.delete(op.lane);
+      if (this.dispatched.get(op.lane) === op) this.dispatched.delete(op.lane);
       this.schedule();
     });
     return op.settling;
@@ -337,8 +350,9 @@ export class ResponsesWebSocketSession {
       for (const item of queue) { this.bufferedBytes -= item.bytes; this.bufferedCount--; }
       queue.length = 0;
     }
-    for (const op of this.active.values()) this.options.waitUntil(this.finish(op, cause, null));
-    for (const op of this.active.values()) {
+    const operations = [...this.active.values(), ...this.settling];
+    for (const op of operations) this.options.waitUntil(this.finish(op, cause, null));
+    for (const op of operations) {
       const ownedCause = op.ending!.outcome;
       op.controller.abort(new ResponsesOperationAborted(ownedCause === "timeout" ? "timeout" : cause));
     }
