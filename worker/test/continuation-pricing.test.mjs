@@ -1,4 +1,5 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sha256Hex } from "../utils.ts";

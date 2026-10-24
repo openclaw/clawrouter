@@ -1,29 +1,37 @@
 # Agent spend control
 
-ClawRouter supports centralized model budgets with default pre-request reservation
-and optional low-latency soft enforcement. Provider credentials remain server-side; clients use
+ClawRouter supports centralized model budgets with default low-latency soft
+enforcement and opt-in pre-request reservation. Provider credentials remain server-side; clients use
 a ClawRouter credential and receive only the providers and models allowed by
 their policy.
 
 ## Soft budgets and dynamic caps
 
-`budgetMode: "reserve"` is the default when omitted. Existing policies keep
-pre-dispatch reservation, pricing guards, dispatch receipts, and conservative
-settlement. The remaining reservation sections describe that default.
+New policies created through the admin API or console default to
+`budgetMode: "soft"`, so budget checks never sit in front of the upstream request.
+Stored policies keep their mode, and a stored policy without one keeps
+`"reserve"`: pre-dispatch reservation, pricing guards, dispatch receipts, and
+conservative settlement. Set `"reserve"` explicitly for hard caps; the remaining
+reservation sections describe it.
 
-`budgetMode: "soft"` forwards ordinary HTTP inference immediately after the
-existing authentication, selection, credential materialization and required
-retention checks. Revocation, expiry, model allowlists and service-tier controls
+Soft mode forwards ordinary HTTP inference immediately after authentication and
+selection (both normally served from the isolate hot cache, see
+[hot-path performance](hot-path-performance.md#zero-hop-warm-path-2026-10-23)). Revocation, expiry, model allowlists and service-tier controls
 remain authoritative. It starts all configured policy daily/weekly/monthly and
 provider monthly `/status` reads concurrently with upstream fetch, without
-reserve or dispatch RPCs. A window with spent >= limit (including zero) aborts
-the upstream before delivery and returns its existing 402 code, policy hint and
-reset time, recording a denied, no-charge usage event. Provider work may already
-have incurred an upstream cost; this denial does not claim a provider refund.
+reserve or dispatch RPCs. A zero limit, or a scope this isolate observed as exhausted
+within the last 10 seconds, is denied before dispatch with its existing 402 code,
+policy hint and reset time. Otherwise a window found at spent >= limit while the
+upstream is still pending aborts it before delivery, recording a denied,
+no-charge usage event; provider work may already have incurred an upstream cost
+and this denial does not claim a provider refund.
 
 When headers arrive first, the router waits **at most 50 ms more** for the budget
-check. Read errors and a check still pending after that grace period fail open;
-late results cannot retract an exposed response. Soft mode admits requests
+check. Because the reads start at dispatch, this only happens when the ledger is
+slower than the provider's own time to headers. Read errors and checks still
+pending after that grace period fail open; late results cannot retract an exposed
+response but mark the scope exhausted for later requests. Concurrent requests can
+therefore overspend a soft cap by the work in flight before exhaustion is seen. Soft mode admits requests
 without a complete price, charges the priced portion of observed usage (or an
 explicit fixed tariff), and records `unpriced_usage` when any price is unknown.
 Missing usage has no invented reservation charge. It is deliberately unsuitable

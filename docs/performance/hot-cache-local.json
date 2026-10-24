@@ -1,0 +1,2073 @@
+{
+  "note": "Synthetic workerd fixture; 100 measured requests per cell, concurrency 1, 200 ms fixed upstream delay, weekly window. before = 7e1ddb4, after = hot-cache change. Host load average ~45-65.",
+  "cells": {
+    "before-none-off": {
+      "label": "before",
+      "retention": "off",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "none",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 21.519635209,
+          "throughput": 4.6469189198048175,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 207.37316600000122,
+            "p90": 216.7641250000006,
+            "p95": 263.0160419999993,
+            "p99": 324.8209999999999,
+            "max": 403.39529200000106
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 207.1072920000006,
+            "p90": 216.71450000000004,
+            "p95": 262.96795799999927,
+            "p99": 324.55349999999817,
+            "max": 403.30404199999975
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 207.1072920000006,
+            "p90": 216.71450000000004,
+            "p95": 262.96795799999927,
+            "p99": 324.55349999999817,
+            "max": 403.30404199999975
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {},
+          "routerAddedLatencyMs": {
+            "p50": 7.37316600000122,
+            "p95": 63.01604199999929
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 7.107292000000598,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 5,
+            "drainMs": 4144.220290999998,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 128.921875,
+            "peakCpuPercent": 5.2
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.189813791,
+          "throughput": 3.969858643247642,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 249.30887500000244,
+            "p90": 254.28170799999498,
+            "p95": 255.62258299999667,
+            "p99": 261.3952500000014,
+            "max": 446.31958300000406
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 206.7747079999972,
+            "p90": 210.95995799999946,
+            "p95": 213.609540999998,
+            "p99": 215.1611669999984,
+            "max": 228.95249999999942
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 5.171125000000757,
+            "p90": 10.991165999999794,
+            "p95": 13.782874999997148,
+            "p99": 129.88412500000413,
+            "max": 163.48016700000153
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {},
+          "routerAddedLatencyMs": {
+            "p50": 49.308875000002445,
+            "p95": 55.622582999996666
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 6.77470799999719,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 18,
+            "drainMs": 801.5902910000004,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 163.875,
+            "peakCpuPercent": 7.2
+          }
+        }
+      ]
+    },
+    "before-default-off": {
+      "label": "before",
+      "retention": "off",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "default",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 23.87166675,
+          "throughput": 4.189066521716587,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 215.32279200000085,
+            "p90": 320.85050000000047,
+            "p95": 352.2182500000017,
+            "p99": 478.1922909999994,
+            "max": 501.7239579999987
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 214.51095800000076,
+            "p90": 320.5759590000016,
+            "p95": 352.1698329999999,
+            "p99": 478.09920799999963,
+            "max": 497.5917499999996
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 214.51095800000076,
+            "p90": 320.5759590000016,
+            "p95": 352.1698329999999,
+            "p99": 478.09920799999963,
+            "max": 497.5917499999996
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 15.322792000000845,
+            "p95": 152.21825000000172
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 14.510958000000755,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 14,
+            "drainMs": 1883.7255410000034,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 136.0625,
+            "peakCpuPercent": 5.8
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 27.433722333000006,
+          "throughput": 3.645148798481133,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 254.37479200000234,
+            "p90": 308.8090420000008,
+            "p95": 377.0815829999992,
+            "p99": 585.109000000004,
+            "max": 624.8314170000012
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 210.97366700000566,
+            "p90": 239.90270900000178,
+            "p95": 306.82800000000134,
+            "p99": 507.75979100000404,
+            "max": 624.5192079999979
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 8.839291000011144,
+            "p90": 18.169832999999926,
+            "p95": 20.856832999998005,
+            "p99": 41.32258400000137,
+            "max": 230.13145800000348
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 54.374792000002344,
+            "p95": 177.08158299999923
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 10.973667000005662,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 7,
+            "drainMs": 3462.393750000003,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 175.03125,
+            "peakCpuPercent": 9.7
+          }
+        }
+      ]
+    },
+    "before-soft-off": {
+      "label": "before",
+      "retention": "off",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "soft",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.236413,
+          "throughput": 3.962528272143906,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 214.29620800000157,
+            "p90": 348.50762499999837,
+            "p95": 414.0921660000022,
+            "p99": 663.3734999999979,
+            "max": 803.572791999999
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 213.71408300000076,
+            "p90": 348.4672499999979,
+            "p95": 414.01937499999985,
+            "p99": 663.2909579999978,
+            "max": 803.030834000001
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 213.71408300000076,
+            "p90": 348.4672499999979,
+            "p95": 414.01937499999985,
+            "p99": 663.2909579999978,
+            "max": 803.030834000001
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 14.29620800000157,
+            "p95": 214.09216600000218
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 13.714083000000755,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 18,
+            "drainMs": 791.3586250000008,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 136.796875,
+            "peakCpuPercent": 6.5
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 28.748414749999995,
+          "throughput": 3.4784526684206134,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 256.153624999999,
+            "p90": 401.86287500000617,
+            "p95": 463.8675839999996,
+            "p99": 696.6605420000051,
+            "max": 745.5637920000008
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 211.27158300000156,
+            "p90": 232.2433749999982,
+            "p95": 395.2607910000006,
+            "p99": 483.71466599999985,
+            "max": 679.6445000000022
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 11.726624999995693,
+            "p90": 16.61858399999619,
+            "p95": 21.211708000002545,
+            "p99": 227.08262500000274,
+            "max": 467.83654199999
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 56.15362499999901,
+            "p95": 263.8675839999996
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 11.271583000001556,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 9,
+            "drainMs": 2463.034500000009,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 168.546875,
+            "peakCpuPercent": 8.5
+          }
+        }
+      ]
+    },
+    "before-default-on": {
+      "label": "before",
+      "retention": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "default",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.666707917,
+          "throughput": 3.8960976344678135,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 222.6981670000023,
+            "p90": 348.15883400000166,
+            "p95": 392.43416699999943,
+            "p99": 578.0097499999993,
+            "max": 638.6184170000015
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 221.6945410000044,
+            "p90": 347.9525420000027,
+            "p95": 392.31725000000006,
+            "p99": 577.7798750000002,
+            "max": 637.763167000001
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 221.6945410000044,
+            "p90": 347.9525420000027,
+            "p95": 392.31725000000006,
+            "p99": 577.7798750000002,
+            "max": 637.763167000001
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 22.698167000002286,
+            "p95": 192.43416699999943
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 21.694541000004392,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 21,
+            "drainMs": 264.49483399999735,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 153.453125,
+            "peakCpuPercent": 8.7
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 28.295571875,
+          "throughput": 3.53412189164316,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 260.9263329999958,
+            "p90": 374.7501670000056,
+            "p95": 401.80429199999344,
+            "p99": 507.2442500000034,
+            "max": 556.4527079999971
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 215.8600410000072,
+            "p90": 235.7132500000007,
+            "p95": 350.2340420000037,
+            "p99": 465.76870800000324,
+            "max": 556.2964999999967
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 12.988916000002064,
+            "p90": 23.306040999996185,
+            "p95": 25.277416999997513,
+            "p99": 30.344582999998238,
+            "max": 38.345500000003085
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 60.92633299999579,
+            "p95": 201.80429199999344
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 15.860041000007186,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 8,
+            "drainMs": 3182.738209000003,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 197.8125,
+            "peakCpuPercent": 11.4
+          }
+        }
+      ]
+    },
+    "before-soft-on": {
+      "label": "before",
+      "retention": "on",
+      "hotCache": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "soft",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 23.605615666,
+          "throughput": 4.2362801044852025,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 220.73320800000147,
+            "p90": 304.8862079999999,
+            "p95": 324.91720799999894,
+            "p99": 337.12620900000184,
+            "max": 417.49304199999824
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 220.41512500000135,
+            "p90": 304.8396250000005,
+            "p95": 324.88195799999994,
+            "p99": 337.06416700000045,
+            "max": 417.42062499999884
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 220.41512500000135,
+            "p90": 304.8396250000005,
+            "p95": 324.88195799999994,
+            "p99": 337.06416700000045,
+            "max": 417.42062499999884
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 20.73320800000147,
+            "p95": 124.91720799999894
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 20.415125000001353,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 13,
+            "drainMs": 2114.7140830000026,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 154.59375,
+            "peakCpuPercent": 11.9
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 26.01591754100001,
+          "throughput": 3.8438006210007445,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 255.16929200000595,
+            "p90": 270.3580409999995,
+            "p95": 281.46679199999926,
+            "p99": 338.1539579999953,
+            "max": 356.07170799999585
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 212.84762500000215,
+            "p90": 228.24633300000278,
+            "p95": 232.43633299999783,
+            "p99": 247.55445899999904,
+            "max": 310.4081670000014
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 11.314250000003085,
+            "p90": 24.42079200000444,
+            "p95": 28.83400000000256,
+            "p99": 121.3538750000007,
+            "max": 140.81375000000116
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 55.16929200000595,
+            "p95": 81.46679199999926
+          },
+          "authorityRpc": {
+            "/admission/resolve": 100,
+            "/grant-pools/feedback": 100
+          },
+          "credentialRpc": {
+            "/materialize": 100
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 12.847625000002154,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 1,
+            "drainMs": 5121.023375000004,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 196.640625,
+            "peakCpuPercent": 14
+          }
+        }
+      ]
+    },
+    "after-none-off": {
+      "label": "after",
+      "retention": "off",
+      "hotCache": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "none",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 22.317433875000003,
+          "throughput": 4.480801895061064,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 209.24937499999942,
+            "p90": 234.97720799999934,
+            "p95": 327.028790999997,
+            "p99": 354.783958,
+            "max": 456.0016250000008
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 209.03949999999895,
+            "p90": 234.63891700000022,
+            "p95": 323.3077080000003,
+            "p99": 354.70579200000066,
+            "max": 455.9577500000014
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 209.03949999999895,
+            "p90": 234.63891700000022,
+            "p95": 323.3077080000003,
+            "p99": 354.70579200000066,
+            "max": 455.9577500000014
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {},
+          "routerAddedLatencyMs": {
+            "p50": 9.249374999999418,
+            "p95": 127.028790999997
+          },
+          "authorityRpc": {
+            "/admission/resolve": 2,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 9.039499999998952,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 7,
+            "drainMs": 3060.0579160000016,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 124.703125,
+            "peakCpuPercent": 11.1
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.134022333,
+          "throughput": 3.978670770444246,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 248.4065000000046,
+            "p90": 255.84208400000352,
+            "p95": 261.5192919999972,
+            "p99": 298.36379199999647,
+            "max": 341.20562499999505
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 205.43070799999987,
+            "p90": 212.99591599999985,
+            "p95": 254.02512500000012,
+            "p99": 270.42112500000076,
+            "max": 298.3138749999998
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 3.353791999994428,
+            "p90": 6.8182500000039,
+            "p95": 11.043124999996508,
+            "p99": 14.575041999996756,
+            "max": 148.54462500000227
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {},
+          "routerAddedLatencyMs": {
+            "p50": 48.4065000000046,
+            "p95": 61.51929199999722
+          },
+          "authorityRpc": {
+            "/admission/resolve": 3,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 5.430707999999868,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 19,
+            "drainMs": 575.4967499999984,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 149.671875,
+            "peakCpuPercent": 7.3
+          }
+        }
+      ]
+    },
+    "after-default-off": {
+      "label": "after",
+      "retention": "off",
+      "hotCache": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "default",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 21.627448124999997,
+          "throughput": 4.623754010275774,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 208.47804199999882,
+            "p90": 225.59887499999968,
+            "p95": 282.1623749999999,
+            "p99": 310.7219580000001,
+            "max": 315.30058299999837
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 208.41133400000035,
+            "p90": 224.95979200000147,
+            "p95": 282.1039579999997,
+            "p99": 308.8443329999973,
+            "max": 315.0022909999989
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 208.41133400000035,
+            "p90": 224.95979200000147,
+            "p95": 282.1039579999997,
+            "p99": 308.8443329999973,
+            "max": 315.0022909999989
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 8.478041999998823,
+            "p95": 82.16237499999988
+          },
+          "authorityRpc": {
+            "/admission/resolve": 2,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 8.411334000000352,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 5,
+            "drainMs": 4160.289625000001,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 134.046875,
+            "peakCpuPercent": 4.3
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.202271209,
+          "throughput": 3.967896352305301,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 249.51479099999415,
+            "p90": 257.2470420000027,
+            "p95": 261.09712500000023,
+            "p99": 265.9737499999974,
+            "max": 372.27570900000137
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 206.4357089999976,
+            "p90": 210.4226669999989,
+            "p95": 214.94945800000278,
+            "p99": 221.01404200000252,
+            "max": 223.66841600000043
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 4.534000000006927,
+            "p90": 7.648542000002635,
+            "p95": 13.579750000004424,
+            "p99": 23.259916999995767,
+            "max": 99.27729099999851
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 49.51479099999415,
+            "p95": 61.09712500000023
+          },
+          "authorityRpc": {
+            "/admission/resolve": 3,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 15
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 6.435708999997587,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 18,
+            "drainMs": 524.2032499999987,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 167.859375,
+            "peakCpuPercent": 5.4
+          }
+        }
+      ]
+    },
+    "after-soft-off": {
+      "label": "after",
+      "retention": "off",
+      "hotCache": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "soft",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 21.753190042000004,
+          "throughput": 4.5970269099348124,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 207.78554200000144,
+            "p90": 231.31354199999987,
+            "p95": 277.12166600000273,
+            "p99": 329.1737499999981,
+            "max": 376.1518329999999
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 207.60295899999983,
+            "p90": 230.4743329999983,
+            "p95": 276.1685830000024,
+            "p99": 329.11562499999854,
+            "max": 375.7750419999975
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 207.60295899999983,
+            "p90": 230.4743329999983,
+            "p95": 276.1685830000024,
+            "p99": 329.11562499999854,
+            "max": 375.7750419999975
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 7.785542000001442,
+            "p95": 77.12166600000273
+          },
+          "authorityRpc": {
+            "/admission/resolve": 2,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 7.602958999999828,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 6,
+            "drainMs": 4119.544125,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 131.84375,
+            "peakCpuPercent": 7.6
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 24.903359707999996,
+          "throughput": 4.015522450485901,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 247.8257500000036,
+            "p90": 252.9065000000046,
+            "p95": 258.1270829999994,
+            "p99": 261.59716599999956,
+            "max": 268.877542000002
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 205.1996250000011,
+            "p90": 212.4942080000037,
+            "p95": 215.66420800000196,
+            "p99": 231.36845800000447,
+            "max": 243.62075000000186
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 3.80554100000154,
+            "p90": 7.347709000001487,
+            "p95": 9.547790999997233,
+            "p99": 16.174749999998312,
+            "max": 18.625583000000915
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 47.82575000000361,
+            "p95": 58.1270829999994
+          },
+          "authorityRpc": {
+            "/admission/resolve": 2,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {},
+          "routerAddedP50Ms": 5.199625000001106,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 17,
+            "drainMs": 1088.191875000004,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 166.546875,
+            "peakCpuPercent": 5.7
+          }
+        }
+      ]
+    },
+    "after-default-on": {
+      "label": "after",
+      "retention": "on",
+      "hotCache": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "default",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 21.828125500000002,
+          "throughput": 4.581245421188365,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 208.3492499999993,
+            "p90": 229.15058300000055,
+            "p95": 275.46979099999953,
+            "p99": 327.11041699999987,
+            "max": 399.72762500000135
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 208.2168330000004,
+            "p90": 222.95441700000083,
+            "p95": 275.3924999999981,
+            "p99": 327.0164999999979,
+            "max": 399.5095420000016
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 208.2168330000004,
+            "p90": 222.95441700000083,
+            "p95": 275.3924999999981,
+            "p99": 327.0164999999979,
+            "max": 399.5095420000016
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 8.349249999999302,
+            "p95": 75.46979099999953
+          },
+          "authorityRpc": {
+            "/admission/resolve": 2,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 8.216833000000406,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 7,
+            "drainMs": 3900.400625000002,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 150.890625,
+            "peakCpuPercent": 10.6
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.207818792000005,
+          "throughput": 3.967023121879001,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 249.64125000000058,
+            "p90": 255.86133400000108,
+            "p95": 260.29970799999865,
+            "p99": 272.48445800000627,
+            "max": 365.76087499999994
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 207.50100000000384,
+            "p90": 235.24945899999875,
+            "p95": 244.10462499999994,
+            "p99": 253.3541250000053,
+            "max": 263.1209579999995
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 5.424084000005678,
+            "p90": 9.236750000003667,
+            "p95": 10.235666000000492,
+            "p99": 17.342875000002095,
+            "max": 17.742374999994354
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/reserve": 100,
+            "/dispatch": 100,
+            "/settle": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 49.64125000000058,
+            "p95": 60.299707999998645
+          },
+          "authorityRpc": {
+            "/admission/resolve": 3,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 15
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 7.501000000003842,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 19,
+            "drainMs": 541.2503750000033,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 190.453125,
+            "peakCpuPercent": 12.9
+          }
+        }
+      ]
+    },
+    "after-soft-on": {
+      "label": "after",
+      "retention": "on",
+      "hotCache": "on",
+      "environment": {
+        "node": "v24.22.0",
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpus": 32
+      },
+      "budgetMode": "soft",
+      "budgetWindow": "weekly",
+      "delayMs": 200,
+      "maxTokens": 16,
+      "cells": [
+        {
+          "scenario": "messages",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 21.787931125,
+          "throughput": 4.58969690267001,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 208.59666700000162,
+            "p90": 229.13845799999763,
+            "p95": 280.4918749999997,
+            "p99": 332.76574999999866,
+            "max": 406.429874999998
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 208.38520900000003,
+            "p90": 228.52966699999888,
+            "p95": 280.45741700000144,
+            "p99": 332.6830829999999,
+            "max": 405.92291699999987
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 208.38520900000003,
+            "p90": 228.52966699999888,
+            "p95": 280.45741700000144,
+            "p99": 332.6830829999999,
+            "max": 405.92291699999987
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 8.596667000001617,
+            "p95": 80.49187499999971
+          },
+          "authorityRpc": {
+            "/admission/resolve": 2,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 14
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 8.385209000000032,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 5,
+            "drainMs": 3974.6300410000003,
+            "upstream": {
+              "requests": 100,
+              "streams": 0,
+              "count": 0,
+              "messages": 100,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 150.359375,
+            "peakCpuPercent": 10.6
+          }
+        },
+        {
+          "scenario": "stream",
+          "concurrency": 1,
+          "completed": 100,
+          "seconds": 25.508283083000002,
+          "throughput": 3.920295210564172,
+          "dropped": 0,
+          "errors": 0,
+          "intentionalAborts": 0,
+          "totalMs": {
+            "samples": 100,
+            "p50": 248.7459170000002,
+            "p90": 266.26591599999665,
+            "p95": 292.7910830000037,
+            "p99": 333.44304200000624,
+            "max": 438.2206670000014
+          },
+          "ttfbMs": {
+            "samples": 100,
+            "p50": 206.2846669999999,
+            "p90": 243.39274999999907,
+            "p95": 271.66675000000396,
+            "p99": 296.5187090000036,
+            "max": 296.6305410000059
+          },
+          "firstByteMs": {
+            "samples": 100,
+            "p50": 4.644541000001482,
+            "p90": 8.6596669999999,
+            "p95": 10.888166000004276,
+            "p99": 17.53037499999482,
+            "max": 26.762457999997423
+          },
+          "statuses": {
+            "200": 100
+          },
+          "errorsByCode": {
+            "none": 100
+          },
+          "lanes": {
+            "subscription": 100
+          },
+          "failovers": 0,
+          "stickiness": {
+            "note": "No grant identity header exposed; consistency cannot be inferred from lane alone."
+          },
+          "budgetRpc": {
+            "/status": 100,
+            "/charge": 100
+          },
+          "routerAddedLatencyMs": {
+            "p50": 48.74591700000019,
+            "p95": 92.79108300000371
+          },
+          "authorityRpc": {
+            "/admission/resolve": 3,
+            "/grant-pools/feedback": 100,
+            "/grant-pools/record": 100
+          },
+          "credentialRpc": {
+            "/materialize": 16
+          },
+          "contentOps": {
+            "put": 100
+          },
+          "routerAddedP50Ms": 6.284666999999899,
+          "bookkeeping": {
+            "expected": 100,
+            "selected": 100,
+            "usage": 100,
+            "initialBacklog": 18,
+            "drainMs": 549.5409160000054,
+            "upstream": {
+              "requests": 100,
+              "streams": 100,
+              "count": 0,
+              "messages": 0,
+              "canceled": 0,
+              "completed": 100
+            },
+            "recentEventsChecked": 100,
+            "recentEventStatuses": {
+              "success": 100
+            },
+            "recentTokenTotals": {
+              "input": 1200,
+              "output": 400
+            },
+            "sessionsChecked": 70,
+            "sessionsWithMultipleGrants": 0,
+            "quotaUpdatedGrants": 7
+          },
+          "workerd": {
+            "peakRssMiB": 190.671875,
+            "peakCpuPercent": 11.7
+          }
+        }
+      ]
+    }
+  }
+}

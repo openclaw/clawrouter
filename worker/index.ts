@@ -28,6 +28,7 @@ import { proxyRealtimeWebSocket } from "./realtime-websocket";
 import { proxyResponsesWebSocket } from "./responses-websocket";
 import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
+import { clearHotCaches, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
@@ -52,6 +53,12 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     } catch (error) {
       response = caughtResponse(error, correlated.requestId);
     }
+    // Mutations served by this isolate take effect here at once; other isolates
+    // converge within the hot-cache max age.
+    if (mutatesHotState(request.method, path)) clearHotCaches();
+    // Stale-cache refreshes and coalesced counters registered by this request.
+    const background = pendingBackgroundWork();
+    if (background) context.waitUntil(background);
     response = withNativeLocalError(response, path, correlated.requestId);
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
     // The correlation wrapper makes a mutable copy without buffering streams.
@@ -63,6 +70,12 @@ const handler: ExportedHandler<Env, QueueMessage> = {
 };
 
 export default handler;
+
+function mutatesHotState(method: string, path: string): boolean {
+  if (path === "/v1/oauth/callback") return true;
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
+  return path.startsWith("/v1/admin/") || path.startsWith("/v1/session/credentials") || path.startsWith("/v1/pool-submissions/");
+}
 
 async function route(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const url = new URL(request.url), rawPath = url.pathname, path = canonicalPath(rawPath);

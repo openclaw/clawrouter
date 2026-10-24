@@ -11,10 +11,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { startWorkerdFixture } from '../test/helpers/workerd.mjs';
 import { parseOptions, runLoad } from './loadtest.mjs';
 
-const { values } = parseArgs({ options: { out: { type: 'string' }, concurrency: { type: 'string', default: '10,50,100,200' }, requests: { type: 'string', default: '400' }, 'delay-ms': { type: 'string', default: '20' }, 'max-tokens': { type: 'string', default: '32' }, scenarios: { type: 'string', default: 'catalog,count,messages,stream,abort' }, label: { type: 'string', default: 'local' }, 'budget-mode': { type: 'string', default: 'reserve' }, 'budget-window': { type: 'string', default: 'monthly' } } });
+const { values } = parseArgs({ options: { out: { type: 'string' }, concurrency: { type: 'string', default: '10,50,100,200' }, requests: { type: 'string', default: '400' }, 'delay-ms': { type: 'string', default: '20' }, 'max-tokens': { type: 'string', default: '32' }, scenarios: { type: 'string', default: 'catalog,count,messages,stream,abort' }, label: { type: 'string', default: 'local' }, 'budget-mode': { type: 'string', default: 'reserve' }, retention: { type: 'string', default: 'off' }, 'hot-cache': { type: 'string', default: 'on' }, 'budget-window': { type: 'string', default: 'monthly' } } });
 const concurrency = values.concurrency.split(',').map(Number), requests = Number(values.requests), delay = Number(values['delay-ms']);
 const scenarios = values.scenarios.split(',');
-assert.ok(['none', 'reserve', 'soft'].includes(values['budget-mode']));
+assert.ok(['none', 'reserve', 'soft', 'default'].includes(values['budget-mode']));
+assert.ok(['on', 'off'].includes(values.retention) && ['on', 'off'].includes(values['hot-cache']));
 assert.ok(['monthly', 'weekly'].includes(values['budget-window']));
 assert.ok(concurrency.every(value => Number.isSafeInteger(value) && value > 0));
 assert.ok(Number.isSafeInteger(requests) && requests > 0 && Number.isFinite(delay) && delay >= 0);
@@ -38,17 +39,21 @@ function sampleProcesses() {
 try {
   const router = `import handler, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject };
-const authorityCalls = {}, budgetCalls = {};
+const authorityCalls = {}, budgetCalls = {}, credentialCalls = {}, contentCalls = {};
 export default { ...handler, fetch(request, env, ctx) {
  if (new URL(request.url).pathname === '/__load/stats') return fetch('https://synthetic.invalid/__stats');
  if (new URL(request.url).pathname === '/__load/budget') return Response.json(budgetCalls);
  if (new URL(request.url).pathname === '/__load/authority') return Response.json(authorityCalls);
+ if (new URL(request.url).pathname === '/__load/credentials') return Response.json(credentialCalls);
+ if (new URL(request.url).pathname === '/__load/content') return Response.json(contentCalls);
  const ACCESS_CONTROL = { idFromName: name => env.ACCESS_CONTROL.idFromName(name), get(id) {
   const stub = env.ACCESS_CONTROL.get(id);
   return { fetch(url, init) { const path = new URL(url).pathname; authorityCalls[path] = (authorityCalls[path] ?? 0) + 1; return stub.fetch(url, init); } };
  } };
  const BUDGET_LEDGER = { idFromName: name => env.BUDGET_LEDGER.idFromName(name), get(id) { const stub = env.BUDGET_LEDGER.get(id); return { fetch(url, init) { const path = new URL(url).pathname; budgetCalls[path] = (budgetCalls[path] ?? 0) + 1; return stub.fetch(url, init); } }; } };
- return handler.fetch(request, { ...env, ACCESS_CONTROL, BUDGET_LEDGER, CLAWROUTER_ADMIN_TOKEN_SHA256: '${sha(admin)}', ANTHROPIC_API_KEY: 'synthetic-environment' }, ctx);
+ const GRANT_CREDENTIALS = { idFromName: name => env.GRANT_CREDENTIALS.idFromName(name), get(id) { const stub = env.GRANT_CREDENTIALS.get(id); return { fetch(url, init) { const path = new URL(url).pathname; credentialCalls[path] = (credentialCalls[path] ?? 0) + 1; return stub.fetch(url, init); } }; } };
+ const CONTENT_ARCHIVE = env.CONTENT_ARCHIVE && new Proxy(env.CONTENT_ARCHIVE, { get(target, name) { const value = target[name]; return typeof value === 'function' ? (...args) => { contentCalls[name] = (contentCalls[name] ?? 0) + 1; return value.apply(target, args); } : value; } });
+ return handler.fetch(request, { ...env, ACCESS_CONTROL, BUDGET_LEDGER, GRANT_CREDENTIALS, ...(CONTENT_ARCHIVE ? { CONTENT_ARCHIVE } : {}), CLAWROUTER_ADMIN_TOKEN_SHA256: '${sha(admin)}', ANTHROPIC_API_KEY: 'synthetic-environment' }, ctx);
 }};`;
   const upstream = `const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const counts = { requests: 0, streams: 0, count: 0, messages: 0, canceled: 0, completed: 0 };
@@ -71,12 +76,12 @@ export default { async fetch(request) {
  }, cancel() { canceled = true; counts.canceled++; } });
  return new Response(stream, { headers: { ...headers, 'content-type': 'text/event-stream' } });
 }};`;
-  mf = await startWorkerdFixture(temporary, router, upstream, { queueConsumer: { maxBatchSize: 50, maxBatchTimeout: 5 } });
+  mf = await startWorkerdFixture(temporary, router, upstream, { queueConsumer: { maxBatchSize: 50, maxBatchTimeout: 5 }, hotCache: values['hot-cache'] === 'on', ...(values.retention === 'on' ? { r2Buckets: ['CONTENT_ARCHIVE'] } : {}) });
   const baseUrl = String(await mf.ready).replace(/\/$/, '');
   const bindings = await mf.getBindings('router');
   const authority = bindings.ACCESS_CONTROL.get(bindings.ACCESS_CONTROL.idFromName('policy-bindings'));
   const init = async (path, body) => { const response = await authority.fetch(`https://fixture${path}`, { method: 'POST', body: JSON.stringify(body) }); assert.ok(response.ok, path); };
-  await init('/policies/initialize-all', [{ policyId: 'load', policy: { enabled: true, generation: 'load-v1', providers: ['anthropic'], models: ['anthropic/claude-sonnet-5'], tenantId: 'synthetic', tokenRole: 'service', budgetMode: values['budget-mode'] === 'soft' ? 'soft' : 'reserve', monthlyBudgetMicros: values['budget-mode'] !== 'none' && values['budget-window'] === 'monthly' ? 1000000000 : null, weeklyBudgetMicros: values['budget-mode'] !== 'none' && values['budget-window'] === 'weekly' ? 1000000000 : null, requestCostMicros: 1, retainRequestContent: false, poolStatus: 'visible', grantRouting: { strategy: 'most_remaining', stickiness: 'session', failover: true, environmentFallback: true, includedQuotaReservePercent: 10, staleState: 'allow', staleAfterSeconds: 300, eligibleGrants: {} } } }]);
+  await init('/policies/initialize-all', [{ policyId: 'load', policy: { enabled: true, generation: 'load-v1', providers: ['anthropic'], models: ['anthropic/claude-sonnet-5'], tenantId: 'synthetic', tokenRole: 'service', ...(values['budget-mode'] === 'default' ? {} : { budgetMode: values['budget-mode'] === 'soft' ? 'soft' : 'reserve' }), monthlyBudgetMicros: values['budget-mode'] !== 'none' && values['budget-window'] === 'monthly' ? 1000000000 : null, weeklyBudgetMicros: values['budget-mode'] !== 'none' && values['budget-window'] === 'weekly' ? 1000000000 : null, requestCostMicros: 1, retainRequestContent: values.retention === 'on', poolStatus: 'visible', grantRouting: { strategy: 'most_remaining', stickiness: 'session', failover: true, environmentFallback: true, includedQuotaReservePercent: 10, staleState: 'allow', staleAfterSeconds: 300, eligibleGrants: {} } } }]);
   await init('/credentials/initialize-all', [{ credentialId: 'load', credential: { enabled: true, secretSha256: sha(secret), policyId: 'load', policyGeneration: 'load-v1' } }]);
   await init('/connections/initialize-all', [{ providerId: 'anthropic', enabled: true }]);
   const adminHeaders = { authorization: `Bearer ${admin}`, 'content-type': 'application/json' };
@@ -88,7 +93,7 @@ export default { async fetch(request) {
   const json = async path => { const response = await fetch(`${baseUrl}${path}`, { headers }); assert.ok(response.ok, `${path}: ${response.status}`); return response.json(); };
   const usageCount = async () => (await json('/v1/usage')).usage.summary.requestCount;
   const selectedCount = async () => (await json('/v1/pool')).grants.reduce((sum, grant) => sum + grant.selectedCount, 0);
-  const output = { label: values.label, environment: { node: process.version, platform: platform(), arch: arch(), cpus: cpus().length }, budgetMode: values['budget-mode'], budgetWindow: values['budget-window'], delayMs: delay, maxTokens: Number(values['max-tokens']), cells: [] };
+  const output = { label: values.label, retention: values.retention, hotCache: values['hot-cache'], environment: { node: process.version, platform: platform(), arch: arch(), cpus: cpus().length }, budgetMode: values['budget-mode'], budgetWindow: values['budget-window'], delayMs: delay, maxTokens: Number(values['max-tokens']), cells: [] };
   for (const scenario of scenarios) for (const clients of concurrency) {
     const options = parseOptions(['--base-url', baseUrl, '--key-file', keyFile, '--scenario', scenario === 'abort' ? 'stream' : scenario, '--requests', String(requests), '--concurrency', String(clients), '--session-spread', '70', '--abort-fraction', scenario === 'abort' ? '0.5' : '0', '--timeout-ms', '30000', '--max-tokens', values['max-tokens']]);
     // Warm canonical reads and isolate each cell's bookkeeping deltas.
@@ -100,7 +105,7 @@ export default { async fetch(request) {
       assert.equal(await usageCount(), beforeWarm + 7, 'warmup usage drained');
     }
     const expectedBefore = await selectedCount(), usageBefore = await usageCount(), upstreamBefore = await json('/__load/stats');
-    const authorityBefore = await json('/__load/authority'), budgetBefore = await json('/__load/budget');
+    const authorityBefore = await json('/__load/authority'), budgetBefore = await json('/__load/budget'), credentialBefore = await json('/__load/credentials'), contentBefore = await json('/__load/content');
     const sampleStart = memory.length;
     sampleProcesses(); const sampler = setInterval(sampleProcesses, 1000);
     let report;
@@ -108,7 +113,7 @@ export default { async fetch(request) {
     // Requests reset before ingress have no accounting obligation. Compare with
     // observed synthetic egress, and retain transport failures in the load report.
     const deliveredUpstream = await json('/__load/stats');
-    const authorityAfter = await json('/__load/authority'), budgetAfter = await json('/__load/budget');
+    const authorityAfter = await json('/__load/authority'), budgetAfter = await json('/__load/budget'), credentialAfter = await json('/__load/credentials'), contentAfter = await json('/__load/content');
     const deliveryDone = performance.now(), expectedUsage = deliveredUpstream.requests - upstreamBefore.requests;
     let usageAfter = await usageCount();
     const initialBacklog = usageBefore + expectedUsage - usageAfter;
@@ -127,6 +132,8 @@ export default { async fetch(request) {
       budgetRpc: Object.fromEntries(Object.entries(budgetAfter).map(([path, count]) => [path, count - (budgetBefore[path] ?? 0)]).filter(([, count]) => count)),
       routerAddedLatencyMs: ['catalog', 'pool', 'abort'].includes(scenario) ? null : { p50: report.summary.totalMs.p50 - delay, p95: report.summary.totalMs.p95 - delay },
       authorityRpc: Object.fromEntries(Object.entries(authorityAfter).map(([path, count]) => [path, count - (authorityBefore[path] ?? 0)]).filter(([, count]) => count)),
+      credentialRpc: Object.fromEntries(Object.entries(credentialAfter).map(([path, count]) => [path, count - (credentialBefore[path] ?? 0)]).filter(([, count]) => count)),
+      contentOps: Object.fromEntries(Object.entries(contentAfter).map(([name, count]) => [name, count - (contentBefore[name] ?? 0)]).filter(([, count]) => count)),
       routerAddedP50Ms: ['catalog','pool','abort'].includes(scenario) ? null : report.summary.ttfbMs.p50 - delay,
       bookkeeping: { expected: expectedUsage, selected: selectedAfter - expectedBefore, usage: usageAfter - usageBefore, initialBacklog, drainMs, upstream: Object.fromEntries(Object.keys(upstreamAfter).map(key => [key, upstreamAfter[key] - upstreamBefore[key]])),
         recentEventsChecked: events.length, recentEventStatuses: events.reduce((counts, event) => { counts[event.status] = (counts[event.status] ?? 0) + 1; return counts; }, {}),

@@ -102,7 +102,7 @@ export const defaultPolicy: PolicyForm = {
   requestCostDollars: "0.001",
   requestCostsDollars: "",
   budgetScope: "policy",
-  budgetMode: "reserve",
+  budgetMode: "soft",
   providers: ["openai", "tavily"],
   allProviders: false,
   models: "",

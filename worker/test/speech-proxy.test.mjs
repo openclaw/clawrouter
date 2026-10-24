@@ -1,4 +1,5 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -75,7 +76,7 @@ for (const scenario of ["empty", "no-body", "wrong-mime", "malformed-mime", "jso
   test(`speech lifecycle ${scenario} preserves delivered evidence and both budgets`, async t => {
     const f = fixture(t, { retainContent: scenario !== "retention-off", fixedCost: scenario === "fixed-zero" ? 0 : null });
     let canceled = 0;
-    if (scenario === "retention-error") f.env.CONTENT_ARCHIVE.put = async () => { throw new Error("fixture archive unavailable"); };
+    if (scenario === "retention-error") { f.env.CONTENT_ARCHIVE.put = async () => { throw new Error("fixture archive unavailable"); }; t.mock.method(console, "error", () => {}); }
     const upstream = t.mock.method(globalThis, "fetch", async () => {
       if (scenario === "fetch-error") throw new Error("fixture upstream unavailable");
       if (scenario === "no-body") return new Response(null, { headers: { "content-type": "audio/mpeg" } });
@@ -99,8 +100,9 @@ for (const scenario of ["empty", "no-body", "wrong-mime", "malformed-mime", "jso
     await Promise.all(f.pending);
     assert.equal(f.events.length, 1);
     const event = f.events[0];
-    const complete = ["retention-off", "fixed-zero", "maximum"].includes(scenario);
-    const free = ["rejection", "retention-error"].includes(scenario);
+    // Retention is best-effort after dispatch: an archive failure still delivers and settles.
+    const complete = ["retention-off", "retention-error", "fixed-zero", "maximum"].includes(scenario);
+    const free = scenario === "rejection";
     const actual = free || scenario === "fixed-zero" ? 0 : scenario === "maximum" ? 61440 : complete ? 75 : 150;
     assert.equal(event.actual_cost_micros, actual);
     assert.equal(event.cost_basis, free ? "none" : scenario === "fixed-zero" ? "policy_fixed" : complete ? "request_character_estimate" : "manifest_reservation");
@@ -108,7 +110,7 @@ for (const scenario of ["empty", "no-body", "wrong-mime", "malformed-mime", "jso
     assert.equal(event.status, scenario === "cancel" || scenario === "rejection" ? "client_error" : complete ? "success" : "provider_error");
     assert.equal(event.reserved_cost_micros, scenario === "fixed-zero" ? 0 : scenario === "maximum" ? 245760 : 150);
     for (const name of owners) { const [row] = f.ledger.get(name).reservations(); assert.equal(row.reserved_micros, actual); assert.equal(row.settled, 1); }
-    assert.equal(upstream.mock.callCount(), scenario === "retention-error" ? 0 : 1);
+    assert.equal(upstream.mock.callCount(), 1);
     if (scenario === "cancel") assert.equal(canceled, 1);
     if (scenario === "retention-off") { assert.equal(f.retained.length, 0); assert.equal(response.headers.get("x-clawrouter-content-retention"), "off"); }
   });

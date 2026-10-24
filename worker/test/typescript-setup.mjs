@@ -9,3 +9,11 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
+
+// Isolate hot caches are module state; every test starts from a cold isolate.
+const { beforeEach } = await import("node:test");
+const { clearHotCaches, setHotCacheClock, overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");
+if (process.env.CLAWROUTER_TEST_HOT_CACHE === "off") overrideHotCacheConfig(HOT_CACHE_DISABLED);
+beforeEach(() => { clearHotCaches(); setHotCacheClock(); });
+/** Suites that mutate authority state directly between requests test the per-request authority path. */
+export function perRequestAuthority() { overrideHotCacheConfig(HOT_CACHE_DISABLED); }

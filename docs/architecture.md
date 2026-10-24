@@ -141,25 +141,36 @@ OpenAI, manifest, and native request translation. `proxy-accounting.ts` captures
 one request's identity, correlation, pricing, and timing, then builds its final
 usage event and delegates independent settlement and delivery to `accounting.ts`.
 
-1. Authenticate the Access session or proxy credential against canonical state.
+1. Authenticate the Access session or proxy credential. Proxy keys use an
+   isolate-local admission snapshot (fresh 10 s, stale-while-revalidate up to the
+   60 s max age) and re-verify the secret digest on every request; a miss, secret
+   mismatch or failover asks the canonical authority.
 2. Resolve the selected policy, its catalog-model allowlist, and provider-scoped readiness. Tenant grants are
    visible only to policies in that tenant; policy grants are exact-scope.
-3. Reserve the conservative budget before provider work by default. With an
-   explicit soft policy on supported HTTP paths, overlap concurrent window reads
-   with upstream fetch, gate delivery for at most 50 ms after headers, and charge
-   observed usage off the response path. See [soft budgets](agent-spend-control.md#soft-budgets-and-dynamic-caps).
-4. Retain eligible LLM request content in R2 when policy requires it. Storage
-   failure is fail-closed and prevents the upstream call.
-5. For eligible proxy-key HTTP creates, admission filters and selects within one
-   synchronous authority transaction using owner-published routing projections.
+3. Budgets: soft policies (the default for new policies) overlap concurrent
+   window reads with upstream fetch, gate delivery for at most 50 ms after headers,
+   deny scopes recently observed exhausted before dispatch, and charge observed
+   usage off the response path. Reserve policies (including stored policies
+   without a mode) reserve the conservative budget before provider work. See [soft budgets](agent-spend-control.md#soft-budgets-and-dynamic-caps).
+4. Retain eligible LLM request content in R2 when policy requires it, in the
+   background after dispatch (best-effort); background jobs and expanded Claude
+   bodies keep the fail-closed write before the upstream call.
+5. For eligible proxy-key HTTP creates, the first admission filters and selects
+   within one synchronous authority transaction using owner-published routing
+   projections and returns a secretless pool snapshot. Warm requests filter and
+   select locally with the same shared code (`selectAdmissionCandidate`,
+   `chooseGrantKey`) and record coalesced counters in the background.
    Legacy projection rows retain the Worker KV/read-and-select path.
    Filter grants by the policy's provider allowlist, explicit grant eligibility,
-   cooldown, stale-state rule, and lowest active priority tier. The access
-   authority atomically applies priority, round-robin, least-used, quota-aware,
-   or weighted selection and records only counters and privacy-safe sticky input.
-6. Materialize the selected credential from its per-grant owner on every request.
-   Secret material is not cached: owner revocation must take effect even when
-   publication to the global authority fails. Expiring OAuth
+   cooldown, stale-state rule, and lowest active priority tier. Selection applies
+   priority, round-robin, least-used, quota-aware, or weighted strategies and
+   records only counters and privacy-safe sticky input; counters can drift slightly
+   across isolates.
+6. Materialize the selected credential from its per-grant owner. The isolate
+   keeps the materialized credential in memory (never persisted or logged) for at
+   most the hot-cache max age and never past the token's refresh margin, so owner
+   revocation reaches a warm isolate within that bound; an upstream 401/403
+   evicts it immediately. Expiring OAuth
    tokens refresh through that same serialized owner, which commits each rotated
    access/refresh pair and generation together.
 7. Sign and forward the provider request, then normalize manifest-declared quota
@@ -245,10 +256,12 @@ Object bindings are unchanged.
 
 ## Failure boundaries
 
-- Revocation and provider connection state fail closed. Default reserve budget
-  preflight fails closed; explicitly selected soft checks fail open on errors or
-  the 50 ms post-header deadline.
-- Required request retention fails closed before upstream traffic.
+- Revocation and provider connection state fail closed at the authority; warm
+  isolates enforce them within the hot-cache max age (60 s by default, typically
+  10 s under traffic). Reserve budget preflight fails closed; soft checks (the
+  default for new policies) fail open on errors or the 50 ms post-header deadline.
+- Request retention is best-effort after dispatch, except for background jobs and
+  expanded Claude bodies, which still fail closed before upstream traffic.
 - Rejected, nonbillable work releases reservations to zero. Received billable
   responses can still incur cost when generation or stream delivery fails:
   authoritative usage settles the charge; missing usage retains the qualified

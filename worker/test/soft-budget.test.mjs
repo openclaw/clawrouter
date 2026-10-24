@@ -53,11 +53,11 @@ test('soft dispatch precedes concurrent checks, never reserves/dispatches, charg
   assert.equal((await f.ledger.get(name).fetch('https://fixture/charge', { method: 'POST', body: JSON.stringify({ ...charge, amountMicros: 2 }) })).status, 409);
 });
 
-for (const [option, code] of [['dailyLimit', 'daily_budget_exhausted'], ['weeklyLimit', 'weekly_budget_exhausted'], ['limit', 'budget_exhausted'], ['providerLimit', 'provider_budget_exhausted']]) test(`${code} aborts dispatched upstream without exposing headers or charging`, async t => {
-  const f = await setup(t, { [option]: 0 }); let aborted = false;
-  t.mock.method(globalThis, 'fetch', async (_url, init) => new Promise((_resolve, reject) => { init.signal.addEventListener('abort', () => { aborted = true; reject(init.signal.reason); }); }));
+for (const [option, code] of [['dailyLimit', 'daily_budget_exhausted'], ['weeklyLimit', 'weekly_budget_exhausted'], ['limit', 'budget_exhausted'], ['providerLimit', 'provider_budget_exhausted']]) test(`${code} at a zero limit is denied before dispatch without charging`, async t => {
+  const f = await setup(t, { [option]: 0 });
+  const upstream = t.mock.method(globalThis, 'fetch', async () => Response.json({}));
   const response = await f.request();
-  assert.equal(response.status, 402); assert.equal((await response.json()).error.code, code); assert.ok(aborted);
+  assert.equal(response.status, 402); assert.equal((await response.json()).error.code, code); assert.equal(upstream.mock.callCount(), 0);
   await f.drain(); assert.equal(f.events[0].actual_cost_micros, 0); assert.equal(f.events[0].status, 'denied'); assert.ok(!f.calls.includes('/charge'));
 });
 
@@ -69,7 +69,8 @@ test('nonzero spent at limit aborts before upstream headers and includes hint/re
 });
 
 test('soft denial preserves the retained-content audit reference without a charge', async t => {
-  const f = await setup(t, { dailyLimit: 0, retainContent: true });
+  const f = await setup(t, { dailyLimit: 10, retainContent: true });
+  f.env.BUDGET_LEDGER.get = () => ({ fetch: async url => { f.calls.push(new URL(url).pathname); return Response.json({ spentMicros: 10 }); } });
   let retained;
   f.env.CONTENT_ARCHIVE = { put: async (_key, value) => { retained = JSON.parse(value); } };
   t.mock.method(globalThis, 'fetch', async (_url, init) => new Promise((_resolve, reject) => { init.signal.addEventListener('abort', () => reject(init.signal.reason)); }));
@@ -110,7 +111,8 @@ test('soft unknown pricing forwards and records unpriced usage without invented 
 
 test('budget mode defaults and validation preserve existing records', () => {
   const base = { providers: ['openai'] };
-  assert.equal(normalizePolicy(base, undefined, false).budgetMode, undefined);
+  assert.equal(normalizePolicy(base, undefined, false).budgetMode, 'soft', 'new policies are soft');
+  assert.equal(normalizePolicy(base, { enabled: true, generation: 'g', providers: ['openai'] }, false).budgetMode, undefined, 'stored records keep an omitted mode');
   assert.equal(normalizePolicy({ ...base, budgetMode: 'soft' }, undefined, false).budgetMode, 'soft');
   for (const value of [null, '', 'fast', 1]) assert.throws(() => normalizePolicy({ ...base, budgetMode: value }, undefined, false));
 });

@@ -2,12 +2,13 @@
 
 ## WebSocket create follow-up (2026-10-23)
 
-Live production baseline: 15 chained `previous_response_id` turns on one
-Responses WebSocket, using the same model on both sides. Direct OpenAI median
-`response.created` was about **120 ms**, versus **810 ms** through ClawRouter;
-TTFT was about **995 ms**, versus **1,550 ms**. The router added roughly
-550–700 ms per turn. A warm edge-to-global-authority round trip measured about
-72 ms (`cr-admission;dur=72`); HTTP router overhead was about 130–200 ms.
+Live production baseline, measured **before #326's hot caches**: 15 chained
+`previous_response_id` turns on one Responses WebSocket, using the same model
+on both sides. Direct OpenAI median `response.created` was about **120 ms**,
+versus **810 ms** through ClawRouter; TTFT was about **995 ms**, versus
+**1,550 ms**. The router added roughly 550–700 ms per turn. A warm
+edge-to-global-authority round trip measured about 72 ms (`cr-admission;dur=72`);
+HTTP router overhead was about 130–200 ms.
 
 Budget reservation now starts every configured monthly, daily, weekly and
 provider leg concurrently, including on HTTP hard-budget paths. Attempted IDs
@@ -15,42 +16,119 @@ are observed before each leg's I/O. All results finish before rollback; every
 successful leg is released on failure, and the first failure in plan order wins.
 Failed rollback still returns `accounting_unavailable`.
 
-On pinned WebSocket creates, continuation resolution overlaps grant selection
-and credential-owner materialization. Once continuation tool evidence resolves,
-budget reservation also overlaps the remaining preparation. Its provider
-connection comes from the current admission result through the existing
-`assertProviderAccess` check, with no extra RPC. First creates retain sequential
-continuation/preparation/reservation ordering: unpinned selection can refresh
-the authorization snapshot. No authorization or credential state is cached
-between creates.
+On pinned WebSocket creates, continuation resolution overlaps grant preparation.
+Once continuation tool evidence resolves, budget reservation also overlaps the
+remaining preparation. Its provider connection comes from the same request's
+admission result through `assertProviderAccess`, with no extra I/O, whether that
+admission came from the hot cache or the authority. Pinned preparation uses that
+same connection object and does not refresh the authorization snapshot. First
+creates retain sequential continuation/preparation/reservation ordering because
+unpinned selection can refresh the snapshot. This change adds no cache of its
+own; admission and credential caching follow [#326's hot-cache bounds](#zero-hop-warm-path-2026-10-23).
 
-For a warm pinned, chained create with a stored grant, no refresh, and retention
-disabled, these are **sequential storage round trips before upstream send**:
+For a warm pinned, chained create with a stored grant, no credential refresh,
+and retention disabled, these are **sequential storage round trips before
+upstream send**. The baseline is main at `0f0d455` without this PR's Worker
+changes; its counts follow the sequential awaits in that version. The merged
+counts are asserted by the latency-injected fixture in both modes.
 
-| Budget legs | Before | After |
+| Budget legs | Warm caches: main → merged | Cache disabled: main → merged |
 | --- | ---: | ---: |
-| None | 5 | 4 |
-| One | 7 | 5 |
-| Policy monthly + provider | 8 | 5 |
-| Policy monthly + daily + weekly + provider | 10 | 5 |
+| None | 3 → 2 | 5 → 4 |
+| One (policy monthly) | 5 → 3 | 7 → 5 |
+| Policy monthly + provider | 6 → 3 | 8 → 5 |
+| Policy monthly + daily + weekly + provider | 8 → 3 | 10 → 5 |
 
-Previously: admission → continuation → KV → select → credential owner → each
-reserve → parallel dispatch. Now: admission → concurrent branches
-`KV → select → credential owner` and `continuation → parallel reserve` → parallel
-dispatch. RPC totals remain unchanged; independent round trips overlap. Retention,
-when required, still completes after reservation and before dispatch. These counts
+With warm caches, main waits for continuation → KV → select → each reserve →
+parallel dispatch. The merged path overlaps `KV → select` with
+`continuation → parallel reserve`, then awaits parallel dispatch. WebSocket
+creates do not pass an operation selection to admission, so they still read
+KV and call `/grant-pools/select`; the zero-hop HTTP selection path does not
+apply. Disabling `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS` with a value of `0` adds
+foreground admission before those branches and credential materialization after
+select. With any budget legs, the branches converge before dispatch; without
+legs there is no dispatch ledger call. Total calls within each cache mode are
+unchanged by this PR; independent waits overlap.
+
+WebSocket retention, when required, still completes after reservation and before
+dispatch; #326's post-dispatch retention applies to ordinary HTTP. These counts
 exclude the connection handshake, earlier-turn settlement, and continuation
-publication holding `response.created`; all three retain their existing behavior.
-Materialization, every budget check, retention and dispatch must finish before send.
+publication holding `response.created`. Credential preparation, every budget
+check, required retention and dispatch still finish before the frame is sent.
 
 The SQLite-backed Node admission fixture injects 20 ms per storage round and
-asserts the five batches, including all four reserves in one batch. A separate
-40 ms-per-reserve test observes four simultaneous legs completing in roughly one
-delay. These are scheduling proofs, not a new production latency measurement.
-A continuation belonging to another grant now returns the actionable
+asserts each batch for all eight cells, freezing the cache clock after warm-up
+so host scheduling cannot expire entries. It also proves that
+`assertProviderAccess` and pinned preparation return the same admitted connection
+without a new connection lookup in both modes. A separate 40 ms-per-reserve test
+observes four simultaneous legs completing in roughly one delay. These are
+scheduling proofs, not a new production latency measurement.
+A continuation belonging to another grant returns the actionable
 `409 continuation_restart_required` before dispatch, instead of reaching the
 session's generic `502 provider_unavailable` pin-change close. The fixture also
-proves unsent reservations are released after mismatch or materialization failure.
+proves unsent reservations are released after mismatch or materialization failure;
+materialization-failure fixtures explicitly disable the credential cache.
+
+## Zero-hop warm path (2026-10-23)
+
+Directive: the router should add no measurable delay beyond the network path to
+the provider; operations may be asynchronous and small tracking discrepancies are
+acceptable. A warm proxy-key HTTP inference now performs **no foreground backend
+call** (no Durable Object, KV or R2) before the upstream `fetch` on soft or
+unbudgeted policies.
+
+| Concern | Before | After |
+| --- | --- | --- |
+| Admission + grant selection | `/admission/resolve` on the global `policy-bindings` authority every request | Isolate snapshot (`worker/admission-cache.ts`): fresh 10 s, stale-while-revalidate to the 60 s max age, one single-flight background refresh |
+| Selection counters | Atomic SQLite update inside admission | Same shared strategy code (`chooseGrantKey`, `selectAdmissionCandidate`) on the snapshot; counters coalesced (25 ms) into one background `/grant-pools/record` |
+| Credential materialization | `/materialize` on the per-grant owner every request | Isolate memory (`worker/credential-cache.ts`), keyed by grant + generation + revision, bounded by max age and the token refresh margin; upstream 401/403 evicts |
+| Quota feedback | Background authority write | Also applied to this isolate's snapshot at once |
+| Request retention | R2 put before dispatch, fail-closed | R2 put after dispatch in `waitUntil`, best-effort; background jobs and >8 MiB Claude bodies keep the fail-closed write |
+| Soft budgets | Concurrent status + 50 ms post-header grace | Unchanged, plus a 10 s exhausted-scope verdict that denies before dispatch with no ledger call; new policies default to soft |
+| Reserve budgets | reserve + dispatch | Unchanged (authoritative, foreground) |
+
+Correctness boundaries:
+
+- Every request hashes its secret and compares it with `safeEqual`; a mismatch
+  re-asks the authority and never evicts the owner's entry. Only fully admitted
+  outcomes are cached.
+- Revocation, policy, owner, connection and pool changes reach a warm isolate
+  within the max age (typically within 10 s under traffic). A mutation served by
+  the same isolate (admin, session credentials, pool submissions, OAuth callback)
+  clears that isolate's caches immediately. Failover after an upstream rejection
+  always takes a fresh authoritative admission.
+- Credentials stay in isolate memory only: never persisted, logged or returned.
+- `CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0` restores per-request authority checks.
+  `Server-Timing` reports `cr-cache;desc=hit|stale|miss|off`.
+- Counters can drift slightly across isolates; least-used/round-robin/threshold
+  remain per-isolate exact. Soft caps can overspend by in-flight work.
+
+### Measured local comparison
+
+Same harness and fixture as the soft-budget comparison below (100 measured
+requests per cell, concurrency 1, 200 ms synthetic upstream, weekly window), now
+also counting credential-owner calls and R2 operations
+(`--retention on|off`, `--hot-cache on|off`). Foreground calls are per warm
+request; local Durable Objects run in-process, so the latency columns understate
+production round trips and are noisy (load average 45-65 during both runs).
+
+| Policy | Foreground backend calls, before → after | Messages TTFB added p50 / p95 ms, before → after | Stream TTFB added p50 / p95 ms, before → after |
+| --- | --- | --- | --- |
+| Unbudgeted | 2 → 0 | 7.1 / 63.0 → 9.0 / 123.3 | 6.8 / 13.6 → 5.4 / 54.0 |
+| Soft | 2 → 0 | 13.7 / 214.0 → 7.6 / 76.2 | 11.3 / 195.3 → 5.2 / 15.7 |
+| Soft + retention | 3 → 0 | 20.4 / 124.9 → 8.4 / 80.5 | 12.8 / 32.4 → 6.3 / 71.7 |
+| Reserve | 4 → 2 | 14.5 / 152.2 → 8.4 / 82.1 | 11.0 / 106.8 → 6.4 / 14.9 |
+| Reserve + retention | 5 → 2 | 21.7 / 192.3 → 8.2 / 75.4 | 15.9 / 150.2 → 7.5 / 44.1 |
+
+Per 100 requests the authority received 2-3 `/admission/resolve` (background
+stale refreshes) instead of 100, and the credential owner 14-16 `/materialize`
+(first use of each of the seven pooled grants plus background refreshes) instead
+of 100. Every cell reconciled 100 selections and 100 usage events. The
+deterministic proof is `worker/test/hot-path-cache.test.mjs`: a warm request
+issues zero authority, credential-owner and KV calls before upstream, and local
+selection matches the authority across all strategies and stickiness modes.
+Raw reports: [hot-cache-local.json](performance/hot-cache-local.json).
+
 
 ## Soft-budget instrumentation (2026-10-18)
 
@@ -437,9 +515,9 @@ partitioning the global authority. `/admission/resolve` reads the credential,
 policy, optional principal, requested provider connections, and scoped pool
 membership/runtime in one invocation of the existing `policy-bindings` object.
 The Worker still computes and compares the secret digest with `safeEqual`.
-Only the current authenticated operation holds the result; every HTTP request
-and WebSocket create resolves again. Nothing caches revocation, policy,
-budget, membership, runtime, or selection state across requests.
+At this stage only the current authenticated operation held the result. This
+historical no-cache behavior was superseded by [#326](#zero-hop-warm-path-2026-10-23);
+current admissions use its bounded isolate cache on HTTP and WebSocket creates.
 
 Cold imports retain the existing family markers, normalization, guarded
 initialization and canonical reread. A disable or migration closure committed
@@ -473,7 +551,7 @@ module-level projections; filtering, offers and affordability remain per request
 | Models/catalog with N eligible providers, service key | 3 + N | 1 |
 | Key inspect, me, usage authentication | 2 (+1 owner) | 1 |
 | Pool status authentication | 2 (+1 owner) | 1 |
-| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | 2; unchanged RPC count, [independent storage waits now overlap](#websocket-create-follow-up-2026-10-23) |
+| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | Warm caches: 1 global authority RPC (select); cache disabled: 2 (admission + select). Continuation ownership is separate; [full sequential storage counts](#websocket-create-follow-up-2026-10-23). |
 | Alternate attempt after provider rejection | 2 (resolve + select) | 2 |
 
 Pool status still scans the caller's scopes and reads statistics/runtime and
@@ -640,11 +718,12 @@ writers. A TTL or matching generation alone does not solve this boundary.
 | Alternate after 401/403/429, projections ready | 2 authority + 1 KV + 1 owner | 1 fresh authority + 1 owner |
 | Environment fallback, projections ready | admission, optional select, KV | 1 authority; no credential owner |
 | Discovery, Access policy selection, HTTP pinned continuations, Fusion preflight | Existing paths | Existing paths |
-| Pinned WebSocket create | 2 authority + 1 KV + 1 credential owner, serial continuation/reserves | Same calls; continuation and reserves overlap preparation ([round-trip counts](#websocket-create-follow-up-2026-10-23)) |
+| Pinned WebSocket create | 2 authority + 1 KV + 1 credential owner, serial continuation/reserves | Warm caches: 1 authority (select) + 1 KV; cache disabled: 2 authority + 1 KV + 1 credential owner. Continuation and reserves overlap preparation ([round-trip counts](#websocket-create-follow-up-2026-10-23)). |
 
-The full target of one authority call **plus upstream only is not claimed**.
-No authorization, policy, pool, runtime, selection or credential secret is cached
-between requests.
+At this stage the full target of one authority call **plus upstream only was
+not claimed**, and no authorization or credential state was cached between
+requests. [#326](#zero-hop-warm-path-2026-10-23) supersedes that historical cache
+restriction; the WebSocket row above reflects the current merged behavior.
 
 The regression suite compares old and combined outcomes/counters across all six
 strategies, three stickiness modes, priority tiers, reserve, model-scoped

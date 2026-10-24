@@ -1,4 +1,5 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -149,19 +150,21 @@ test("gateway arrays cannot bypass a policy or provider budget without a fixed p
   assert.equal(upstream.mock.callCount(), 0);
 });
 
-test("retention failure prevents gateway dispatch and releases the existing reservation", async (t) => {
+test("retention failure is best-effort after gateway dispatch and keeps the content reference", async (t) => {
   const fixture = await gatewayFixture(t);
-  fixture.env.CONTENT_ARCHIVE.put = async () => { throw new Error("synthetic archive outage"); };
-  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not dispatch"); });
+  const order = [];
+  fixture.env.CONTENT_ARCHIVE.put = async () => { order.push("archive"); throw new Error("synthetic archive outage"); };
+  const logged = t.mock.method(console, "error", () => {});
+  const upstream = t.mock.method(globalThis, "fetch", async () => { order.push("upstream"); throw new Error("synthetic transport failure"); });
   const response = await fixture.call(nativePath, [{ provider: "openai", query: {} }]);
-  assert.equal(response.status, 503);
-  assert.equal((await response.json()).error.code, "content_retention_unavailable");
+  assert.equal(response.status, 502);
+  await response.text();
   await fixture.drain();
-  assert.equal(upstream.mock.callCount(), 0);
-  assert.deepEqual(fixture.budgetCalls.map(({ path }) => path), ["/reserve", "/settle"]);
-  assert.equal(fixture.budgetCalls[1].body.actualCostMicros, 0);
+  assert.equal(upstream.mock.callCount(), 1);
+  assert.deepEqual(order, ["upstream", "archive"]);
+  assert.ok(logged.mock.calls.some(call => call.arguments[0] === "request content retention failed"));
   assert.equal(fixture.events.length, 1);
-  assert.equal(fixture.events[0].content_retained, false);
+  assert.equal(fixture.events[0].content_retained, true);
 });
 
 test("only the declared universal format accepts arrays and manifest metadata stays object-only", async (t) => {
