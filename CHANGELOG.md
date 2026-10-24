@@ -4,7 +4,6 @@
 
 - Overlap the credential-owner round trip with a cold admission: on a hot-cache miss the isolate starts loading the grant it last selected for that key (same version only, never for a mismatched secret) while admission runs, so a miss costs roughly the slower call instead of both. `Server-Timing` adds `cr-credential` with the credential cache state and owner wait.
 - Make the production deploy train tolerate Cloudflare's read-after-upload lag: re-read the version history while the candidate is absent and retry a 404 from the candidate's version endpoint, each for up to 15 s; a different newer upload or any other error still stops the train.
-- Make the production deploy train tolerate a version history that briefly trails a completed upload, re-reading for up to 15 s; a different newer upload still stops the train.
 - Reuse committed same-socket continuation ownership and pricing witnesses to remove the warm chained WebSocket authority round trip, with bounded witnesses and authoritative fallback.
 - Forward non-terminal WebSocket frames while continuation bindings commit; hold terminal delivery and same-lane dispatch until publication finishes.
 
