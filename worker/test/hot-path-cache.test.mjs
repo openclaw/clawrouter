@@ -394,7 +394,8 @@ test('a cold admission miss overlaps the remembered grant credential load and re
   const response = await pending; await response.text(); await Promise.all(f.pending);
   assert.equal(response.status, 200);
   assert.equal(events.filter(event => event === 'owner').length, 1, 'the real lookup joins the prefetch');
-  assert.match(response.headers.get('server-timing'), /cr-cache;desc=miss.*cr-credential;dur=[\d.]+;desc=miss/);
+  // The prefetch either finished before the lookup (hit, 0 wait) or was joined in flight (miss).
+  assert.match(response.headers.get('server-timing'), /cr-cache;desc=miss.*cr-credential;dur=[\d.]+;desc=(hit|miss)/);
 });
 
 test('a wrong secret never starts a remembered credential load', async t => {
