@@ -74,6 +74,27 @@ async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "r
   return Object.assign(f, { client, create, frames, messages, provider, drain });
 }
 
+test("created reaches the client while its binding write is held", async t => {
+  const f = await websocketFixture(t, { cache: "warm", budgetMode: "soft", budgets: 0 });
+  const gate = Promise.withResolvers(), writing = Promise.withResolvers(), created = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  let committed = false;
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    if (new URL(request.url).pathname === "/http-continuations" && (await request.clone().json()).action === "register") {
+      writing.resolve(); await gate.promise; committed = true;
+    }
+  };
+  f.client.addEventListener("message", ({ data }) => { if (JSON.parse(data).type === "response.created") created.resolve(); });
+  const turn = f.create();
+  await Promise.all([writing.promise, created.promise]);
+  assert.equal(committed, false);
+  assert.deepEqual(f.messages.map(frame => frame.type), ["response.created"]);
+  assert.equal(f.events.length, 0);
+  gate.resolve();
+  assert.equal((await turn).type, "response.completed");
+  assert.equal(committed, true);
+});
+
 for (const native of [false, true]) for (const revoked of [false, true]) test(`${native ? "native create with unsupported model" : "unified create with unknown model"} returns ${revoked ? "revoked-key authentication error" : "selection error for a valid key"}`, async t => {
   const f = await websocketFixture(t, { cache: "warm", budgets: 0, path: native ? "/v1/native/openai/v1/responses" : "/v1/responses" });
   assert.equal((await f.create()).type, "response.completed");

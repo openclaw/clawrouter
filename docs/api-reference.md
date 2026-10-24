@@ -253,6 +253,10 @@ retention. Each authorization scope admits up to one million hashed identities;
 it never evicts a live binding to admit another. Binding-store failure or capacity
 exhaustion returns `continuation_unavailable` before headers, or terminates an
 already-started stream. The upstream call can still incur charges. Response IDs
+on WebSockets can appear before their binding commits; every binding and pricing
+evidence write finishes before the terminal frame and next same-lane dispatch.
+If binding fails, the socket closes with `continuation_unavailable` without
+delivering the terminal; unbound IDs require a restart with full input. IDs
 are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
 limited by HTTP identity observation, and raw identities and model output are not
 stored in this index.
@@ -446,7 +450,10 @@ Credential authentication errors take precedence over per-create model or route
 selection errors, as they do for HTTP requests.
 
 Response IDs and `response.metadata` turn state are bound to each create's fresh
-authorization scope and actual upstream owner before forwarding. Codex can then
+authorization scope and actual upstream owner before the terminal frame is
+forwarded and before the next same-lane dispatch. Earlier frames, including
+`response.created`, metadata and deltas, may expose IDs before binding commits.
+Codex can then
 reconnect with `client_metadata["x-codex-turn-state"]` or fall back to HTTP with
 the same turn state and account. Conflicting header and metadata tokens are
 rejected; every supplied continuation identity must name the same owner.
@@ -456,7 +463,10 @@ a new connection. The rejected create is not billed and does not close the socke
 An upgrade header alone
 does not create a synthetic metadata event. Metadata may precede
 `response.created`; it identifies the response without proving execution started.
-Pending publication preserves frame order. After a terminal outcome is claimed
+Binding and pricing evidence writes run concurrently with non-terminal delivery,
+in per-operation order. The terminal waits for all those writes; pending
+publication preserves wire order and counts toward output limits. Binding failure
+closes with `503 continuation_unavailable` before terminal delivery. After a terminal outcome is claimed
 and its frame is forwarded, the next same-lane create may begin admission while
 settlement finishes; dispatch and the final soft-budget preflight wait for
 successful settlement on that lane, without blocking other lanes' admission or

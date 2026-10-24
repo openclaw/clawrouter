@@ -14,7 +14,7 @@ export function responseIdentity(kind: ResponseIdentity["kind"], value: unknown)
 // WebSockets already own a parsed frame. Inspect the same protocol fields as
 // the HTTP scanner without reparsing output or treating metadata as execution.
 export function responseEventIdentities(event: Record<string, unknown>): ResponseIdentity[] {
-  if (typeof event.type !== "string" || !event.type.startsWith("response.")) return [];
+  if (typeof event.type !== "string" || !event.type.startsWith("response.") && event.type !== "error") return [];
   const response = event.response && typeof event.response === "object" && !Array.isArray(event.response) ? event.response as Record<string, unknown> : null;
   const identities = [responseIdentity("response", response?.id), responseIdentity("response", event.response_id)].filter((value): value is ResponseIdentity => !!value);
   if (event.type === "response.metadata" && event.headers && typeof event.headers === "object" && !Array.isArray(event.headers)) {

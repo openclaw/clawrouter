@@ -49,7 +49,7 @@ those counts.
 WebSocket retention, when required, still completes after reservation and before
 dispatch; #326's post-dispatch retention applies to ordinary HTTP. These counts
 exclude the connection handshake, earlier-turn settlement, and continuation
-publication holding `response.created`. In reserve mode, credential preparation,
+publication. In reserve mode, credential preparation,
 budget reservation, required retention and dispatch finish before the frame is sent.
 
 Soft-policy WebSocket turns now omit reserve and dispatch calls. They perform
@@ -59,6 +59,13 @@ Observed usage uses the shared soft charge/recovery path. With local selection,
 the causal fixture asserts one warm round (`continuation`) or two with caching
 disabled (`admission`, then `continuation + materialize`), with zero, one, two or
 four budget legs. Required retention remains ahead of send.
+
+Non-terminal frames (including `response.created`, metadata, deltas and items)
+forward in wire order while identity and pricing evidence writes run in their
+own per-operation FIFO. The terminal frame waits for every write; binding failure
+closes with `continuation_unavailable` before that terminal can reach the client.
+Pending writes and held frames consume the output count/byte limits. Settlement
+waits for both writes and terminal delivery, including on close/timeout races.
 
 After terminal publication, the next same-lane create can begin admission while
 the prior turn settles. Sending and the final soft-budget preflight wait for

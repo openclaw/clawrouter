@@ -53,6 +53,7 @@ interface Operation {
   admitted?: AdmittedResponse;
   responseId?: string;
   executionStarted: boolean;
+  bindings: Promise<void>;
   publication: Promise<void>;
   previousSettlement?: Promise<void>;
   sent: boolean;
@@ -146,7 +147,7 @@ export class ResponsesWebSocketSession {
       // Unsent denials settle too, but must never become upstream frame owners.
       let previousSettlement: Promise<void> | undefined;
       for (const previous of this.settling) if (previous.lane === lane) previousSettlement = previous.settling;
-      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, publication: Promise.resolve(), previousSettlement };
+      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, bindings: Promise.resolve(), publication: Promise.resolve(), previousSettlement };
       this.active.set(lane, op);
       // Serialize admission so large parsed bodies and the first route selection
       // and connection establishment have one owner. Lane sends run separately.
@@ -273,16 +274,22 @@ export class ResponsesWebSocketSession {
     }
     this.publishingCount++;
     this.publishingBytes += bytes;
-    // Capture the admitted operation now, never look it up after the await.
-    // One bounded FIFO keeps metadata and every following wire frame ordered.
-    const published = this.publication.then(async () => {
-      if (this.ending) return;
-      if (op) await op.admitted!.publish(identities, event);
-      if (!this.ending) this.send(data);
-    }).catch(() => {
+    const failed = () => {
       this.close("router_error", 1011, { code: "continuation_unavailable", message: "Continuation ownership could not be recorded; restart with full input.", status: 503, lane: op?.lane });
-    }).finally(() => { this.publishingCount--; this.publishingBytes -= bytes; });
-    this.publication = published;
+    };
+    // Bindings keep their captured producer and per-op order. Only the terminal
+    // delivery joins that chain; earlier wire frames do not wait for storage.
+    const bindings = op ? op.bindings.then(async () => {
+      if (!this.ending) await op.admitted!.publish(identities, event);
+    }).catch(failed) : Promise.resolve();
+    if (op) op.bindings = bindings;
+    const delivered = this.publication.then(async () => {
+      if (terminalTypes.has(String(event.type))) await bindings;
+      if (!this.ending) this.send(data);
+    }).catch(failed);
+    this.publication = delivered;
+    // Pending writes and held terminal frames both consume the output bounds.
+    const published = Promise.all([bindings, delivered]).then(() => {}).finally(() => { this.publishingCount--; this.publishingBytes -= bytes; });
     if (op) op.publication = published;
     this.options.waitUntil(published);
   }
