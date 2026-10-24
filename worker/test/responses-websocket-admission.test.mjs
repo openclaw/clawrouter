@@ -23,7 +23,7 @@ class Socket extends EventTarget {
 }
 function pair() { const a = new Socket(), b = new Socket(); a.peer = b; b.peer = a; return [a, b]; }
 
-async function websocketFixture(t, { cache = "off", budgets = 4 } = {}) {
+async function websocketFixture(t, { cache = "off", budgets = 4, budgetMode = "reserve", limit = budgets ? 100_000 : null, fixedCost = 7, retain = false } = {}) {
   overrideHotCacheConfig();
   // Keep warmed entries fresh independently of host load or the injected waits.
   const now = Date.now();
@@ -37,11 +37,10 @@ async function websocketFixture(t, { cache = "off", budgets = 4 } = {}) {
   });
   globalThis.WebSocketPair = function () { return pair(); };
   t.after(() => { delete globalThis.WebSocketPair; });
-  const limit = budgets ? 100_000 : null;
-  const f = await fixture(t, false, { limit, fixedCost: 7 });
+  const f = await fixture(t, false, { limit, fixedCost });
   if (cache === "off") f.env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS = "0";
   for (const [index, key] of grantKeys.entries()) await putGrantCredentials(f.env, key, { provider: "openai", kind: "api_key", enabled: true, credential: `synthetic-key-${index}` });
-  await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, dailyBudgetMicros: budgets === 4 ? limit : null, weeklyBudgetMicros: budgets === 4 ? limit : null } });
+  await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, budgetMode, retainRequestContent: retain, limitHint: "Use the team policy.", dailyBudgetMicros: budgets === 4 ? limit : null, weeklyBudgetMicros: budgets === 4 ? limit : null } });
   await f.authority("/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: budgets >= 2 ? limit : null });
   const [upstream, provider] = pair(), frames = [], messages = [], pending = [];
   const fetch = globalThis.fetch;
@@ -50,13 +49,15 @@ async function websocketFixture(t, { cache = "off", budgets = 4 } = {}) {
   provider.addEventListener("message", ({ data }) => {
     const body = JSON.parse(data); frames.push(body); f.onSend?.();
     const response = { id: `ws_${frames.length}`, status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+    if (f.onFrame?.(body, response) === false) return;
     provider.send(JSON.stringify({ type: "response.created", response }));
     provider.send(JSON.stringify({ type: "response.completed", response }));
   });
   const response = await proxyResponsesWebSocket(new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), f.env, { waitUntil: promise => pending.push(promise) }, "/v1/responses");
   const client = response.webSocket;
   client.addEventListener("message", ({ data }) => messages.push(JSON.parse(data)));
-  const drain = async () => { while (pending.length) await Promise.all(pending.splice(0)); await f.drain(); };
+  const drainHttp = f.drain;
+  const drain = async () => { while (pending.length) await Promise.all(pending.splice(0)); await drainHttp(); };
   const create = async (body = {}) => {
     const before = messages.length;
     client.send(JSON.stringify({ type: "response.create", model: "openai/gpt-5.6-sol", input: "fixture", ...body }));
@@ -68,21 +69,21 @@ async function websocketFixture(t, { cache = "off", budgets = 4 } = {}) {
     return messages.at(-1);
   };
   t.after(async () => { client.close(); await drain(); });
-  return Object.assign(f, { client, create, frames, messages });
+  return Object.assign(f, { client, create, frames, messages, provider, drain });
 }
 
-for (const cache of ["warm", "off"]) for (const budgets of [0, 1, 2, 4]) {
-  test(`warm chained admission: cache ${cache}, ${budgets} budget legs`, async t => {
-    const f = await websocketFixture(t, { cache, budgets });
+for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"]) for (const budgets of [0, 1, 2, 4]) {
+  test(`warm chained admission: cache ${cache}, ${budgetMode}, ${budgets} budget legs`, async t => {
+    const f = await websocketFixture(t, { cache, budgets, budgetMode });
     const first = await f.create();
     assert.equal(first.type, "response.completed", JSON.stringify(first));
     assert.equal(first.response.id, "ws_1");
     const expected = [
       ...(cache === "off" ? [["admission"]] : []),
       ["continuation", "kv"],
-      [...Array(budgets).fill("reserve"), "select"],
+      [...Array(budgetMode === "soft" ? 0 : budgets).fill("reserve"), "select"],
       ...(cache === "off" ? [["materialize"]] : []),
-      ...(budgets ? [Array(budgets).fill("dispatch")] : []),
+      ...(budgets && budgetMode === "reserve" ? [Array(budgets).fill("dispatch")] : []),
     ];
     const rounds = [], waiting = [];
     let measuring = true, problem = null, watchdog;
@@ -135,7 +136,7 @@ for (const cache of ["warm", "off"]) for (const budgets of [0, 1, 2, 4]) {
     clearTimeout(watchdog);
     assert.equal(problem, null);
     assert.deepEqual(rounds, expected);
-    t.diagnostic(`cache ${cache}, ${budgets} budget legs: ${rounds.length} sequential storage rounds`);
+    t.diagnostic(`cache ${cache}, ${budgetMode}, ${budgets} budget legs: ${rounds.length} sequential storage rounds`);
   });
 }
 
@@ -214,3 +215,94 @@ function assertReleased(f) {
     assert.ok(rows.filter(row => row.reserved_micros === 0).length >= 1);
   }
 }
+
+async function until(predicate) {
+  for (let i = 0; !predicate(); i++) {
+    assert.ok(i < 1000, "fixture event timed out");
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
+test("soft WebSocket sends without awaiting status; exhaustion charges this turn and denies the next", async t => {
+  const f = await websocketFixture(t, { cache: "warm", budgetMode: "soft", budgets: 1, limit: 7 });
+  const gate = Promise.withResolvers(), calls = [];
+  const get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
+  f.env.BUDGET_LEDGER.get = name => {
+    const stub = get(name);
+    return { ...stub, fetch: async (url, init) => {
+      const path = new URL(url).pathname; calls.push(path);
+      if (path === "/status") { await gate.promise; return Response.json({ spentMicros: 7 }); }
+      return stub.fetch(url, init);
+    } };
+  };
+  let terminal;
+  f.onFrame = (_body, response) => {
+    terminal = response;
+    f.provider.send(JSON.stringify({ type: "response.created", response }));
+    return false;
+  };
+  f.client.send(JSON.stringify({ type: "response.create", model: "openai/gpt-5.6-sol", input: "fixture" }));
+  await until(() => f.frames.length === 1);
+  assert.deepEqual(calls, ["/status"]);
+  gate.resolve();
+  await f.drain();
+  assert.equal(f.client.closed, false);
+  f.provider.send(JSON.stringify({ type: "response.completed", response: terminal }));
+  await until(() => f.messages.some(message => message.type === "response.completed"));
+  await f.drain();
+  assert.equal(f.messages.at(-1).type, "response.completed");
+  assert.equal(f.events[0].actual_cost_micros, 7);
+  assert.deepEqual(calls, ["/status", "/charge"]);
+  const denied = await f.create({ previous_response_id: "ws_1" });
+  assert.equal(denied.status, 402);
+  assert.equal(denied.error.code, "budget_exhausted");
+  assert.match(denied.error.message, /resets at.*Use the team policy/);
+  assert.equal(f.frames.length, 1);
+  assert.deepEqual(calls, ["/status", "/charge"]);
+});
+
+test("zero soft WebSocket budget denies before dispatch without ledger calls", async t => {
+  const f = await websocketFixture(t, { budgetMode: "soft", budgets: 1, limit: 0 });
+  f.env.BUDGET_LEDGER.get = () => assert.fail("zero limit needs no ledger");
+  const result = await f.create();
+  assert.equal(result.status, 402);
+  assert.equal(result.error.code, "budget_exhausted");
+  assert.match(result.error.message, /resets at.*Use the team policy/);
+  assert.equal(f.frames.length, 0);
+  assert.equal(f.events[0].actual_cost_micros, 0);
+});
+
+for (const recoveryFails of [false, true]) test(`soft WebSocket failed charge ${recoveryFails ? "and recovery closes the socket" : "uses durable recovery"}`, async t => {
+  t.mock.method(console, "error", () => {});
+  const f = await websocketFixture(t, { budgetMode: "soft", budgets: 1 });
+  const get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
+  f.env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+    if (new URL(url).pathname === "/charge") throw new Error("fixture charge failure");
+    return get(name).fetch(url, init);
+  } });
+  const send = f.env.USAGE_QUEUE.send;
+  const recovered = [];
+  f.env.USAGE_QUEUE.send = async event => {
+    if (event.kind === "budget_charge") {
+      recovered.push(event);
+      if (recoveryFails) throw new Error("fixture recovery failure");
+    }
+    return send(event);
+  };
+  await f.create();
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].request.amountMicros, 7);
+  assert.equal(f.client.closed, recoveryFails);
+  if (recoveryFails) assert.ok(f.messages.some(message => message.error?.code === "accounting_unavailable"));
+});
+
+test("soft WebSocket missing usage has no invented reservation charge", async t => {
+  const f = await websocketFixture(t, { budgetMode: "soft", budgets: 1, fixedCost: null });
+  f.onFrame = () => { f.provider.close(); return false; };
+  f.client.send(JSON.stringify({ type: "response.create", model: "openai/gpt-5.6-sol", input: "fixture" }));
+  await until(() => f.events.length > 0);
+  await f.drain();
+  assert.equal(f.events[0].actual_cost_micros, 0);
+  assert.equal(f.events[0].reserved_cost_micros, 0);
+  assert.equal(f.events[0].cost_basis, "unpriced_usage");
+});

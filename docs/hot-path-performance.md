@@ -56,6 +56,14 @@ exclude the connection handshake, earlier-turn settlement, and continuation
 publication holding `response.created`. Credential preparation, every budget
 check, required retention and dispatch still finish before the frame is sent.
 
+Soft-policy WebSocket turns now omit reserve and dispatch calls. They perform
+local budget preflight and start `/status` reads alongside the send; exhaustion
+never aborts the active turn and instead denies the next create in this isolate.
+Observed usage uses the shared soft charge/recovery path. The causal fixture
+asserts two warm rounds (`continuation + KV`, then `select`) or four with caching
+disabled (additional admission and materialization), with zero, one, two or four
+budget legs. Required retention remains ahead of send.
+
 The SQLite-backed Node admission fixture releases each storage round only once
 exactly its expected hops are waiting, so concurrency is proven causally rather
 than by wall-clock timing; a serialized or unexpected hop fails the test. It

@@ -9,6 +9,7 @@ import { captureGrantRuntime, prepareSelected } from "./proxy";
 import { assertProviderAccess, modelRoute, providerById } from "./providers";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
+import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";
 import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
@@ -52,6 +53,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       let accounting: ReturnType<typeof createProxyAccounting> | undefined;
       let reservation = emptyReservation(), content: string | null = null;
       let continuation: HttpContinuation | undefined;
+      const useSoft = softBudgetPolicy(auth.policy);
       try {
         let cost: ReturnType<typeof estimateCost> | undefined;
         const resolve = HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
@@ -59,7 +61,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         // Unpinned selection can refresh auth; only a pinned create can reserve
         // against this admission's connection while materialization is pending.
         const preparing = pinned ? prepare(pinned) : resolve.then(value => prepare(value?.pinned));
-        const reserving = pinned ? resolve.then(async value => {
+        const reserving = pinned && !useSoft ? resolve.then(async value => {
           cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, value?.parentTools);
           const connection = await assertProviderAccess(selection.provider, auth, env);
           signal.throwIfAborted();
@@ -82,17 +84,29 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
         if (reserved.status === "rejected") throw reserved.reason;
-        if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
+        if (useSoft) {
+          const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
+          if (denial) throw denial;
+          reservation = { reservations: [], reservedMicros: 0, charges: [] };
+        } else if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
         try { content = await retainRequestContent(env, auth, selection, requestId); }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
         await markBudgetDispatched(env, reservation);
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
+        const usageId = accounting.facts.event.id;
         return {
           pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
           timeoutMs: selection.endpoint.timeout_ms ?? 120_000,
           connect: upstreamConnection(upstream.url, upstream.headers, signal, observe),
+          beforeSend: useSoft ? () => {
+            const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
+            if (denial) throw denial;
+            const soft = softBudget(env, auth, selection.capability, upstream.connection, usageId);
+            Object.assign(reservation, soft.reservation);
+            context.waitUntil(soft.check);
+          } : undefined,
           publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
           settle: settlement(accounting, reservation, content, observe),
         };
@@ -144,7 +158,8 @@ function settlement(accounting: ReturnType<typeof createProxyAccounting>, reserv
       : outcome === "failed" || outcome === "error" ? { status: "provider_error" as const, statusCode: typeof terminal?.status === "number" ? terminal.status : 502 }
       : closeStatus(outcome);
     // A request-scoped error before a response is rejected work. Once upstream
-    // execution starts, missing usage must retain the estimate, including on close.
+    // execution starts, reserve mode retains its estimate on missing usage;
+    // soft mode charges only observed usage or an explicit fixed tariff.
     const billable = sent && (outcome !== "error" || executionStarted || tokens !== null);
     return requireAccounting(accounting.settle(statusCode, status, billable, tokens, reservation, content));
   };

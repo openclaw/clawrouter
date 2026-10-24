@@ -38,7 +38,7 @@ export function softBudgetPreflight(env: Env, auth: AuthorizedIdentity, capabili
   return undefined;
 }
 
-export function softBudget(env: Env, auth: AuthorizedIdentity, capability: string, connection: ProviderConnection, requestId: string, abort: (error: HttpError) => void) {
+export function softBudget(env: Env, auth: AuthorizedIdentity, capability: string, connection: ProviderConnection, requestId: string, abort?: (error: HttpError) => void) {
   const config = hotCacheConfig(env);
   const plan = planBudgetReservation(auth, capability, { reserveMicros: 0, basis: "none", inputTokens: null, outputTokens: null }, connection, Date.now(), true);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: 0, charges: plan.legs.map(({ objectName, request }) => ({ objectName, request: {
@@ -63,7 +63,8 @@ export function softBudget(env: Env, auth: AuthorizedIdentity, capability: strin
       }
       // Remember for the fresh window so later requests stop before dispatch.
       exhausted.set(legId(leg), true, config, hotCacheNow() + config.freshMs);
-      if (delivered || denial) return;
+      // Shared WebSocket lanes cannot abort one turn; only deny later creates.
+      if (!abort || delivered || denial) return;
       denial = softDenial(leg, connection);
       abort(denial);
     } catch { /* Soft budget observations fail open. */ }

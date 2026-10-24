@@ -456,15 +456,19 @@ publication acknowledgments and queued output.
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
-grants after dispatch. A terminal response with usable usage settles once;
-sent requests interrupted by disconnects or deadlines without final usage retain
-the reservation. Unsent admitted requests release it; queued requests have no
+grants after dispatch. A terminal response with usable usage settles once.
+Reserve policies retain the reservation when sent requests disconnect or time
+out without final usage; unsent admitted requests release it. Soft policies use
+local pre-dispatch denials and parallel budget checks, then charge observed usage
+or an explicit fixed tariff, marking unknown prices as `unpriced_usage` without
+inventing a missing-usage charge. Budget exhaustion never aborts an in-flight
+soft turn; it denies the next create in this isolate. Queued requests have no
 receipt. The first terminal outcome or close cause owns settlement, including
 when admission finishes after cancellation. A client disconnect records
 `client_error` with `status_code: null`; only the response whose deadline expired
 records `timeout`/504. Other active lanes closed with that connection do not
 inherit its timeout. If budget
-settlement and its durable recovery both fail, or usage publication fails, the
+settlement/charge and its durable recovery both fail, or usage publication fails, the
 socket reports `accounting_unavailable` and closes before accepting more work.
 
 Limits per connection are 16 active responses, 32 named lanes plus the default
