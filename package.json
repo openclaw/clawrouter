@@ -34,7 +34,8 @@
     "pool:contribute": "node scripts/pool-contribute.mjs",
     "codex:connect": "node scripts/codex-connect.mjs",
     "cf:smoke": "node scripts/smoke-deployed.mjs",
-    "cf:members": "node scripts/provision-member-access.mjs"
+    "cf:members": "node scripts/provision-member-access.mjs",
+    "cf:budget-mode": "node scripts/policy-budget-mode.mjs"
   },
   "dependencies": {
     "stream-chain": "4.2.6",

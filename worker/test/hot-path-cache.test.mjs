@@ -340,3 +340,35 @@ test('warm proxy-key catalog and models reuse the derived inventory without back
   const changed = await get('/v1/models'); assert.equal(changed.status, 200);
   assert.ok(!(await changed.json()).data.some(model => model.id === 'anthropic/claude-sonnet-5'), 'a policy change is a new inventory');
 });
+
+test('a legacy routing projection repairs itself after one fallback request', async t => {
+  const f = await fixture(); await f.put(keyA, grant());
+  f.authority.sql.exec('UPDATE upstream_grant_projections SET legacy = 1, projection_json = NULL WHERE grant_key = ?', keyA);
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  f.reset();
+  assert.equal((await f.send()).response.status, 200);
+  assert.ok(f.calls.includes('/grant-pools/select'), 'the legacy row took the read-and-select path');
+  const row = [...f.authority.sql.exec('SELECT legacy, projection_json FROM upstream_grant_projections WHERE grant_key = ?', keyA)][0];
+  assert.equal(row.legacy, 0, 'owner republished the projection'); assert.ok(row.projection_json);
+  await f.send();
+  f.reset();
+  const warm = await f.send();
+  assert.equal(warm.response.status, 200);
+  assert.match(warm.response.headers.get('server-timing'), /cr-cache;desc=hit/);
+  assert.ok(!f.calls.includes('/admission/resolve') && !f.calls.includes('/grant-pools/select'), f.calls.join());
+});
+
+test('projection repair is throttled per grant and off when the hot cache is disabled', async t => {
+  for (const env of [{}, { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0' }]) {
+    const f = await fixture(env); await f.put(keyA, grant());
+    const legacy = () => f.authority.sql.exec('UPDATE upstream_grant_projections SET legacy = 1, projection_json = NULL WHERE grant_key = ?', keyA);
+    legacy();
+    t.mock.method(globalThis, 'fetch', async () => ok());
+    await f.send();
+    legacy(); f.reset();
+    await f.send();
+    const repaired = [...f.authority.sql.exec('SELECT legacy FROM upstream_grant_projections WHERE grant_key = ?', keyA)][0].legacy === 0;
+    assert.equal(repaired, false, env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS ? 'no repair with the cache disabled' : 'second fallback within the interval does not repair again');
+    t.mock.restoreAll();
+  }
+});
