@@ -372,3 +372,40 @@ test('projection repair is throttled per grant and off when the hot cache is dis
     t.mock.restoreAll();
   }
 });
+
+test('a cold admission miss overlaps the remembered grant credential load and reuses it once', async t => {
+  const time = clock();
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  const warm = await f.send();
+  assert.match(warm.response.headers.get('server-timing'), /cr-credential;dur=[\d.]+;desc=miss/);
+  assert.match((await f.send()).response.headers.get('server-timing'), /cr-credential;dur=[\d.]+;desc=hit/);
+  time.advance(61_000); // both the admission snapshot and the credential entry expire
+  const release = Promise.withResolvers(), events = [];
+  const base = f.env.ACCESS_CONTROL.get;
+  f.env.ACCESS_CONTROL.get = id => { const stub = base(id); return { async fetch(url, init) { if (new URL(url).pathname === '/admission/resolve') { events.push('admission:start'); await release.promise; events.push('admission:end'); } return stub.fetch(url, init); } }; };
+  const ownerGet = f.env.GRANT_CREDENTIALS.get;
+  f.env.GRANT_CREDENTIALS.get = id => { const stub = ownerGet(id); return { fetch(...args) { events.push('owner'); return stub.fetch(...args); } }; };
+  f.reset();
+  const pending = f.request();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual([...events].sort(), ['admission:start', 'owner'], 'owner load runs while admission is still pending');
+  release.resolve();
+  const response = await pending; await response.text(); await Promise.all(f.pending);
+  assert.equal(response.status, 200);
+  assert.equal(events.filter(event => event === 'owner').length, 1, 'the real lookup joins the prefetch');
+  // The prefetch either finished before the lookup (hit, 0 wait) or was joined in flight (miss).
+  assert.match(response.headers.get('server-timing'), /cr-cache;desc=miss.*cr-credential;dur=[\d.]+;desc=(hit|miss)/);
+});
+
+test('a wrong secret never starts a remembered credential load', async t => {
+  const time = clock();
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send();
+  time.advance(61_000);
+  f.reset();
+  const { response } = await f.send({ ...admissionHeaders, authorization: 'Bearer clawrouter-live-fixture-not-the-secret' });
+  assert.equal(response.status, 401);
+  assert.equal(f.ownerCalls, 0);
+});

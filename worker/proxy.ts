@@ -19,7 +19,7 @@ import { createProxyAccounting, estimateCost, type CompoundRequestContext } from
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
-import { admissionCacheState, admissionDuration } from "./admission-timing.ts";
+import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
 import {
   concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
@@ -582,8 +582,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // Header sanitization strips upstream router-code spoofing. Only a verified
   // local JSON replacement may restore this diagnostic; SSE fails after headers.
   if (priceGuard?.failure() && response.status === 502) outputHeaders.set("x-clawrouter-error-code", "pricing_required");
-  const cacheState = admissionCacheState(auth);
-  outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}${cacheState ? `, cr-cache;desc=${cacheState}` : ""}`);
+  const cacheState = admissionCacheState(auth), credential = credentialWait(auth);
+  outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}${cacheState ? `, cr-cache;desc=${cacheState}` : ""}${credential ? `, cr-credential;dur=${credential.ms.toFixed(1)};desc=${credential.cache}` : ""}`);
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");

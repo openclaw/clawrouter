@@ -67,6 +67,7 @@ export async function recoverTrain({ api, state, save = () => {} }) {
   state.deploymentId = restored.id; state.status = 'rolled-back'; state.recovery = 'rollback'; save(state);
   return 'rollback';
 }
+const UPLOAD_VISIBILITY_ATTEMPTS = 5, UPLOAD_VISIBILITY_STEP_MS = 1_000;
 export async function runTrain({ state, api, upload, smoke, save = () => {}, now = Date.now, wait = sleep, analytics = observeAnalytics, mode = 'rollout', negativeSmoke = async () => { throw new Error('Deliberate 0% smoke failure'); } }) {
   if (!['rollout', 'zero-smoke', 'zero-failure'].includes(mode)) throw new Error('Invalid train mode');
   if (mode !== 'rollout' && (state.migration || state.unsafe)) throw new Error('No-impact rehearsals cannot include lifecycle or rollback-unsafe changes');
@@ -78,9 +79,24 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
     if (beforeUpload.id !== state.deploymentId) throw new Error('Deployment changed since preflight');
     assertSecretLineage(await api.versions(), state.blue);
     state.green = await upload(state); save(state);
-    const uploaded = await api.versions();
+    // Cloudflare's version list can trail a just-completed upload. Re-read only
+    // while the candidate is absent; any other newer upload still fails at once.
+    let uploaded = await api.versions();
+    for (let attempt = 1; attempt <= UPLOAD_VISIBILITY_ATTEMPTS && !uploaded.some(version => version.id === state.green); attempt++) {
+      await wait(UPLOAD_VISIBILITY_STEP_MS * attempt);
+      uploaded = await api.versions();
+    }
+    if (!uploaded.some(version => version.id === state.green)) throw new Error('Uploaded version did not appear in the version history');
     if (assertSecretLineage(uploaded, state.blue) !== state.green) throw new Error('Latest upload changed during candidate creation');
-    const version = await api.version(state.green);
+    // The per-version endpoint can 404 for a moment after the history lists it.
+    let version;
+    for (let attempt = 1; ; attempt++) {
+      try { version = await api.version(state.green); break; }
+      catch (error) {
+        if (error?.status !== 404 || attempt > UPLOAD_VISIBILITY_ATTEMPTS) throw error;
+        await wait(UPLOAD_VISIBILITY_STEP_MS * attempt);
+      }
+    }
     if (version.annotations?.['workers/tag'] !== state.sha) throw new Error('Uploaded version does not attest candidate SHA');
     if (state.migration) {
       const deployed = await api.latest();

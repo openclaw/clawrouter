@@ -274,6 +274,21 @@ hours of per-version invocation analytics:
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
 
+### Cold-miss overlap (2026-10-24)
+
+Spaced production requests (70 s apart, past the 60 s max age) measured what a
+cold isolate pays: `cr-admission` 76-167 ms, plus 128-263 ms outside admission
+and upstream against 33-60 ms on the warm request that followed. The difference
+is the credential owner round trip, which ran only after admission returned.
+
+On a foreground admission miss the isolate now starts materializing the grant it
+last selected for the same key, provider, endpoint, mode and model, keyed by that
+grant's generation and revision. If admission selects the same version, the real
+lookup joins the in-flight load; otherwise the prefetched entry is unused. The
+hint is secretless routing data and only the secret digest that earned it can
+start an owner call. Staleness bounds are unchanged. `Server-Timing` now carries
+`cr-credential;dur=<owner wait>;desc=hit|stale|miss|off`.
+
 ### Stress and hardening (2026-10-23)
 
 Concurrency sweep on the same fixture (400 requests per cell, 20 ms synthetic
