@@ -181,6 +181,48 @@ test("next same-lane admission overlaps settlement but send waits for success", 
   assert.deepEqual(f.settled.map(item => item.terminal.response.id), ["first", "second", "third"]);
 });
 
+test("a lane waiting for prior settlement does not block another lane's queued admission or send", async t => {
+  const admission = Promise.withResolvers(), settlement = Promise.withResolvers(), checked = [];
+  t.after(() => { admission.resolve(); settlement.resolve(); });
+  const f = fixture(t, {
+    admit: index => index === 1 ? admission.promise : undefined,
+    settle: index => index === 0 ? settlement.promise : undefined,
+    beforeSend: index => checked.push(index),
+  });
+  f.client.receive(create("a")); f.client.receive(create("a")); await tick();
+  respond(f, "a", "first"); await tick();
+  assert.deepEqual(f.admitted.map(item => item.lane), ["a", "a"]);
+  f.client.receive(create("b")); await tick();
+  assert.equal(f.admitted.length, 2, "B queues behind A's held admission");
+  admission.resolve(); await tick();
+  assert.deepEqual(f.admitted.map(item => item.lane), ["a", "a", "b"]);
+  assert.deepEqual(f.upstream.sent.map(value => JSON.parse(value).stream_id), ["a", "b"]);
+  assert.deepEqual(checked, [0, 2], "A's next preflight still waits for settlement");
+  respond(f, "b", "parallel"); await tick();
+  assert.deepEqual(f.settled.map(item => item.index), [0, 2]);
+  settlement.resolve(); await tick();
+  assert.deepEqual(f.upstream.sent.map(value => JSON.parse(value).stream_id), ["a", "b", "a"]);
+  assert.deepEqual(checked, [0, 2, 1]);
+  respond(f, "a", "second"); await tick();
+  assert.deepEqual(f.settled.map(item => item.terminal.response.id), ["first", "parallel", "second"]);
+});
+
+test("a create waiting for same-lane settlement still consumes the buffer limit", async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, { limits: { buffered: 2 }, settle: index => index === 0 ? gate.promise : undefined });
+  f.client.receive(create("a")); await tick();
+  f.client.receive(create("a")); f.client.receive(create("a"));
+  respond(f, "a", "first"); await tick();
+  assert.equal(f.admitted.length, 2); assert.equal(f.upstream.sent.length, 1);
+  f.client.receive(create("b")); await tick();
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_queue_full");
+  assert.equal(f.admitted.length, 2);
+  gate.resolve(); await tick();
+  f.client.receive(create("b")); await tick();
+  assert.equal(f.admitted.length, 3); assert.equal(f.upstream.sent.length, 3);
+});
+
 for (const denied of [false, true]) test(`pipelined beforeSend waits for settlement${denied ? " and denies unsent exactly once without closing" : " before sending"}`, async t => {
   const gate = Promise.withResolvers(), checked = [];
   let settled = false;
@@ -212,6 +254,34 @@ for (const denied of [false, true]) test(`pipelined beforeSend waits for settlem
     respond(f, "lane", "third"); await tick();
     assert.equal(f.settled.filter(item => item.index === 1).length, 1);
   } else { respond(f, "lane", "second"); await tick(); }
+});
+
+for (const failed of [false, true]) test(`an unsent denial gates the next same-lane send until settlement ${failed ? "fails and closes" : "succeeds"}`, async t => {
+  const gate = Promise.withResolvers();
+  t.after(() => gate.resolve());
+  const f = fixture(t, {
+    settle: index => index === 1 ? gate.promise : undefined,
+    beforeSend: index => {
+      if (index === 1) throw Object.assign(new Error("budget exhausted"), { status: 402, code: "budget_exhausted" });
+    },
+  });
+  f.client.receive(create("lane")); f.client.receive(create("lane")); f.client.receive(create("lane"));
+  await tick(); respond(f, "lane", "first"); await tick();
+  assert.equal(f.admitted.length, 3);
+  assert.equal(f.upstream.sent.length, 1);
+  assert.deepEqual(f.settled.map(({ index, outcome, sent }) => ({ index, outcome, sent })), [
+    { index: 0, outcome: "completed", sent: true }, { index: 1, outcome: "error", sent: false },
+  ]);
+  if (failed) gate.reject(new Error("fixture accounting failure")); else gate.resolve();
+  await tick();
+  assert.equal(f.upstream.sent.length, failed ? 1 : 2);
+  assert.equal(f.client.closed, failed);
+  if (failed) {
+    assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "accounting_unavailable");
+    assert.equal(f.settled[2].outcome, "router_error");
+    assert.equal(f.settled[2].sent, false);
+  } else { respond(f, "lane", "third"); await tick(); }
+  assert.equal(f.settled.length, 3);
 });
 
 test("failed settlement closes an admitted next turn before send and settles its reservation once", async t => {

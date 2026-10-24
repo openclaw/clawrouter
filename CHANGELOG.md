@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep Responses WebSocket settlement waits local to their lane so other lanes can admit and send while a prior turn settles.
 - Select Responses WebSocket grants from the shared hot admission snapshot, preserving pinned owners and transport eligibility; warm soft creates need only continuation resolution, while reserve creates retain authoritative budget admission.
 
 - Combine budget reservation and dispatch marking for ordinary HTTP requests and Responses WebSocket turns without required retention, saving a ledger round trip; older ledgers retain two-step dispatch, and unsent crash outcomes conservatively retain reservations.

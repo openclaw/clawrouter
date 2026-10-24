@@ -64,7 +64,9 @@ After terminal publication, the next same-lane create can begin admission while
 the prior turn settles. Sending and the final soft-budget preflight wait for
 that settlement and recheck cancellation. A cap observed by the previous turn
 therefore denies the next send; an unsent denial settles once without closing
-the socket. Settling operations still count toward the active limit.
+the socket. The per-lane settlement wait runs outside shared admission and
+connection establishment, so other lanes can admit and send while it is held.
+Settling operations still count toward the active limit.
 
 The SQLite-backed Node admission fixture releases each storage round only once
 exactly its expected hops are waiting, so concurrency is proven causally rather

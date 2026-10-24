@@ -54,6 +54,7 @@ interface Operation {
   responseId?: string;
   executionStarted: boolean;
   publication: Promise<void>;
+  previousSettlement?: Promise<void>;
   sent: boolean;
   ending?: Ending;
   settling?: Promise<void>;
@@ -142,10 +143,13 @@ export class ResponsesWebSocketSession {
       if (this.active.size + this.settling.size >= this.limits.active) break;
       if (this.active.has(lane) || !queue.length) continue;
       const queued = queue.shift()!;
-      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, publication: Promise.resolve() };
+      // Unsent denials settle too, but must never become upstream frame owners.
+      let previousSettlement: Promise<void> | undefined;
+      for (const previous of this.settling) if (previous.lane === lane) previousSettlement = previous.settling;
+      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, publication: Promise.resolve(), previousSettlement };
       this.active.set(lane, op);
       // Serialize admission so large parsed bodies and the first route selection
-      // have one owner. Already-dispatched responses still run concurrently.
+      // and connection establishment have one owner. Lane sends run separately.
       this.admissions = this.admissions.then(() => this.dispatch(op)).catch(() => this.close("router_error"));
       this.options.waitUntil(this.admissions);
     }
@@ -184,29 +188,43 @@ export class ResponsesWebSocketSession {
       });
       const socket = await this.connecting;
       establishing = false;
+      this.options.waitUntil(this.sendOperation(op, socket).catch(() => this.close("router_error")));
+    } catch (error) {
+      await this.dispatchFailure(op, error, establishing);
+    } finally {
+      if (!op.admitted) { this.releaseFrame(op); this.active.delete(op.lane); this.schedule(); }
+    }
+  }
+
+  private async sendOperation(op: Operation, socket: ResponsesSocket): Promise<void> {
+    try {
       // Admission may overlap the prior turn's accounting, dispatch may not.
-      await this.dispatched.get(op.lane)?.settling;
+      // Keep this lane's wait outside the shared admission/connection chain.
+      await op.previousSettlement;
       if (this.ending || op.ending) { await this.finish(op, this.ending ?? "router_error", null); return; }
-      op.admitted.beforeSend?.();
-      socket.send(op.admitted.payload);
+      op.admitted!.beforeSend?.();
+      socket.send(op.admitted!.payload);
       op.sent = true;
       this.dispatched.set(op.lane, op);
       // Settlement captures only immutable accounting facts, never a request body.
-      op.admitted.payload = "";
+      op.admitted!.payload = "";
     } catch (error) {
-      const failure = error as { status?: number; code?: string; message?: string };
-      const notice = { code: failure.code ?? "provider_unavailable", message: failure.code ? failure.message ?? "Request could not be dispatched." : "Responses upstream could not accept this request; open a new connection.", status: failure.status ?? 502, lane: op.lane };
-      // Claim the operation before error delivery can synchronously close the
-      // client. A cancellation already owned by the session wins this race.
-      const finished = this.finish(op, failure.code ? "error" : "upstream_disconnect", failure.code ? this.errorFrame(notice) : null);
-      if (failure.code === "accounting_unavailable") this.close("router_error", 1000, notice);
-      else if (establishing || !failure.code) this.close("upstream_disconnect", 1000, notice);
-      else this.error(notice.code, notice.message, notice.status, notice.lane);
-      await finished;
+      await this.dispatchFailure(op, error);
     } finally {
       this.releaseFrame(op);
-      if (!op.admitted) { this.active.delete(op.lane); this.schedule(); }
     }
+  }
+
+  private async dispatchFailure(op: Operation, error: unknown, establishing = false): Promise<void> {
+    const failure = error as { status?: number; code?: string; message?: string };
+    const notice = { code: failure.code ?? "provider_unavailable", message: failure.code ? failure.message ?? "Request could not be dispatched." : "Responses upstream could not accept this request; open a new connection.", status: failure.status ?? 502, lane: op.lane };
+    // Claim the operation before error delivery can synchronously close the
+    // client. A cancellation already owned by the session wins this race.
+    const finished = this.finish(op, failure.code ? "error" : "upstream_disconnect", failure.code ? this.errorFrame(notice) : null);
+    if (failure.code === "accounting_unavailable") this.close("router_error", 1000, notice);
+    else if (establishing || !failure.code) this.close("upstream_disconnect", 1000, notice);
+    else this.error(notice.code, notice.message, notice.status, notice.lane);
+    await finished;
   }
 
   private upstreamMessage(data: unknown): void {

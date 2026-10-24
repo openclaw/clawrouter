@@ -457,7 +457,8 @@ does not create a synthetic metadata event. Metadata may precede
 Pending publication preserves frame order. After a terminal outcome is claimed
 and its frame is forwarded, the next same-lane create may begin admission while
 settlement finishes; dispatch and the final soft-budget preflight wait for
-successful settlement. An accounting
+successful settlement on that lane, without blocking other lanes' admission or
+dispatch. An accounting
 failure still closes the connection with `accounting_unavailable` before new
 work is sent. Closing the connection suppresses late publication acknowledgments
 and queued output.
