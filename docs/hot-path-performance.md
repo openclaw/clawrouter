@@ -274,12 +274,36 @@ hours of per-version invocation analytics:
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
 
+### Verified in production (2026-10-24)
+
+`68377baf` (`50717c7`, #326-#332) rolled out through the full canary train on
+the first attempt after the read-lag fix. Measured from SJC with a member key:
+
+| Path (warm) | `2473bdd3` (#326 only) | `68377baf` |
+| --- | ---: | ---: |
+| `/v1/models` | ~212 ms | 19.6 ms |
+| `/v1/catalog` | ~215 ms | 28.8 ms |
+| Count request, total minus upstream | ~33 ms | ~32 ms |
+| `/v1/health` network floor | 28 ms | 25 ms |
+
+38 of 40 count requests were hot-cache hits with 0.0 ms admission. A two-minute
+tail of real traffic on `68377baf` showed no exceptions or warning/error logs,
+and `pnpm cf:health-report` showed about 0.1% failures per hour on the new
+versions.
+
 ### Cold-miss overlap (2026-10-24)
 
-Spaced production requests (70 s apart, past the 60 s max age) measured what a
-cold isolate pays: `cr-admission` 76-167 ms, plus 128-263 ms outside admission
-and upstream against 33-60 ms on the warm request that followed. The difference
-is the credential owner round trip, which ran only after admission returned.
+Correction after deploying `68377baf`: the first measurement below
+misattributed client connection setup to the credential owner. Spaced requests
+(70 s apart, past the 60 s max age) showed `cr-admission` 76-167 ms plus
+128-263 ms outside admission and upstream, against 33-60 ms on the next warm
+request. Repeating them with a `/v1/health` call immediately before each cold
+request (which itself took 83-411 ms to re-establish the client's TLS
+connection) left cold and warm requests with the same remaining time (47-142 ms
+vs 31-214 ms). For that key, whose OpenAI pool has no credential-owner grant and
+reports no `cr-credential`, a cold miss costs only the admission round trip,
+78-102 ms. Pools with owner-held grants also pay the owner round trip on a cold
+isolate, which the change below overlaps with admission.
 
 On a foreground admission miss the isolate now starts materializing the grant it
 last selected for the same key, provider, endpoint, mode and model, keyed by that
