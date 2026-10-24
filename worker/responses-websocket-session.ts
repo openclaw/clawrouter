@@ -1,4 +1,5 @@
 import { responseEventIdentities, type ResponseIdentity } from "./response-identities.ts";
+import { WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
 
 type Frame = Record<string, unknown>;
 export type ResponsesCloseCause = "client_disconnect" | "upstream_disconnect" | "client_protocol_error" | "upstream_protocol_error" | "router_limit" | "router_error" | "timeout";
@@ -32,7 +33,7 @@ export interface AdmittedResponse {
 }
 
 interface SessionOptions {
-  admit(body: Frame, lane: string | null, requestId: string, pin: string | null, signal: AbortSignal): Promise<AdmittedResponse>;
+  admit(body: Frame, lane: string | null, requestId: string, pin: string | null, signal: AbortSignal, witnesses: WebSocketContinuationWitnesses): Promise<AdmittedResponse>;
   waitUntil(promise: Promise<unknown>): void;
   limits?: Partial<typeof DEFAULT_LIMITS>;
 }
@@ -75,6 +76,7 @@ export class ResponsesWebSocketSession {
   private bufferedCount = 0;
   private outputBytes = 0;
   private pin: string | null = null;
+  private witnesses = new WebSocketContinuationWitnesses();
   private upstream: ResponsesSocket | null = null;
   private connecting: Promise<ResponsesSocket> | null = null;
   private admissions: Promise<void> = Promise.resolve();
@@ -167,7 +169,7 @@ export class ResponsesWebSocketSession {
       // The upstream WebSocket contract owns streaming and cannot run background jobs.
       delete body.stream;
       delete body.background;
-      op.admitted = await this.options.admit(body, op.lane || null, op.requestId, this.pin, op.controller.signal);
+      op.admitted = await this.options.admit(body, op.lane || null, op.requestId, this.pin, op.controller.signal, this.witnesses);
       if (this.ending || op.ending) { await this.finish(op, this.ending ?? "router_error", null); return; }
       if (this.pin !== null && this.pin !== op.admitted.pin) {
         this.close("router_error", 1000, { code: "provider_unavailable", message: "Responses upstream could not accept this request; open a new connection.", status: 502, lane: op.lane });
@@ -370,6 +372,7 @@ export class ResponsesWebSocketSession {
   close(cause: ResponsesCloseCause = "router_error", code = 1000, notice?: ErrorNotice | string): void {
     if (this.ending) return;
     this.ending = cause;
+    this.witnesses.close();
     clearTimeout(this.connectionTimer);
     for (const queue of this.lanes.values()) {
       for (const item of queue) { this.bufferedBytes -= item.bytes; this.bufferedCount--; }

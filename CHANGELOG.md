@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reuse committed same-socket continuation ownership and pricing witnesses to remove the warm chained WebSocket authority round trip, with bounded witnesses and authoritative fallback.
 - Forward non-terminal WebSocket frames while continuation bindings commit; hold terminal delivery and same-lane dispatch until publication finishes.
 
 - Add `pnpm cf:health-report` for hourly Worker outcomes per deployed version (client disconnects, exceptions, CPU/memory limits, load shedding), marking version changes and flagging disconnect or failure spikes.

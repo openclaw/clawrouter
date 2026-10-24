@@ -457,6 +457,14 @@ Codex can then
 reconnect with `client_metadata["x-codex-turn-state"]` or fall back to HTTP with
 the same turn state and account. Conflicting header and metadata tokens are
 rejected; every supplied continuation identity must name the same owner.
+Each socket retains at most 32 recently committed identities with their owner
+and final pricing evidence. A fresh create can use these witnesses only when
+every supplied identity matches its authorization scope, policy generation,
+provider/endpoint and the socket's grant key/revision. Witnesses are recorded
+after successful binding and pricing evidence commits and cleared on close.
+Unknown, pending, failed or evicted identities, reconnects, HTTP requests, and
+changed scope/generation/grant pins use the authoritative continuation lookup.
+Header/metadata conflicts are still rejected before any lookup.
 A continuation naming a different grant from the connection's pin returns
 `409 continuation_restart_required` before dispatch; restart with full input on
 a new connection. The rejected create is not billed and does not close the socket.

@@ -118,8 +118,8 @@ for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"
     assert.equal(first.response.id, "ws_1");
     const expected = [
       ...(cache === "off" ? [["admission"]] : []),
-      ["continuation", ...(cache === "off" ? ["materialize"] : [])],
-      ...(budgetMode === "reserve" && budgets ? [Array(budgets).fill("reserve")] : []),
+      ...(cache === "off" ? [["materialize"]] : []),
+      ...(budgetMode === "reserve" && budgets ? [Array(budgets).fill("reserve-dispatched")] : []),
     ];
     const rounds = [], waiting = [];
     let measuring = true, problem = null, watchdog;
@@ -162,7 +162,10 @@ for (const cache of ["warm", "off"]) for (const budgetMode of ["reserve", "soft"
         const stub = get(name);
         return { ...stub, fetch: async (url, init) => {
           const path = new URL(url).pathname;
-          if (path === `/${operation}` || path === "/dispatch") await hop(path.slice(1));
+          if (path === "/reserve") {
+            assert.equal(JSON.parse(init.body).dispatched, true);
+            await hop("reserve-dispatched");
+          } else if (path === `/${operation}` || path === "/dispatch") await hop(path.slice(1));
           return stub.fetch(url, init);
         } };
       };

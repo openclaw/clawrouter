@@ -8,6 +8,7 @@ import { createResponsesToolEvidence, retainedToolBase, type ToolKnowledge } fro
 import { responseOutcome } from "./token-usage.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
+import type { WebSocketContinuationPin, WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
 
 export function continuationRestart(): HttpError {
   return new HttpError(409, "continuation_restart_required", "continuation owner is unavailable or changed; restart with full input and omit previous_response_id and x-codex-turn-state");
@@ -28,6 +29,7 @@ export class HttpContinuation {
   private readonly tools: ReturnType<typeof createResponsesToolEvidence>;
   private claim: "owned" | "legacy_unknown" | undefined;
   private qualificationAttempted = false;
+  private finalEvidence?: PricingEvidence;
   private witnesses?: CompactionWitnessProducer;
   private backgroundJobId?: string;
 
@@ -44,7 +46,7 @@ export class HttpContinuation {
       ? { key: owner.grantKey, lineage: owner.lineage } : { key: null, revision: null };
   }
 
-  static async resolve(request: Request, selection: ProxySelection, auth: AuthorizedIdentity, env: Env, transport: "http" | "websocket" = "http"): Promise<HttpContinuation | undefined> {
+  static async resolve(request: Request, selection: ProxySelection, auth: AuthorizedIdentity, env: Env, transport: "http" | "websocket" = "http", socket?: { witnesses: WebSocketContinuationWitnesses; pin?: WebSocketContinuationPin }): Promise<HttpContinuation | undefined> {
     if (!["llm.responses", "llm.responses.compact"].includes(selection.capability) || Array.isArray(selection.body)) return undefined;
     const metadata = transport === "websocket" ? selection.body.client_metadata : null;
     const headerTurn = responseIdentity("turn", request.headers.get("x-codex-turn-state"));
@@ -57,10 +59,10 @@ export class HttpContinuation {
     let owner: ContinuationOwner | null = null;
     let inherited: ToolKnowledge = identities.some(identity => identity.kind === "response") ? "unknown" : "token_only";
     if (identities.length) {
-      const keys = await Promise.all(identities.map(identityKey));
-      const { owners, evidence } = await call<{ owners: Array<ContinuationOwner | null>; evidence?: Array<PricingEvidence | null> }>(env, scope, { action: "resolve", keys });
-      owner = owners[0] ?? null;
       const endpointId = selection.capability === "llm.responses.compact" ? selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint : selection.endpoint.id;
+      const witnessed = transport === "websocket" && endpointId ? socket?.witnesses.resolve(identities, scope, auth.policy.generation, selection.provider.id, endpointId, socket.pin) : undefined;
+      const { owners, evidence } = witnessed ?? await call<{ owners: Array<ContinuationOwner | null>; evidence?: Array<PricingEvidence | null> }>(env, scope, { action: "resolve", keys: await Promise.all(identities.map(identityKey)) });
+      owner = owners[0] ?? null;
       if (!owner || owners.some(value => !value || JSON.stringify(value) !== JSON.stringify(owner)) || owner.providerId !== selection.provider.id || owner.endpointId !== endpointId || owner.policyGeneration !== auth.policy.generation) throw continuationRestart();
       const previous = evidence?.[identities.findIndex(identity => identity.kind === "response")];
       if (previous?.state === "final") inherited = previous.knowledge;
@@ -103,6 +105,11 @@ export class HttpContinuation {
     if (responseOutcome(frame) === "provider_error") this.tools.invalid();
     this.tools.accept(frame, true);
     await this.qualify();
+  }
+
+  rememberWebSocket(witnesses: WebSocketContinuationWitnesses, pin: WebSocketContinuationPin): void {
+    if (!this.owner || !this.finalEvidence || this.signal.aborted) return;
+    witnesses.remember(this.scope, this.owner, pin, [...this.evidence].map(([kind, value]) => ({ kind, value })), this.finalEvidence);
   }
 
   inspect(response: Response, compact = false) {
@@ -153,6 +160,7 @@ export class HttpContinuation {
     }
     // Semantic CAS conflicts must not fall into the transient RPC catch above.
     if (result.outcome !== "qualified" && result.outcome !== "unavailable") throw unavailable();
+    if (result.outcome === "qualified") this.finalEvidence = { version: 1, producerId: this.producerId, state: "final", knowledge: proof.knowledge };
   }
 }
 
