@@ -77,17 +77,38 @@ for (const cache of ["warm", "off"]) for (const budgets of [0, 1, 2, 4]) {
     const first = await f.create();
     assert.equal(first.type, "response.completed", JSON.stringify(first));
     assert.equal(first.response.id, "ws_1");
+    const expected = [
+      ...(cache === "off" ? [["admission"]] : []),
+      ["continuation", "kv"],
+      [...Array(budgets).fill("reserve"), "select"],
+      ...(cache === "off" ? [["materialize"]] : []),
+      ...(budgets ? [Array(budgets).fill("dispatch")] : []),
+    ];
     const rounds = [], waiting = [];
-    let timer, measuring = true;
+    let measuring = true, problem = null, watchdog;
+    const flush = () => {
+      clearTimeout(watchdog);
+      const batch = waiting.splice(0);
+      rounds.push(batch.map(item => item.label).sort());
+      for (const item of batch) item.resolve();
+    };
+    // Causal, not wall-clock: a round is released only once exactly its expected
+    // hops are all waiting, so concurrency is proven independent of host speed.
+    // A serialized hop never completes its round; an unexpected one fails fast.
     const hop = label => {
       if (!measuring) return;
       return new Promise(resolve => {
         waiting.push({ label, resolve });
-        timer ??= setTimeout(() => {
-          const batch = waiting.splice(0); timer = undefined;
-          rounds.push(batch.map(item => item.label).sort());
-          for (const item of batch) item.resolve();
-        }, 20);
+        if (problem) return flush();
+        const want = expected[rounds.length] ?? [], labels = waiting.map(item => item.label).sort();
+        const left = [...want];
+        if (!labels.every(item => { const at = left.indexOf(item); return at >= 0 && left.splice(at, 1); })) {
+          problem = `round ${rounds.length + 1}: waiting [${labels}], expected [${want}]`;
+          return flush();
+        }
+        clearTimeout(watchdog);
+        if (!left.length) return flush();
+        watchdog = setTimeout(() => { problem = `round ${rounds.length + 1} stalled: waiting [${labels}], expected [${want}]`; flush(); }, 2_000);
       });
     };
     f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
@@ -109,19 +130,12 @@ for (const cache of ["warm", "off"]) for (const budgets of [0, 1, 2, 4]) {
         } };
       };
     }
-    let elapsed;
-    const started = performance.now();
-    f.onSend = () => { elapsed = performance.now() - started; measuring = false; };
+    f.onSend = () => { measuring = false; };
     assert.equal((await f.create({ previous_response_id: "ws_1" })).response.id, "ws_2");
-    const expected = [
-      ...(cache === "off" ? [["admission"]] : []),
-      ["continuation", "kv"],
-      [...Array(budgets).fill("reserve"), "select"],
-      ...(cache === "off" ? [["materialize"]] : []),
-      ...(budgets ? [Array(budgets).fill("dispatch")] : []),
-    ];
+    clearTimeout(watchdog);
+    assert.equal(problem, null);
     assert.deepEqual(rounds, expected);
-    t.diagnostic(`cache ${cache}, ${budgets} budget legs: ${rounds.length} sequential storage rounds; ${Math.round(elapsed)} ms with 20 ms per round`);
+    t.diagnostic(`cache ${cache}, ${budgets} budget legs: ${rounds.length} sequential storage rounds`);
   });
 }
 

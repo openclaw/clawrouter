@@ -56,7 +56,9 @@ exclude the connection handshake, earlier-turn settlement, and continuation
 publication holding `response.created`. Credential preparation, every budget
 check, required retention and dispatch still finish before the frame is sent.
 
-The SQLite-backed Node admission fixture injects 20 ms per storage round and
+The SQLite-backed Node admission fixture releases each storage round only once
+exactly its expected hops are waiting, so concurrency is proven causally rather
+than by wall-clock timing; a serialized or unexpected hop fails the test. It
 asserts each batch for all eight cells, freezing the cache clock after warm-up
 so host scheduling cannot expire entries. It also proves that
 `assertProviderAccess` and pinned preparation return the same admitted connection
