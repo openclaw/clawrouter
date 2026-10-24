@@ -82,20 +82,25 @@ export function planBudgetReservation(auth: AuthorizedIdentity, capability: stri
 export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void): Promise<BudgetReservation> {
   const plan = planBudgetReservation(auth, capability, cost, connection);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
-  for (const leg of plan.legs) {
+  const results = await Promise.allSettled(plan.legs.map(async leg => {
     // A caller owning cancellation can retain the exact attempted ID before
     // I/O; a committed reservation can lose its acknowledgement.
     observe?.(leg, "attempted");
     try {
-      reservation.reservations.push(await reserveLedgerIntent(env, leg));
+      return await reserveLedgerIntent(env, leg);
     } catch (error) {
       if (error instanceof HttpError && error.status === 402) observe?.(leg, "denied");
-      if (reservation.reservations.length) {
-        try { await settleBudget(env, reservation, 0); }
-        catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
-      }
       throw error;
     }
+  }));
+  for (const result of results) if (result.status === "fulfilled") reservation.reservations.push(result.value);
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) {
+    if (reservation.reservations.length) {
+      try { await settleBudget(env, reservation, 0); }
+      catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
+    }
+    throw failed.reason;
   }
   return reservation;
 }

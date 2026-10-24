@@ -447,9 +447,12 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
     // The release's secretless KV metadata is imported once into the owner record.
     assert.deepEqual([record.metadata.provider, record.metadata.kind, record.metadata.accountId, record.metadata.hasAccessToken, record.metadata.accessToken], ["openai", "subscription", grantsBefore[key].accountId, true, undefined], key);
   }
-  const ledgerAfter = await until(budget, value => settled(value["tenant:fixture"], 3) && settled(value["provider:openai"], 5));
+  const ledgerAfter = await until(budget, value => settled(value["tenant:fixture"], 3) && settled(value["provider:openai"], 6));
   for (const name of legs) for (const row of openedLedgers[name].budget_reservations) assert.ok(ledgerAfter[name].budget_reservations.includes(row), `${name} release reservation preserved`);
   assert.equal(ledgerAfter["tenant:fixture"].budget_reservations.reduce((sum, row) => sum + JSON.parse(row).reserved_micros, 0), 300);
+  const providerRows = ledgerAfter["provider:openai"].budget_reservations.map(row => JSON.parse(row));
+  assert.equal(providerRows.reduce((sum, row) => sum + row.reserved_micros, 0), 500);
+  assert.equal(providerRows.filter(row => row.reserved_micros === 0 && row.dispatch_started === 0).length, 1, "parallel provider reservation rolls back on policy denial");
   const usageAfter = await until(usageLedgers, value => value[shards[0]].usage_events.length === 4 && value[shards[1]].usage_events.length === 3);
   const appended = { [shards[0]]: [["denied", 402, "subscription"], ["success", 200, "subscription"]], [shards[1]]: [["client_error", 409, null], ["success", 200, "subscription"]] };
   for (const name of shards) {

@@ -1,5 +1,57 @@
 # Hot-path review and local load evidence
 
+## WebSocket create follow-up (2026-10-23)
+
+Live production baseline: 15 chained `previous_response_id` turns on one
+Responses WebSocket, using the same model on both sides. Direct OpenAI median
+`response.created` was about **120 ms**, versus **810 ms** through ClawRouter;
+TTFT was about **995 ms**, versus **1,550 ms**. The router added roughly
+550–700 ms per turn. A warm edge-to-global-authority round trip measured about
+72 ms (`cr-admission;dur=72`); HTTP router overhead was about 130–200 ms.
+
+Budget reservation now starts every configured monthly, daily, weekly and
+provider leg concurrently, including on HTTP hard-budget paths. Attempted IDs
+are observed before each leg's I/O. All results finish before rollback; every
+successful leg is released on failure, and the first failure in plan order wins.
+Failed rollback still returns `accounting_unavailable`.
+
+On pinned WebSocket creates, continuation resolution overlaps grant selection
+and credential-owner materialization. Once continuation tool evidence resolves,
+budget reservation also overlaps the remaining preparation. Its provider
+connection comes from the current admission result through the existing
+`assertProviderAccess` check, with no extra RPC. First creates retain sequential
+continuation/preparation/reservation ordering: unpinned selection can refresh
+the authorization snapshot. No authorization or credential state is cached
+between creates.
+
+For a warm pinned, chained create with a stored grant, no refresh, and retention
+disabled, these are **sequential storage round trips before upstream send**:
+
+| Budget legs | Before | After |
+| --- | ---: | ---: |
+| None | 5 | 4 |
+| One | 7 | 5 |
+| Policy monthly + provider | 8 | 5 |
+| Policy monthly + daily + weekly + provider | 10 | 5 |
+
+Previously: admission → continuation → KV → select → credential owner → each
+reserve → parallel dispatch. Now: admission → concurrent branches
+`KV → select → credential owner` and `continuation → parallel reserve` → parallel
+dispatch. RPC totals remain unchanged; independent round trips overlap. Retention,
+when required, still completes after reservation and before dispatch. These counts
+exclude the connection handshake, earlier-turn settlement, and continuation
+publication holding `response.created`; all three retain their existing behavior.
+Materialization, every budget check, retention and dispatch must finish before send.
+
+The SQLite-backed Node admission fixture injects 20 ms per storage round and
+asserts the five batches, including all four reserves in one batch. A separate
+40 ms-per-reserve test observes four simultaneous legs completing in roughly one
+delay. These are scheduling proofs, not a new production latency measurement.
+A continuation belonging to another grant now returns the actionable
+`409 continuation_restart_required` before dispatch, instead of reaching the
+session's generic `502 provider_unavailable` pin-change close. The fixture also
+proves unsent reservations are released after mismatch or materialization failure.
+
 ## Soft-budget instrumentation (2026-10-18)
 
 Ordinary proxied HTTP inference exposes three `Server-Timing` durations in
@@ -421,7 +473,7 @@ module-level projections; filtering, offers and affordability remain per request
 | Models/catalog with N eligible providers, service key | 3 + N | 1 |
 | Key inspect, me, usage authentication | 2 (+1 owner) | 1 |
 | Pool status authentication | 2 (+1 owner) | 1 |
-| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | 2 |
+| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | 2; unchanged RPC count, [independent storage waits now overlap](#websocket-create-follow-up-2026-10-23) |
 | Alternate attempt after provider rejection | 2 (resolve + select) | 2 |
 
 Pool status still scans the caller's scopes and reads statistics/runtime and
@@ -587,7 +639,8 @@ writers. A TTL or matching generation alone does not solve this boundary.
 | Legacy/unimportable projection | 2 authority + 1 Worker KV + 1 owner | Same fallback; first read may attempt bounded import |
 | Alternate after 401/403/429, projections ready | 2 authority + 1 KV + 1 owner | 1 fresh authority + 1 owner |
 | Environment fallback, projections ready | admission, optional select, KV | 1 authority; no credential owner |
-| Discovery, Access policy selection, pinned continuations, Fusion preflight, WebSocket creates | Existing paths | Existing paths |
+| Discovery, Access policy selection, HTTP pinned continuations, Fusion preflight | Existing paths | Existing paths |
+| Pinned WebSocket create | 2 authority + 1 KV + 1 credential owner, serial continuation/reserves | Same calls; continuation and reserves overlap preparation ([round-trip counts](#websocket-create-follow-up-2026-10-23)) |
 
 The full target of one authority call **plus upstream only is not claimed**.
 No authorization, policy, pool, runtime, selection or credential secret is cached

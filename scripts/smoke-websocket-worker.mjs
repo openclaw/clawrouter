@@ -533,7 +533,10 @@ try {
       assert.equal((await stateFrames()).length - before, phase !== "terminal" ? 0 : recovered ? 2 : 1);
       if (phase === "rollback") {
         const trace = await (await dispatch("/fixture-accounting")).json();
-        assert.deepEqual(trace.slice(0, 4).map(({ kind }) => kind), ["policy_reserved", "provider_denied", "rollback_attempted", "rollback_queued"]);
+        // Legs reserve concurrently; rollback must still follow both outcomes.
+        const kinds = trace.slice(0, 4).map(({ kind }) => kind);
+        assert.deepEqual(kinds.slice(0, 2).sort(), ["policy_reserved", "provider_denied"]);
+        assert.deepEqual(kinds.slice(2), ["rollback_attempted", "rollback_queued"]);
       }
       current.close(1000, "accounting fixture complete");
     }

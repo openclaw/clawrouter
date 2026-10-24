@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reduce Responses WebSocket turn latency by overlapping pinned continuation and grant preparation with budget reservation; reserve hard-budget legs concurrently with ordered errors and full rollback, and return a continuation restart error for cross-grant turns.
 - Report caller-owned request, token, and spend totals as `usage.personal` on personal usage reads and a per-principal breakdown as `usage.principals` on admin usage, alongside the unchanged shared policy totals. Show both in the console.
 
 ## 0.5.0 - 2026-10-22
