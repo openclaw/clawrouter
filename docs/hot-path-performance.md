@@ -193,6 +193,23 @@ issues zero authority, credential-owner and KV calls before upstream, and local
 selection matches the authority across all strategies and stickiness modes.
 Raw reports: [hot-cache-local.json](performance/hot-cache-local.json).
 
+### Production measurement (2026-10-24)
+
+Live `clawrouter.openclaw.ai` on `165a53c` (hot cache deployed), from SJC, 40
+sequential zero-cost `POST /v1/responses/input_tokens` requests per run with a
+member key, three runs. Durations are the Worker's own `Server-Timing` values.
+
+| Request | Count | `cr-admission` | Client total minus `cr-upstream-ttfb` |
+| --- | ---: | ---: | ---: |
+| Cache miss (per-request authority path) | 1 per run | 73 ms | ~485 ms (includes cold credential materialization) |
+| Cache hit | 38 per run | 0.0 ms | 40-55 ms p50 |
+| `/v1/health` (no backend work, network floor) | 20 | — | 30.5 ms p50 total |
+
+Warm admission reports 0.0 ms because Workers timers advance only across I/O: a
+hit performs no backend round trip. Upstream OpenAI time to headers was ~190 ms;
+the remaining ~10-25 ms above the network floor is request/response transfer and
+Worker CPU.
+
 ### Stress and hardening (2026-10-23)
 
 Concurrency sweep on the same fixture (400 requests per cell, 20 ms synthetic
@@ -233,8 +250,11 @@ requests. Findings and changes:
   the policy at the authority mid-load and requires every request to be denied
   after the max age. With a 4 s max age, successes stopped 2.94-2.96 s after
   revocation across three runs, with no 5xx.
-- Pools whose grants still carry legacy (KV-only) projections keep the
-  authority selection path on every request until owner publication repairs them.
+- Pools whose grants still carry legacy (KV-only) projections take the
+  authority read-and-select path. The first such request now asks the grant's
+  credential owner to republish its routing projection (`/reconcile`, at most
+  once per grant per 10 minutes per isolate, only with the hot cache enabled), so
+  the pool joins the local hot path on a later admission.
 
 Interleaved A/B against the landed hot path (three alternating rounds per side,
 concurrency 50, 400 requests per cell, medians; all cells reconciled with zero

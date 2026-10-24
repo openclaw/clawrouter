@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `pnpm cf:budget-mode` to preview and switch existing policies between soft and reserve budgets, writing back every other field unchanged. Repair legacy routing projections automatically: a proxy-key request that falls back to the legacy read-and-select path asks the grant's owner to republish its projection (at most once per grant per 10 minutes per isolate) so later requests use the local hot path.
 - Coalesce per-grant quota feedback with selection counters into one background flush per 250 ms window, cutting global-authority writes under load from one per request to a few per grant (written per response when the hot cache is disabled). Reuse a proxy key's catalog and model-list inventory within the hot-cache bounds, and bound background work so a hung backend call cannot keep extending later requests.
 - Authenticate each Responses WebSocket create before reporting model or route selection errors, preserving credential revocation and expiry errors without extra successful-admission round trips.
 - Keep Responses WebSocket settlement waits local to their lane so other lanes can admit and send while a prior turn settles.

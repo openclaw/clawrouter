@@ -14,6 +14,18 @@ Stored policies keep their mode, and a stored policy without one keeps
 conservative settlement. Set `"reserve"` explicitly for hard caps; the remaining
 reservation sections describe it.
 
+To move existing policies to soft budgets, preview and then apply:
+
+```sh
+pnpm cf:budget-mode -- --all            # plan: policies not yet soft, with their limits
+pnpm cf:budget-mode -- --policy team_server --policy member_weekly --apply
+```
+
+`--mode reserve` switches back. The command needs `CLAWROUTER_BASE_URL` and
+`CLAWROUTER_ADMIN_TOKEN` (plus `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`
+behind Access), reads each policy and writes it back unchanged except for
+`budgetMode`. Keep reserve for keys whose cap must never be exceeded.
+
 Soft mode forwards ordinary HTTP inference immediately after authentication and
 selection (both normally served from the isolate hot cache, see
 [hot-path performance](hot-path-performance.md#zero-hop-warm-path-2026-10-23)). Revocation, expiry, model allowlists and service-tier controls
