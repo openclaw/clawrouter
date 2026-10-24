@@ -1,4 +1,4 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs"; perRequestAuthority();
 import assert from "node:assert/strict";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
@@ -7,7 +7,8 @@ const { default: handler } = await import("../index.ts");
 const { providerBudgetStatus, queue } = await import("../ledgers.ts");
 
 for (const failure of ["retention", "provider"]) {
-  test(`${failure} failure accounts the fixed tariff only after dispatch and preserves request attribution`, async (t) => {
+  test(`${failure} failure accounts the fixed tariff after dispatch and preserves request attribution`, async (t) => {
+    const logged = t.mock.method(console, "error", () => {}); // retention is best-effort after dispatch
     const env = usageEnv([], { provider: "local-openai", retainContent: failure === "retention" });
     env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
@@ -20,17 +21,17 @@ for (const failure of ["retention", "provider"]) {
       headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json", "x-request-id": "synthetic-request", "x-clawrouter-session-id": "synthetic-session" },
       body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "synthetic input" }] }),
     }), env, { waitUntil: promise => pending.push(promise) });
-    assert.equal(response.status, failure === "retention" ? 503 : 502);
+    assert.equal(response.status, 502);
     await Promise.all(pending);
-    assert.equal(upstream.mock.callCount(), failure === "retention" ? 0 : 1);
+    assert.equal(upstream.mock.callCount(), 1);
+    if (failure === "retention") assert.ok(events[0].content_ref && logged.mock.calls.some(call => call.arguments[0] === "request content retention failed"));
     assert.equal(events.length, 1);
     assert.equal(events[0].request_id, "synthetic-request");
     assert.equal(events[0].session_id, "synthetic-session");
     assert.equal(events[0].status, "provider_error");
     assert.equal(events[0].reserved_cost_micros, 1);
-    const charged = failure === "retention" ? 0 : 1;
-    assert.equal(events[0].actual_cost_micros, charged);
-    assert.equal(events[0].cost_basis, failure === "retention" ? "none" : "policy_fixed");
+    const charged = 1; assert.equal(events[0].actual_cost_micros, charged);
+    assert.equal(events[0].cost_basis, "policy_fixed");
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, charged);
     assert.equal((await providerBudgetStatus(env, "local-openai", 100)).spentMicros, charged);
@@ -469,10 +470,10 @@ test("dispatched pre-header HTTP and native failures retain estimates through in
   }
 });
 
-test("cancellation before fetch stays zero after preflight, retention, or dispatch confirmation", async (t) => {
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const phase of ["initial", "retention", "dispatch"]) for (const fixedCost of [null, 0, 7]) {
+test("cancellation before fetch stays zero after preflight or dispatch confirmation", async (t) => {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const phase of ["initial", "dispatch"]) for (const fixedCost of [null, 0, 7]) {
     const events = [], pending = [], abort = new AbortController();
-    const env = usageEnv([], { limit: 1_000_000, fixedCost, retainContent: phase === "retention" });
+    const env = usageEnv([], { limit: 1_000_000, fixedCost, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
     const ledger = sqlBudgetNamespace(t);
     env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: async (url, init) => {
@@ -480,7 +481,6 @@ test("cancellation before fetch stays zero after preflight, retention, or dispat
       if (phase === "dispatch" && name === "provider:openai" && new URL(url).pathname === "/dispatch") abort.abort();
       return response;
     } }) };
-    env.CONTENT_ARCHIVE = { put: async () => { abort.abort(); } };
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
       init.signal.throwIfAborted();
@@ -599,9 +599,9 @@ test("either enforced budget rejects unsupported tiers while fixed policy tariff
 
 for (const existingUnmetered of [false, true]) {
   test(`${existingUnmetered ? "existing stored" : "fresh"} unmetered policies explicitly allowing a future tier distinguish unavailable prices`, async (t) => {
-    for (const [servedTier, status, expected, basis] of [["future", 200, 0, "unpriced_usage"], [undefined, 200, 0, "unpriced_usage"], ["priority", 200, 1_080, "manifest_pricing"], ["default", 200, 540, "manifest_pricing"], ["future", 400, 0, "none"], ["transport_failure", 502, 0, "unpriced_usage"], ["timeout", 502, 0, "unpriced_usage"], ["retention_failure", 503, 0, "none"]]) {
+    for (const [servedTier, status, expected, basis] of [["future", 200, 0, "unpriced_usage"], [undefined, 200, 0, "unpriced_usage"], ["priority", 200, 1_080, "manifest_pricing"], ["default", 200, 540, "manifest_pricing"], ["future", 400, 0, "none"], ["transport_failure", 502, 0, "unpriced_usage"], ["timeout", 502, 0, "unpriced_usage"]]) {
       const events = [], pending = [], ledgerCalls = [];
-      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: servedTier === "retention_failure", existingUnmetered, serviceTiers: { allowed: ["default", "future"] } });
+      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: false, existingUnmetered, serviceTiers: { allowed: ["default", "future"] } });
       env.OPENAI_API_KEY = "fixture-openai-key";
       env.USAGE_QUEUE = { send: async event => events.push(event) };
       env.CONTENT_ARCHIVE = { put: async () => { throw new Error("synthetic retention failure"); } };
@@ -617,7 +617,7 @@ for (const existingUnmetered of [false, true]) {
       }), env, { waitUntil: promise => pending.push(promise) });
       assert.equal(response.status, status);
       await response.text(); await Promise.all(pending);
-      assert.equal(upstream.mock.callCount(), servedTier === "retention_failure" ? 0 : 1);
+      assert.equal(upstream.mock.callCount(), 1);
       assert.equal(events.length, 1);
       assert.equal(events[0].actual_cost_micros, expected);
       assert.equal(events[0].reserved_cost_micros, 0);

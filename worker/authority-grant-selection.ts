@@ -1,7 +1,9 @@
 import { credentialExpired } from "./credential-lifecycle.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
-import type { AccessControlUser, AccessPolicyEntry, Env, ProviderConnection, ProviderSnapshot, ProxyCredentialEntry, UpstreamGrant } from "./types";
-import type { AdmissionPool, AdmissionRequest, AdmissionResult } from "./authority-admission.ts";
+import type { AccessControlUser, AccessPolicyEntry, CompiledEndpoint, CompiledProvider, Env, GrantRuntimeState, ProviderConnection, ProviderSnapshot, ProxyCredentialEntry, UpstreamGrant } from "./types";
+import type { AdmissionPool, AdmissionPoolCandidate, AdmissionPoolSnapshot, AdmissionRequest, AdmissionResult, AdmissionSelection } from "./authority-admission.ts";
+import type { GrantSelectionResult } from "./grant-eligibility.ts";
+import type { GrantChoiceInput } from "./grant-selection-strategies.ts";
 import type { GrantAttachmentSnapshot } from "./authority.ts";
 import { routingProjection } from "./grant-projection.ts";
 import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantRoutingPolicy, grantWeight, poolRetryAt } from "./grant-eligibility.ts";
@@ -16,7 +18,8 @@ interface SelectionStore {
   resolveConnections(ids: string[]): { connections: ProviderConnection[] };
   resolveGrantPool(input: { providerId: string; policyId: string; tenantId: string; defaultKeys: string[] }): AdmissionPool;
   grantAttachment(key: string): GrantAttachmentSnapshot;
-  selectGrant(input: { poolKey: string; strategy: string; stickyHash: string | null; switchAtUsedPercent: number; hysteresisPercent: number; candidates: Array<{ key: string; weight: number; remainingRatio: number | null }> }): { selectedKey: string };
+  selectGrant(input: GrantChoiceInput & { poolKey: string }): { selectedKey: string };
+  selectionState(poolKey: string): { cursorKey: string | null; counts: Record<string, { count: number; lastMs: number }> };
 }
 function rows<T>(cursor: Iterable<T>): T[] { return Array.from(cursor); }
 
@@ -65,22 +68,42 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     const pool = store.resolveGrantPool(poolInput);
     fresh.pools = { ...fresh.pools, [provider.id]: pool };
     if (backfillFailed) return fresh;
-    const candidates = [];
+    const candidates: AdmissionPoolCandidate[] = [];
     for (const key of pool.keys) {
       const row = rows<{ projection_json: string | null; legacy: number }>(sql.exec("SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
       if (!row || row.legacy) return fresh;
-      const grant = row.projection_json ? JSON.parse(row.projection_json) as UpstreamGrant : null;
-      candidates.push({ key, grant, runtimeState: grant ? currentGrantRuntime(grant, pool.states[key]) : null });
+      candidates.push({ key, grant: row.projection_json ? JSON.parse(row.projection_json) as UpstreamGrant : null });
     }
-    const routing = grantRoutingPolicy(policy.policy.grantRouting), now = Date.now();
-    const requirement = { provider, endpoint, mode: request.mode, model: request.model };
-    const filtered = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, undefined, requirement, now);
-    const { available, hasConfiguredGrant } = filtered;
-    const active = activeOperationCandidates(available, env, requirement);
-    const stickyHash = routing.stickiness === "identity" ? identityHash : routing.stickiness === "session" ? request.sessionHash ?? fallbackSessionHash : null;
-    const choice = active.length ? store.selectGrant({ poolKey: `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(poolInput.tenantId)}`, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) })) }) : null;
-    const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
-    const retryAt = selected ? undefined : poolRetryAt(filtered, env, requirement);
-    return { ...fresh, selection: { selected: selected ? { ...selected, authorityRevision: store.grantAttachment(selected.key).revision } : null, hasConfiguredGrant, ...(retryAt ? { retryAt } : {}) } };
+    const poolKey = `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(poolInput.tenantId)}`;
+    const revision = (key: string) => store.grantAttachment(key).revision;
+    const snapshot = (): AdmissionPoolSnapshot => {
+      const state = store.selectionState(poolKey);
+      return { poolKey, candidates, revisions: Object.fromEntries(candidates.map(({ key }) => [key, revision(key)])), cursorKey: state.cursorKey, counts: state.counts, identityHash, fallbackSessionHash };
+    };
+    if (input.snapshot === "only") return { ...fresh, snapshots: { [provider.id]: snapshot() } };
+    const selection = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey, candidates, states: pool.states, identityHash, fallbackSessionHash }, choice => store.selectGrant(choice), revision);
+    return { ...fresh, selection, ...(input.snapshot === "select" ? { snapshots: { [provider.id]: snapshot() } } : {}) };
   });
+}
+
+// One owner of candidate filtering and strategy dispatch for both the
+// authority transaction and the Worker's isolate-local snapshot selection.
+export function selectAdmissionCandidate(
+  env: Env,
+  input: { provider: CompiledProvider; endpoint: CompiledEndpoint; request: AdmissionSelection; policy: AccessPolicyEntry; poolKey: string; candidates: readonly AdmissionPoolCandidate[]; states: Record<string, GrantRuntimeState>; identityHash: string; fallbackSessionHash: string },
+  choose: (choice: GrantChoiceInput & { poolKey: string }) => { selectedKey: string } | null,
+  revision: (key: string) => number | undefined,
+): GrantSelectionResult {
+  const { provider, endpoint, request, policy } = input;
+  const routing = grantRoutingPolicy(policy.policy.grantRouting), now = Date.now();
+  const requirement = { provider, endpoint, mode: request.mode, model: request.model };
+  const candidates = input.candidates.map(({ key, grant }) => ({ key, grant, runtimeState: grant ? currentGrantRuntime(grant, input.states[key]) : null }));
+  const filtered = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, undefined, requirement, now);
+  const { available, hasConfiguredGrant } = filtered;
+  const active = activeOperationCandidates(available, env, requirement);
+  const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
+  const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) })) }) : null;
+  const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
+  const retryAt = selected ? undefined : poolRetryAt(filtered, env, requirement);
+  return { selected: selected ? { ...selected, authorityRevision: revision(selected.key) } : null, hasConfiguredGrant, ...(retryAt ? { retryAt } : {}) };
 }

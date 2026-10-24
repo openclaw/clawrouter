@@ -8,7 +8,7 @@ import { proxyResponseHeaders } from "./proxy-response.ts";
 import { providerById } from "./providers.ts";
 import { prepareSelected, captureGrantRuntime } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { softBudget } from "./soft-budget.ts";
+import { softBudget, softBudgetPolicy } from "./soft-budget.ts";
 import { readBounded, readTranscriptionUpload, transcriptionLimits } from "./transcription-body.ts";
 import { transcriptionUsage } from "./transcription-usage.ts";
 import type { Env } from "./types.ts";
@@ -54,7 +54,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       operation.signal.throwIfAborted();
       const prepared = await operation.wait(prepareSelected(request, env, selection, {}, auth));
       accounting.setGrant(prepared.grantKey, prepared.grantLane);
-      const useSoft = auth.policy.budgetMode === "soft";
+      const useSoft = softBudgetPolicy(auth.policy);
       if (!useSoft) {
         const pending = reserveBudget(env, auth, selection.capability, accounting.cost, prepared.connection, (intent, state) => {
           if (state === "denied") {

@@ -1,4 +1,5 @@
-import "./typescript-setup.mjs";
+import { perRequestAuthority } from "./typescript-setup.mjs";
+perRequestAuthority();
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -11,7 +12,7 @@ const { default: handler } = await import("../index.ts");
 const { normalizePolicy } = await import("../admin.ts");
 const { modelRoute } = await import("../providers.ts");
 const minute = 60_000, day = 86_400_000;
-const policy = normalizePolicy({ providers: ["openai"], tenantId: "provider", monthlyBudgetMicros: 100 }, undefined, false);
+const policy = normalizePolicy({ providers: ["openai"], tenantId: "provider", monthlyBudgetMicros: 100, budgetMode: "reserve" }, undefined, false);
 const auth = { policyId: "openai", policy };
 const connection = { providerId: "openai", monthlyBudgetMicros: 100 };
 const cost = { reserveMicros: 60, basis: "manifest_pricing" };

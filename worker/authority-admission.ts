@@ -1,5 +1,5 @@
 import { credentialExpired } from "./credential-lifecycle.ts";
-import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry } from "./types";
+import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant } from "./types";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { normalizeEmail, safeEqual } from "./utils.ts";
 
@@ -9,8 +9,22 @@ export interface AdmissionSelection {
   model?: string | null; catalogModelId?: string | null; capability: string;
   sessionHash?: string; excludedKeys?: string[];
 }
-export interface AdmissionRequest { selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean }
+// "select" also returns the pool snapshot after selecting; "only" returns the
+// snapshot without selecting or touching counters (stale-cache refresh).
+export interface AdmissionRequest { selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
 export interface AdmissionPool { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; unavailable?: true }
+export interface AdmissionPoolCandidate { key: string; grant: UpstreamGrant | null }
+// Secretless routing state for isolate-local selection: projections, counters,
+// cursor and attachment revisions. Never contains credential material.
+export interface AdmissionPoolSnapshot {
+  poolKey: string;
+  candidates: AdmissionPoolCandidate[];
+  revisions: Record<string, number>;
+  cursorKey: string | null;
+  counts: Record<string, { count: number; lastMs: number }>;
+  identityHash: string;
+  fallbackSessionHash: string;
+}
 export interface AdmissionResult {
   selection?: GrantSelectionResult;
   credential: ProxyCredentialEntry | null;
@@ -21,6 +35,7 @@ export interface AdmissionResult {
   policyUnavailable?: true;
   ownerUnavailable?: true;
   connectionsUnavailable?: true;
+  snapshots?: Record<string, AdmissionPoolSnapshot>;
 }
 
 interface AdmissionStore {
