@@ -23,7 +23,8 @@ test("report queries the account and script window and never prints the token", 
   let request;
   const fetchImpl = async (url, init) => { request = { url, init, body: JSON.parse(init.body) }; return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: rows }] } } }); };
   const env = { CLOUDFLARE_ACCOUNT_ID: "91b59577e757131d68d55a471fe32aca", CLOUDFLARE_API_TOKEN: "synthetic-token" };
-  const summary = await healthReport(["--hours", "3"], { env, fetchImpl, log: line => logs.push(line), now: Date.parse("2026-10-24T06:00:00Z") });
+  // pnpm forwards the documented `pnpm cf:health-report -- --hours N` separator.
+  const summary = await healthReport(["--", "--hours", "3"], { env, fetchImpl, log: line => logs.push(line), now: Date.parse("2026-10-24T06:00:00Z") });
   assert.equal(summary.length, 3);
   assert.equal(request.init.headers.authorization, "Bearer synthetic-token");
   assert.deepEqual(request.body.variables, { account: env.CLOUDFLARE_ACCOUNT_ID, script: "clawrouter-edge", since: "2026-10-24T03:00:00.000Z", until: "2026-10-24T06:00:00.000Z" });

@@ -18,7 +18,7 @@ the plan. Every other policy field is written back unchanged.
   --apply       write the changes`;
 
 export function budgetModePlan(argv) {
-  const { values } = parseArgs({ args: argv, options: { policy: { type: "string", multiple: true }, all: { type: "boolean" }, mode: { type: "string", default: "soft" }, apply: { type: "boolean" }, help: { type: "boolean" } }, strict: true });
+  const { values } = parseArgs({ args: argv.filter(value => value !== "--"), options: { policy: { type: "string", multiple: true }, all: { type: "boolean" }, mode: { type: "string", default: "soft" }, apply: { type: "boolean" }, help: { type: "boolean" } }, strict: true });
   if (values.help) return { help: true };
   if (!["soft", "reserve"].includes(values.mode)) throw new Error("--mode must be soft or reserve");
   const policies = [...new Set(values.policy ?? [])];

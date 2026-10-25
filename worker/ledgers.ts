@@ -15,6 +15,7 @@ const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
 const usageWindowDays = 30;
 const usageRetentionMs = usageWindowDays * usageDayMs;
+const usageAttributionBatchSize = 2_000;
 
 export class BudgetLedgerObject implements DurableObject {
   private sql: SqlStorage;
@@ -164,14 +165,21 @@ export class UsageLedgerObject implements DurableObject {
     if (request.method === "GET" && url.pathname === "/snapshot") {
       const kind = url.searchParams.get("events"), id = url.searchParams.get("event_owner");
       if (kind !== "admin" && !(kind === "principal" && id !== null) && !(kind === "credential" && id)) return errorResponse("invalid_usage_scope", "an explicit usage event scope is required", 400);
-      return json(this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100)));
+      const pending = this.backfillAttribution();
+      const snapshot = this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100), pending);
+      if (pending) {
+        const next = Date.now() + 60_000, alarm = await this.state.storage.getAlarm();
+        if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
+      }
+      return json(snapshot);
     }
     return errorResponse("route_not_found", "route not found", 404);
   }
 
   async alarm(): Promise<void> {
     this.cleanup();
-    if (first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + 86_400_000);
+    const pending = this.backfillAttribution();
+    if (pending || first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + (pending ? 60_000 : 86_400_000));
   }
 
   private ingest(event: UsageEvent): UsageIngestReceipt {
@@ -183,9 +191,10 @@ export class UsageLedgerObject implements DurableObject {
     if (event.occurred_at_ms < cutoff) return { eventId: event.id, outcome: "expired_by_retention" };
     event.policy_id ||= event.key_id;
     const inserted = first<{ id: string }>(this.sql.exec(
-      "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, grant_key, grant_lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
+      "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, grant_key, grant_lane, principal_id, principal_key, credential_id, cost_basis, principal_nontext) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
       event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
       event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event), event.grant_key ?? null, event.grant_lane ?? null,
+      ...usageAttribution(event),
     ));
     if (inserted?.id !== event.id) throw new Error("usage ledger did not confirm insertion");
     return { eventId: event.id, outcome: "stored" };
@@ -222,39 +231,41 @@ export class UsageLedgerObject implements DurableObject {
   // Builds one shard's usage snapshot. Shared totals cover every event in the
   // requested policies; recent events and personal totals are limited to the
   // caller's own rows; the admin scope instead gets a per-principal breakdown.
-  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number): UsageSnapshot {
+  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number, pending: string | null): UsageSnapshot {
     this.cleanup();
     const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
     const range = { where, params: [...uniquePolicyIds, cutoffs.rolling] };
     const dailyRange = { where, params: [...uniquePolicyIds, cutoffs.daily] };
-    const owner = this.ownerCondition(range, scope);
+    const owner = this.ownerCondition(range, scope, pending);
     // Ownership is filtered in SQL before LIMIT so other principals' rows never displace the caller's.
     const eventRange = owner ? restrict(range, owner) : range;
     const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventRange.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventRange.params, limit)).map((row) => JSON.parse(row.event_json));
-    const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(range, dailyRange), events };
-    if (owner) snapshot.personal = this.totals(restrict(range, owner), restrict(dailyRange, owner));
-    else snapshot.principals = this.principalTotals(range);
+    const columns = usageSummaryColumns(pending ? `CASE WHEN ${pending} THEN json_extract(event_json, '$.cost_basis') ELSE cost_basis END` : "cost_basis");
+    const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(range, dailyRange, columns), events };
+    if (owner) snapshot.personal = this.totals(restrict(range, owner), restrict(dailyRange, owner), columns);
+    else snapshot.principals = this.principalTotals(range, columns.summary, pending);
     return snapshot;
   }
 
   // Aggregates request, token, and spend totals overall, per provider, and per UTC day.
-  private totals(range: SqlRange, dailyRange: SqlRange): UsageTotals {
-    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${summaryColumns} FROM usage_events WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
-    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${totalColumns} FROM usage_events WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
-    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, ${totalColumns} FROM usage_events WHERE ${dailyRange.where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
+  private totals(range: SqlRange, dailyRange: SqlRange, columns: { total: string; summary: string }): UsageTotals {
+    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${columns.summary} FROM usage_events WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
+    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${columns.total} FROM usage_events WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
+    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, ${columns.total} FROM usage_events WHERE ${dailyRange.where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
     return { summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily) };
   }
 
   // Groups totals by attributed principal, or by credential for events without one.
   // Raw principal IDs are merged under the authority's email normalizer so case and
   // whitespace variants of one identity report as a single row.
-  private principalTotals(range: SqlRange): PrincipalUsage[] {
-    const attributed = "json_type(event_json, '$.principal_id') = 'text'";
+  private principalTotals(range: SqlRange, summaryColumns: string, pending: string | null): PrincipalUsage[] {
+    const principal = pending ? `CASE WHEN ${pending} THEN CASE WHEN json_type(event_json, '$.principal_id') = 'text' THEN json_extract(event_json, '$.principal_id') END ELSE principal_id END` : "principal_id";
+    const credential = pending ? `CASE WHEN ${pending} THEN json_extract(event_json, '$.credential_id') ELSE credential_id END` : "credential_id";
     const grouped = rows<PrincipalRow>(this.sql.exec(`SELECT
-      CASE WHEN ${attributed} THEN json_extract(event_json, '$.principal_id') END AS principal_id,
-      CASE WHEN ${attributed} THEN NULL ELSE json_extract(event_json, '$.credential_id') END AS credential_id,
+      ${principal} AS principal_id,
+      CASE WHEN (${principal}) IS NOT NULL THEN NULL ELSE ${credential} END AS credential_id,
       ${summaryColumns} FROM usage_events WHERE ${range.where} GROUP BY 1, 2`, ...range.params) as unknown as Iterable<PrincipalRow>);
     return mergePrincipalUsage(grouped.map(({ principal_id, credential_id, ...summary }) => ({
       principalId: principal_id === null ? null : normalizeEmail(principal_id) ?? principal_id,
@@ -264,17 +275,35 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   // Returns the SQL condition limiting rows to the caller's own events, or null for admin scope.
-  private ownerCondition(range: SqlRange, scope: UsageEventScope): SqlRange | null {
+  private ownerCondition(range: SqlRange, scope: UsageEventScope, pending: string | null): SqlRange | null {
     if (scope.kind === "admin") return null;
-    if (scope.kind === "credential") return { where: "json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?", params: [scope.id] };
+    if (scope.kind === "credential") return pending
+      ? { where: `((NOT (${pending}) AND principal_id IS NULL AND principal_nontext = 0 AND credential_id = ?) OR (${pending} AND json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?))`, params: [scope.id, scope.id] }
+      : { where: "principal_id IS NULL AND principal_nontext = 0 AND credential_id = ?", params: [scope.id] };
     const principal = normalizeEmail(scope.id);
     if (!principal) return { where: "0", params: [] };
+    if (!pending) return { where: "principal_key = ?", params: [principal] };
     // SQLite lower/trim do not implement JS Unicode identity normalization.
     // Match retained raw IDs with the authority's normalizer, then filter in SQL
     // before LIMIT. Never derive historical ownership from today's credentials.
-    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${range.where} AND json_type(event_json, '$.principal_id') = 'text'`, ...range.params));
+    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${range.where} AND ${pending} AND json_type(event_json, '$.principal_id') = 'text'`, ...range.params));
     const aliases = candidates.map((row) => row.principal_id).filter((id) => normalizeEmail(id) === principal);
-    return { where: "json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))", params: [JSON.stringify(aliases)] };
+    return { where: `((NOT (${pending}) AND principal_key = ?) OR (${pending} AND json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))))`, params: [principal, JSON.stringify(aliases)] };
+  }
+
+  // The fixed upper bound excludes new, already-projected ingests. Advance rows and
+  // watermark atomically; pending rows retain JSON query semantics until visited.
+  private backfillAttribution(): string | null {
+    const migration = first<{ last_rowid: number; upper_rowid: number; complete: number }>(this.sql.exec("SELECT last_rowid, upper_rowid, complete FROM usage_attribution_migration WHERE id = 1"))!;
+    if (migration.complete) return null;
+    const batch = rows<{ rowid: number; event_json: string }>(this.sql.exec("SELECT rowid, event_json FROM usage_events WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?", migration.last_rowid, migration.upper_rowid, usageAttributionBatchSize));
+    const last = batch.at(-1)?.rowid ?? migration.upper_rowid;
+    const complete = batch.length < usageAttributionBatchSize || last === migration.upper_rowid;
+    this.state.storage.transactionSync(() => {
+      for (const row of batch) this.sql.exec("UPDATE usage_events SET principal_id = ?, principal_key = ?, credential_id = ?, cost_basis = ?, principal_nontext = ? WHERE rowid = ?", ...usageAttribution(JSON.parse(row.event_json)), row.rowid);
+      this.sql.exec("UPDATE usage_attribution_migration SET last_rowid = ?, complete = ? WHERE id = 1", last, complete ? 1 : 0);
+    });
+    return complete ? null : `(rowid > ${last} AND rowid <= ${migration.upper_rowid})`;
   }
 
   private cleanup(cutoff = Date.now() - usageRetentionMs): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff); }
@@ -284,9 +313,19 @@ export class UsageLedgerObject implements DurableObject {
       const columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(usage_events)")).map(row => row.name));
       if (!columns.has("grant_key")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN grant_key TEXT");
       if (!columns.has("grant_lane")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN grant_lane TEXT");
+      for (const column of ["principal_id", "principal_key", "credential_id", "cost_basis"]) {
+        if (!columns.has(column)) this.sql.exec(`ALTER TABLE usage_events ADD COLUMN ${column} TEXT`);
+      }
+      if (!columns.has("principal_nontext")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN principal_nontext INTEGER NOT NULL DEFAULT 0");
+      this.sql.exec("CREATE TABLE IF NOT EXISTS usage_attribution_migration (id INTEGER PRIMARY KEY CHECK (id = 1), last_rowid INTEGER NOT NULL, upper_rowid INTEGER NOT NULL, complete INTEGER NOT NULL)");
+      if (!first(this.sql.exec("SELECT id FROM usage_attribution_migration WHERE id = 1"))) {
+        this.sql.exec("INSERT INTO usage_attribution_migration (id, last_rowid, upper_rowid, complete) SELECT 1, 0, COALESCE(MAX(rowid), 0), CASE WHEN MAX(rowid) IS NULL THEN 1 ELSE 0 END FROM usage_events");
+      }
     });
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_credential ON usage_events (policy_id, credential_id, occurred_at_ms DESC)");
   }
 }
 
@@ -429,8 +468,17 @@ interface SummaryRow { request_count: number; success_count: number; error_count
 interface ProviderRow { provider: string; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
 interface PrincipalRow extends SummaryRow { principal_id: string | null; credential_id: string | null }
 // Count final unavailable outcomes, not historical unpriced-tier admission denials.
-const totalColumns = "COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, COALESCE(SUM(CASE WHEN json_extract(event_json, '$.cost_basis') = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count";
-const summaryColumns = `${totalColumns}, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens`;
+function usageSummaryColumns(costBasis: string) {
+  const total = `COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, COALESCE(SUM(CASE WHEN ${costBasis} = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count`;
+  return { total, summary: `${total}, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens` };
+}
+
+function usageAttribution(event: UsageEvent): [string | null, string | null, string | null, string | null, number] {
+  const principal = typeof event.principal_id === "string" ? event.principal_id : null;
+  // Non-text historical principals count under credentials in admin grouping,
+  // but must not become credential-owned events when their projection is NULL.
+  return [principal, principal === null ? null : normalizeEmail(principal), typeof event.credential_id === "string" ? event.credential_id : null, typeof event.cost_basis === "string" ? event.cost_basis : null, event.principal_id != null && principal === null ? 1 : 0];
+}
 interface DailyRow { day_start_ms: number; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number; unpriced_request_count: number }
 function emptySummary(): SummaryRow { return { request_count: 0, success_count: 0, error_count: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, actual_cost_micros: 0, unpriced_request_count: 0 }; }
 function camelSummary(row: SummaryRow) { return { requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, inputTokens: row.input_tokens, outputTokens: row.output_tokens, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }

@@ -413,7 +413,7 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
     assert.deepEqual(openedLedgers[name].budget_windows, ledgerBefore[name].budget_windows, name);
   }
   const openedUsage = await usageLedgers();
-  for (const name of shards) assert.deepEqual(openedUsage[name].usage_events, withColumns(usageBefore[name].usage_events, { grant_key: null, grant_lane: null }), name);
+  for (const name of shards) assert.deepEqual(openedUsage[name].usage_events, withColumns(usageBefore[name].usage_events, { grant_key: null, grant_lane: null, principal_id: null, principal_key: null, credential_id: null, cost_basis: null, principal_nontext: 0 }), name);
 
   // Behavior: the same keys are refused, the release grants still route, and
   // release spend still counts against the release-written monthly budget.
@@ -459,5 +459,22 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
     for (const row of openedUsage[name].usage_events) assert.ok(usageAfter[name].usage_events.includes(row), `${name} release usage event preserved`);
     const added = usageAfter[name].usage_events.filter(row => !openedUsage[name].usage_events.includes(row)).map(row => JSON.parse(row));
     assert.deepEqual(added.map(row => [row.status, row.status_code, row.grant_lane]).sort(), appended[name], name);
+  }
+  // A real personal read backfills the release's persisted JSON without changing
+  // its payload or losing old events beside the newly projected head ingests.
+  for (const [index, name] of shards.entries()) {
+    const response = await f.call("/v1/usage", undefined, index === 0 ? keys.fixture : keys.foreign);
+    assert.equal(response.status, 200);
+    const { usage: snapshot } = await response.json();
+    const retained = usageAfter[name].usage_events.map(row => JSON.parse(row));
+    assert.deepEqual(snapshot.events.map(event => event.id).sort(), retained.map(row => row.id).sort());
+    assert.equal(snapshot.personal.summary.requestCount, retained.length);
+    const migrated = (await f.object("USAGE_LEDGER", name, "/fixture/dump")).tables;
+    assert.equal(JSON.parse(migrated.usage_attribution_migration[0]).complete, 1);
+    for (const row of migrated.usage_events.map(row => JSON.parse(row))) {
+      assert.equal(row.event_json, retained.find(event => event.id === row.id).event_json);
+      const event = JSON.parse(row.event_json);
+      assert.deepEqual([row.principal_id, row.principal_key, row.credential_id, row.cost_basis, row.principal_nontext], [null, null, event.credential_id, event.cost_basis, 0]);
+    }
   }
 });
