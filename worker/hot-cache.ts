@@ -7,7 +7,7 @@ export const HOT_CACHE_DEFAULT_MAX_AGE_SECONDS = 60;
 export const HOT_CACHE_FRESH_SECONDS = 10;
 
 export interface HotCacheConfig { readonly maxAgeMs: number; readonly freshMs: number }
-export type HotCacheState = "hit" | "stale" | "colo" | "miss" | "off";
+export type HotCacheState = "hit" | "stale" | "colo" | "joined" | "miss" | "off";
 
 const DISABLED: HotCacheConfig = Object.freeze({ maxAgeMs: 0, freshMs: 0 });
 
@@ -26,6 +26,21 @@ export function hotCacheConfig(env: Pick<Env, "CLAWROUTER_HOT_CACHE_MAX_AGE_SECO
 }
 
 let clock: () => number = () => Date.now();
+
+// Workers resume the code after `await promise` in the I/O context of whichever
+// request resolved that promise. Awaiting another request's in-flight load would
+// attribute this request's later I/O (upstream fetch, response stream) to it, and
+// the runtime rejects that with "Cannot perform I/O on behalf of a different
+// request". Waiters therefore poll shared state on their own timers, bounded.
+export const JOIN_WAIT_MS = 5_000;
+export async function waitForOtherRequest(settled: () => boolean, timeoutMs = JOIN_WAIT_MS): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (let step = 1; !settled(); step = Math.min(step * 2, 16)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, step));
+  }
+  return true;
+}
 export function hotCacheNow(): number { return clock(); }
 /** Test hook: inject a clock; call with no argument to restore Date.now. */
 export function setHotCacheClock(next?: () => number): void { clock = next ?? (() => Date.now()); }
@@ -51,7 +66,7 @@ export interface Loaded<V> { value: V; cacheable: boolean; expiresAt?: number }
 
 export class HotCache<V> {
   private readonly entries = new Map<string, Entry<V>>();
-  private readonly inflight = new Map<string, Promise<Loaded<V>>>();
+  private readonly inflight = new Map<string, { promise: Promise<Loaded<V>>; settled: boolean }>();
   private readonly limit: number;
   constructor(limit: number) { this.limit = limit; }
 
@@ -85,20 +100,32 @@ export class HotCache<V> {
   }
   clear(): void { this.entries.clear(); this.inflight.clear(); }
 
-  /** Single-flight load; a cacheable result is stored before callers resume. */
-  load(key: string, config: HotCacheConfig, loader: () => Promise<Loaded<V>>): Promise<Loaded<V>> {
+  /**
+   * Single-flight load; a cacheable result is stored before callers resume. A
+   * caller that finds another load in flight never awaits that promise (see
+   * waitForOtherRequest): it waits for the shared entry, then loads itself if
+   * the other load failed or produced nothing cacheable.
+   */
+  async load(key: string, config: HotCacheConfig, loader: () => Promise<Loaded<V>>): Promise<Loaded<V>> {
     const pending = this.inflight.get(key);
-    if (pending) return pending;
-    const started = (async () => {
+    if (pending) {
+      await waitForOtherRequest(() => pending.settled);
+      const entry = this.entries.get(key);
+      const now = hotCacheNow();
+      if (entry && now < entry.expiresAt && now - entry.storedAt < config.maxAgeMs) return { value: entry.value, cacheable: true, expiresAt: entry.expiresAt };
+      if (this.inflight.get(key) === pending) this.inflight.delete(key);
+    }
+    const flight = { settled: false } as { promise: Promise<Loaded<V>>; settled: boolean };
+    flight.promise = (async () => {
       try {
         const loaded = await loader();
         if (loaded.cacheable) this.set(key, loaded.value, config, loaded.expiresAt);
         else this.entries.delete(key);
         return loaded;
-      } finally { this.inflight.delete(key); }
+      } finally { flight.settled = true; if (this.inflight.get(key) === flight) this.inflight.delete(key); }
     })();
-    this.inflight.set(key, started);
-    return started;
+    this.inflight.set(key, flight);
+    return flight.promise;
   }
 
   /** Start one background refresh unless a load for this key is already running. */
