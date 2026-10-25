@@ -517,3 +517,19 @@ test('a concurrent load waits for the shared entry instead of awaiting another r
   assert.equal((await failing).value, 'denied');
   assert.equal((await retry).value, 'second', 'an uncacheable leader result sends the follower to its own load');
 });
+
+test('a request drains only its own background work, bounded by its own timer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { runInBackground, backgroundMark, DRAIN_BOUND_MS } = await import('../hot-cache.ts');
+  runInBackground(new Promise(() => {})); // another request's stuck work
+  const mark = backgroundMark();
+  assert.equal(pendingBackgroundWork(mark), null, 'work registered before this request is not drained');
+  runInBackground(new Promise(() => {})); // this request's own stuck work
+  const drain = pendingBackgroundWork(mark);
+  assert.ok(drain);
+  let finished = false; drain.then(() => { finished = true; });
+  t.mock.timers.tick(DRAIN_BOUND_MS - 1); await Promise.resolve();
+  assert.equal(finished, false);
+  t.mock.timers.tick(1); await drain;
+  assert.equal(finished, true, 'the drain ends at its own bound even though the work never settles');
+});

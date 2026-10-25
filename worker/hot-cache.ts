@@ -50,15 +50,28 @@ export function setHotCacheClock(next?: () => number): void { clock = next ?? ((
 // backend call leaves the set after the bound, so later requests never keep
 // extending their waitUntil for it.
 export const BACKGROUND_WORK_BOUND_MS = 25_000;
-const background = new Set<Promise<unknown>>();
+// A request drains only work registered after its own start, and bounds the wait
+// with a timer created in its own context. Work owned by another request (whose
+// own timers may never fire there, e.g. after a client disconnect) can otherwise
+// pin this request's waitUntil past the platform limit, and Cloudflare then
+// cancels every remaining task of this request, including its usage accounting.
+export const DRAIN_BOUND_MS = 10_000;
+let workSeq = 0;
+const background = new Map<Promise<unknown>, number>();
 export function runInBackground(work: Promise<unknown>): void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, BACKGROUND_WORK_BOUND_MS); });
   const tracked: Promise<unknown> = Promise.race([work.catch(() => undefined), bound]).finally(() => { clearTimeout(timer); background.delete(tracked); });
-  background.add(tracked);
+  background.set(tracked, ++workSeq);
 }
-export function pendingBackgroundWork(): Promise<unknown> | null {
-  return background.size ? Promise.allSettled([...background]) : null;
+/** Mark taken at request entry; pass it to pendingBackgroundWork at the end. */
+export function backgroundMark(): number { return workSeq; }
+export function pendingBackgroundWork(since = 0): Promise<unknown> | null {
+  const mine = [...background].filter(([, seq]) => seq > since).map(([work]) => work);
+  if (!mine.length) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, DRAIN_BOUND_MS); });
+  return Promise.race([Promise.allSettled(mine), bound]).finally(() => clearTimeout(timer));
 }
 
 interface Entry<V> { value: V; storedAt: number; expiresAt: number }

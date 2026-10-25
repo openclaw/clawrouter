@@ -28,7 +28,7 @@ import { proxyRealtimeWebSocket } from "./realtime-websocket";
 import { proxyResponsesWebSocket } from "./responses-websocket";
 import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
-import { clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
+import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
@@ -41,6 +41,7 @@ export { BudgetLedgerObject, GrantCredentialObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
+    const backgroundMark = currentBackgroundMark();
     // Private responses must not pass through public correlation, logging, or CORS.
     if (privatePath(new URL(request.url).pathname)) return privateCodex(request, env);
     const path = canonicalPath(new URL(request.url).pathname);
@@ -56,8 +57,8 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     // Mutations served by this isolate take effect here at once; other isolates
     // converge within the hot-cache max age.
     if (mutatesHotState(request.method, path)) { clearHotCaches(); fenceSharedHotCache(); }
-    // Stale-cache refreshes and coalesced counters registered by this request.
-    const background = pendingBackgroundWork();
+    // Stale-cache refreshes and coalesced counters registered during this request.
+    const background = pendingBackgroundWork(backgroundMark);
     if (background) context.waitUntil(background);
     response = withNativeLocalError(response, path, correlated.requestId);
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);

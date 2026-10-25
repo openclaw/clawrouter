@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop one request's stuck background work from getting another request's tasks cancelled: each request now drains only background work registered during its own lifetime, bounded at 10 s by a timer it owns. Production logged `waitUntil() tasks did not complete within the allowed time ... cancelled` on ~0.15% of requests, which also cancels that request's usage accounting.
 - Make the deploy train re-read the deployments list when it still shows the previous deployment right after a traffic-split change (bounded ~15 s), without repeating the mutation; any other split still stops the train.
 - Accept pnpm's forwarded argument separator in the documented health-report and budget-mode script invocations.
 - Index usage snapshot attribution by normalized principal and credential, with bounded resumable backfill and correct historical results throughout migration; avoid repeated JSON parsing once backfill finishes.
