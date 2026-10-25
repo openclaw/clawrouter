@@ -289,6 +289,18 @@ re-verify their own secret and select locally, reporting `cr-cache;desc=joined`.
 A wrong secret or an uncacheable leader result sends the follower to the
 authority itself, and failover never joins.
 
+The first version of this awaited the leader's promise and failed the workerd
+revocation-under-load test with hundreds of HTTP 500s:
+`Cannot perform I/O on behalf of a different request (I/O type:
+ReadableStreamSource)`. Workers resume the code after `await promise` in the I/O
+context of the request that resolved it, so the follower's upstream fetch and
+response stream belonged to the leader's request. The credential cache's
+existing single-flight (`HotCache.load`) had the same shape; it did not fail
+locally only because in-process credential loads finish too quickly to overlap.
+No request may await another request's promise: waiters poll the shared entry
+or a settled flag on their own timers (`waitForOtherRequest`, bounded at 5 s)
+and fall back to their own call.
+
 ### Per-location snapshot sharing (2026-10-24)
 
 A live tail during light traffic showed 13 `/admission/resolve` calls for about
