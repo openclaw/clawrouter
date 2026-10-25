@@ -1,5 +1,48 @@
 # Hot-path review and local load evidence
 
+## Indexed usage snapshots (2026-10-25)
+
+Production observation supplied for this change: one UsageLedgerObject
+`GET /snapshot` spent **9.8 s CPU / 18.7 s wall**, and `/v1/usage` wall P99 was
+**4.9 s**. Ownership and admin grouping repeatedly extracted IDs from full
+event JSON across the thirty-day window.
+
+Usage rows now project raw `principal_id`, authority-normalized `principal_key`,
+and `credential_id`. Indexes on `(policy_id, principal_key, occurred_at_ms DESC)`
+and `(policy_id, credential_id, occurred_at_ms DESC)` serve owner filters before
+the event limit. Projected `cost_basis` also removes JSON parsing from the
+unpriced counters. A `principal_nontext` flag preserves the old exclusion of
+non-string, non-null principals from credential-owned reads. Raw event JSON,
+retention, grant usage, public shapes, and principal merging stay unchanged.
+
+The durable `usage_attribution_migration` row records an initial upper rowid,
+last processed rowid, and completion. Each snapshot and alarm updates at most
+2,000 rows with JS normalization, committing projections and cursor together.
+Pending migrations schedule alarms every 60 seconds; new ingests write the
+projections immediately. Only pending rows use the original JSON ownership and
+counter expressions. Snapshots remain complete during migration, although
+pending reads still incur JSON scan costs. Completed shards never restart the
+backfill and snapshot SQL performs no JSON extraction. SQLite builds the two
+new indexes once on first activation.
+
+Reproduce with `node scripts/benchmark-usage-snapshots.mjs`: 100,000 synthetic
+events averaging 1,500 bytes, multiple principals/providers/days, five warm
+samples, median process CPU and wall time on Node 26.12.1 / Apple M3 Ultra.
+The harness compares the pre-change SQL with the real migrated ledger and
+asserts identical complete responses. This is local SQLite evidence, not a
+post-deployment latency measurement.
+
+| Snapshot | CPU before → after | Wall before → after | CPU speedup |
+| --- | ---: | ---: | ---: |
+| Personal | 2,188 → 272 ms | 2,839 → 425 ms | 8.04× |
+| Admin | 2,349 → 355 ms | 3,250 → 469 ms | 6.62× |
+
+Schema/index creation used 174 ms CPU. Backfill completed in 50 batches:
+median 22.8 ms CPU, maximum 53.8 ms. Equality tests also cover partially
+backfilled shards, Unicode/case/whitespace aliases, non-text historical
+principals, credential-only events, concurrent-era ingests, restart/rollback,
+and owner filtering before LIMIT.
+
 ## WebSocket create follow-up (2026-10-23)
 
 Live production baseline, measured **before #326's hot caches**: 15 chained
