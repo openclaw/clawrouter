@@ -4,7 +4,7 @@ import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
-import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, waitForOtherRequest, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
@@ -51,14 +51,40 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
       return { admission: { ...shared.value, ...(selection ? { selection } : {}) }, cache: "colo" };
     }
   }
-  const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined });
-  if (loaded.cacheable) rememberSelection(key, request, loaded.value.selection);
-  if (loaded.cacheable) admissions.set(key, withoutSelection(loaded.value), config, loaded.expiresAt);
-  // A wrong secret must not evict the key owner's entry; only an outcome
-  // observed with the matching secret (revoked, disabled, missing) does.
-  else if (!loaded.value.credential || safeEqual(request.secretSha256, loaded.value.credential.credential.secretSha256.toLowerCase())) admissions.delete(key);
-  return { admission: loaded.value, cache: "miss" };
+  const failover = !!request.selection?.excludedKeys?.length;
+  // A burst of cold requests for one key shares the first authority call: the
+  // rest wait for its snapshot, re-verify their own secret and select locally.
+  const leader = failover ? undefined : inflightMisses.get(key);
+  if (leader) {
+    await waitForOtherRequest(() => leader.settled);
+    const joined = admissions.peek(key, config);
+    if (joined && safeEqual(request.secretSha256, joined.value.credential!.credential.secretSha256.toLowerCase())) {
+      const selection = request.selection ? localSelection(env, joined.value, request.selection) : undefined;
+      if (!request.selection || selection) {
+        rememberSelection(key, request, selection);
+        return { admission: { ...joined.value, ...(selection ? { selection } : {}) }, cache: "joined" };
+      }
+    }
+  }
+  const flight = (async () => {
+    const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined });
+    if (loaded.cacheable) rememberSelection(key, request, loaded.value.selection);
+    if (loaded.cacheable) admissions.set(key, withoutSelection(loaded.value), config, loaded.expiresAt);
+    // A wrong secret must not evict the key owner's entry; only an outcome
+    // observed with the matching secret (revoked, disabled, missing) does.
+    else if (!loaded.value.credential || safeEqual(request.secretSha256, loaded.value.credential.credential.secretSha256.toLowerCase())) admissions.delete(key);
+    return loaded;
+  })();
+  const owns = !failover && !leader;
+  const marker = { settled: false };
+  if (owns) inflightMisses.set(key, marker);
+  try { return { admission: (await flight).value, cache: "miss" }; }
+  finally { marker.settled = true; if (owns && inflightMisses.get(key) === marker) inflightMisses.delete(key); }
 }
+
+// Concurrent misses wait on this flag with their own timers, never on the
+// leader's promise (see waitForOtherRequest).
+const inflightMisses = new Map<string, { settled: boolean }>();
 
 async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest) {
   const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", request);

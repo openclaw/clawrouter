@@ -415,6 +415,33 @@ hours of per-version invocation analytics:
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
 
+### Production check of the colo layer and burst coalescing (2026-10-24)
+
+On `f8d67e89` (#334), one warm-up request followed by three waves of ten
+requests over fresh connections from SJC returned 22 isolate hits, 4 stale hits
+and 4 `cr-cache;desc=colo` adoptions at 6 ms median admission (10 ms max), with
+no authority calls after the warm-up. A cold isolate that previously paid ~91 ms
+now adopts its neighbour's snapshot.
+
+The same probe exposed a burst gap: twelve simultaneous cold requests for one
+key made twelve authority calls. Concurrent foreground misses for a key now share
+the first request's authority admission; the others wait for its snapshot,
+re-verify their own secret and select locally, reporting `cr-cache;desc=joined`.
+A wrong secret or an uncacheable leader result sends the follower to the
+authority itself, and failover never joins.
+
+The first version of this awaited the leader's promise and failed the workerd
+revocation-under-load test with hundreds of HTTP 500s:
+`Cannot perform I/O on behalf of a different request (I/O type:
+ReadableStreamSource)`. Workers resume the code after `await promise` in the I/O
+context of the request that resolved it, so the follower's upstream fetch and
+response stream belonged to the leader's request. The credential cache's
+existing single-flight (`HotCache.load`) had the same shape; it did not fail
+locally only because in-process credential loads finish too quickly to overlap.
+No request may await another request's promise: waiters poll the shared entry
+or a settled flag on their own timers (`waitForOtherRequest`, bounded at 5 s)
+and fall back to their own call.
+
 ### Per-location snapshot sharing (2026-10-24)
 
 A live tail during light traffic showed 13 `/admission/resolve` calls for about
