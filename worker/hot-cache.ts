@@ -7,7 +7,7 @@ export const HOT_CACHE_DEFAULT_MAX_AGE_SECONDS = 60;
 export const HOT_CACHE_FRESH_SECONDS = 10;
 
 export interface HotCacheConfig { readonly maxAgeMs: number; readonly freshMs: number }
-export type HotCacheState = "hit" | "stale" | "colo" | "miss" | "off";
+export type HotCacheState = "hit" | "stale" | "colo" | "joined" | "miss" | "off";
 
 const DISABLED: HotCacheConfig = Object.freeze({ maxAgeMs: 0, freshMs: 0 });
 

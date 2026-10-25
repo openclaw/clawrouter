@@ -475,3 +475,26 @@ test('the colo layer is unused when the hot cache is disabled', async t => {
   await f.send(); await f.send();
   assert.deepEqual(colo.stats, { puts: 0, matches: 0, hits: 0 });
 });
+
+test('a burst of cold requests for one key shares a single authority admission', async t => {
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  f.reset();
+  const responses = await Promise.all(Array.from({ length: 5 }, () => f.request()));
+  const states = responses.map(response => response.headers.get('server-timing').match(/cr-cache;desc=(\w+)/)[1]);
+  for (const response of responses) { assert.equal(response.status, 200); await response.text(); }
+  await Promise.all(f.pending);
+  assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, f.calls.join());
+  assert.deepEqual(states.sort(), ['joined', 'joined', 'joined', 'joined', 'miss']);
+  const counts = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
+  assert.equal(counts[0].selected_count, 5, 'every joined request still records its selection');
+});
+
+test('a wrong secret joining a burst is rejected without disturbing the others', async t => {
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  const wrong = { ...admissionHeaders, authorization: 'Bearer clawrouter-live-fixture-not-the-secret' };
+  const [good, bad, also] = await Promise.all([f.request(), f.request(wrong), f.request()]);
+  assert.deepEqual([good.status, bad.status, also.status], [200, 401, 200]);
+  await Promise.all([good.text(), bad.text(), also.text()]); await Promise.all(f.pending);
+});
