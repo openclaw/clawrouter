@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reduce HTTP Responses CPU by skipping unused whole-request serialization for fixed input-token bounds and scanning irrelevant SSE output text in batches; preserve pricing, retention, continuation publication and identity limits, with a reproducible synthetic CPU profiler.
 - Share secretless admission snapshots between isolates in the same Cloudflare location through the Cache API, so a cold isolate can adopt a neighbour's fresh snapshot instead of calling the authority. Entries keep their original fetch time (same max age), every request still re-verifies its secret, credentials are never shared, and a mutation served by an isolate makes it ignore older shared entries. `Server-Timing` reports `cr-cache;desc=colo` for these hits.
 - Overlap the credential-owner round trip with a cold admission: on a hot-cache miss the isolate starts loading the grant it last selected for that key (same version only, never for a mismatched secret) while admission runs, so a miss costs roughly the slower call instead of both. `Server-Timing` adds `cr-credential` with the credential cache state and owner wait.
 - Make the production deploy train tolerate Cloudflare's read-after-upload lag: re-read the version history while the candidate is absent and retry a 404 from the candidate's version endpoint, each for up to 15 s; a different newer upload or any other error still stops the train.
