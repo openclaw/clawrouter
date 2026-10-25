@@ -274,6 +274,21 @@ hours of per-version invocation analytics:
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
 
+### Production check of the colo layer and burst coalescing (2026-10-24)
+
+On `f8d67e89` (#334), one warm-up request followed by three waves of ten
+requests over fresh connections from SJC returned 22 isolate hits, 4 stale hits
+and 4 `cr-cache;desc=colo` adoptions at 6 ms median admission (10 ms max), with
+no authority calls after the warm-up. A cold isolate that previously paid ~91 ms
+now adopts its neighbour's snapshot.
+
+The same probe exposed a burst gap: twelve simultaneous cold requests for one
+key made twelve authority calls. Concurrent foreground misses for a key now share
+the first request's authority admission; the others wait for its snapshot,
+re-verify their own secret and select locally, reporting `cr-cache;desc=joined`.
+A wrong secret or an uncacheable leader result sends the follower to the
+authority itself, and failover never joins.
+
 ### Per-location snapshot sharing (2026-10-24)
 
 A live tail during light traffic showed 13 `/admission/resolve` calls for about
