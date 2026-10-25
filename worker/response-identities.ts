@@ -52,22 +52,31 @@ export function createResponseIdentityInspector(sse: boolean, emit: (identity: R
     } else if (data || prefix === "data") dataLines++;
     prefix = ""; lineHasBytes = false; data = false; optionalSpace = false;
   }
+  function line(text: string) {
+    lineHasBytes ||= text.length > 0;
+    let offset = 0;
+    while (!data && prefix.length <= 4 && offset < text.length) {
+      const char = text[offset++];
+      if (char === ":") {
+        data = prefix === "data"; optionalSpace = data;
+        if (data && dataLines) scanner("\n");
+        prefix = "ignored";
+      } else prefix += char;
+    }
+    if (!data) return;
+    if (optionalSpace && offset < text.length) { optionalSpace = false; if (text[offset] === " ") offset++; }
+    scanner(text.slice(offset));
+  }
+  const newline = /[\r\n]/g;
   function push(text: string) {
-    for (const char of text) {
-      if (!sse) { scanner(char); continue; }
-      if (skipLf) { skipLf = false; if (char === "\n") continue; }
-      if (char === "\n" || char === "\r") { endLine(); skipLf = char === "\r"; continue; }
-      lineHasBytes = true;
-      if (data) {
-        if (optionalSpace) { optionalSpace = false; if (char === " ") continue; }
-        scanner(char);
-      } else if (prefix.length <= 4) {
-        if (char === ":") {
-          data = prefix === "data"; optionalSpace = data;
-          if (data && dataLines) scanner("\n");
-          prefix = "ignored";
-        } else prefix += char;
-      }
+    if (!sse) { scanner(text); return; }
+    for (let offset = 0; offset < text.length;) {
+      if (skipLf) { skipLf = false; if (text[offset] === "\n") { offset++; continue; } }
+      newline.lastIndex = offset;
+      const boundary = newline.exec(text), end = boundary?.index ?? text.length;
+      line(text.slice(offset, end));
+      if (!boundary) return;
+      endLine(); skipLf = text[end] === "\r"; offset = end + 1;
     }
   }
   return { push(bytes: Uint8Array) { push(decoder.decode(bytes, { stream: true })); }, end() { push(decoder.decode()); } };
@@ -76,12 +85,13 @@ export function createResponseIdentityInspector(sse: boolean, emit: (identity: R
 type Field = "type" | "id" | "response_id" | "turn";
 type Frame = { context: "root" | "response" | "headers" | "ignored"; object: boolean; key: string | null; expectingKey: boolean };
 
-function identityJson(sse: boolean, emit: (field: Field, value: string) => void): (char: string) => void {
+function identityJson(sse: boolean, emit: (field: Field, value: string) => void): (text: string) => void {
   // Only root fields and one protocol object below them can name identities.
   // A scalar depth skips arbitrarily deep model output without a nesting stack.
   const frames: Frame[] = [];
   let depth = 0, string = false, escaped = false, raw = "", capture: Field | "key" | null = null;
   let firstTurnValue = false, closed = false;
+  const stringBoundary = /["\\]/g;
   function field(frame: Frame | undefined): Field | null {
     if (!frame || frame.expectingKey) return null;
     if (frame.context === "root") {
@@ -92,49 +102,67 @@ function identityJson(sse: boolean, emit: (field: Field, value: string) => void)
     if (frame.context === "response" && frame.key === "id") return "id";
     return frame.context === "headers" && frame.key?.toLowerCase() === "x-codex-turn-state" ? "turn" : null;
   }
-  return char => {
+  return text => {
     if (closed) return;
-    const frame = depth <= 2 ? frames[depth - 1] : undefined;
-    if (string) {
-      if (char === '"' && !escaped) {
-        string = false;
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index];
+      const frame = depth <= 2 ? frames[depth - 1] : undefined;
+      if (string) {
+        if (!capture) {
+          // Most bytes are output text or arguments, never identity evidence.
+          // Skip whole spans while retaining escape state across chunk boundaries.
+          let offset = index + (escaped ? 1 : 0); escaped = false;
+          while (offset < text.length) {
+            stringBoundary.lastIndex = offset;
+            const boundary = stringBoundary.exec(text);
+            if (!boundary) return;
+            if (boundary[0] === '"') { string = false; index = boundary.index; break; }
+            offset = boundary.index + 2;
+            escaped = offset > text.length;
+          }
+          if (string) return;
+          continue;
+        }
+        if (char === '"' && !escaped) {
+          string = false;
+          if (capture) {
+            const value: string = JSON.parse(`"${raw}"`);
+            if (capture === "key") { if (frame) frame.key = value; }
+            else emit(capture, value);
+          }
+          capture = null; raw = ""; continue;
+        }
         if (capture) {
-          const value: string = JSON.parse(`"${raw}"`);
-          if (capture === "key") { if (frame) frame.key = value; }
-          else emit(capture, value);
+          raw += char;
+          const limit = capture === "turn" ? limits.turn : capture === "key" || capture === "type" ? 64 : limits.response;
+          if (raw.length > limit * 6) {
+            if (capture === "key") { capture = null; raw = ""; }
+            else throw new HttpError(502, "continuation_identity_invalid", "upstream continuation identity exceeds its limit");
+          }
         }
-        capture = null; raw = ""; return;
+        escaped = !escaped && char === "\\";
+        continue;
       }
-      if (capture) {
-        raw += char;
-        const limit = capture === "turn" ? limits.turn : capture === "key" || capture === "type" ? 64 : limits.response;
-        if (raw.length > limit * 6) {
-          if (capture === "key") { capture = null; raw = ""; }
-          else throw new HttpError(502, "continuation_identity_invalid", "upstream continuation identity exceeds its limit");
-        }
+      if (/\s/.test(char)) continue;
+      if (char === '"') {
+        string = true; escaped = false; raw = "";
+        capture = firstTurnValue ? "turn" : frame?.object && frame.expectingKey && frame.context !== "ignored" ? "key" : field(frame);
+        firstTurnValue = false;
+        continue;
       }
-      escaped = !escaped && char === "\\";
-      return;
-    }
-    if (/\s/.test(char)) return;
-    if (char === '"') {
-      string = true; escaped = false; raw = "";
-      capture = firstTurnValue ? "turn" : frame?.object && frame.expectingKey && frame.context !== "ignored" ? "key" : field(frame);
+      if (char === "{" || char === "[") {
+        firstTurnValue = char === "[" && (firstTurnValue || field(frame) === "turn");
+        const context = depth === 0 && char === "{" ? "root"
+          : depth === 1 && char === "{" && frame?.context === "root" && sse
+            ? frame.key === "response" ? "response" : frame.key === "headers" ? "headers" : "ignored" : "ignored";
+        depth++;
+        if (depth <= 2) frames[depth - 1] = { context, object: char === "{", key: null, expectingKey: char === "{" };
+        continue;
+      }
       firstTurnValue = false;
-      return;
+      if (char === "}" || char === "]") { depth--; if (depth <= 0) { closed = true; return; } }
+      else if (char === ":" && frame) frame.expectingKey = false;
+      else if (char === "," && frame) { frame.expectingKey = frame.object; frame.key = null; }
     }
-    if (char === "{" || char === "[") {
-      firstTurnValue = char === "[" && (firstTurnValue || field(frame) === "turn");
-      const context = depth === 0 && char === "{" ? "root"
-        : depth === 1 && char === "{" && frame?.context === "root" && sse
-          ? frame.key === "response" ? "response" : frame.key === "headers" ? "headers" : "ignored" : "ignored";
-      depth++;
-      if (depth <= 2) frames[depth - 1] = { context, object: char === "{", key: null, expectingKey: char === "{" };
-      return;
-    }
-    firstTurnValue = false;
-    if (char === "}" || char === "]") { depth--; if (depth <= 0) closed = true; }
-    else if (char === ":" && frame) frame.expectingKey = false;
-    else if (char === "," && frame) { frame.expectingKey = frame.object; frame.key = null; }
   };
 }

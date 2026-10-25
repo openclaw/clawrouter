@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reduce HTTP Responses CPU by skipping unused whole-request serialization for fixed input-token bounds and scanning irrelevant SSE output text in batches; preserve pricing, retention, continuation publication and identity limits, with a reproducible synthetic CPU profiler.
 - Coalesce a burst of cold requests for one key into a single authority admission per isolate: the others wait for that snapshot, re-verify their own secret and select locally (`Server-Timing` `cr-cache;desc=joined`).
 - Fix hot-cache single-flight under concurrency: a request that found another request's credential or admission load in flight awaited that request's promise, and Workers then attribute its later I/O to the other request, failing it with `Cannot perform I/O on behalf of a different request` (HTTP 500). Waiters now poll the shared entry on their own timers (bounded at 5 s) and load themselves if it never appears.
 - Share secretless admission snapshots between isolates in the same Cloudflare location through the Cache API, so a cold isolate can adopt a neighbour's fresh snapshot instead of calling the authority. Entries keep their original fetch time (same max age), every request still re-verifies its secret, credentials are never shared, and a mutation served by an isolate makes it ignore older shared entries. `Server-Timing` reports `cr-cache;desc=colo` for these hits.
