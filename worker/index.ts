@@ -28,7 +28,7 @@ import { proxyRealtimeWebSocket } from "./realtime-websocket";
 import { proxyResponsesWebSocket } from "./responses-websocket";
 import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
-import { clearHotCaches, pendingBackgroundWork } from "./hot-cache.ts";
+import { clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
@@ -55,7 +55,7 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     }
     // Mutations served by this isolate take effect here at once; other isolates
     // converge within the hot-cache max age.
-    if (mutatesHotState(request.method, path)) clearHotCaches();
+    if (mutatesHotState(request.method, path)) { clearHotCaches(); fenceSharedHotCache(); }
     // Stale-cache refreshes and coalesced counters registered by this request.
     const background = pendingBackgroundWork();
     if (background) context.waitUntil(background);

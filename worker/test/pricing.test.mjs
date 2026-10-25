@@ -39,6 +39,27 @@ test("opaque inputs and provider-added tools reserve the full input window", () 
   assert.equal(estimateModelCost(pricing, { tools: [{ type: "computer_20250124" }] }).inputTokens, pricing.maxInputTokens);
 });
 
+test("fixed input bounds do not serialize large Responses histories", t => {
+  const endpoint = { request_format: "openai.responses" };
+  for (const extra of [
+    { input: [{ type: "reasoning", encrypted_content: "synthetic".repeat(100_000) }] },
+    { previous_response_id: "resp_parent", input: "history".repeat(100_000) },
+    { input: [{ type: "input_image", image_url: "https://example.invalid/image" }] },
+  ]) {
+    const body = { ...extra, max_output_tokens: 16 };
+    const stringify = JSON.stringify;
+    const calls = t.mock.method(JSON, "stringify", function (value, ...args) {
+      assert.notEqual(value, body, "a fixed input bound does not use serialized bytes");
+      return stringify(value, ...args);
+    });
+    const result = estimateModelCost(pricing, body, endpoint);
+    assert.equal(result.inputTokens, pricing.maxInputTokens);
+    assert.equal(result.outputTokens, 16);
+    assert.equal(result.reserveMicros, Math.ceil(pricing.maxInputTokens * pricing.inputMicrosPerMillion / 1e6) + 240);
+    calls.mock.restore();
+  }
+});
+
 const claude = { request_format: "anthropic.messages" };
 const b64 = (bytes) => Buffer.from(bytes).toString("base64");
 const le = (value, size) => Array.from({ length: size }, (_, index) => value >> index * 8 & 0xff);

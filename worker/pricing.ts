@@ -165,13 +165,15 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   const opaque = (!endpoint || endpoint.request_format === "openai.responses" || compact) && responsesHasOpaqueInput(body);
   const opaqueLimit = opaque ? opaqueInputLimit(pricing) : null;
   if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
-  const bytes = endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
   // Claude base64 images with a recognized header replace their encoded bytes
   // with their visual-token ceiling. Every other media input stays unbounded.
   const images: InlineImageBound | undefined = endpoint?.request_format === "anthropic.messages" ? { encodedBytes: 0, tokens: 0 } : undefined;
-  const inputTokens = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images))
-    ? inputLimit
+  const unbounded = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images));
+  // Opaque/history/media inputs already reserve the full bound; their encoded
+  // size cannot refine it. Avoid serializing the conversation just to discard it.
+  const bytes = unbounded ? 0 : endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
+  const inputTokens = unbounded ? inputLimit
     : Math.min(inputLimit, saturatingAdd(saturatingAdd(bytes - (images?.encodedBytes ?? 0), images?.tokens ?? 0), pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
   // Native maxOutputTokens includes both thoughts and visible candidate tokens.

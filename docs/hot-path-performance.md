@@ -43,6 +43,147 @@ backfilled shards, Unicode/case/whitespace aliases, non-text historical
 principals, credential-only events, concurrent-era ingests, restart/rollback,
 and owner filtering before LIMIT.
 
+## HTTP Responses CPU (2026-10-25)
+
+The supplied 15-minute production tail reported `POST /v1/responses` at 101 ms
+median / 2.2 s P99 / 3.7 s max CPU (135 requests), and native OpenAI Responses at
+142 ms median / 1.5 s P99 (102 requests). Embeddings were about 15 ms median and
+Durable Object routes at most 7 ms. DFW load shedding was 2.8%, LAX 0.9%. These
+are the supplied observations, not a new production measurement or deployment.
+
+The local baseline is `f8faad4`, the clean checkout actually present at task start
+(newer than the work order's `2163d3f`). The diagnostic drives `handler.fetch`
+through unified and native OpenAI HTTP Responses, with a soft-budget policy,
+warm admission snapshots, an environment credential, fake continuation ACKs and
+fake budget status/charge receipts. It asserts zero pre-dispatch backend calls,
+zero warm KV reads, exact delivered byte counts, one usage receipt per request,
+the terminal token counts, and the expected number of archive writes.
+
+Synthetic Codex histories contain messages, function calls/results, function
+schemas and reasoning with encrypted content. Request sizes are 524,257,
+2,097,121 and 5,242,849 UTF-8 bytes. Each response has 600 deltas, an item-done
+snapshot and a final completed snapshot with usage: 1,185,305 SSE bytes in
+4,093-byte chunks crossing JSON escapes, UTF-8 and CRLF boundaries. Generation
+and encoding of these fixtures happen outside measurement. Each cell warms 30
+requests, then averages `process.cpuUsage()` over 30 sequential requests, from
+handler entry through byte delivery and all accounting/retention background work.
+Request construction is excluded. The fixture freezes only its test hot-cache
+clock so a long cell cannot become a refresh experiment; production cache rules
+are unchanged. Node v26.12.1 was used; the raw report records the runtime.
+
+| Route | Input MiB | Retention | Before CPU ms/request | After CPU ms/request | Reduction |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Unified | 0.5 | Off | 65.86 | 62.30 | 5.4% |
+| Unified | 2 | Off | 79.24 | 73.11 | 7.7% |
+| Unified | 5 | Off | 98.48 | 97.02 | 1.5% |
+| Unified | 5 | On | 97.02 | 91.55 | 5.6% |
+| Native | 0.5 | Off | 61.40 | 46.49 | 24.3% |
+| Native | 2 | Off | 75.57 | 68.28 | 9.6% |
+| Native | 5 | Off | 97.45 | 80.79 | 17.1% |
+| Native | 5 | On | 102.59 | 94.22 | 8.2% |
+
+These are process CPU averages, not edge invocation measurements. Whole-request
+variation is material: retention-on can appear cheaper than retention-off in
+separate cells, and unified/native dispatches share most code. Do not infer a
+uniform speedup, an archive discount, or production tail/load-shedding changes.
+The [raw before/intermediate/after samples](performance/http-responses-cpu-local.json)
+preserve that variation rather than selecting the best rounds. Exploratory runs
+with shorter warmups, a cache-refresh crossing, or overlapping task-owned runs
+were excluded; the retained native 5 MiB baseline briefly overlapped a focused
+test process, so shared-host interference remains possible even though CPU
+counters exclude that other process. No full scripts test suite was run.
+
+### Sampled CPU ranking
+
+Separate inspector profiles cover 20 requests per cell at a 100 µs interval
+(10 warmups before, 30 after). Profiling overhead raises the baseline unified
+5 MiB retention-off mean to **119.23 ms**, versus 98.48 ms without the profiler.
+Self and inclusive totals below are sample-count estimates normalized to that
+profiled process CPU, excluding idle/program samples. Inclusive rows overlap;
+async stack boundaries and Node test/Promise hooks limit stage attribution.
+They are not precise workerd timers or independently additive stage durations.
+
+| Rank | Function / stage | Self ms | Inclusive ms | Request CPU |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | Identity inspector byte `push` (`response-identities.ts`) | 3.91 | 25.88 | 21.7% |
+| 2 | Token pipeline `next` (`stream-chain`) | 5.05 | 22.58 | 18.9% |
+| 3 | `estimateModelCost`: redundant JSON stringify + UTF-8 count | 7.53 | 11.79 | 9.9% |
+| 4 | `readJson`: required request decode/JSON parse | 6.27 | 8.49 | 7.1% |
+| 5 | `prepareSingleSelected`: outbound serialization/preparation | 7.98 | 8.23 | 6.9% |
+| 6 | Metadata/tool/witness token dispatch (`responses-usage.ts`) | 1.69 | 8.11 | 6.8% |
+| 7 | JSON tokenizer (`stream-json`) | 6.87 | 6.92 | 5.8% |
+| 8 | Garbage collection | 5.76 | 5.76 | 4.8% |
+| 9 | UTF-8 encode builtin, across owners | 5.45 | 5.45 | 4.6% |
+| 10 | UTF-8 decode builtin, across owners | 4.31 | 4.31 | 3.6% |
+| 11 | Compaction witness `observe` | 0.16 | 0.80 | 0.7% |
+| 12 | Recursive cache TTL body scan | 0.55 | 0.68 | 0.6% |
+| 13 | Recursive cache-control key body scan | 0.44 | 0.61 | 0.5% |
+| 14 | `sha256Hex`, all request/continuation owners | 0.22 | 0.58 | 0.5% |
+| 15 | Usage extraction (`extractUsageTokens`) | <0.02 | 0.04 | <0.1% |
+
+Request continuation/tool-base classification and witness construction had no
+self samples in this profile; that is below sampling resolution, not zero work.
+With retention enabled, archive `write` was 10.18 ms self/inclusive (8.2% of that
+separate 123.96 ms profile). The response parser already uses one streaming
+decoder, bounded feeds and incremental scalar/tool projections; it does not
+accumulate or repeatedly decode the whole SSE response. Identity inspection has
+its own decoder because it publishes protocol identities independently of full
+JSON validity and bounded pricing/tool qualification. Removing that independence
+would change delivery/error/publication semantics.
+
+### Safe changes and measured savings
+
+`422d4ef` defers serialized-size estimation until bytes can affect the input
+bound. Opaque reasoning, history references and unbounded media already select
+the full existing bound. The pricing-gap, media, service-tier, output-limit and
+reservation rules remain in place. At 5 MiB, before-header CPU fell from
+25.50 to 20.23 ms unified, and 25.78 to 20.39 ms native: **about 5.3 ms saved**.
+Whole-request means in that intermediate run were 98.43/97.71 ms, effectively
+unchanged against 98.48/97.45 ms because delivery variation masked the gain.
+Ingress still parses once; the opaque retention-off request now serializes once
+for dispatch instead of twice. The optional JSON audit confirms one large parse
+and one large stringify per request after the change; retention adds its original
+archive-envelope serialization. Original ingress length cannot generally replace
+the transformed pricing body's length (model rewrites, whitespace and escaping).
+
+`d87b694` feeds complete SSE data spans into the bounded identity scanner and
+skips irrelevant string runs with native delimiter searches. It preserves
+escape parity across chunks, typed identity paths, UTF-8 limits, conflicts,
+line endings and incomplete-event publication rules. In the separate 5 MiB
+profile, identity byte `push` fell **25.88 → 8.02 ms**, about **17.9 ms / 69%**.
+Final profiled request CPU was 110.48 ms. The unprofiled table above is the
+whole-request result; profile-attributed savings are not additive predictions.
+
+Substantial work remains: one ingress decode/parse, the transformed outbound
+serialization, and validating streamed usage, tool ancestry and witness evidence.
+The latter pipeline is now the dominant sampled response cost. Further safe
+work should target tokenizer/projection allocation and Promise overhead, with
+the same fault/cancellation/duplicate-key corpus. Sharing the identity decoder
+and parser would need a design that preserves early identity publication and
+its error precedence. Forwarding unchecked raw input, dropping final output
+inspection or reducing archive content would change contracts; none was done.
+No auth, policy, budget state, pricing result or continuation witness cache was
+added or extended.
+
+Reproduce timing, profiles and the optional serialization audit separately:
+
+```sh
+# Choose an artifact directory on the external volume, outside this checkout.
+proof=/Volumes/Clawstudio-Storage/CodexWorktrees/clawrouter-http-cpu-proof
+HTTP_CPU_OUT="$proof/timing" node test/diagnostics/http-responses-cpu.test.mjs
+HTTP_CPU_PROFILE=1 HTTP_CPU_SIZES=5 HTTP_CPU_RUNS=20 HTTP_CPU_OUT="$proof/profile" \
+  node test/diagnostics/http-responses-cpu.test.mjs
+node scripts/summarize-http-cpu.mjs "$proof/profile/unified-5MiB-retention-off.cpuprofile" "$proof/profile/results.json"
+node --cpu-prof --cpu-prof-dir="$proof" test/diagnostics/http-responses-cpu.test.mjs
+HTTP_CPU_COUNT_JSON=1 HTTP_CPU_RUNS=1 HTTP_CPU_WARMUPS=1 HTTP_CPU_SIZES=5 \
+  node test/diagnostics/http-responses-cpu.test.mjs
+```
+
+CPU profiles remain outside Git. `before-node.cpuprofile` and
+`after-node.cpuprofile` capture complete `node --cpu-prof` runs; per-cell inspector
+profiles exclude startup/fixture generation. No live provider call or deployment
+was performed.
+
 ## WebSocket create follow-up (2026-10-23)
 
 Live production baseline, measured **before #326's hot caches**: 15 chained
@@ -316,6 +457,55 @@ hours of per-version invocation analytics:
   history costs 2.6 ms p50 (1.1 ms at 200 KB). Responses CPU in the tail
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
+
+### Production check of the colo layer and burst coalescing (2026-10-24)
+
+On `f8d67e89` (#334), one warm-up request followed by three waves of ten
+requests over fresh connections from SJC returned 22 isolate hits, 4 stale hits
+and 4 `cr-cache;desc=colo` adoptions at 6 ms median admission (10 ms max), with
+no authority calls after the warm-up. A cold isolate that previously paid ~91 ms
+now adopts its neighbour's snapshot.
+
+The same probe exposed a burst gap: twelve simultaneous cold requests for one
+key made twelve authority calls. Concurrent foreground misses for a key now share
+the first request's authority admission; the others wait for its snapshot,
+re-verify their own secret and select locally, reporting `cr-cache;desc=joined`.
+A wrong secret or an uncacheable leader result sends the follower to the
+authority itself, and failover never joins.
+
+The first version of this awaited the leader's promise and failed the workerd
+revocation-under-load test with hundreds of HTTP 500s:
+`Cannot perform I/O on behalf of a different request (I/O type:
+ReadableStreamSource)`. Workers resume the code after `await promise` in the I/O
+context of the request that resolved it, so the follower's upstream fetch and
+response stream belonged to the leader's request. The credential cache's
+existing single-flight (`HotCache.load`) had the same shape; it did not fail
+locally only because in-process credential loads finish too quickly to overlap.
+No request may await another request's promise: waiters poll the shared entry
+or a settled flag on their own timers (`waitForOtherRequest`, bounded at 5 s)
+and fall back to their own call.
+
+### Per-location snapshot sharing (2026-10-24)
+
+A live tail during light traffic showed 13 `/admission/resolve` calls for about
+17 inference requests: Cloudflare spreads sparse traffic across many isolates,
+and each cold isolate paid the 78-102 ms admission round trip. Admission
+snapshots now also go to a per-location Workers Cache API layer
+(`worker/colo-cache.ts`). On a local miss, an isolate first checks that layer
+(single-digit milliseconds) and adopts a snapshot another isolate in the same
+location fetched, before calling the authority.
+
+- Only the secretless admission snapshot is shared (policy, owner, connection,
+  pool routing projections, the key's secret digest). Upstream credentials stay
+  in isolate memory.
+- An adopted entry keeps its original fetch time: the 10 s fresh window and 60 s
+  max age are measured from the authority fetch, so staleness bounds are
+  unchanged. The request's secret must match through the same `cacheable` check.
+- A mutation served by an isolate fences that isolate against shared entries
+  fetched at or before the mutation, so its own changes still apply immediately.
+  Other isolates converge within the max age, as before.
+- Failover, the disabled knob (`CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0`) and
+  Cache API errors all fall through to the authority.
 
 ### Verified in production (2026-10-24)
 

@@ -16,6 +16,7 @@ const { clearHotCaches, setHotCacheClock, overrideHotCacheConfig, HOT_CACHE_DISA
 // Coalescing windows are wall-clock; keep suites fast, a dedicated test covers the real window.
 (await import("../admission-cache.ts")).setCoalesceWindowMs(0);
 if (process.env.CLAWROUTER_TEST_HOT_CACHE === "off") overrideHotCacheConfig(HOT_CACHE_DISABLED);
-beforeEach(() => { clearHotCaches(); setHotCacheClock(); });
+const { resetSharedHotCacheFence } = await import("../hot-cache.ts");
+beforeEach(() => { clearHotCaches(); setHotCacheClock(); resetSharedHotCacheFence(); });
 /** Suites that mutate authority state directly between requests test the per-request authority path. */
 export function perRequestAuthority() { overrideHotCacheConfig(HOT_CACHE_DISABLED); }

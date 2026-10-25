@@ -48,6 +48,29 @@ test("identity evidence survives oversized frames and metadata after terminal ou
   assert.deepEqual(inspect(JSON.stringify({ output, id: "resp_large" }), false, [8192]), [{ kind: "response", value: "resp_large" }]);
 });
 
+test("skipped strings preserve escape parity before late identities at every boundary", () => {
+  const output = 'quoted " text \\ and \\\\ emoji 🦊\n' + '{"id":"decoy","type":"response.metadata"}';
+  for (const sse of [false, true]) {
+    const value = sse ? { response: { output: [{ text: output }], id: "resp_late" }, type: "response.completed" }
+      : { output: [{ text: output }], id: "resp_late" };
+    const wire = sse ? `: ignored comment\r\nevent: response.completed\r\ndata: ${JSON.stringify(value)}\r\n\r\n` : JSON.stringify(value);
+    for (let split = 1; split < encoder.encode(wire).length; split++) {
+      assert.deepEqual(inspect(wire, sse, [split, 1]), [{ kind: "response", value: "resp_late" }], `${sse}/${split}`);
+    }
+  }
+});
+
+test("batched SSE scanning preserves unfinished events and metadata limits", () => {
+  const metadata = `data: ${JSON.stringify({ type: "response.metadata", headers: { "x-codex-turn-state": "é".repeat(4096) } })}\r\n\r\n`;
+  assert.deepEqual(inspect(metadata, true, [4093]), [{ kind: "turn", value: "é".repeat(4096) }]);
+  assert.throws(() => inspect(metadata.replace('é', 'éé'), true, [4093]), /continuation identity/);
+  assert.deepEqual(inspect(metadata.slice(0, -2), true, [4093]), []);
+  // A skipped trailing escape must carry into the next data feed, not hide
+  // the eventual closing quote or expose JSON-shaped output as an identity.
+  const wire = 'data: {"response":{"output":"' + '\\\\'.repeat(10_000) + '\\"ignored","id":"resp_tail"},"type":"response.completed"}\n\n';
+  assert.deepEqual(inspect(wire, true, [4093, 1, 2]), [{ kind: "response", value: "resp_tail" }]);
+});
+
 test("deep skipped output and long unrelated keys do not become identities", () => {
   const nested = "[".repeat(20_000) + '{"response":{"id":"nested"}}' + "]".repeat(20_000);
   const body = `{"${"k".repeat(4000)}":"ignored","output":${nested},"id":"resp_after_nested"}`;
