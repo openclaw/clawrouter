@@ -498,3 +498,22 @@ test('a wrong secret joining a burst is rejected without disturbing the others',
   assert.deepEqual([good.status, bad.status, also.status], [200, 401, 200]);
   await Promise.all([good.text(), bad.text(), also.text()]); await Promise.all(f.pending);
 });
+
+test('a concurrent load waits for the shared entry instead of awaiting another request\'s promise', async () => {
+  clock();
+  const config = hotCacheConfig({}), cache = new HotCache(8);
+  const gate = Promise.withResolvers();
+  let loads = 0;
+  const leaderLoader = async () => { loads++; await gate.promise; return { value: 'leader', cacheable: true }; };
+  const followerLoader = async () => { loads++; return { value: 'follower', cacheable: true }; };
+  const leader = cache.load('k', config, leaderLoader);
+  const follower = cache.load('k', config, followerLoader);
+  gate.resolve();
+  assert.deepEqual((await leader).value, 'leader');
+  assert.deepEqual((await follower).value, 'leader', 'the follower adopts the stored entry');
+  assert.equal(loads, 1, 'only one load ran');
+  const failing = cache.load('f', config, async () => { loads++; return { value: 'denied', cacheable: false }; });
+  const retry = cache.load('f', config, async () => { loads++; return { value: 'second', cacheable: true }; });
+  assert.equal((await failing).value, 'denied');
+  assert.equal((await retry).value, 'second', 'an uncacheable leader result sends the follower to its own load');
+});

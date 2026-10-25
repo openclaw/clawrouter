@@ -4,7 +4,7 @@ import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
-import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, waitForOtherRequest, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
@@ -56,7 +56,7 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
   // rest wait for its snapshot, re-verify their own secret and select locally.
   const leader = failover ? undefined : inflightMisses.get(key);
   if (leader) {
-    await leader.catch(() => undefined);
+    await waitForOtherRequest(() => leader.settled);
     const joined = admissions.peek(key, config);
     if (joined && safeEqual(request.secretSha256, joined.value.credential!.credential.secretSha256.toLowerCase())) {
       const selection = request.selection ? localSelection(env, joined.value, request.selection) : undefined;
@@ -76,12 +76,15 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
     return loaded;
   })();
   const owns = !failover && !leader;
-  if (owns) inflightMisses.set(key, flight);
+  const marker = { settled: false };
+  if (owns) inflightMisses.set(key, marker);
   try { return { admission: (await flight).value, cache: "miss" }; }
-  finally { if (owns && inflightMisses.get(key) === flight) inflightMisses.delete(key); }
+  finally { marker.settled = true; if (owns && inflightMisses.get(key) === marker) inflightMisses.delete(key); }
 }
 
-const inflightMisses = new Map<string, Promise<unknown>>();
+// Concurrent misses wait on this flag with their own timers, never on the
+// leader's promise (see waitForOtherRequest).
+const inflightMisses = new Map<string, { settled: boolean }>();
 
 async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest) {
   const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", request);
