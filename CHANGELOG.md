@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make the deploy train re-read the deployments list when it still shows the previous deployment right after a traffic-split change (bounded ~15 s), without repeating the mutation; any other split still stops the train.
 - Accept pnpm's forwarded argument separator in the documented health-report and budget-mode script invocations.
 - Index usage snapshot attribution by normalized principal and credential, with bounded resumable backfill and correct historical results throughout migration; avoid repeated JSON parsing once backfill finishes.
 - Reduce HTTP Responses CPU by skipping unused whole-request serialization for fixed input-token bounds and scanning irrelevant SSE output text in batches; preserve pricing, retention, continuation publication and identity limits, with a reproducible synthetic CPU profiler.

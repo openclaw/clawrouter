@@ -17,23 +17,25 @@ import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
-function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0 } = {}) {
+function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0 } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
   let versions = [{ id: blue }];
   let time = 1_000_000, smokes = 0, uploads = 0;
   const calls = [], receipts = [], smokeObservations = [];
   const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration };
-  const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture-token', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' }, fetchImpl: async (url, init) => {
+  let stale = 0, previous;
+  const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture-token', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' }, wait: async (ms) => { time += ms; }, fetchImpl: async (url, init) => {
     calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body), time });
     const path = new URL(url).pathname;
     let result;
     if (path.endsWith('/deployments')) {
       if (init.method === 'POST') {
         const body = JSON.parse(init.body);
+        previous = deployment; stale = deploymentLag;
         deployment = { id: `d${calls.length}`, versions: body.versions, annotations: body.annotations };
         result = deployment;
         if (lostPost) { lostPost = false; throw new Error('Lost response after mutation'); }
-      } else result = { deployments: [deployment] };
+      } else result = { deployments: [stale-- > 0 && previous ? previous : deployment] }; // deploymentLag: list trails the POST
     } else if (path.endsWith('/versions')) {
       // listLag: the uploaded candidate stays hidden for that many history reads.
       result = { items: uploads && listLag-- > 0 ? versions.filter((version) => version.id !== green) : versions };
@@ -98,6 +100,15 @@ test('a version history that briefly trails the upload is re-read; a foreign new
   const foreign = fixture({ foreignUpload: true });
   await assert.rejects(runTrain(foreign.options), /Latest upload changed during candidate creation/);
   assert.equal(posts(foreign).length, 0);
+});
+
+test('a deployments list that trails an accepted split is re-read without repeating the mutation', async () => {
+  const lagging = fixture({ deploymentLag: 2 });
+  await runTrain(lagging.options);
+  assert.equal(lagging.state.status, 'done');
+  assert.deepEqual(posts(lagging).map((p) => p.versions.map((v) => v.percentage)), [[0, 100], [10, 90], [50, 50], [100, 0], [100, 0]], 'each split is posted exactly once');
+  const stuck = fixture({ deploymentLag: 99 });
+  await assert.rejects(runTrain(stuck.options), /readback differs/);
 });
 
 test('zero-only success removes candidate and leaves exactly blue100', async () => {

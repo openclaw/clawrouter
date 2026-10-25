@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 
-export function createApi({ env = process.env, fetchImpl = fetch } = {}) {
+const READBACK_ATTEMPTS = 5, READBACK_STEP_MS = 1_000;
+export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep } = {}) {
   const repository = env.GITHUB_REPOSITORY || 'openclaw/clawrouter';
   if (repository !== 'openclaw/clawrouter') throw new Error('Production train repository mismatch');
   const worker = env.CLAWROUTER_WORKER_NAME || 'clawrouter-edge';
@@ -40,8 +41,15 @@ export function createApi({ env = process.env, fetchImpl = fetch } = {}) {
         await cloudflare(`${workerPath}/deployments`, { method: 'POST', body: { strategy: 'percentage', versions, annotations: { 'workers/message': message } } });
       } catch (cause) { error = cause; }
       // A lost mutation response is ambiguous. Read back, never blindly retry POST.
-      const actual = await this.latest();
-      if (actual?.annotations?.['workers/message'] !== message || actual?.versions?.length !== versions.length || actual.versions.some((v, i) => v.version_id !== versions[i].version_id || v.percentage !== versions[i].percentage)) throw error || new Error('Deployment readback differs from requested split');
+      const matches = (deployment) => deployment?.annotations?.['workers/message'] === message && deployment?.versions?.length === versions.length && deployment.versions.every((v, i) => v.version_id === versions[i].version_id && v.percentage === versions[i].percentage);
+      let actual = await this.latest();
+      // The deployments list can trail an accepted POST. Re-read only while it
+      // still shows the deployment that existed before; any other split fails now.
+      for (let attempt = 1; attempt <= READBACK_ATTEMPTS && !matches(actual) && actual?.id === before?.id; attempt++) {
+        await wait(READBACK_STEP_MS * attempt);
+        actual = await this.latest();
+      }
+      if (!matches(actual)) throw error || new Error('Deployment readback differs from requested split');
       console.log(`deployment ${actual.id}: ${versions.map((v) => `${v.version_id}=${v.percentage}%`).join(' ')}`);
       return actual;
     },
