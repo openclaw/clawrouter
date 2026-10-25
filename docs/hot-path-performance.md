@@ -274,6 +274,28 @@ hours of per-version invocation analytics:
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
 
+### Per-location snapshot sharing (2026-10-24)
+
+A live tail during light traffic showed 13 `/admission/resolve` calls for about
+17 inference requests: Cloudflare spreads sparse traffic across many isolates,
+and each cold isolate paid the 78-102 ms admission round trip. Admission
+snapshots now also go to a per-location Workers Cache API layer
+(`worker/colo-cache.ts`). On a local miss, an isolate first checks that layer
+(single-digit milliseconds) and adopts a snapshot another isolate in the same
+location fetched, before calling the authority.
+
+- Only the secretless admission snapshot is shared (policy, owner, connection,
+  pool routing projections, the key's secret digest). Upstream credentials stay
+  in isolate memory.
+- An adopted entry keeps its original fetch time: the 10 s fresh window and 60 s
+  max age are measured from the authority fetch, so staleness bounds are
+  unchanged. The request's secret must match through the same `cacheable` check.
+- A mutation served by an isolate fences that isolate against shared entries
+  fetched at or before the mutation, so its own changes still apply immediately.
+  Other isolates converge within the max age, as before.
+- Failover, the disabled knob (`CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0`) and
+  Cache API errors all fall through to the authority.
+
 ### Verified in production (2026-10-24)
 
 `68377baf` (`50717c7`, #326-#332) rolled out through the full canary train on
