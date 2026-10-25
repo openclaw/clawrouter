@@ -7,7 +7,7 @@ export const HOT_CACHE_DEFAULT_MAX_AGE_SECONDS = 60;
 export const HOT_CACHE_FRESH_SECONDS = 10;
 
 export interface HotCacheConfig { readonly maxAgeMs: number; readonly freshMs: number }
-export type HotCacheState = "hit" | "stale" | "miss" | "off";
+export type HotCacheState = "hit" | "stale" | "colo" | "miss" | "off";
 
 const DISABLED: HotCacheConfig = Object.freeze({ maxAgeMs: 0, freshMs: 0 });
 
@@ -69,9 +69,9 @@ export class HotCache<V> {
     return { value: entry.value, fresh: now - entry.storedAt < config.freshMs };
   }
 
-  set(key: string, value: V, config: HotCacheConfig, expiresAt = Number.POSITIVE_INFINITY): void {
+  /** `storedAt` lets an entry adopted from the colo cache keep its original fetch time. */
+  set(key: string, value: V, config: HotCacheConfig, expiresAt = Number.POSITIVE_INFINITY, storedAt = hotCacheNow()): void {
     if (!config.maxAgeMs) return;
-    const storedAt = hotCacheNow();
     if (expiresAt <= storedAt) { this.entries.delete(key); return; }
     this.entries.delete(key);
     this.entries.set(key, { value, storedAt, expiresAt });
@@ -123,3 +123,11 @@ const caches = new Set<{ clear(): void }>();
 export function registerHotCache<V extends { clear(): void }>(cache: V): V { caches.add(cache); return cache; }
 /** Test hook and local invalidation after same-isolate admin mutations. */
 export function clearHotCaches(): void { for (const cache of caches) cache.clear(); }
+
+// Shared (colo) entries fetched before a mutation served by this isolate are
+// ignored here, so this isolate's own changes still apply immediately.
+let sharedFence = 0;
+export function fenceSharedHotCache(): void { sharedFence = hotCacheNow(); }
+export function sharedHotCacheFence(): number { return sharedFence; }
+/** Test hook: forget the fence between independent tests. */
+export function resetSharedHotCacheFence(): void { sharedFence = 0; }
