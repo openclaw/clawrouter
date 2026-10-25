@@ -409,3 +409,69 @@ test('a wrong secret never starts a remembered credential load', async t => {
   assert.equal(response.status, 401);
   assert.equal(f.ownerCalls, 0);
 });
+
+function fakeColo(t) {
+  const entries = new Map(), stats = { puts: 0, matches: 0, hits: 0 };
+  const cache = {
+    async match(url) { stats.matches++; const body = entries.get(String(url)); if (body) stats.hits++; return body ? new Response(body) : undefined; },
+    async put(url, response) { stats.puts++; entries.set(String(url), await response.text()); },
+  };
+  const previous = globalThis.caches;
+  globalThis.caches = { default: cache };
+  t.after(() => { globalThis.caches = previous; });
+  return { entries, stats };
+}
+// Another isolate in the same location: empty local caches, shared colo layer intact.
+const otherIsolate = async () => { const { clearHotCaches } = await import('../hot-cache.ts'); clearHotCaches(); };
+
+test('a cold isolate adopts a fresh colo snapshot instead of calling the authority', async t => {
+  clock();
+  const colo = fakeColo(t);
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send();
+  assert.equal(colo.stats.puts, 1, 'the authority result is published once');
+  assert.ok(![...colo.entries.values()].join('').includes('synthetic-token'), 'no credential material in the colo layer');
+  await otherIsolate(); f.reset();
+  const { response } = await f.send();
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('server-timing'), /cr-cache;desc=colo/);
+  assert.ok(!f.calls.includes('/admission/resolve'), f.calls.join());
+});
+
+test('colo snapshots expire by their original fetch time and never admit a different secret', async t => {
+  const time = clock();
+  fakeColo(t);
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send();
+  await otherIsolate(); f.reset();
+  const wrong = await f.send({ ...admissionHeaders, authorization: 'Bearer clawrouter-live-fixture-not-the-secret' });
+  assert.equal(wrong.response.status, 401);
+  assert.deepEqual(f.calls, ['/admission/resolve'], 'a secret mismatch goes to the authority');
+  time.advance(60_000);
+  await otherIsolate(); f.reset();
+  const late = await f.send();
+  assert.equal(late.response.status, 200);
+  assert.match(late.response.headers.get('server-timing'), /cr-cache;desc=miss/, 'past the max age the colo entry is ignored');
+});
+
+test('a mutation served by this isolate ignores older colo snapshots', async t => {
+  clock();
+  fakeColo(t);
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send();
+  f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  const admin = await worker.fetch(new Request('https://fixture/v1/admin/policies/fixture', { method: 'PUT', body: '{}' }), f.env, f.context);
+  await admin.text();
+  assert.equal((await f.send()).response.status, 403, 'the pre-mutation colo snapshot is not adopted here');
+});
+
+test('the colo layer is unused when the hot cache is disabled', async t => {
+  const colo = fakeColo(t);
+  const f = await fixture({ CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0' }); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send(); await f.send();
+  assert.deepEqual(colo.stats, { puts: 0, matches: 0, hits: 0 });
+});

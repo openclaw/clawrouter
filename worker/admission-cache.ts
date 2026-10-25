@@ -4,7 +4,8 @@ import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
-import { HotCache, hotCacheConfig, registerHotCache, runInBackground, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { coloGet, coloPut } from "./colo-cache.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
 import { assertPolicyModel } from "./policy-models.ts";
@@ -39,6 +40,17 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
     }
   }
   prefetchRememberedCredential(env, key, request);
+  // Another isolate in this location may have fetched it moments ago.
+  const shared = request.selection?.excludedKeys?.length ? undefined : await coloGet<AdmissionResult>("admission", key, config);
+  if (shared && cacheable(shared.value, request.secretSha256)) {
+    admissions.set(key, shared.value, config, expiryOf(shared.value), shared.fetchedAt);
+    const selection = request.selection ? localSelection(env, shared.value, request.selection) : undefined;
+    if (!request.selection || selection) {
+      if (hotCacheNow() - shared.fetchedAt >= config.freshMs) admissions.revalidate(key, config, () => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }));
+      rememberSelection(key, request, selection);
+      return { admission: { ...shared.value, ...(selection ? { selection } : {}) }, cache: "colo" };
+    }
+  }
   const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined });
   if (loaded.cacheable) rememberSelection(key, request, loaded.value.selection);
   if (loaded.cacheable) admissions.set(key, withoutSelection(loaded.value), config, loaded.expiresAt);
@@ -50,8 +62,15 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
 
 async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest) {
   const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", request);
+  const ok = config.maxAgeMs > 0 && cacheable(value, request.secretSha256);
+  // Publish the secretless snapshot for other isolates in this location.
+  if (ok) coloPut("admission", cacheKey(request), withoutSelection(value), hotCacheNow(), config);
+  return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: ok, expiresAt: expiryOf(value) };
+}
+
+function expiryOf(value: AdmissionResult): number {
   const expiresAt = value.credential?.credential.expiresAt ? Date.parse(value.credential.credential.expiresAt) : Number.POSITIVE_INFINITY;
-  return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: config.maxAgeMs > 0 && cacheable(value, request.secretSha256), expiresAt: Number.isFinite(expiresAt) ? expiresAt : Number.POSITIVE_INFINITY };
+  return Number.isFinite(expiresAt) ? expiresAt : Number.POSITIVE_INFINITY;
 }
 
 // The last grant each key selected per operation: secretless routing data used
