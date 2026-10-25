@@ -52,7 +52,7 @@ function apiToken(env) {
 }
 
 export async function healthReport(argv, { env = process.env, fetchImpl = fetch, log = console.log, now = Date.now() } = {}) {
-  const { values } = parseArgs({ args: argv, options: { hours: { type: "string", default: "24" }, script: { type: "string", default: "clawrouter-edge" }, json: { type: "boolean" }, help: { type: "boolean" } }, strict: true });
+  const { values } = parseArgs({ args: argv.filter(value => value !== "--"), options: { hours: { type: "string", default: "24" }, script: { type: "string", default: "clawrouter-edge" }, json: { type: "boolean" }, help: { type: "boolean" } }, strict: true });
   if (values.help) { log(help); return []; }
   const hours = Number(values.hours);
   if (!Number.isInteger(hours) || hours < 1 || hours > 168) throw new Error("--hours must be an integer from 1 to 168");

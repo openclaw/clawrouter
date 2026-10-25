@@ -35,7 +35,7 @@ test("dry run reads only; apply writes each changed policy once", async () => {
       assert.equal(init.headers.authorization, "Bearer synthetic-admin");
       return init.method === "GET" ? Response.json({ policies }) : Response.json({ ok: true });
     };
-    await applyBudgetMode(["--policy", "hard", "--policy", "fast", ...(apply ? ["--apply"] : [])], { env, fetchImpl, log: line => logs.push(line) });
+    await applyBudgetMode(["--", "--policy", "hard", "--policy", "fast", ...(apply ? ["--apply"] : [])], { env, fetchImpl, log: line => logs.push(line) });
     assert.deepEqual(calls, apply ? ["GET /v1/admin/policies", "PUT /v1/admin/policies/hard"] : ["GET /v1/admin/policies"]);
     assert.ok(logs.some(line => line.includes("hard reserve -> soft (monthly=100; tenant acme)")));
     assert.ok(!logs.join("\n").includes("synthetic-admin"), "the admin token is never logged");
