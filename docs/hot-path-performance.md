@@ -458,6 +458,24 @@ hours of per-version invocation analytics:
   (162 ms p50 for completed requests) is spent after headers, in delivery
   inspection and accounting.
 
+### Background drain bound (2026-10-25)
+
+A 15-minute production tail on `cab719cc` (1,947 events, no exceptions or 5xx)
+showed three requests logging `waitUntil() tasks did not complete within the
+allowed time after invocation end and have been cancelled`, each with 30-37 s of
+wall time. When that limit hits, Cloudflare cancels every remaining task of the
+request, including its usage accounting and settlement.
+
+The Worker entry handed the whole global set of pending background work (stale
+refreshes, colo publishes, counter flushes) to each request's `waitUntil`,
+including work owned by other requests. If such work never settles in the
+draining request's context (for example after its owner's client disconnected),
+the 25 s bound inside `runInBackground` does not help either, because that timer
+also belongs to the owning request. A request now drains only work registered
+after its own entry (`backgroundMark`) and races it against a 10 s timer created
+in its own context (`DRAIN_BOUND_MS`), so it can no longer reach the platform
+limit through someone else's work.
+
 ### Production check of the colo layer and burst coalescing (2026-10-24)
 
 On `f8d67e89` (#334), one warm-up request followed by three waves of ten
