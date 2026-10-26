@@ -47,10 +47,45 @@ function* jsonChunks(value: unknown): Generator<string> {
   }
 }
 
-export function jsonBodyBytes(value: unknown): number {
-  let bytes = 0;
-  for (const chunk of jsonChunks(value)) bytes += encoder.encode(chunk).byteLength;
+// A quoted chunk is at most 6 × stringChunk + 2 UTF-16 units (\u0000 escapes),
+// and each unit encodes to at most 3 bytes.
+const scratch = new Uint8Array(3 * (6 * stringChunk + 2));
+
+// Same chunks as quoted(), measured into a reused buffer instead of encoded.
+function quotedBytes(value: string): number {
+  if (value.length <= stringChunk) return encoder.encodeInto(JSON.stringify(value), scratch).written;
+  let bytes = 2;
+  for (let offset = 0; offset < value.length;) {
+    let end = Math.min(value.length, offset + stringChunk);
+    const last = value.charCodeAt(end - 1), next = value.charCodeAt(end);
+    if (end < value.length && last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
+    bytes += encoder.encodeInto(JSON.stringify(value.slice(offset, end)), scratch).written - 2;
+    offset = end;
+  }
   return bytes;
+}
+
+// Counts exactly what jsonBodyStream emits, without serializing: pricing and
+// dispatch size every Claude body, and the chunked serializer cost ~70% of a
+// request's CPU just to be measured.
+export function jsonBodyBytes(value: unknown): number {
+  if (typeof value === "string") return quotedBytes(value);
+  if (Array.isArray(value)) {
+    let bytes = 1 + Math.max(0, value.length - 1) + 1;
+    for (let index = 0; index < value.length; index++) bytes += jsonBodyBytes(value[index] ?? null);
+    return bytes;
+  }
+  if (value !== null && typeof value === "object") {
+    let bytes = 2, members = 0;
+    for (const [key, item] of Object.entries(value)) {
+      if (item === undefined) continue;
+      bytes += quotedBytes(key) + 1 + jsonBodyBytes(item);
+      members++;
+    }
+    return bytes + Math.max(0, members - 1);
+  }
+  if (value !== null && typeof value !== "number" && typeof value !== "boolean") throw new TypeError("expected a JSON value");
+  return JSON.stringify(value).length;
 }
 
 export function jsonBodyStream(value: unknown): ReadableStream<Uint8Array> {
