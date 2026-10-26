@@ -1,6 +1,7 @@
 packages:
   - admin
 overrides:
+  workerd: 1.20261021.1
   # Axe's auto-installed peer must match the screenshot runner's Page types.
   playwright-core: 1.63.0
 allowBuilds:
