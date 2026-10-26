@@ -40,6 +40,14 @@ For a custom manifest or another intentional Worker variable, add its name to
 the comma-separated `CLAWROUTER_SELF_HOST_VARS` value. Never add the raw
 `CLAWROUTER_ADMIN_TOKEN`; the Worker receives only its digest.
 
+The image includes the system CA bundle required by workerd's TLS verifier.
+For an operator-hosted HTTPS provider with a private CA, mount a maintained PEM
+bundle read-only into the container and set `NODE_EXTRA_CA_CERTS` to its container
+path. This setting belongs to the container environment; it does not need to be
+added to `CLAWROUTER_SELF_HOST_VARS`. Recreate the container after rotating the
+bundle. Additional CA trust does not override workerd's rejection of compromised
+certificate keys.
+
 ## Console sign-in
 
 Local console sign-in is opt-in. Add `CLAWROUTER_LOCAL_AUTH=enabled` to
