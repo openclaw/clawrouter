@@ -1,4 +1,4 @@
-import { responseEventIdentities, type ResponseIdentity } from "./response-identities.ts";
+import { responseEventIdentities, responseIdentity, type ResponseIdentity } from "./response-identities.ts";
 import { WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
 
 type Frame = Record<string, unknown>;
@@ -32,13 +32,16 @@ export interface AdmittedResponse {
   settle(outcome: Outcome, terminal: Frame | null, sent: boolean, executionStarted: boolean): Promise<void>;
 }
 
+export type ResponsesControlObservation = { eventType: "response.create" | "response.interrupt" | "response.steer" | "other"; outcome: "forwarded" | "unsupported_event"; background: boolean };
+
 interface SessionOptions {
+  observeControl?(event: ResponsesControlObservation): void;
   admit(body: Frame, lane: string | null, requestId: string, pin: string | null, signal: AbortSignal, witnesses: WebSocketContinuationWitnesses): Promise<AdmittedResponse>;
   waitUntil(promise: Promise<unknown>): void;
   limits?: Partial<typeof DEFAULT_LIMITS>;
 }
 
-const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, frameBytes: 4 * 1024 * 1024, bufferedBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
+const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, interrupts: 128, frameBytes: 4 * 1024 * 1024, bufferedBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
 const OUTPUT_LIMIT_ERROR: ErrorNotice = { code: "websocket_connection_limit_reached", message: "Router WebSocket output limit reached; open a new connection.", status: 400 };
 const encoder = new TextEncoder();
 const terminalTypes = new Map<string, Outcome>([["response.completed", "completed"], ["response.incomplete", "incomplete"], ["response.failed", "failed"], ["error", "error"]]);
@@ -72,6 +75,11 @@ export class ResponsesWebSocketSession {
   private settling = new Set<Operation>();
   private dispatched = new Map<string, Operation>();
   private terminalIds = new Map<string, string>();
+  // Retain only control identities, never operations or request bodies. ACKs can
+  // arrive after settlement and after a successor starts on the same lane.
+  private interrupts = new Map<string, Set<string>>();
+  private interruptCount = 0;
+  private controlObservations = 0;
   private bufferedBytes = 0;
   private bufferedCount = 0;
   private outputBytes = 0;
@@ -101,12 +109,12 @@ export class ResponsesWebSocketSession {
   private receive(data: unknown): void {
     if (this.ending) return;
     if (typeof data !== "string") {
-      this.close("client_protocol_error", 1003, { code: "unsupported_event", message: "Responses WebSockets accept JSON text response.create events only.", status: 400 });
+      this.close("client_protocol_error", 1003, { code: "unsupported_event", message: "Responses WebSockets accept JSON text events only.", status: 400 });
       return;
     }
     const bytes = encoder.encode(data).byteLength;
     if (bytes > this.limits.frameBytes) {
-      this.error("request_too_large", "Response create exceeds the router WebSocket frame limit.", 413);
+      this.error("request_too_large", "Event exceeds the router WebSocket frame limit.", 413);
       return;
     }
     let frame: Frame;
@@ -114,14 +122,16 @@ export class ResponsesWebSocketSession {
       const parsed = JSON.parse(data);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
       frame = parsed;
-    } catch { this.error("invalid_json", "Expected a JSON response.create object.", 400); return; }
+    } catch { this.error("invalid_json", "Expected a JSON event object.", 400); return; }
     const lane = frame.stream_id === undefined ? "" : frame.stream_id;
     if (typeof lane !== "string" || (frame.stream_id !== undefined && !/^[A-Za-z0-9_.-]{1,256}$/.test(lane))) {
       this.error("invalid_stream_id", "stream_id must contain 1–256 letters, numbers, underscores, hyphens, or periods.", 400);
       return;
     }
+    if (frame.type === "response.interrupt") { this.interrupt(frame, data, lane); return; }
     if (frame.type !== "response.create" || frame.background === true) {
-      this.error("unsupported_event", "Only response.create without background execution is supported.", 400, lane);
+      this.observeControl(frame, "unsupported_event");
+      this.error("unsupported_event", "Only response.create without background execution and response.interrupt are supported.", 400, lane);
       return;
     }
     if (!this.lanes.has(lane) && lane && [...this.lanes.keys()].filter(Boolean).length >= this.limits.lanes) {
@@ -138,6 +148,41 @@ export class ResponsesWebSocketSession {
     this.bufferedCount++;
     this.bufferedBytes += bytes;
     this.schedule();
+  }
+
+  private interrupt(frame: Frame, data: string, lane: string): void {
+    let id: string | undefined;
+    try { id = responseIdentity("response", frame.response_id)?.value; } catch { /* Report a client validation error below. */ }
+    if (!id) { this.error("invalid_response_id", "response.interrupt requires a nonempty response_id of at most 256 bytes.", 400, lane); return; }
+    if (frame.mode !== "discard_partial_items" || Object.keys(frame).some(key => !["type", "response_id", "mode", "stream_id"].includes(key))) {
+      this.observeControl(frame, "unsupported_event");
+      this.error("unsupported_event", "response.interrupt supports only response_id, mode discard_partial_items, and optional stream_id.", 400, lane);
+      return;
+    }
+    const op = this.dispatched.get(lane);
+    if (!(op?.sent && op.responseId === id) && this.terminalIds.get(lane) !== id && !this.interrupts.get(lane)?.has(id)) {
+      this.error("response_not_found", "response_id does not belong to this connection and stream.", 400, lane);
+      return;
+    }
+    // A lifetime cap bounds repeated sends as well as retained late-ACK state.
+    // Interrupts bypass the create queue, but cannot create billable work.
+    if (this.interruptCount >= this.limits.interrupts) {
+      this.close("router_limit", 1000, { code: "websocket_connection_limit_reached", message: "Router WebSocket interrupt limit reached; open a new connection.", status: 400, lane });
+      return;
+    }
+    const ids = this.interrupts.get(lane) ?? new Set<string>();
+    ids.add(id);
+    this.interrupts.set(lane, ids);
+    this.interruptCount++;
+    try { this.upstream!.send(data); this.observeControl(frame, "forwarded"); } catch { this.close("upstream_disconnect"); }
+  }
+
+  private observeControl(frame: Frame, outcome: ResponsesControlObservation["outcome"]): void {
+    // Fixed vocabulary and a lifetime cap: no arbitrary client strings, IDs,
+    // bodies or credentials reach diagnostics, even for malformed events.
+    if (!this.options.observeControl || this.controlObservations++ >= 16) return;
+    const eventType = frame.type === "response.create" || frame.type === "response.interrupt" || frame.type === "response.steer" ? frame.type : "other";
+    try { this.options.observeControl({ eventType, outcome, background: frame.background === true }); } catch { /* Diagnostics cannot affect the protocol. */ }
   }
 
   private schedule(): void {
@@ -237,7 +282,23 @@ export class ResponsesWebSocketSession {
     try { event = JSON.parse(data); } catch { this.close("upstream_protocol_error", 1011); return; }
     if (!event || typeof event !== "object" || Array.isArray(event)) { this.close("upstream_protocol_error", 1011); return; }
     const lane = typeof event.stream_id === "string" ? event.stream_id : "";
+    if (event.type === "response.interrupt.accepted" || event.type === "response.interrupt.failed") {
+      if ((event.stream_id !== undefined && (typeof event.stream_id !== "string" || !/^[A-Za-z0-9_.-]{1,256}$/.test(lane))) || typeof event.response_id !== "string" || !this.interrupts.get(lane)?.has(event.response_id)) {
+        this.close("upstream_protocol_error", 1011);
+        return;
+      }
+      // Control ACKs neither publish continuation ownership nor settle work.
+      // Use the wire FIFO even when the owning terminal is still publishing.
+      this.publish(data, undefined, [], event);
+      return;
+    }
     const op = this.dispatched.get(lane);
+    if (event.type === "error" && this.interruptCount) {
+      // Errors have no control request correlation. Even a late interrupt can
+      // fail while a successor runs; close and retain sent-work estimates.
+      this.close("upstream_disconnect", 1000, data);
+      return;
+    }
     const response = event.response && typeof event.response === "object" ? event.response as Frame : null;
     const responseId = typeof response?.id === "string" ? response.id : typeof event.response_id === "string" ? event.response_id : undefined;
     const outcome = terminalTypes.get(String(event.type));

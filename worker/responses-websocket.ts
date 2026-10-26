@@ -29,7 +29,9 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
   const pair = new WebSocketPair();
   pair[1].accept();
   let pinned: { providerId: string; endpointId: string; key: string | null; revision: string | null } | undefined;
+  const connectionId = crypto.randomUUID();
   new ResponsesWebSocketSession(pair[1], {
+    observeControl: (event) => console.log({ event: "responses_websocket_control", connection_id: connectionId, ...event }),
     waitUntil: (promise) => context.waitUntil(promise),
     async admit(body, lane, requestId, _pin, signal, witnesses) {
       let selection: ProxySelection;

@@ -4,6 +4,12 @@ compatibility_date = "2026-06-05"
 compatibility_flags = ["enable_request_signal"]
 keep_vars = true
 
+# Retain bounded structured diagnostics without per-request invocation logs.
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = false
+
 [version_metadata]
 binding = "CF_VERSION_METADATA"
 

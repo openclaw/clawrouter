@@ -483,6 +483,29 @@ failure still closes the connection with `accounting_unavailable` before new
 work is sent. Closing the connection suppresses late publication acknowledgments
 and queued output.
 
+`response.interrupt` with `response_id` and `mode: "discard_partial_items"`
+bypasses the create queue on the same upstream socket. Its optional `stream_id`
+must match the response's lane. The ID must belong to a sent active response,
+the lane's most recent terminal response, or a response previously interrupted
+on that connection. No other control fields or modes are accepted. Repeated
+interrupts are forwarded; they do not create usage receipts or new generations.
+Upstream `response.interrupt.accepted` and `response.interrupt.failed` frames
+preserve wire order, including after settlement or a successor's start. They
+never bind continuation ownership or settle the generation. The router does not
+fabricate acknowledgements or require one before processing a normal terminal.
+Early cancellation and acknowledgements depend on the upstream. The router
+forwards the control without promising that it stops generation. Uncorrelated
+upstream `error` events after an interrupt close the connection conservatively,
+retaining estimates for running work rather than treating a control rejection as
+a generation terminal.
+
+Worker deployments retain structured `responses_websocket_control` diagnostics
+for forwarded interrupts and unsupported events (at most 16 per connection).
+Fields are a router-generated connection ID, a fixed event-type category,
+forwarded/rejected outcome, and whether background was explicitly enabled.
+Request/response bodies, response IDs, lane IDs, credentials, and arbitrary event
+names are excluded. Wrangler enables retained logs with invocation logs disabled.
+
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
@@ -504,8 +527,9 @@ socket reports `accounting_unavailable` and closes before sending more work.
 Limits per connection are 16 active responses (including those still settling),
 32 named lanes plus the default lane, 48 buffered creates, 4 MiB per incoming
 frame, 8 MiB total buffered create bytes, at most 48 output frames/8 MiB awaiting
-publication, and 16 MiB cumulative
-downstream output. The output limit bounds a slow
+publication, 16 MiB cumulative downstream output, and 128 forwarded interrupts
+(including repeats). Interrupt identities remain bounded by this lifetime cap
+to correlate late acknowledgements. The output limit bounds a slow
 reader because Workers' WebSocket API has no supported drain/queue metric.
 Connections last at most 60 minutes; each response uses its endpoint deadline,
 capped at 600 seconds. Clients must reconnect after a limit or deadline closes
