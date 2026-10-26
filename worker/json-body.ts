@@ -1,5 +1,5 @@
-import parser, { type Token } from "stream-json/core/parser.js";
-import { fun, none } from "stream-chain/core";
+import type { Token } from "stream-json/core/parser.js";
+import { createJsonTokenizer } from "./json-tokens.ts";
 
 // Large JSON media must not create an additional whole-document string and
 // UTF-8 buffer for every pricing/dispatch/retention owner. Inputs are the plain
@@ -109,11 +109,11 @@ export function createJsonBodyParser() {
       case "nullValue": case "trueValue": case "falseValue": attach(token.value); break;
     }
   }
-  const consume = fun((input: string | typeof none) => input, parser({ packValues: false, jsonStreaming: false }), (token: Token) => { accept(token); return none; });
+  const consume = createJsonTokenizer(accept);
   return {
     async push(text: string) {
-      for (let offset = 0; offset < text.length; offset += 4096) await consume(text.slice(offset, offset + 4096));
+      for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
     },
-    async end(): Promise<unknown> { await consume(none); return root; },
+    async end(): Promise<unknown> { consume.end(); return root; },
   };
 }

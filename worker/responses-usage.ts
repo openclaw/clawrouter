@@ -1,5 +1,5 @@
-import parser, { type Token } from "stream-json/core/parser.js";
-import { fun, none } from "stream-chain/core";
+import type { Token } from "stream-json/core/parser.js";
+import { createJsonTokenizer } from "./json-tokens.ts";
 import { createSseUsageAccumulator, extractUsageTokens, responseOutcome, responsesObservation, type ResponsesObservation, type SseUsageEvidence, type UsageInspection } from "./token-usage.ts";
 import { createToolEvidenceProjection, type createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 import { createHostedSearchUsage } from "./responses-hosted-usage.ts";
@@ -21,16 +21,16 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
   let hasData = false, hasContent = false, eventError = false, undecodedData = false;
   let eventName = literal("error"), done = literal("[DONE]", true);
 
-  async function data(text: string) {
+  function data(text: string) {
     done.push(text);
     hasContent ||= text.trim().length > 0;
-    await document.push(text);
+    document.push(text);
   }
-  async function beginData() {
-    if (hasData) await data("\n");
+  function beginData() {
+    if (hasData) data("\n");
     hasData = true;
   }
-  async function line(text: string) {
+  function line(text: string) {
     lineNonempty ||= text.length > 0;
     let offset = 0;
     while (mode === "prefix" && offset < text.length) {
@@ -38,7 +38,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
       if (char === ":") {
         mode = prefix === "data" ? "data" : prefix === "event" ? "event" : "ignored";
         optionalSpace = true;
-        if (mode === "data") { await beginData(); if (stopped) return; }
+        if (mode === "data") { beginData(); if (stopped) return; }
         else if (mode === "event") eventName = literal("error");
       } else if (prefix.length < 5) prefix += char;
       else mode = "ignored";
@@ -47,46 +47,49 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
       optionalSpace = false;
       if (text[offset] === " ") offset++;
     }
-    if (mode === "data") await data(text.slice(offset));
+    if (mode === "data") data(text.slice(offset));
     else if (mode === "event") eventName.push(text.slice(offset));
   }
-  async function endLine() {
+  // Returns the dispatched event's observation; the caller awaits its delivery.
+  function endLine(): ResponsesObservation | null {
+    let fact: ResponsesObservation | null = null;
     if (!lineNonempty) {
       if (eventError) {
-        const evidence = hasContent ? await document.end() : null;
-        if (stopped) return;
+        const evidence = hasContent ? document.end() : null;
+        if (stopped) return null;
         accumulator.accept({ kind: "error", ...(evidence?.kind === "data" ? { value: evidence.value } : {}) });
         tools?.invalid(); tools?.witness?.invalid(); hosted.invalid();
       }
       else if (hasData && hasContent) {
-        const evidence = done.matches() ? { kind: "done" } as const : await document.end();
-        if (stopped) return;
+        const evidence = done.matches() ? { kind: "done" } as const : document.end();
+        if (stopped) return null;
         accumulator.accept(evidence);
         if (evidence.kind === "data") {
           if (responseOutcome(evidence.value) === "provider_error") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
           tools?.accept(document.tools(), true); tools?.witness?.accept(document.witnesses(), true);
           hosted.accept(document.tools(), true);
-          const fact = responsesObservation(evidence.value);
-          if (fact) await observe?.(fact);
+          fact = observe ? responsesObservation(evidence.value) : null;
         }
         else if (evidence.kind !== "done") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
       }
       document.stop();
       document = metadataParser(!!observe, !!tools?.witness); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
-    } else if (mode === "prefix" && prefix === "data") await beginData();
+    } else if (mode === "prefix" && prefix === "data") beginData();
     else if (mode === "event" || mode === "prefix" && prefix === "event") eventError = mode === "event" && eventName.matches();
     prefix = ""; mode = "prefix"; lineNonempty = false; optionalSpace = false;
+    return fact;
   }
   async function text(value: string) {
-    if (!sse) { await document.push(value); return; }
+    if (!sse) { document.push(value); return; }
     let offset = 0;
     while (offset < value.length && !stopped) {
       if (skipLf) { skipLf = false; if (value[offset] === "\n") { offset++; continue; } }
       let end = offset;
       while (end < value.length && value[end] !== "\r" && value[end] !== "\n") end++;
-      await line(value.slice(offset, end));
+      line(value.slice(offset, end));
       if (stopped || end === value.length) return;
-      await endLine();
+      const fact = endLine();
+      if (fact) await observe!(fact);
       if (stopped) return;
       skipLf = value[end] === "\r"; offset = end + 1;
     }
@@ -126,7 +129,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
       if (stopped) return;
       await text(tail);
       if (stopped || sse) return; // An undelimited SSE event is never dispatched.
-      const evidence = await document.end();
+      const evidence = document.end();
       if (stopped) return;
       if (evidence.kind === "data") {
         if (responseOutcome(evidence.value) === "provider_error") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
@@ -180,24 +183,19 @@ function metadataParser(inspectIdentity: boolean, encrypted: boolean) {
   const tools = createToolEvidenceProjection();
   const witnesses = encrypted ? createToolEvidenceProjection(true) : null;
   let failure: "invalid" | "unavailable" | null = null;
-  const compose = () => fun(
-    (input: string | typeof none): string | typeof none => input,
-    parser({ packValues: false, jsonStreaming: false }),
-    (token: Token): typeof none => { projection.accept(token); tools?.accept(token); witnesses?.accept(token); return none; },
-  );
-  let consume: ReturnType<typeof compose> | undefined = compose();
+  let consume: ReturnType<typeof createJsonTokenizer> | undefined = createJsonTokenizer((token: Token) => { projection.accept(token); tools?.accept(token); witnesses?.accept(token); });
   function failed(error: unknown) {
     failure = error instanceof InspectionLimit ? "unavailable" : "invalid";
     consume = undefined; projection.clear(); tools?.clear(); witnesses?.clear();
   }
   return {
-    async push(text: string) {
+    push(text: string) {
       if (!consume || !text) return;
-      try { await consume(text); } catch (error) { failed(error); }
+      try { consume.push(text); } catch (error) { failed(error); }
     },
-    async end(): Promise<MetadataEvidence> {
+    end(): MetadataEvidence {
       if (consume) {
-        try { await consume(none); } catch (error) { failed(error); }
+        try { consume.end(); } catch (error) { failed(error); }
         consume = undefined;
       }
       return failure ? { kind: failure } : { kind: "data", value: projection.value() };
@@ -216,6 +214,9 @@ type Frame = { context: Context | null; value: Record<string, unknown> | null; k
 const counters = new Set(["input_tokens", "prompt_tokens", "inputTokens", "output_tokens", "completion_tokens", "outputTokens", "total_tokens", "totalTokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"]);
 const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens", "text_tokens", "image_tokens", "reasoning_tokens"]);
 const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]);
+const textKeys = new Set(["type", "object", "status", "service_tier"]);
+const valueStarts = new Set(["startObject", "startArray", "startString", "startNumber", "nullValue", "trueValue", "falseValue"]);
+const leafFields = new Set(["text", "identity", "number", "error", "output"]);
 
 function metadataProjection(inspectIdentity: boolean) {
   const frames: Frame[] = [];
@@ -227,7 +228,7 @@ function metadataProjection(inspectIdentity: boolean) {
     const frame = current(), key = frame.key;
     if (!key || !frame.context) return null;
     if (frame.context === "root" || frame.context === "response") {
-      if (["type", "object", "status", "service_tier"].includes(key)) return "text";
+      if (textKeys.has(key)) return "text";
       if (inspectIdentity && key === "id") return "identity";
       if (key === "output") return "output";
       if (frame.context === "root" && key === "error") return "error";
@@ -250,12 +251,13 @@ function metadataProjection(inspectIdentity: boolean) {
     complete: () => complete,
     clear() { value = undefined; complete = false; frames.length = 0; scalar = ""; capture = null; },
     accept(token: Token) {
-      const selected = field();
+      // Only value starts consult the selected path; it is per-token hot.
+      const selected = valueStarts.has(token.name) ? field() : null;
       // Retain only a one-element witness for a nonempty output array, never
       // its generated text/tool arguments. Duplicate output/response keys still
       // replace the witness together with their other projected descendants.
       const output = current()?.output;
-      if (output && !output.length && ["startObject", "startArray", "startString", "startNumber", "nullValue", "trueValue", "falseValue"].includes(token.name)) output.push(true);
+      if (output && !output.length && valueStarts.has(token.name)) output.push(true);
       switch (token.name) {
         case "startObject":
         case "startArray": {
@@ -265,7 +267,7 @@ function metadataProjection(inspectIdentity: boolean) {
           // primitive/array must still block the normalizer's nullish fallback.
           const next = selected ? object ? {} : [] : undefined;
           assign(next);
-          const context = object && selected && !["text", "identity", "number", "error", "output"].includes(selected) ? selected as Context : null;
+          const context = object && selected && !leafFields.has(selected) ? selected as Context : null;
           frames.push({ context, value: context ? next as Record<string, unknown> : null, key: null, ...(selected === "output" && !object ? { output: next as unknown[] } : {}) });
           break;
         }
