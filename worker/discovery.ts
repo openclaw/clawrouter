@@ -22,7 +22,8 @@ import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, pr
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
-import { HotCache, hotCacheConfig, registerHotCache } from "./hot-cache.ts";
+import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
+import { coloGet, coloPut } from "./colo-cache.ts";
 
 // Only compiled metadata lives across requests. Eligibility, health, balances
 // and policy projections are always rebuilt from this request's observations.
@@ -77,17 +78,20 @@ export async function avatarResponse(request: Request, env: Env): Promise<Respon
   return new Response(bytes, { headers: { "content-type": type, "cache-control": "private, no-store", vary: "cf-access-jwt-assertion" } });
 }
 
-export async function modelsResponse(request: Request, env: Env): Promise<Response> {
-  const entitlements = await clientEntitlements(request, env);
-  if (entitlements instanceof Response) return entitlements;
+export function modelsResponse(request: Request, env: Env): Promise<Response> {
+  const anthropic = request.headers.has("anthropic-version");
+  return discoveryResponse(request, env, anthropic ? "models-anthropic" : "models", entitlements => modelsBody(entitlements, anthropic));
+}
+
+function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unknown {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
-  if (request.headers.has("anthropic-version")) {
+  if (anthropic) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => compiledProjection(provider).models.get(model.id)?.anthropic ?? ({
       id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
       capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
-    return privateJson({ data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null });
+    return { data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null };
   }
   const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).flatMap((model) => {
     const capabilities = model.capabilities;
@@ -102,12 +106,11 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
     display_name: "ClawRouter · Fusion",
     capabilities: ["llm.chat"],
   });
-  return privateJson({ object: "list", data });
+  return { object: "list", data };
 }
 
-export async function catalogResponse(request: Request, env: Env): Promise<Response> {
-  const entitlements = await clientEntitlements(request, env);
-  return entitlements instanceof Response ? entitlements : privateJson(catalogProjection(entitlements));
+export function catalogResponse(request: Request, env: Env): Promise<Response> {
+  return discoveryResponse(request, env, "catalog", catalogProjection);
 }
 
 // The compiler validates declarations; retain a fail-closed projection for
@@ -257,23 +260,41 @@ interface ClientEntitlements {
 }
 
 const entitlementCache = registerHotCache(new HotCache<ClientEntitlements>(512));
+const loads = new WeakMap<ClientEntitlements, { started: number; published: Set<string> }>();
 
-async function clientEntitlements(request: Request, env: Env): Promise<ClientEntitlements | Response> {
+// Proxy-key discovery. Authentication is re-checked per request; the derived
+// inventory (health, grant eligibility, balances) is reused within the hot-cache
+// bounds, and any change to the authorized identity or its policy is a new key.
+// A cold isolate first adopts a sibling's rendered body from the same location:
+// it is exactly what this caller receives, so it is secretless, unlike the
+// inventory (selectors, grants). It keeps the load's start time and fence.
+async function discoveryResponse(request: Request, env: Env, variant: string, render: (entitlements: ClientEntitlements) => unknown): Promise<Response> {
   const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
-  if (hasKey) {
-    const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
-    if (auth instanceof Response) return auth;
-    // Authentication above is re-checked per request; the derived inventory
-    // (health, grant eligibility, balances) is reused within the hot-cache bounds.
-    // Any change to the authorized identity or its policy is a different key.
-    const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy]);
-    return (await entitlementCache.get(key, hotCacheConfig(env), async () => ({
-      value: await entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId }), cacheable: true,
-    }))).value;
+  if (!hasKey) {
+    const session = await verifiedAccessSession(request, env);
+    if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
+    return privateJson(render(await sessionEntitlements(session, env)));
   }
-  const session = await verifiedAccessSession(request, env);
-  if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
-  return sessionEntitlements(session, env);
+  const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
+  if (auth instanceof Response) return auth;
+  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy]);
+  const config = hotCacheConfig(env), shared = `${variant}\n${key}`;
+  if (!entitlementCache.peek(key, config)) {
+    const adopted = await coloGet<unknown>("discovery", shared, config);
+    if (adopted) return privateJson(adopted.value);
+  }
+  const { value } = await entitlementCache.get(key, config, async () => {
+    const started = hotCacheNow();
+    const value = await entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId });
+    loads.set(value, { started, published: new Set() });
+    return { value, cacheable: true };
+  });
+  const body = render(value);
+  // Each variant of a loaded inventory is published once, stamped with the
+  // load's start, whichever request first renders it in this isolate.
+  const load = loads.get(value);
+  if (load && !load.published.has(variant)) { load.published.add(variant); coloPut("discovery", shared, body, load.started, config); }
+  return privateJson(body);
 }
 
 async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
