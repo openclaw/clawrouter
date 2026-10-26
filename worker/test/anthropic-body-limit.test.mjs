@@ -192,6 +192,17 @@ test("real workerd still denies a large PDF that exceeds its full-window hard bu
  } finally {await worker?.dispose();await rm(temporary,{recursive:true,force:true});}
 });
 
+test("JSON byte counting matches JSON.stringify across escapes, surrogates and chunk boundaries",()=>{
+ const units=["a","\n",'"',"\\","\u0001","\u007f","\u0080","é","€","\u2028","🦊","\ud800","\udfff","日"];
+ let seed=7;const next=n=>(seed=(seed*1103515245+12345)&0x7fffffff)%n;
+ for(let round=0;round<200;round++) {
+  const text=(next(2)?"x".repeat(4095-next(2)):"")+Array.from({length:next(6000)},()=>units[next(units.length)]).join("");
+  const value={[text.slice(0,9)]:text,list:[text.slice(next(40)),undefined,-0,NaN,1e21,{nested:text,omitted:undefined}]};
+  assert.equal(jsonBodyBytes(value),new TextEncoder().encode(JSON.stringify(value)).byteLength,`round ${round}`);
+ }
+ assert.throws(()=>jsonBodyBytes({value:1n}),TypeError);
+});
+
 test("chunked JSON preserves escaped Unicode, duplicate/prototype keys, numbers and optional fields",async()=>{
  const value=JSON.parse('{"__proto__":{"safe":true},"duplicate":1,"duplicate":2}');
  value.media="a".repeat(4095)+"😀"+"b".repeat(4094)+"\ud800"+"\udfff";

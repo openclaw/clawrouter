@@ -192,6 +192,35 @@ case is closer to production than the two-snapshot handler fixture. Remaining
 inspector CPU is flat: tokenizer ~12%, projection dispatch and path
 classification ~35%, GC ~4%.
 
+### Claude body byte counting (2026-10-26)
+
+Production native Anthropic Messages requests were ~730 KiB at p50 and spent
+~69 ms CPU per MiB, nearly all before upstream dispatch. A profile of the new
+`http-anthropic-cpu` diagnostic (Claude Code-shaped history: system blocks with
+cache control, tool schemas, thinking, tool use/results) put **71%** of request
+CPU in `jsonBodyBytes`, called by pricing and again by dispatch (and by
+retention). It measured a body by running the generator-based chunk serializer
+and UTF-8-encoding every chunk, to avoid a whole-document copy of bodies up to
+32 MB.
+
+`jsonBodyBytes` now walks the value directly and measures each string with the
+same 4 KiB `JSON.stringify` chunks, written by `encodeInto` into one reused
+scratch buffer: no generators, no per-chunk `Uint8Array`, still no document
+copy. The result is the exact UTF-8 length of `JSON.stringify(value)` (fuzzed
+against it, including lone/paired surrogates across chunk boundaries); the
+streaming serializer for bodies above 8 MiB is unchanged.
+
+| Native Anthropic, interleaved local runs | Before CPU ms | After CPU ms |
+| --- | ---: | ---: |
+| 0.75 MiB, before headers | 18.2–22.5 | 7.8–9.3 |
+| 2 MiB, before headers | 50.9–57.9 | 18.0–19.1 |
+| 2 MiB retention on, whole request | 86.5–97.0 | 26.8–32.7 |
+
+Byte counting alone: 2.1 MiB ASCII 5.2 → 1.5 ms, mixed emoji/escapes 8.8 →
+5.0 ms, 6 MiB CJK 6.9 → 2.5 ms. A regex scan over non-ASCII text was tried and
+rejected: 9× slower on CJK. Remaining pre-dispatch CPU is the two counts (~35%
+of the smaller total), ingress parse and dispatch serialization.
+
 Reproduce timing, profiles and the optional serialization audit separately:
 
 ```sh
@@ -205,6 +234,7 @@ node --cpu-prof --cpu-prof-dir="$proof" test/diagnostics/http-responses-cpu.test
 HTTP_CPU_COUNT_JSON=1 HTTP_CPU_RUNS=1 HTTP_CPU_WARMUPS=1 HTTP_CPU_SIZES=5 \
   node test/diagnostics/http-responses-cpu.test.mjs
 node test/diagnostics/responses-inspector-cpu.test.mjs
+HTTP_CPU_OUT="$proof/anthropic" node test/diagnostics/http-anthropic-cpu.test.mjs
 ```
 
 CPU profiles remain outside Git. `before-node.cpuprofile` and
