@@ -242,6 +242,53 @@ CPU profiles remain outside Git. `before-node.cpuprofile` and
 profiles exclude startup/fixture generation. No live provider call or deployment
 was performed.
 
+### Cold isolates (2026-10-26)
+
+Production small unified Responses (~3 KiB in) reported 120–200 ms CPU while
+the warm handler fixture measured ~27 ms for a 1.2 MB reply and under 2 ms
+before headers. Warm Node runs fully optimized code; a production isolate
+serving a few requests a minute mostly runs V8's interpreter and pays lazy
+compilation on each code path's first call. Two local proxies for that:
+
+| Case | CPU ms per request |
+| --- | ---: |
+| 3 KiB in, 1.2 MB reply, warm optimized | 23–30 |
+| Same, optimizing tiers off (`--no-opt --no-maglev --no-sparkplug`) | 150–165 |
+| 3 KiB in, 20 KiB reply, 1st / 2nd / 4th+ request of a fresh process | 32–40 / ~10 / 3–6 |
+
+Before headers stays ~2.5 ms interpreted, so this is billed CPU and CPU-limit
+headroom rather than added latency; inspection runs inline before each chunk
+is forwarded (~0.13 ms per KiB interpreted). Per-byte JavaScript loops dominate
+interpreted inspection, so two were removed:
+
+- SSE line splitting in `text()` searched for CR/LF one character at a time;
+  it now uses a sticky native regex search, as `response-identities` already did.
+- stream-json emits a `stringChunk` per 256-unit run and per escape once a
+  string spans feeds (output text, the final `response.completed` copy), and
+  each token fanned out to three projections. `createJsonTokenizer` now merges
+  a feed's adjacent string/number chunks before dispatch. Chunk boundaries
+  already follow arbitrary input boundaries, every consumer applies its limits
+  to the running length, and a seeded test rebuilds random escape/surrogate-heavy
+  documents under random splits exactly as `JSON.parse` does. The only counter
+  that sees boundaries, tool-evidence ciphertext bytes, can only get more exact.
+
+| Interleaved local runs, 1.2 MB reply | Before CPU ms | After CPU ms |
+| --- | ---: | ---: |
+| Optimizing tiers off (unified / native) | 150–160 / 150–165 | 100–134 / 108–133 |
+| Warm optimized | 25–47 | 23–33 (noise) |
+
+Remaining interpreted inspection is stream-json's own string scan and
+per-token loop (~50%) and the identity scanner (~20%). First-request compile
+cost is not addressable from application code.
+
+```sh
+proof=/Volumes/Clawstudio-Storage/CodexWorktrees/clawrouter-cold-proof
+HTTP_CPU_SIZES=0.003 HTTP_CPU_OUT="$proof" node --no-opt --no-maglev --no-sparkplug \
+  test/diagnostics/http-responses-cpu.test.mjs
+HTTP_CPU_DELTAS=10 HTTP_CPU_WARMUPS=0 HTTP_CPU_SIZES=0.003 HTTP_CPU_RUNS=12 HTTP_CPU_OUT="$proof" \
+  node test/diagnostics/http-responses-cpu.test.mjs  # per-request samples in results.json
+```
+
 ## WebSocket create follow-up (2026-10-23)
 
 Live production baseline, measured **before #326's hot caches**: 15 chained

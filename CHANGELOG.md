@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Cut streamed Responses inspection CPU in cold (interpreted) isolates by 25–35%: SSE lines are split with a native search instead of a per-character loop, and adjacent JSON string chunks of a feed are merged before reaching the projections instead of one dispatch per escape; evidence, limits and error semantics are unchanged.
 - Serve `/v1/catalog` and `/v1/models` from a sibling isolate's rendered body in the same Cloudflare location when this isolate is cold, instead of rebuilding the caller's inventory (~400 ms under burst); bodies are client-visible and secretless, keyed by identity and policy, and keep the original max age and mutation fence.
 - Fix cold-burst admission coalescing: the leader is now claimed before the per-location cache read, so requests arriving during that read wait for it instead of each calling the authority.
 - Cut native Anthropic Messages pre-dispatch CPU about 2.5–3× by measuring Claude bodies with a direct walk and a reused UTF-8 scratch buffer instead of the generator-based chunk serializer; counts stay exactly `JSON.stringify`'s UTF-8 length and large bodies still stream without a whole-document copy.

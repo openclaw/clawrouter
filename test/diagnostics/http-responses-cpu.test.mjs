@@ -18,9 +18,12 @@ const encoder = new TextEncoder();
 const model = 'gpt-5.6';
 const repetitions = Number(process.env.HTTP_CPU_RUNS ?? 30);
 const warmups = Number(process.env.HTTP_CPU_WARMUPS ?? 30);
+// Fewer deltas model short replies; 0 warmups exposes first-call compilation.
+const deltas = Number(process.env.HTTP_CPU_DELTAS ?? 600);
 const sizes = (process.env.HTTP_CPU_SIZES ?? '0.5,2,5').split(',').map(Number);
 assert.ok(Number.isSafeInteger(repetitions) && repetitions > 0);
-assert.ok(Number.isSafeInteger(warmups) && warmups > 0);
+assert.ok(Number.isSafeInteger(warmups) && warmups >= 0);
+assert.ok(Number.isSafeInteger(deltas) && deltas > 0);
 assert.ok(sizes.every(size => size > 0 && size <= 5));
 const out = process.env.HTTP_CPU_OUT && resolve(process.env.HTTP_CPU_OUT);
 
@@ -44,10 +47,10 @@ function codexBody(size, native) {
 function upstreamChunks() {
   const frame = value => `event: ${value.type}\r\ndata: ${JSON.stringify(value)}\r\n\r\n`;
   const delta = 'Synthetic output with Unicode 🦊 and escaped syntax "\\\n'.repeat(10);
-  const output = [{ id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: delta.repeat(600), annotations: [] }] }];
+  const output = [{ id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: delta.repeat(deltas), annotations: [] }] }];
   let wire = frame({ type: 'response.created', response: { id: 'resp_cpu_fixture', object: 'response', status: 'in_progress', output: [] } });
   wire += frame({ type: 'response.output_item.added', output_index: 0, item: { ...output[0], status: 'in_progress', content: [] } });
-  for (let n = 0; n < 600; n++) wire += frame({ type: 'response.output_text.delta', item_id: 'msg_fixture', output_index: 0, content_index: 0, sequence_number: n, delta });
+  for (let n = 0; n < deltas; n++) wire += frame({ type: 'response.output_text.delta', item_id: 'msg_fixture', output_index: 0, content_index: 0, sequence_number: n, delta });
   wire += frame({ type: 'response.output_item.done', output_index: 0, item: output[0] });
   wire += frame({ type: 'response.completed', response: { id: 'resp_cpu_fixture', object: 'response', status: 'completed', output,
     usage: { input_tokens: 123456, output_tokens: 4096, total_tokens: 127552, input_tokens_details: { cached_tokens: 100000 } } } });
@@ -155,9 +158,12 @@ test('diagnostic: warm HTTP Responses CPU (synthetic only)', async t => {
       const { profile } = await post('Profiler.stop'); session.disconnect();
       await writeFile(resolve(out, `${label}.cpuprofile`), JSON.stringify(profile));
     }
-    assert.ok(samples.every(sample => sample.warm), 'measured requests must hit the warm admission cache');
-    assert.equal(backend.filter(call => !call.dispatched).length, 0, 'zero foreground authority calls');
-    assert.equal(kvReads, 0, 'zero warm KV reads');
+    // Without warmups the first sample is the cold admission miss by design.
+    assert.ok(samples.slice(warmups ? 0 : 1).every(sample => sample.warm), 'measured requests must hit the warm admission cache');
+    if (warmups) {
+      assert.equal(backend.filter(call => !call.dispatched).length, 0, 'zero foreground authority calls');
+      assert.equal(kvReads, 0, 'zero warm KV reads');
+    }
     assert.equal(archiveWrites, retention ? repetitions + warmups : 0);
     assert.equal(events.length, repetitions + warmups, 'one accounting event per invocation');
     const mean = key => samples.reduce((sum, sample) => sum + sample[key], 0) / samples.length;
