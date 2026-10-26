@@ -27,8 +27,8 @@ function nativeFixtureCatalog(provider, bundled) {
 const binary = process.env.CLAWROUTER_CODEX_BINARY;
 const producer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? binary;
 const nativeVersion = binary ? execFileSync(binary, ["--version"], { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 20_000, maxBuffer: 1024 }).trim() : null;
-// The pinned 0.156.1 protocol adds workspace discovery to account/read.
-const hasWorkspaceRouting = nativeVersion === "codex-cli 0.156.1";
+// Both verified 0.156.1 and 0.164.0 protocols expose workspace routing.
+const hasWorkspaceRouting = ["codex-cli 0.156.1", "codex-cli 0.164.0"].includes(nativeVersion);
 const routerKey = "synthetic-router-key";
 const model = "gpt-6-astra";
 

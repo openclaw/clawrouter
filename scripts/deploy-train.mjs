@@ -9,6 +9,7 @@ import { pathToFileURL } from 'node:url';
 import { createApi, observeAnalytics } from './deploy-train-api.mjs';
 import { analyticsDecision, LEGACY_DEPLOYMENT, deploymentMessage, deploymentState, POLL_MS, recoveryDecision, splitVersions, stableVersion, TRAIN_STEPS, versionId } from './deploy-train-policy.mjs';
 import { inspectSource } from './deploy-train-source.mjs';
+import { verifyObservability } from './deploy-train-observability.mjs';
 import { startQueueObservation } from './deploy-queue-observation.mjs';
 import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
 import { assertSecretLineage, uploadMessage } from './deploy-train-secrets.mjs';
@@ -73,6 +74,7 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
   if (mode !== 'rollout' && (state.migration || state.unsafe)) throw new Error('No-impact rehearsals cannot include lifecycle or rollback-unsafe changes');
   state.status = 'rolling'; state.startedAt = now(); state.exposed = false; save(state);
   try {
+    await verifyObservability(api, state, now()); save(state);
     // Mark before the potentially irreversible command: a timeout cannot erase the gate.
     if (state.migration) { state.exposed = true; save(state); }
     const beforeUpload = await api.latest();
@@ -112,6 +114,7 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
     if (capability.disabled) state.analyticsDisabled = capability.disabled;
     save(state);
     for (const step of TRAIN_STEPS) {
+      await verifyObservability(api, state, now()); save(state);
       // Non-HTTP trigger selection is not a canary guarantee. Conservatively mark
       // exposure BEFORE inclusion, also covering synthetic DO writes at zero percent.
       state.exposed = true; state.percentage = step.percentage; save(state);
@@ -160,8 +163,9 @@ export async function main(env = process.env) {
   Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha }));
   assertAssetBootstrap(state.deployedSha);
   const save = (value) => saveState(env.TRAIN_STATE_PATH, value);
-  save(state);
   const api = createApi({ env });
+  await verifyObservability(api, state);
+  save(state);
   appendFileSync(env.GITHUB_OUTPUT, `migration=${state.migration}\n`);
   const ready = (green) => waitForHealth({
     baseUrl: env.CLAWROUTER_BASE_URL,
@@ -188,7 +192,7 @@ export async function main(env = process.env) {
     });
   } finally {
     await stopObservation();
-    const summary = `## Production train\n- Candidate: \`${state.sha}\`\n- Blue: \`${state.blue}\`\n- Green: \`${state.green || 'not uploaded'}\`\n- Result: ${state.status || 'preflight'}; recovery: ${state.recovery || 'not needed'}\n- Lifecycle migration: ${state.migration}; rollback-unsafe range: ${state.unsafe}\n- Analytics: ${state.analyticsDisabled ? `DISABLED — ${state.analyticsDisabled}; mandatory smoke-only gating` : state.analytics ? JSON.stringify(state.analytics) : 'no comparison sample'}\n- Queue observation: ${state.queueObservationStatus || 'not started'}; ${JSON.stringify(state.queueObservations || [])}\n- Mode: ${env.TRAIN_MODE || 'rollout'}\n`;
+    const summary = `## Production train\n- Candidate: \`${state.sha}\`\n- Blue: \`${state.blue}\`\n- Green: \`${state.green || 'not uploaded'}\`\n- Result: ${state.status || 'preflight'}; recovery: ${state.recovery || 'not needed'}\n- Lifecycle migration: ${state.migration}; rollback-unsafe range: ${state.unsafe}\n- Observability reconciliation: ${state.observabilityReconciliation || 'not needed'}; last live readback: ${state.observabilityVerifiedAt || 'not needed'}\n- Analytics: ${state.analyticsDisabled ? `DISABLED — ${state.analyticsDisabled}; mandatory smoke-only gating` : state.analytics ? JSON.stringify(state.analytics) : 'no comparison sample'}\n- Queue observation: ${state.queueObservationStatus || 'not started'}; ${JSON.stringify(state.queueObservations || [])}\n- Mode: ${env.TRAIN_MODE || 'rollout'}\n`;
     appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   }
 }

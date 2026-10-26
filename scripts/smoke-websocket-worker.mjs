@@ -70,6 +70,39 @@ try {
   assert.equal(new Set(usage.usage.events.map((event) => event.request_id)).size, 3);
   assert.ok(usage.usage.events.every((event) => event.session_id === "fixture-session" && event.content_retained === false));
   let count = 3, spent = 2_220;
+  for (const [index, scenario] of ["interrupt_before_terminal", "interrupt_after_terminal", "interrupt_no_ack", "interrupt_late_ack"].entries()) {
+    const native = index % 2 === 0;
+    const opened = await dispatch(native ? "/v1/native/openai/v1/responses" : "/v1/responses", { headers: { upgrade: "websocket", "session-id": scenario } });
+    assert.equal(opened.status, 101);
+    const current = opened.webSocket; current.accept(); sockets.push(current);
+    const received = [];
+    current.addEventListener("message", event => received.push(JSON.parse(event.data)));
+    const sendCreate = body => current.send(JSON.stringify({ type: "response.create", model: native ? "gpt-6-astra" : "openai/gpt-6-astra", service_tier: "priority", max_output_tokens: 32, ...body }));
+    sendCreate({ input: scenario });
+    await until(() => received.some(event => event.type === "response.created"));
+    const responseId = received.find(event => event.type === "response.created").response.id;
+    current.send(JSON.stringify({ type: "response.interrupt", response_id: responseId, mode: "discard_partial_items" }));
+    // Queue before the terminal/ACK: the control must bypass the create FIFO.
+    sendCreate({ previous_response_id: responseId, input: [], generate: false });
+    await until(() => received.filter(event => event.type === "response.completed").length === 2);
+    assert.ok(received.every(event => event.type !== "error"));
+    const acks = received.filter(event => event.type === "response.interrupt.accepted");
+    assert.equal(acks.length, scenario === "interrupt_no_ack" ? 0 : 1);
+    if (acks.length) {
+      assert.equal(acks[0].response_id, responseId);
+      const ackIndex = received.indexOf(acks[0]);
+      const terminalIndex = received.findIndex(event => event.type === "response.completed");
+      assert.equal(ackIndex < terminalIndex, scenario === "interrupt_before_terminal");
+    }
+    count += 2; spent += 1_140;
+    await until(async () => { usage = await (await dispatch("/v1/usage")).json(); return usage.usage.summary.requestCount === count; });
+    const receipts = usage.usage.events.filter(event => event.session_id === scenario);
+    assert.equal(receipts.length, 2, "the interrupt creates no usage receipt");
+    assert.ok(receipts.every(event => event.status === "success" && event.cost_basis === "manifest_pricing"));
+    assert.equal(receipts.reduce((sum, event) => sum + event.actual_cost_micros, 0), 1_140);
+    assert.equal(usage.budget.spentMicros, spent);
+    current.close(1000, "interrupt scenario complete");
+  }
   for (const scenario of ["incomplete", "failed", "error_before_start", "error_after_start", "disconnect"]) {
     const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "session-id": scenario } });
     assert.equal(opened.status, 101);
@@ -650,8 +683,20 @@ export default { async fetch(request) {
   headerMatch = request.headers.get('authorization') === 'Bearer fixture-upstream-key' && request.headers.get('session-id') === 'fixture-session' && request.headers.get('x-openai-internal-codex-responses-lite') === 'true';
   const pair = new WebSocketPair(); pair[1].accept();
   const held = new Map();
+  let lateInterruptAck;
   pair[1].addEventListener('message', ({ data }) => {
     const frame = JSON.parse(data); frames.push(frame);
+    if (frame.type === 'response.interrupt') {
+      const pending = held.get(frame.response_id);
+      if (!pending || frame.mode !== 'discard_partial_items') { pair[1].send(JSON.stringify({ type: 'error', status: 400, error: { code: 'invalid_interrupt' } })); return; }
+      const ack = () => pair[1].send(JSON.stringify({ type: 'response.interrupt.accepted', response_id: frame.response_id }));
+      if (pending.input === 'interrupt_before_terminal') ack();
+      pending.complete();
+      if (pending.input === 'interrupt_after_terminal') ack();
+      if (pending.input === 'interrupt_late_ack') lateInterruptAck = ack;
+      held.delete(frame.response_id);
+      return;
+    }
     const id = typeof frame.input === 'string' && frame.input.startsWith('lane_') ? frame.input + '_response' : 'response_' + frames.length;
     const output = frames.length === 2 ? [{ type: 'function_call', id: 'fc_fixture', call_id: 'call_fixture', name: 'fixture_tool', arguments: '{}' }] : frames.length === 3 ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete' }] }] : [];
     const usage = { input_tokens: frame.generate === false ? 3 : 14, output_tokens: frame.generate === false ? 0 : 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
@@ -664,6 +709,11 @@ export default { async fetch(request) {
     }
     if (frame.input === 'error_before_start') { pair[1].send(JSON.stringify({ type: 'error', status: 429, error: { code: 'rate_limit_exceeded', message: 'fixture' } })); return; }
     pair[1].send(JSON.stringify({ type: 'response.created', response: { id, status: 'in_progress' } }));
+    if (lateInterruptAck) { lateInterruptAck(); lateInterruptAck = undefined; }
+    if (typeof frame.input === 'string' && frame.input.startsWith('interrupt_')) {
+      held.set(id, { input: frame.input, complete: () => pair[1].send(JSON.stringify({ type: 'response.completed', response: { id, status: 'completed', output, usage, service_tier: 'priority' } })) });
+      return;
+    }
     if (frame.input === 'disconnect') { pair[1].close(1011, 'fixture disconnect'); return; }
     if (frame.input === 'error_after_start') { pair[1].send(JSON.stringify({ type: 'error', status: 500, response_id: id, error: { code: 'server_error', message: 'fixture' } })); return; }
     if (frame.input === 'failed_unpriced') { pair[1].send(JSON.stringify({ type: 'response.failed', response: { id, status: 'failed', usage, service_tier: 'future-tier' } })); return; }

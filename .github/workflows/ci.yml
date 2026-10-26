@@ -31,6 +31,8 @@ jobs:
             sha256: "e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0"
           - version: "0.156.1"
             sha256: "aff46539a83aff86e3c62c592bce2c50d95391f9df289afaf03a50c01d14533d"
+          - version: "0.164.0"
+            sha256: "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -67,6 +69,9 @@ jobs:
           fi
       - name: Native client through real router and ledgers
         run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
+      - name: Native steering and completion-race regression
+        if: matrix.version == '0.164.0'
+        run: node --test test/codex-interrupt.test.mjs
       - name: Upload synthetic Desktop configuration
         if: matrix.version == '0.155.0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
