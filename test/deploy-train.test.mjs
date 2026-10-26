@@ -17,7 +17,7 @@ import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
-function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0 } = {}) {
+function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0, scriptSettings } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
   let versions = [{ id: blue }];
   let time = 1_000_000, smokes = 0, uploads = 0;
@@ -44,6 +44,7 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
       if (versionLag-- > 0) return Response.json({ success: false, errors: [{ message: 'version not found' }] }, { status: 404 });
       result = { id: green, annotations: { 'workers/tag': sha } };
     }
+    else if (path.endsWith('/script-settings')) result = scriptSettings();
     else if (path.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: analyticsRows }] } } });
     else throw new Error(`Unexpected API path: ${path}`);
     return Response.json({ success: true, result });
@@ -62,6 +63,31 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
   return { options, api, state, calls, receipts, smokeObservations, get deployment() { return deployment; }, get smokes() { return smokes; }, get uploads() { return uploads; } };
 }
 const posts = (f) => f.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/deployments')).map((c) => c.body);
+
+test('reconciliation requires live logs before upload and every traffic step; no settings mutations', async () => {
+  const f = fixture({ scriptSettings: () => ({ observability: { enabled: true, logs: { enabled: true, head_sampling_rate: 1, invocation_logs: false } } }) });
+  f.state.observabilityReconciliation = 'retained-diagnostics-v1';
+  await runTrain(f.options);
+  const reads = f.calls.filter(c => c.url.endsWith('/script-settings'));
+  assert.equal(reads.length, 5, 'before upload plus 0/10/50/100');
+  assert.ok(reads.every(c => c.method === 'GET' && c.body === undefined));
+  assert.equal(f.state.status, 'done');
+  assert.ok(f.receipts.some(r => r.observabilityVerifiedAt));
+  const absent = fixture({ scriptSettings: () => ({ observability: null }) });
+  absent.state.observabilityReconciliation = 'retained-diagnostics-v1';
+  await assert.rejects(runTrain(absent.options), /Live observability does not match/);
+  assert.equal(absent.uploads, 0);
+  assert.equal(posts(absent).length, 0);
+});
+
+test('logging drift after zero-percent smoke blocks promotion and restores blue', async () => {
+  const f = fixture({ scriptSettings: () => ({ observability: { enabled: true, logs: { enabled: true, head_sampling_rate: 1, invocation_logs: f.state.percentage === 0 } } }) });
+  f.state.observabilityReconciliation = 'retained-diagnostics-v1';
+  await assert.rejects(runTrain(f.options), /Live observability does not match/);
+  assert.deepEqual(posts(f).map(p => p.versions), [splitVersions(blue, green, 0), [{ version_id: blue, percentage: 100 }]]);
+  assert.equal(f.state.status, 'rolled-back');
+  assert.equal(f.uploads, 1);
+});
 
 test('train observes a five-minute canary with frequent smoke, keeps DO order, finishes green100', async () => {
   const f = fixture();

@@ -1425,6 +1425,18 @@ cron triggers, routes, workers.dev or preview routing are rejected before upload
 separately authorized configuration deployment and establish a stable SHA-tagged
 base; do not silently leave a requested logging/privacy setting unapplied.
 
+One read-only reconciliation for version-only candidates permits the exact retained-diagnostics profile:
+`[observability.logs]` with `enabled=true`, `head_sampling_rate=1`, and
+`invocation_logs=false`. An operator must separately apply that profile first.
+The train reads `/script-settings` before asset publication, before upload, and
+before every 0/10/50/100 traffic step. Live logs must be enabled and persisted at
+full sampling, invocation logs and traces must be disabled, and no additional
+observability settings may differ from the profile's API defaults. Missing,
+unreadable, or changed settings block the next operation; drift during a canary
+uses the existing recovery policy. The rollout receipt records the profile and
+last successful readback time. This path never writes script settings and does
+not relax the guard for other non-versioned source changes.
+
 For a forward-only data/format change, add this trailer to the commit that lands
 on `main` (preserve it in the squash-merge message):
 
