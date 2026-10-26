@@ -165,6 +165,33 @@ inspection or reducing archive content would change contracts; none was done.
 No auth, policy, budget state, pricing result or continuation witness cache was
 added or extended.
 
+### Synchronous tokenizer (2026-10-25)
+
+stream-json's tokenizer stage (`jsonParser`) is synchronous, but `parser()`
+wraps it in UTF-8 and async generator stages, and `fun()` adds another async
+layer: every 4 KiB feed and every per-event `end()` paid generator and Promise
+overhead larger than the tokenizing. `worker/json-tokens.ts` calls the bare
+stage directly (pinned 3.7.0 exports it at runtime, not in its typings;
+`worker/test/json-tokens.test.mjs` fails if an upgrade drops it). The Responses
+inspector, its SSE line handling and the large-body JSON parser are now
+synchronous; only observation delivery is awaited. The metadata and tool
+projections resolve their selected path only at value starts instead of on
+every token. Token order, per-feed materialization, malformed-feed rejection
+(no tokens from a failing feed), limits and evidence are unchanged.
+
+Interleaved local runs (same host, Node 26, three/two rounds):
+
+| Case | Before CPU ms | After CPU ms |
+| --- | ---: | ---: |
+| Inspector only, 4,000 tiny deltas, ~0.9 MiB (`responses-inspector-cpu`) | 77–94 | 21–24 |
+| Whole handler, 0.5 MiB, after-header share (unified / native) | 43–44 / 42–48 | 26–34 / 24 |
+| Whole handler, 5 MiB retention off, after-header share (unified / native) | 65–77 / 55 | 39–44 / 40–51 |
+
+Real Codex streams are dominated by many small deltas, so the inspector-only
+case is closer to production than the two-snapshot handler fixture. Remaining
+inspector CPU is flat: tokenizer ~12%, projection dispatch and path
+classification ~35%, GC ~4%.
+
 Reproduce timing, profiles and the optional serialization audit separately:
 
 ```sh
@@ -177,6 +204,7 @@ node scripts/summarize-http-cpu.mjs "$proof/profile/unified-5MiB-retention-off.c
 node --cpu-prof --cpu-prof-dir="$proof" test/diagnostics/http-responses-cpu.test.mjs
 HTTP_CPU_COUNT_JSON=1 HTTP_CPU_RUNS=1 HTTP_CPU_WARMUPS=1 HTTP_CPU_SIZES=5 \
   node test/diagnostics/http-responses-cpu.test.mjs
+node test/diagnostics/responses-inspector-cpu.test.mjs
 ```
 
 CPU profiles remain outside Git. `before-node.cpuprofile` and

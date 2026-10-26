@@ -181,6 +181,9 @@ type Context = "root" | "response" | "items" | "item" | "tools" | "tool" | "envi
 type Field = Context | "text" | "ciphertext" | "number" | null;
 type Frame = { context: Context | null; value: Record<string, unknown> | unknown[] | null; key: string | null };
 
+const responseTextKeys = new Set(["type", "id", "response_id", "status", "object"]);
+const itemTextKeys = new Set(["type", "id", "name", "role", "execution", "status"]);
+
 // A second semantic projection on the existing parser's tokens, not another
 // parser or size-triggered output buffer. Limits invalidate only qualification.
 export function createToolEvidenceProjection(encrypted = false) {
@@ -195,12 +198,12 @@ export function createToolEvidenceProjection(encrypted = false) {
     if (frame.context === "tools") return "tool";
     if (!key || !frame.context) return null;
     if (frame.context === "root" || frame.context === "response") {
-      if (["type", "id", "response_id", "status", "object"].includes(key)) return "text";
+      if (responseTextKeys.has(key)) return "text";
       if (key === "output") return "items";
       if (frame.context === "root") return key === "response" ? "response" : key === "item" ? "item" : key === "output_index" ? "number" : key === "item_id" ? "text" : null;
     }
     if (frame.context === "item" || frame.context === "tool") {
-      if (["type", "id", "name", "role", "execution", "status"].includes(key)) return "text";
+      if (itemTextKeys.has(key)) return "text";
       if (key === "tools") return "tools";
       if (frame.context === "item" && key === "action") return "action";
       if (encrypted && frame.context === "item" && key === "encrypted_content") return "ciphertext";
@@ -223,12 +226,12 @@ export function createToolEvidenceProjection(encrypted = false) {
     clear: fail,
     accept(token: Token) {
       if (failed) return;
-      const selected = field();
+      // Only value starts consult the selected path; it is per-token hot.
       switch (token.name) {
         case "startObject":
         case "startArray": {
           if (frames.length >= 128) { fail(); return; }
-          const object = token.name === "startObject", next = selected ? object ? {} : [] : undefined;
+          const selected = field(), object = token.name === "startObject", next = selected ? object ? {} : [] : undefined;
           assign(next); if (failed) return;
           const context = selected && (object ? !["items", "tools", "text", "ciphertext", "number"].includes(selected) : selected === "items" || selected === "tools") ? selected as Context : null;
           frames.push({ context, value: context ? next as Frame["value"] : null, key: null }); break;
@@ -237,7 +240,7 @@ export function createToolEvidenceProjection(encrypted = false) {
         case "endArray": frames.pop(); break;
         case "startKey": current().key = null; scalar = ""; capture = current().context ? "key" : null; break;
         case "endKey": if (capture === "key") current().key = scalar; scalar = ""; capture = null; break;
-        case "startString": scalar = ""; capture = selected === "ciphertext" ? "ciphertext" : selected === "text" || selected === "environment" ? "text" : null; break;
+        case "startString": { const selected = field(); scalar = ""; capture = selected === "ciphertext" ? "ciphertext" : selected === "text" || selected === "environment" ? "text" : null; break; }
         case "stringChunk":
           if (capture) {
             if (capture === "ciphertext") ciphertextBytes += new TextEncoder().encode(token.value).length;
@@ -246,7 +249,7 @@ export function createToolEvidenceProjection(encrypted = false) {
           }
           break;
         case "endString": assign(capture === "text" || capture === "ciphertext" ? scalar : ""); scalar = ""; capture = null; break;
-        case "startNumber": scalar = ""; capture = selected === "number" ? "number" : null; break;
+        case "startNumber": scalar = ""; capture = field() === "number" ? "number" : null; break;
         case "numberChunk": if (capture === "number") { scalar += token.value; if (scalar.length > 64) fail(); } break;
         case "endNumber": assign(capture === "number" ? Number(scalar) : 0); scalar = ""; capture = null; break;
         case "nullValue":
