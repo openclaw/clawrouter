@@ -7,6 +7,8 @@ import { createHostedSearchUsage } from "./responses-hosted-usage.ts";
 export type ResponsesInspectionTools = Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid"> & { witness?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid"> };
 
 const feedLimit = 4096, depthLimit = 128, scalarLimit = 64;
+// Native search; per-character JS loops dominate CPU in cold isolates.
+const lineEnd = /[\r\n]/g;
 const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 
 // Observe the declared Responses format without assembling output. Identity
@@ -84,8 +86,8 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
     let offset = 0;
     while (offset < value.length && !stopped) {
       if (skipLf) { skipLf = false; if (value[offset] === "\n") { offset++; continue; } }
-      let end = offset;
-      while (end < value.length && value[end] !== "\r" && value[end] !== "\n") end++;
+      lineEnd.lastIndex = offset;
+      const end = lineEnd.exec(value)?.index ?? value.length;
       line(value.slice(offset, end));
       if (stopped || end === value.length) return;
       const fact = endLine();
