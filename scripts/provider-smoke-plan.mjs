@@ -92,7 +92,9 @@ export async function waitForSmokeUsage({
   baseUrl,
   smokeKey,
   result,
-  timeoutMs = 60_000,
+  // Queue delivery has stalled ~60 s in production; readiness (180 s), the POST
+  // (10 s) and this wait stay inside the train's five-minute smoke command limit.
+  timeoutMs = 100_000,
   fetchImpl = fetch,
   sleepImpl = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
   nowImpl = Date.now,

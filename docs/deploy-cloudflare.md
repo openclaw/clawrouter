@@ -317,7 +317,7 @@ Each provider POST has a unique request ID. After recording its health result,
 the smoke uses the same key to poll `GET /v1/usage` for that request's successful
 event, matching provider and HTTP status. It reports the independent event ID
 only after observing the event in the caller's durable usage snapshot.
-Polling lasts at most 60 seconds **per successful provider**, with a two-second
+Polling lasts at most 100 seconds **per successful provider**, with a two-second
 interval and a ten-second limit covering each fetch, body read, and disposal.
 This does not bound the existing provider POST or the entire smoke run.
 Authentication, redirects, unsupported endpoints, and malformed snapshots fail
@@ -327,9 +327,12 @@ All selected providers still run before failures are reported.
 
 The snapshot exposes only the latest 100 caller-visible events. A busy caller
 can evict a smoke event before inspection, so timeout means visibility is
-unconfirmed, not proof of data loss. Inspect usage and queue delivery before
-deciding on another paid request. This check proves event visibility, not budget
-settlement or the contents of the ingestion acknowledgment.
+unconfirmed, not proof of data loss. Queue delivery has stalled for about a
+minute in production (2026-10-26), so the bound sits above that while
+staying inside the train's five-minute smoke command limit for one provider.
+Inspect usage and queue delivery before deciding on another paid request.
+This check proves event visibility, not budget settlement or the contents of
+the ingestion acknowledgment.
 
 Select more golden providers with a comma-separated list:
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Wait up to 100 s (was 60 s) for a deploy smoke's usage event: a one-minute Cloudflare queue delivery stall rolled back a healthy candidate.
 - Cut streamed Responses inspection CPU about 3× on delta-heavy streams by driving stream-json's synchronous tokenizer directly instead of through per-chunk async generator plumbing, and by resolving projection paths only at value starts; tokens, limits, usage/tool/witness evidence and error semantics are unchanged.
 - Stop one request's stuck background work from getting another request's tasks cancelled: each request now drains only background work registered during its own lifetime, bounded at 10 s by a timer it owns. Production logged `waitUntil() tasks did not complete within the allowed time ... cancelled` on ~0.15% of requests, which also cancels that request's usage accounting.
 - Make the deploy train re-read the deployments list when it still shows the previous deployment right after a traffic-split change (bounded ~15 s), without repeating the mutation; any other split still stops the train.
