@@ -1,3 +1,4 @@
+import { proxyJsonBodyLimit } from "./request-body-limits.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
@@ -53,7 +54,7 @@ import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./p
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
-  errorResponse, HttpError, json, maxAnthropicJsonBodyBytes, maxJsonBodyBytes, randomId, readJson,
+  errorResponse, HttpError, json, maxJsonBodyBytes, randomId, readJson,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
@@ -253,11 +254,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
-  const admission = provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? new ExpandedJsonAdmission(request, env, mode, provider.id) : undefined;
+  const admission = proxyJsonBodyLimit(provider.id, endpoint.request_format) > maxJsonBodyBytes ? new ExpandedJsonAdmission(request, env, mode, provider.id) : undefined;
   try {
     let envelope, prepared;
     try {
-      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined, admission?.expand));
+      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, proxyJsonBodyLimit(provider.id, endpoint.request_format), admission?.expand));
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
     } catch (error) {
       if (error instanceof Response) return error;
@@ -291,11 +292,11 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
   }
-  const admission = provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? new ExpandedJsonAdmission(request, env, "proxy_key", provider.id) : undefined;
+  const admission = proxyJsonBodyLimit(provider.id, endpoint.request_format) > maxJsonBodyBytes ? new ExpandedJsonAdmission(request, env, "proxy_key", provider.id) : undefined;
   try {
     let prepared;
     try {
-      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined, admission?.expand);
+      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, proxyJsonBodyLimit(provider.id, endpoint.request_format), admission?.expand);
       prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
     } catch (error) {
       if (error instanceof Response) return error;
@@ -683,10 +684,10 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const configuredOwnerUrl = new URL(url);
     applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
     const body = transformTransportBody(upstream.transport, selection.body);
-    // Claude's enlarged envelope must not coexist with full-document pricing,
-    // transport and retention copies in the Worker's 128 MB isolate. Keep small
-    // requests on the existing path; large unsigned Claude JSON streams out.
-    const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages"
+    // Expanded envelopes must not coexist with full-document pricing, transport
+    // and retention copies in the Worker's 128 MB isolate. Keep small requests
+    // on the existing path; large unsigned opted-in JSON streams out.
+    const bytes = proxyJsonBodyLimit(selection.provider.id, selection.endpoint.request_format) > maxJsonBodyBytes
       && !selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4") ? jsonBodyBytes(body) : 0;
     const streamBody = bytes > maxJsonBodyBytes;
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);

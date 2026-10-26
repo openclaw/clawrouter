@@ -1,6 +1,6 @@
 # Claude JSON request limits
 
-ClawRouter accepts up to **32 MB (32,000,000 bytes)** on Anthropic Messages and token-counting routes, including their unified, native, and manifest-envelope forms. Other JSON routes retain the 8 MiB limit. For the manifest route, the envelope counts toward the ingress limit too.
+ClawRouter accepts up to **32 MB (32,000,000 bytes)** on Anthropic Messages and token-counting routes, including their unified, native, and manifest-envelope forms. Resolved [OpenAI native and manifest conversation routes](openai-request-limits.md) also opt into the same 32 MB envelope and share its two expanded-request slots. Other JSON routes retain the 8 MiB limit. For the manifest route, the envelope counts toward the ingress limit too.
 
 Ingress reads incrementally, checks actual byte counts before decoding each chunk, and cancels at the first over-limit chunk. A `Content-Length` above the limit is rejected without reading the body; an absent or understated length cannot bypass the limit. Bodies **at or below 8 MiB** retain the existing `JSON.parse` semantics and cost. Only after crossing 8 MiB does ingress switch to the streaming JSON tokenizer with 4 KiB feeds, first processing the buffered prefix. It assembles values directly rather than retaining a second whole decoded document. Malformed JSON remains a 400; oversized or structurally excessive expanded input is a 413.
 

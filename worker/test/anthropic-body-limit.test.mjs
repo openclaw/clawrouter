@@ -24,7 +24,7 @@ export default { async fetch(request,env,context) {
  if(path==="/fixture/setup") {
   const stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
   for(const [path,body] of [
-   ["/policies/initialize-all",[{policyId:"fixture",policy:{enabled:true,generation:"g1",providers:["anthropic"],tenantId:"tenant",monthlyBudgetMicros:Number(url.searchParams.get("limit")??20000000),retainRequestContent:url.searchParams.has("retain")}}]],
+   ["/policies/initialize-all",[{policyId:"fixture",policy:{enabled:true,generation:"g1",providers:["anthropic","openai"],tenantId:"tenant",monthlyBudgetMicros:Number(url.searchParams.get("limit")??20000000),retainRequestContent:url.searchParams.has("retain")}}]],
    ["/credentials/initialize-all",[{credentialId:"fixture",credential:{enabled:true,secretSha256:await sha256Hex("fixture-key"),policyId:"fixture",policyGeneration:"g1"}}]],
    ["/connections/initialize-all",[{providerId:"anthropic",enabled:true,monthlyBudgetMicros:20000000}]]
   ]) { const r=await stub.fetch("https://owner"+path,{method:"POST",body:JSON.stringify(body)}); if(!r.ok)return r; }
@@ -40,8 +40,9 @@ export default { async fetch(request,env,context) {
   if(action==="cancel") { state.cancelRequested=true;return Response.json({ok:true}); }
   const total=Number(url.searchParams.get("bytes")??(9*1024*1024));
   const manifest=url.searchParams.get("route")?.includes("/proxy/");
-  const prefix=new TextEncoder().encode((manifest?'{"body":':'')+'{"model":"claude-opus-5-5","max_tokens":1,"messages":[{"role":"user","content":"');
-  const suffix=new TextEncoder().encode('"}],"metadata":{"user_id":"'+(url.searchParams.get("mode")??"normal")+'"}}'+(manifest?'}':''));
+  const openai=url.searchParams.get("route")?.includes("/openai/");
+  const prefix=new TextEncoder().encode((manifest?'{"body":':'')+(openai?'{"model":"gpt-6-astra","input":"':'{"model":"claude-opus-5-5","max_tokens":1,"messages":[{"role":"user","content":"'));
+  const suffix=new TextEncoder().encode((openai?'","instructions":"'+(url.searchParams.get("mode")??"normal")+'"}':'"}],"metadata":{"user_id":"'+(url.searchParams.get("mode")??"normal")+'"}}')+(manifest?'}':''));
   const next={read:0,held:false,released:url.searchParams.has("free"),abort:new AbortController()};uploads.set(id,next);
   const stream=new ReadableStream({async pull(c) {
    if(next.read>=8*1024*1024+65536&&!next.released) { next.held=true;while(!next.released&&!next.abort.signal.aborted)await new Promise(resolve=>setTimeout(resolve,10)); }
@@ -66,6 +67,11 @@ export default { async fetch(request,env,context) {
  return worker.fetch(request,{...env,ANTHROPIC_API_KEY:"fixture-upstream-key",USAGE_QUEUE:{send:event=>ingestUsage(env,event)}},context);
 }};`;
 const upstream = `export default { async fetch(request) {
+ if(request.url==="https://api.openai.com/v1/responses/input_tokens") {
+  const body=await request.json();
+  if(body.instructions==="stream")return new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode('{"object":"response.input_tokens","input_tokens":37'));},async pull(c){await new Promise(resolve=>setTimeout(resolve,50));c.enqueue(new TextEncoder().encode(' '));}}),{headers:{"content-type":"application/json"}});
+  return Response.json({object:"response.input_tokens",input_tokens:37,length:body.input.length});
+ }
  if(!request.url.startsWith("https://api.anthropic.com/v1/messages")) throw Error("unexpected upstream");
  const text=await request.text();
  if(text.length>8*1024*1024 && request.headers.get("content-length")!==String(new TextEncoder().encode(text).byteLength))throw Error("large upload must have exact content-length");
@@ -295,8 +301,8 @@ test("real workerd preserves sub-8 MiB native-valid 25k-message and 70k-number r
  });
 }));
 
-test("real workerd stops unauthenticated 30 MB Claude uploads near 8 MiB",{timeout:60000},()=>fixture(async worker=>{
- for(const route of ["/v1/messages","/v1/native/anthropic/v1/messages/count_tokens","/v1/proxy/anthropic/messages"]) for(const auth of ["anonymous","invalid"]) {
+test("real workerd stops unauthenticated 30 MB Claude and OpenAI uploads near 8 MiB",{timeout:60000},()=>fixture(async worker=>{
+ for(const route of ["/v1/messages","/v1/native/anthropic/v1/messages/count_tokens","/v1/proxy/anthropic/messages","/v1/native/openai/v1/responses/input_tokens","/v1/proxy/openai/responses_input_tokens"]) for(const auth of ["anonymous","invalid"]) {
   const id=route+auth;
   await upload(worker,id,"start",{route,[auth]:"1",bytes:"30000000",free:"1"});
   const state=await waitUpload(worker,id,s=>s.status);
@@ -305,17 +311,20 @@ test("real workerd stops unauthenticated 30 MB Claude uploads near 8 MiB",{timeo
  const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();assert.equal(snapshot.events.length,0);
 }));
 
-test("real workerd limits expanded Claude uploads to two and releases success, parse error, rejection and cancel",{timeout:120000},()=>fixture(async worker=>{
+test("real workerd shares two expanded slots across Claude and OpenAI and releases success, parse error, rejection and cancel",{timeout:120000},()=>fixture(async worker=>{
  const start=async(id,options={})=>{await upload(worker,id,"start",options);return waitUpload(worker,id,s=>s.held||s.status);};
- assert.equal((await start("one")).held,true);assert.equal((await start("two",{route:"/v1/proxy/anthropic/messages"})).held,true);
+ assert.equal((await start("one")).held,true);assert.equal((await start("two",{route:"/v1/proxy/openai/responses_input_tokens"})).held,true);
  const denied=await start("three");assert.equal(denied.status,503);assert.equal(denied.retry,"1");
  assert.equal((await start("count-overload",{route:"/v1/native/anthropic/v1/messages/count_tokens"})).status,503,"token counting shares the same isolate bound");
+ assert.equal((await start("openai-overload",{route:"/v1/native/openai/v1/responses/input_tokens"})).status,503,"OpenAI shares the Claude expanded slot bound");
+ assert.equal((await start("openai-manifest-overload",{route:"/v1/proxy/openai/responses_input_tokens"})).status,503);
  assert.equal(denied.result.type,"error");assert.equal(denied.result.error.type,"overloaded_error");
  assert.equal((await start("anonymous",{anonymous:"1"})).status,401,"authentication precedes overload");
  const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();assert.equal(snapshot.events.length,0,"overload is unsent and nonbillable");
  for(const name of ["tenant:fixture","provider:anthropic"])assert.deepEqual(await(await worker.dispatchFetch("https://router.example/fixture/rows?name="+name)).json(),[]);
  assert.equal((await start("small",{bytes:"1024",free:"1"})).status,200,"small requests do not consume expanded slots");
  await upload(worker,"one","release");assert.equal((await waitUpload(worker,"one",s=>s.status)).status,200);
+ assert.equal((await start("openai-success",{route:"/v1/native/openai/v1/responses/input_tokens",free:"1"})).status,200,"OpenAI admits after Claude frees its slot and releases on completion");
  assert.equal((await start("malformed",{malformed:"1"})).held,true,"success frees a slot");
  await upload(worker,"two","cancel");await waitUpload(worker,"two",s=>s.status);
  assert.equal((await start("rejection",{mode:"reject"})).held,true,"ingress cancellation frees a slot");
@@ -326,10 +335,10 @@ test("real workerd limits expanded Claude uploads to two and releases success, p
  for(const id of ["replacement","last"]) {await upload(worker,id,"release");assert.equal((await waitUpload(worker,id,s=>s.status)).status,200);}
 }));
 
-test("real workerd holds expanded slots through response delivery and frees them on caller cancellation",{timeout:60000},()=>fixture(async worker=>{
- for(const id of ["stream1","stream2"]) {await upload(worker,id,"start",{mode:"stream",free:"1"});assert.equal((await waitUpload(worker,id,s=>s.headersStatus)).headersStatus,200);}
- await upload(worker,"overload","start",{free:"1"});assert.equal((await waitUpload(worker,"overload",s=>s.status)).status,503);
+for(const route of ["/v1/messages","/v1/native/openai/v1/responses/input_tokens"]) test("real workerd holds expanded slots through response delivery and frees them on caller cancellation: "+route,{timeout:60000},()=>fixture(async worker=>{
+ for(const id of ["stream1","stream2"]) {await upload(worker,id,"start",{route,mode:"stream",free:"1"});assert.equal((await waitUpload(worker,id,s=>s.headersStatus)).headersStatus,200);}
+ await upload(worker,"overload","start",{route,free:"1"});assert.equal((await waitUpload(worker,"overload",s=>s.status)).status,503);
  await upload(worker,"stream1","cancel");await waitUpload(worker,"stream1",s=>s.status);
- await upload(worker,"after-cancel","start",{free:"1"});assert.equal((await waitUpload(worker,"after-cancel",s=>s.status)).status,200);
+ await upload(worker,"after-cancel","start",{route,free:"1"});assert.equal((await waitUpload(worker,"after-cancel",s=>s.status)).status,200);
  await upload(worker,"stream2","cancel");await waitUpload(worker,"stream2",s=>s.status);
 }));

@@ -654,10 +654,11 @@ retention; approve that requirement before selecting Fable 5.
 Embedding manifests distinguish the per-input token limit from the aggregate
 request limit, so batched inputs reserve against the provider's full request
 allowance.
-Provider-native JSON requests that need model normalization or listed-price
-inspection are capped at 8 MiB. Larger raw payloads can use a provider-native
-route with a fixed per-request policy price; compatibility routes still require
-inspection so ClawRouter can safely rewrite the model identifier.
+JSON inspection defaults to 8 MiB. [Claude conversation routes](anthropic-request-limits.md)
+and resolved [OpenAI native/manifest conversation routes](openai-request-limits.md)
+accept a guarded 32 MB envelope, with shared expanded admission, streamed
+transport/retention and unchanged monetary checks. Fixed per-request pricing
+does not bypass the selected route's ingress limit.
 
 ## Codex
 

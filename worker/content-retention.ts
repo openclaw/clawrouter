@@ -1,3 +1,4 @@
+import { proxyJsonBodyLimit } from "./request-body-limits.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
 import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
@@ -61,7 +62,7 @@ export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, sele
       ? selection.body.map(({ headers: _headers, authorization: _authorization, ...entry }) => entry)
       : selection.body,
   };
-  const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(record) : 0;
+  const bytes = proxyJsonBodyLimit(selection.provider.id, selection.endpoint.request_format) > maxJsonBodyBytes ? jsonBodyBytes(record) : 0;
   return {
     contentRef,
     large: bytes > maxJsonBodyBytes,

@@ -1,3 +1,4 @@
+import { expandedOpenAiFormat } from "./request-body-limits.ts";
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
@@ -172,7 +173,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   const unbounded = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images));
   // Opaque/history/media inputs already reserve the full bound; their encoded
   // size cannot refine it. Avoid serializing the conversation just to discard it.
-  const bytes = unbounded ? 0 : endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
+  const bytes = unbounded ? 0 : endpoint && (endpoint.request_format === "anthropic.messages" || expandedOpenAiFormat(endpoint.request_format)) ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputTokens = unbounded ? inputLimit
     : Math.min(inputLimit, saturatingAdd(saturatingAdd(bytes - (images?.encodedBytes ?? 0), images?.tokens ?? 0), pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
