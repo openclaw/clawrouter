@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Serve `/v1/catalog` and `/v1/models` from a sibling isolate's rendered body in the same Cloudflare location when this isolate is cold, instead of rebuilding the caller's inventory (~400 ms under burst); bodies are client-visible and secretless, keyed by identity and policy, and keep the original max age and mutation fence.
+- Fix cold-burst admission coalescing: the leader is now claimed before the per-location cache read, so requests arriving during that read wait for it instead of each calling the authority.
 - Cut native Anthropic Messages pre-dispatch CPU about 2.5–3× by measuring Claude bodies with a direct walk and a reused UTF-8 scratch buffer instead of the generator-based chunk serializer; counts stay exactly `JSON.stringify`'s UTF-8 length and large bodies still stream without a whole-document copy.
 - Wait up to 100 s (was 60 s) for a deploy smoke's usage event: a one-minute Cloudflare queue delivery stall rolled back a healthy candidate.
 - Cut streamed Responses inspection CPU about 3× on delta-heavy streams by driving stream-json's synchronous tokenizer directly instead of through per-chunk async generator plumbing, and by resolving projection paths only at value starts; tokens, limits, usage/tool/witness evidence and error semantics are unchanged.

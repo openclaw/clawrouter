@@ -583,6 +583,35 @@ location fetched, before calling the authority.
 - Failover, the disabled knob (`CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS=0`) and
   Cache API errors all fall through to the authority.
 
+### Stress test: cold discovery and burst coalescing (2026-10-26)
+
+A production stress run (4,200 requests, all 200) showed `/v1/catalog` at
+50-way concurrency with p50 27 ms but p99 827 ms, while `/v1/models` right after
+stayed under 50 ms p99. An ordered 200-way catalog burst confirmed the cause:
+the first sixth of requests ran at p50 420 ms, falling to 32 ms as Cloudflare's
+new isolates warmed. Each cold isolate rebuilt the caller's inventory (health,
+grant pools, policy and provider balances) before answering.
+
+- The isolate inventory holds selectors and grant objects, so it is not shared.
+  The rendered `/v1/catalog`, `/v1/models` and Anthropic-format models bodies
+  are exactly what the caller receives, so they are secretless. Each is published
+  per location under the full identity+policy key and variant, stamped with the
+  inventory load's start time, once per loaded inventory per isolate. A cold
+  isolate authenticates the key as usual, then adopts a sibling's body within the
+  same max age and mutation fence before rebuilding anything.
+- The same run exposed a race in cold-burst coalescing: the leader was claimed
+  only after the per-location read, so every request arriving during that read
+  (5-20 ms in production) called the authority itself. Leadership is now claimed
+  before the read; a 5-request burst with a slow colo layer makes 1 admission
+  call instead of 5 (regression test fails on the old order).
+
+Local workerd stress (one process, 1,000 requests per cell, soft budgets) stayed
+exact through 500-way concurrency: upstream requests, selections and usage
+events matched in every cell, and admission stayed at most one call per cell.
+Failures appeared only at 500-way as `ECONNRESET` before any HTTP response:
+macOS `kern.ipc.somaxconn` is 128, so the local accept queue overflowed; requests
+that reached the router all completed and were accounted.
+
 ### Verified in production (2026-10-24)
 
 `68377baf` (`50717c7`, #326-#332) rolled out through the full canary train on

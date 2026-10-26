@@ -414,12 +414,13 @@ function fakeColo(t) {
   const entries = new Map(), stats = { puts: 0, matches: 0, hits: 0 };
   const cache = {
     async match(url) { stats.matches++; const body = entries.get(String(url)); if (body) stats.hits++; return body ? new Response(body) : undefined; },
-    async put(url, response) { stats.puts++; entries.set(String(url), await response.text()); },
+    async put(url, response) { stats.puts++; const namespace = String(url).split('/')[4]; byNamespace[namespace] = (byNamespace[namespace] ?? 0) + 1; entries.set(String(url), await response.text()); },
   };
+  const byNamespace = {};
   const previous = globalThis.caches;
   globalThis.caches = { default: cache };
   t.after(() => { globalThis.caches = previous; });
-  return { entries, stats };
+  return { entries, stats, byNamespace };
 }
 // Another isolate in the same location: empty local caches, shared colo layer intact.
 const otherIsolate = async () => { const { clearHotCaches } = await import('../hot-cache.ts'); clearHotCaches(); };
@@ -474,6 +475,55 @@ test('the colo layer is unused when the hot cache is disabled', async t => {
   t.mock.method(globalThis, 'fetch', async () => ok());
   await f.send(); await f.send();
   assert.deepEqual(colo.stats, { puts: 0, matches: 0, hits: 0 });
+});
+
+test('a cold isolate adopts a sibling\'s rendered discovery body per variant, keeping its fetch time', async t => {
+  const time = clock();
+  const colo = fakeColo(t);
+  const f = await fixture(); await f.put(keyA, grant());
+  const get = (path, headers = {}) => worker.fetch(new Request(`https://fixture${path}`, { headers: { ...admissionHeaders, ...headers } }), f.env, f.context);
+  const catalog = await (await get('/v1/catalog')).json(); await Promise.all(f.pending);
+  const models = await (await get('/v1/models')).json(); await Promise.all(f.pending);
+  assert.ok(![...colo.entries.values()].join('').includes('synthetic-token'), 'no credential material in shared bodies');
+  await otherIsolate(); f.reset();
+  t.mock.method(f.env.POLICY_KV, 'get', () => { throw new Error('an adopted discovery body must not rebuild the inventory'); });
+  assert.deepEqual(await (await get('/v1/catalog')).json(), catalog);
+  assert.deepEqual(await (await get('/v1/models')).json(), models, 'variants are shared separately');
+  assert.deepEqual(f.calls.filter(call => call !== '/admission/resolve'), [], 'no inventory reads for adopted bodies');
+  assert.equal((await get('/v1/catalog', { authorization: 'Bearer clawrouter-live-fixture-not-the-secret' })).status, 401, 'adoption never skips authentication');
+  t.mock.restoreAll();
+  const anthropic = await (await get('/v1/models', { 'anthropic-version': '2023-06-01' })).json(); await Promise.all(f.pending);
+  assert.ok(Array.isArray(anthropic.data) && !('object' in anthropic), 'the Anthropic variant is rendered, not adopted from the OpenAI body');
+  time.advance(60_000);
+  await otherIsolate();
+  const published = colo.byNamespace.discovery;
+  assert.equal((await get('/v1/catalog')).status, 200); await Promise.all(f.pending);
+  assert.equal(colo.byNamespace.discovery, published + 1, 'past the max age the shared body is ignored and reloaded');
+});
+
+test('discovery publishes only from the request that loaded and never with the hot cache off', async t => {
+  const colo = fakeColo(t);
+  const f = await fixture(); await f.put(keyA, grant());
+  const get = () => worker.fetch(new Request('https://fixture/v1/catalog', { headers: admissionHeaders }), f.env, f.context);
+  const responses = await Promise.all([get(), get(), get()]); await Promise.all(responses.map(response => response.text())); await Promise.all(f.pending);
+  assert.equal(colo.byNamespace.discovery, 1, 'one catalog publication for a burst');
+  const off = fakeColo(t);
+  const g = await fixture({ CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0' }); await g.put(keyA, grant());
+  await (await worker.fetch(new Request('https://fixture/v1/catalog', { headers: admissionHeaders }), g.env, g.context)).text();
+  assert.deepEqual(off.stats, { puts: 0, matches: 0, hits: 0 });
+});
+
+test('a cold burst still coalesces while the leader reads a slow colo layer', async t => {
+  const colo = fakeColo(t), match = globalThis.caches.default.match;
+  globalThis.caches.default.match = async url => { await new Promise(resolve => setTimeout(resolve, 15)); return match(url); };
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  f.reset();
+  const responses = await Promise.all(Array.from({ length: 5 }, () => f.request()));
+  for (const response of responses) { assert.equal(response.status, 200); await response.text(); }
+  await Promise.all(f.pending);
+  assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, f.calls.join());
+  assert.equal(colo.stats.matches, 1, 'followers wait for the leader instead of each reading the colo layer');
 });
 
 test('a burst of cold requests for one key shares a single authority admission', async t => {
