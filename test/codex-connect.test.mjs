@@ -719,7 +719,7 @@ const nativeBinary = process.env.CLAWROUTER_CODEX_BINARY;
 const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBinary;
 const nativeVersion = nativeBinary ? (await promisify(execFile)(nativeBinary, ["--version"], { env: { PATH: process.env.PATH }, timeout: 20_000, maxBuffer: 1024 })).stdout.trim() : null;
 // Keep both pinned account/read shapes exact, including the new nullable field.
-const hasWorkspaceRouting = nativeVersion === "codex-cli 0.156.1";
+const hasWorkspaceRouting = ["codex-cli 0.156.1", "codex-cli 0.164.0"].includes(nativeVersion);
 for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle preserves auth and clears GUI tier (${shape})`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
   const f = await desktopFixture(t), origin = f.connect[2], requests = [];
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
