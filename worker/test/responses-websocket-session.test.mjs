@@ -816,3 +816,38 @@ test("held terminals consume output bytes and pending frame capacity", async t =
     gate.resolve(); await tick(); assert.equal(f.settled.length, 2);
   }
 });
+
+test("image-heavy creates up to the media envelope lease the isolate budget until settlement", async (t) => {
+  const { bodyBudgetCharged } = await import("../body-budget.ts");
+  const image = (mib) => ({ input: [{ role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(mib * 1024 * 1024)}` }] }] });
+  const before = bodyBudgetCharged();
+  const f = fixture(t), g = fixture(t);
+  f.client.receive(create("a", image(30)));
+  await tick();
+  assert.equal(f.upstream.sent.length, 1, "a 30 MiB create passes the 32 MB frame limit");
+  assert.equal(f.admitted[0].body.input[0].content[0].image_url.length, 30 * 1024 * 1024 + 22, "admitted body is the parsed frame");
+  assert.ok(bodyBudgetCharged() - before >= 60 * 1024 * 1024);
+  g.client.receive(create("b", image(20)));
+  assert.equal(JSON.parse(g.client.sent.at(-1)).error.code, "server_overloaded", "a second large create cannot fit beside the first");
+  assert.equal(JSON.parse(g.client.sent.at(-1)).status, 503);
+  g.client.receive(create("b"));
+  await tick();
+  assert.equal(g.upstream.sent.length, 1, "small creates lease nothing");
+  f.client.receive(create("a", { input: "x".repeat(32_000_001) }));
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "request_too_large");
+  // 9 MB of tiny values must not expand past the isolate before admission.
+  f.client.receive(create("a", { input: "x".repeat(8 * 1024 * 1024), values: Array(70_000).fill(0) }));
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "request_too_large");
+  assert.equal(f.admitted.length, 1);
+  g.client.receive("{" + " ".repeat(20 * 1024 * 1024));
+  assert.equal(JSON.parse(g.client.sent.at(-1)).error.code, "server_overloaded", "refused before parsing while the budget is full");
+  respond(f, "a");
+  await tick();
+  assert.equal(bodyBudgetCharged(), before, "settlement returns the lease");
+  g.client.receive(create("c", image(20)));
+  await tick();
+  assert.equal(g.upstream.sent.length, 2);
+  respond(g, "b"); respond(g, "c", "response-2");
+  await tick();
+  assert.equal(bodyBudgetCharged(), before);
+});

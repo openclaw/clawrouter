@@ -2,8 +2,8 @@
 
 ## Unreleased
 
+- Make image-heavy turns work: OpenAI-format Responses (create, compact, input tokens) and Chat Completions now accept the 32 MB media envelope Claude already had, instead of 413 at 8 MiB, and Responses WebSocket creates accept 32 MB frames instead of 4 MiB. Bodies carrying media splice their large strings into a known-length upstream/R2 stream instead of whole-document copies (a 6.7 MiB image turn holds 7 MiB at dispatch instead of 20.5 MiB; WebSocket creates are parsed once and no longer build an unused HTTP body), and a 96 MiB per-isolate body budget replaces the two-request limit, refusing excess large bodies with a nonbillable `503` + `Retry-After: 1` before they can exceed isolate memory (eight concurrent 6.7 MiB turns: 55 MiB live instead of 122 MiB).
 - Add GPT-6.1 Terra with sourced text/image metadata, Responses tool calling, Standard/Fast/Flex pricing and long-context budget bounds.
-
 - Cut streamed Responses inspection CPU in cold (interpreted) isolates by 25–35%: SSE lines are split with a native search instead of a per-character loop, and adjacent JSON string chunks of a feed are merged before reaching the projections instead of one dispatch per escape; evidence, limits and error semantics are unchanged.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
 

@@ -1,6 +1,6 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
-import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
+import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -61,14 +61,18 @@ export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, sele
       ? selection.body.map(({ headers: _headers, authorization: _authorization, ...entry }) => entry)
       : selection.body,
   };
-  const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(record) : 0;
+  // Media splices in as raw chunks, as at dispatch; other large Claude records
+  // use the chunked serializer rather than a whole-document copy.
+  const media = mediaJsonBody(record);
+  const bytes = media ? media.bytes : selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(record) : 0;
   return {
     contentRef,
     large: bytes > maxJsonBodyBytes,
     async write() {
       // R2 requires a known-length stream. Counting uses the same serializer as
       // delivery, including Unicode/escaping and the retention envelope.
-      const body = bytes > maxJsonBodyBytes ? jsonBodyStream(record).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(record);
+      const body = media ? media.stream().pipeThrough(new FixedLengthStream(bytes))
+        : bytes > maxJsonBodyBytes ? jsonBodyStream(record).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(record);
       await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), body, {
         httpMetadata: { contentType: "application/json" },
         customMetadata: { expiresAt: String(record.expiresAtMs) },

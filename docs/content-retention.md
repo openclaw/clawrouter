@@ -24,8 +24,8 @@ metadata-only; request retention requires an explicit policy opt-in.
   not fail the request, which can leave a usage row whose archive object is
   missing. Two cases keep the write before dispatch and still return
   `503 content_retention_unavailable` without calling the provider: durable
-  background Responses jobs, and Claude bodies above the 8 MiB parser bound
-  (their streamed archive copy must not overlap transport memory).
+  background Responses jobs, and records above 8 MiB (their streamed archive
+  copy must not overlap transport memory).
 - R2 encrypts objects at rest. The `request-content-v1-30-days` lifecycle rule
   schedules deletion under the dedicated `v1/` archive prefix after 30 days without
   affecting unrelated bucket content. Physical deletion is asynchronous. Usage
@@ -65,7 +65,7 @@ the R2 record also includes a small metadata envelope. Large records use a
 known-length stream, not another whole-document serialization. Upload still
 finishes before provider dispatch, so retaining large media adds storage cost
 and admission latency. The existing 30-day expiry, user exemption and admin-only
-read controls are unchanged. See [Claude JSON request limits](anthropic-request-limits.md).
+read controls are unchanged. See [Media JSON request limits](media-request-limits.md).
 
 ## Disclosure
 

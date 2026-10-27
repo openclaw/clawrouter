@@ -144,11 +144,17 @@ export function nowIso(): string { return new Date().toISOString(); }
 export function randomId(prefix: string): string { return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`; }
 
 export const maxJsonBodyBytes = 8 * 1024 * 1024;
-// Claude documents 32 MB for both Messages and token counting. Opt in only
-// after resolving those endpoints; admin and other provider routes stay at 8 MiB.
-export const maxAnthropicJsonBodyBytes = 32_000_000;
+// Media-bearing generation routes (Claude Messages and token counting, OpenAI
+// Responses and Chat Completions) accept 32 MB: Claude's documented limit and
+// Cloudflare's WebSocket message ceiling. Opt in only after resolving those
+// endpoints; admin and other provider routes stay at 8 MiB.
+export const maxMediaJsonBodyBytes = 32_000_000;
 
-export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes, onExpand?: () => Promise<void>): Promise<T> {
+// Provider routes lease isolate memory as bytes arrive and authenticate before
+// expanding past 8 MiB; either may throw the caller's error response.
+export interface JsonIntake { reserve(bytes: number): Promise<void>; expand(): Promise<void> }
+
+export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes, intake?: JsonIntake): Promise<T> {
   const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -159,10 +165,22 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
     if (emptyValue !== undefined) return emptyValue;
     throw new HttpError(400, "invalid_json", "request body must be valid JSON");
   }
+  // A declared length leases all at once: concurrent uploads that each lease
+  // as they read could all stall partway past the budget and all be refused.
+  if (Number.isFinite(declared) && declared > 0) {
+    try { await intake?.reserve(declared); }
+    catch (error) { void request.body.cancel().catch(() => undefined); throw error; }
+  }
   const reader = request.body.getReader(), decoder = new TextDecoder();
-  let size = 0, text = "";
+  // Keep raw bytes until the body either fits JSON.parse or expands. Handing the
+  // streaming parser slices of one decoded prefix would pin all 8 MiB of it for
+  // as long as any parsed value of 13+ characters lives (V8 slices share it).
+  let size = 0, prefix: Array<Uint8Array | undefined> = [];
   // Preserve JSON.parse semantics/cost within the existing 8 MiB envelope.
   let parser: ReturnType<typeof createJsonBodyParser> | undefined;
+  const feed = async (bytes: Uint8Array) => {
+    for (let offset = 0; offset < bytes.byteLength; offset += 4096) parser!.push(decoder.decode(bytes.subarray(offset, offset + 4096), { stream: true }));
+  };
   const canceled = () => { void reader.cancel(request.signal.reason).catch(() => undefined); };
   try {
     while (true) {
@@ -179,21 +197,24 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
       }
       if (!parser && size > maxJsonBodyBytes) {
         // Authenticate/admit before parsing this chunk or pulling any more.
-        await onExpand?.();
+        await intake?.expand();
         parser = createJsonBodyParser();
         request.signal.addEventListener("abort", canceled, { once: true });
         if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
-        await parser.push(text);
-        text = "";
+        for (const chunk of prefix) await feed(chunk!);
+        prefix = [];
       }
-      if (parser) {
-        for (let offset = 0; offset < value.byteLength; offset += 4096) await parser.push(decoder.decode(value.subarray(offset, offset + 4096), { stream: true }));
-      } else text += decoder.decode(value, { stream: true });
+      await intake?.reserve(size);
+      if (parser) await feed(value);
+      else prefix.push(value);
     }
     // Some HTTP runtimes expose an empty stream for a bodyless request. Only
     // callers with an optional-body contract may accept zero bytes as a default.
     if (size === 0 && emptyValue !== undefined) return emptyValue;
-    if (parser) { await parser.push(decoder.decode()); return await parser.end() as T; }
+    if (parser) { parser.push(decoder.decode()); return parser.end() as T; }
+    let text = "";
+    // Release each chunk as it decodes so bytes and text never both peak.
+    for (let index = 0; index < prefix.length; index++) { text += decoder.decode(prefix[index], { stream: true }); prefix[index] = undefined; }
     return JSON.parse(text + decoder.decode()) as T;
   } catch (error) {
     void reader.cancel().catch(() => undefined);

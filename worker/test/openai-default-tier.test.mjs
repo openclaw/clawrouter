@@ -63,7 +63,7 @@ for (const tier of [undefined, "auto", "fast"]) test(`Responses WebSocket prepar
   assert.equal(upstream.websocket, true);
   const payload = { type: "response.create", ...selection.body };
   assert.equal(payload.service_tier, tier === "fast" ? "fast" : "default");
-  assert.equal(JSON.parse(upstream.requestBody).service_tier, payload.service_tier);
+  assert.equal(upstream.requestBody, undefined, "WebSocket creates send their own frame, not an HTTP body copy");
   const cost = estimateModelCost(model.pricing, selection.body);
   assert.equal(cost.reserveMicros, Math.ceil(cost.inputTokens * (tier === "fast" ? 5 : 2.5) + cost.outputTokens * (tier === "fast" ? 20 : 10)));
 });

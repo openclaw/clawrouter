@@ -44,7 +44,7 @@ export default { async fetch(request,env,context) {
   const suffix=new TextEncoder().encode('"}],"metadata":{"user_id":"'+(url.searchParams.get("mode")??"normal")+'"}}'+(manifest?'}':''));
   const next={read:0,held:false,released:url.searchParams.has("free"),abort:new AbortController()};uploads.set(id,next);
   const stream=new ReadableStream({async pull(c) {
-   if(next.read>=8*1024*1024+65536&&!next.released) { next.held=true;while(!next.released&&!next.abort.signal.aborted)await new Promise(resolve=>setTimeout(resolve,10)); }
+   if(next.read>=Number(url.searchParams.get("hold")??8*1024*1024+65536)&&!next.released) { next.held=true;while(!next.released&&!next.abort.signal.aborted)await new Promise(resolve=>setTimeout(resolve,10)); }
    if(next.abort.signal.aborted)return;
    if(next.read===total) { c.close();return; }
    const count=Math.min(65536,total-next.read), chunk=new Uint8Array(count).fill(65);
@@ -305,31 +305,34 @@ test("real workerd stops unauthenticated 30 MB Claude uploads near 8 MiB",{timeo
  const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();assert.equal(snapshot.events.length,0);
 }));
 
-test("real workerd limits expanded Claude uploads to two and releases success, parse error, rejection and cancel",{timeout:120000},()=>fixture(async worker=>{
- const start=async(id,options={})=>{await upload(worker,id,"start",options);return waitUpload(worker,id,s=>s.held||s.status);};
- assert.equal((await start("one")).held,true);assert.equal((await start("two",{route:"/v1/proxy/anthropic/messages"})).held,true);
- const denied=await start("three");assert.equal(denied.status,503);assert.equal(denied.retry,"1");
- assert.equal((await start("count-overload",{route:"/v1/native/anthropic/v1/messages/count_tokens"})).status,503,"token counting shares the same isolate bound");
+// A held 30 MB upload leases about 57 MiB of the 96 MiB isolate body budget,
+// so a second one cannot fit until the first releases its lease.
+const big={bytes:"30000000",hold:String(28*1024*1024)};
+test("real workerd budgets large Claude uploads by bytes and releases success, parse error, rejection and cancel",{timeout:180000},()=>fixture(async worker=>{
+ const start=async(id,options={})=>{await upload(worker,id,"start",{...big,...options});return waitUpload(worker,id,s=>s.held||s.status);};
+ assert.equal((await start("one")).held,true);
+ const denied=await start("three",{route:"/v1/proxy/anthropic/messages"});assert.equal(denied.status,503);assert.equal(denied.retry,"1");
+ assert.ok(denied.read<28*1024*1024,"refused while reading, before holding the full body");
+ assert.equal((await start("count-overload",{route:"/v1/native/anthropic/v1/messages/count_tokens"})).status,503,"token counting shares the same isolate budget");
  assert.equal(denied.result.type,"error");assert.equal(denied.result.error.type,"overloaded_error");
  assert.equal((await start("anonymous",{anonymous:"1"})).status,401,"authentication precedes overload");
  const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();assert.equal(snapshot.events.length,0,"overload is unsent and nonbillable");
  for(const name of ["tenant:fixture","provider:anthropic"])assert.deepEqual(await(await worker.dispatchFetch("https://router.example/fixture/rows?name="+name)).json(),[]);
- assert.equal((await start("small",{bytes:"1024",free:"1"})).status,200,"small requests do not consume expanded slots");
+ assert.equal((await start("small",{bytes:"1024",free:"1"})).status,200,"small requests lease nothing");
  await upload(worker,"one","release");assert.equal((await waitUpload(worker,"one",s=>s.status)).status,200);
- assert.equal((await start("malformed",{malformed:"1"})).held,true,"success frees a slot");
- await upload(worker,"two","cancel");await waitUpload(worker,"two",s=>s.status);
- assert.equal((await start("rejection",{mode:"reject"})).held,true,"ingress cancellation frees a slot");
+ assert.equal((await start("malformed",{malformed:"1"})).held,true,"success frees its lease");
  await upload(worker,"malformed","release");assert.equal((await waitUpload(worker,"malformed",s=>s.status)).status,400);
- assert.equal((await start("replacement")).held,true,"parse error frees a slot");
+ assert.equal((await start("replacement")).held,true,"parse error frees its lease");
+ await upload(worker,"replacement","cancel");await waitUpload(worker,"replacement",s=>s.status);
+ assert.equal((await start("rejection",{mode:"reject"})).held,true,"ingress cancellation frees its lease");
  await upload(worker,"rejection","release");assert.equal((await waitUpload(worker,"rejection",s=>s.status)).status,500);
- assert.equal((await start("last")).held,true,"upstream rejection frees a slot");
- for(const id of ["replacement","last"]) {await upload(worker,id,"release");assert.equal((await waitUpload(worker,id,s=>s.status)).status,200);}
+ assert.equal((await start("last")).held,true,"upstream rejection frees its lease");
+ await upload(worker,"last","release");assert.equal((await waitUpload(worker,"last",s=>s.status)).status,200);
 }));
 
-test("real workerd holds expanded slots through response delivery and frees them on caller cancellation",{timeout:60000},()=>fixture(async worker=>{
- for(const id of ["stream1","stream2"]) {await upload(worker,id,"start",{mode:"stream",free:"1"});assert.equal((await waitUpload(worker,id,s=>s.headersStatus)).headersStatus,200);}
- await upload(worker,"overload","start",{free:"1"});assert.equal((await waitUpload(worker,"overload",s=>s.status)).status,503);
- await upload(worker,"stream1","cancel");await waitUpload(worker,"stream1",s=>s.status);
- await upload(worker,"after-cancel","start",{free:"1"});assert.equal((await waitUpload(worker,"after-cancel",s=>s.status)).status,200);
- await upload(worker,"stream2","cancel");await waitUpload(worker,"stream2",s=>s.status);
+test("real workerd holds body leases through response delivery and frees them on caller cancellation",{timeout:90000},()=>fixture(async worker=>{
+ await upload(worker,"stream","start",{...big,mode:"stream",free:"1"});assert.equal((await waitUpload(worker,"stream",s=>s.headersStatus)).headersStatus,200);
+ await upload(worker,"overload","start",{...big,free:"1"});assert.equal((await waitUpload(worker,"overload",s=>s.status)).status,503);
+ await upload(worker,"stream","cancel");await waitUpload(worker,"stream",s=>s.status);
+ await upload(worker,"after-cancel","start",{...big,free:"1"});assert.equal((await waitUpload(worker,"after-cancel",s=>s.status)).status,200);
 }));

@@ -88,6 +88,21 @@ export function jsonBodyBytes(value: unknown): number {
   return JSON.stringify(value).length;
 }
 
+// UTF-8 length without materializing the encoded copy; slices keep surrogate
+// pairs together so a split cannot count as two replacement characters.
+export function utf8Length(text: string): number {
+  if (text.length <= stringChunk) return encoder.encodeInto(text, scratch).written;
+  let bytes = 0;
+  for (let offset = 0; offset < text.length;) {
+    let end = Math.min(text.length, offset + stringChunk);
+    const last = text.charCodeAt(end - 1), next = text.charCodeAt(end);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
+    bytes += encoder.encodeInto(text.slice(offset, end), scratch).written;
+    offset = end;
+  }
+  return bytes;
+}
+
 export function jsonBodyStream(value: unknown): ReadableStream<Uint8Array> {
   const chunks = jsonChunks(value);
   return new ReadableStream<Uint8Array>({
@@ -104,6 +119,86 @@ export function jsonBodyStream(value: unknown): ReadableStream<Uint8Array> {
     },
     cancel() { chunks.return(undefined); },
   }, { highWaterMark: 0 });
+}
+
+// Base64 images and data URLs dominate large bodies. JSON.stringify of the whole
+// value would add a document-sized string plus its encoded bytes, and the
+// chunked serializer above costs 4–20× native CPU. Instead stringify a skeleton
+// with each media string swapped for a per-call marker, then splice the strings
+// back in as raw chunks: native CPU, and no copy beyond the parsed value.
+// Below 1 MiB of such strings a whole-document copy is cheaper than streaming.
+const mediaChars = 64 * 1024, mediaChunk = 64 * 1024, mediaMinimum = 1024 * 1024;
+// Characters JSON.stringify emits verbatim as one UTF-8 byte each.
+const unplain = /[^\x20\x21\x23-\x5b\x5d-\x7e]/;
+
+export interface MediaJsonBody { bytes: number; stream(): ReadableStream<Uint8Array> }
+
+// Null when large strings total under 1 MiB; JSON.stringify is cheaper then.
+export function mediaJsonBody(value: unknown): MediaJsonBody | null {
+  const slots: Array<{ owner: Record<string, unknown> | unknown[]; key: string | number; value: string }> = [];
+  // Iterative: an 8 MiB JSON.parse body can nest far deeper than the call stack.
+  const pending: unknown[] = [value];
+  let total = 0;
+  while (pending.length) {
+    const owner = pending.pop();
+    if (!owner || typeof owner !== "object") continue;
+    const keys: Array<string | number> = Array.isArray(owner) ? Array.from(owner.keys()) : Object.keys(owner);
+    for (const key of keys) {
+      const item = (owner as Record<string | number, unknown>)[key];
+      if (typeof item === "string") { if (item.length >= mediaChars) { slots.push({ owner: owner as Record<string, unknown>, key, value: item }); total += item.length; } }
+      else if (item && typeof item === "object") pending.push(item);
+    }
+  }
+  if (total < mediaMinimum) return null;
+  const marker = `\u0000clawrouter-media-${crypto.randomUUID()}-`;
+  let skeleton: string;
+  try {
+    slots.forEach((slot, index) => { (slot.owner as Record<string | number, unknown>)[slot.key] = marker + index; });
+    skeleton = JSON.stringify(value);
+  } finally {
+    for (const slot of slots) (slot.owner as Record<string | number, unknown>)[slot.key] = slot.value;
+  }
+  // The marker's control character is always escaped, and its UUID is fresh,
+  // so caller text cannot produce this serialized form.
+  const needle = `"${JSON.stringify(marker).slice(1, -1)}`;
+  const pieces: Array<Uint8Array | string> = [];
+  let bytes = 0, offset = 0;
+  for (let at = skeleton.indexOf(needle); at >= 0; at = skeleton.indexOf(needle, offset)) {
+    const end = skeleton.indexOf('"', at + needle.length);
+    const piece = encoder.encode(skeleton.slice(offset, at)), media = slots[Number(skeleton.slice(at + needle.length, end))].value;
+    pieces.push(piece, media);
+    bytes += piece.byteLength + (unplain.test(media) ? quotedBytes(media) : media.length + 2);
+    offset = end + 1;
+  }
+  const tail = encoder.encode(skeleton.slice(offset));
+  pieces.push(tail);
+  bytes += tail.byteLength;
+  return {
+    bytes,
+    stream() {
+      let index = 0, chunks: Iterator<string> | null = null;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          while (index < pieces.length) {
+            const piece = pieces[index];
+            if (typeof piece !== "string") { index++; if (piece.byteLength) { controller.enqueue(piece); return; } continue; }
+            chunks ??= unplain.test(piece) ? quoted(piece) : plainChunks(piece);
+            const next = chunks.next();
+            if (!next.done) { controller.enqueue(encoder.encode(next.value)); return; }
+            chunks = null; index++;
+          }
+          controller.close();
+        },
+        cancel() { index = pieces.length; },
+      }, { highWaterMark: 0 });
+    },
+  };
+}
+
+function* plainChunks(value: string): Generator<string> {
+  yield '"';
+  for (let offset = 0; offset < value.length; offset += mediaChunk) yield value.slice(offset, offset + mediaChunk);
+  yield '"';
 }
 
 export class JsonBodyStructureLimit extends Error {}
@@ -146,9 +241,24 @@ export function createJsonBodyParser() {
   }
   const consume = createJsonTokenizer(accept);
   return {
-    async push(text: string) {
+    push(text: string): void {
       for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
     },
-    async end(): Promise<unknown> { consume.end(); return root; },
+    end(): unknown { consume.end(); return root; },
   };
+}
+
+// The same structural bounds for a message that already arrived whole, such as
+// an expanded WebSocket create. Feeds are re-decoded copies, never slices: a
+// retained 13+ character value sliced from the message would pin all of it.
+export function parseBoundedJson(text: string): unknown {
+  const parser = createJsonBodyParser(), decoder = new TextDecoder();
+  for (let offset = 0; offset < text.length;) {
+    let end = Math.min(text.length, offset + stringChunk);
+    const last = text.charCodeAt(end - 1), next = text.charCodeAt(end);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) end--;
+    parser.push(decoder.decode(encoder.encode(text.slice(offset, end))));
+    offset = end;
+  }
+  return parser.end();
 }

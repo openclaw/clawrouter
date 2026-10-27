@@ -189,7 +189,9 @@ test("Together full-context requests require headroom in both budgets and settle
       const usage = { prompt_tokens: 500_000, completion_tokens: 1_000, total_tokens: 501_000 };
       const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
         assert.equal(String(url), "https://api.together.xyz/v1/chat/completions");
-        assert.equal(JSON.parse(init.body).model, "zai-org/GLM-5.2");
+        // A megabyte of prompt text streams out instead of a whole-document copy.
+        assert.equal(typeof init.body, "object");
+        assert.equal(JSON.parse(await new Response(init.body).text()).model, "zai-org/GLM-5.2");
         if (!denied) for (const owner of ["tenant:maintainer_access:owner@example.com", "provider:together"]) {
           const [reservation] = ledger.get(owner).reservations();
           assert.equal(reservation.reserved_micros, 1_472_405);

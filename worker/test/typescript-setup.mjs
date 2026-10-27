@@ -10,6 +10,17 @@ registerHooks({
   },
 });
 
+// Workers provides FixedLengthStream for known-length streamed bodies; Node does not.
+globalThis.FixedLengthStream ??= class FixedLengthStream extends TransformStream {
+  constructor(length) {
+    let seen = 0;
+    super({
+      transform(chunk, controller) { seen += chunk.byteLength; if (seen > length) throw new TypeError("FixedLengthStream received too many bytes"); controller.enqueue(chunk); },
+      flush() { if (seen !== length) throw new TypeError("FixedLengthStream received too few bytes"); },
+    });
+  }
+};
+
 // Isolate hot caches are module state; every test starts from a cold isolate.
 const { beforeEach } = await import("node:test");
 const { clearHotCaches, setHotCacheClock, overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");
