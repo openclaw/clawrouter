@@ -1,5 +1,7 @@
 import { responseEventIdentities, responseIdentity, type ResponseIdentity } from "./response-identities.ts";
 import { WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
+import { BodyLease } from "./body-budget.ts";
+import { JsonBodyStructureLimit, parseBoundedJson, utf8Length } from "./json-body.ts";
 
 type Frame = Record<string, unknown>;
 export type ResponsesCloseCause = "client_disconnect" | "upstream_disconnect" | "client_protocol_error" | "upstream_protocol_error" | "router_limit" | "router_error" | "timeout";
@@ -41,15 +43,19 @@ interface SessionOptions {
   limits?: Partial<typeof DEFAULT_LIMITS>;
 }
 
-const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, interrupts: 128, frameBytes: 4 * 1024 * 1024, bufferedBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
+// Creates match the HTTP media envelope (Cloudflare delivers at most 32 MiB);
+// the isolate body budget, not these per-connection caps, bounds their memory.
+const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, interrupts: 128, frameBytes: 32_000_000, bufferedBytes: 32_000_000, upstreamFrameBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
+const expandedFrameBytes = 8 * 1024 * 1024;
 const OUTPUT_LIMIT_ERROR: ErrorNotice = { code: "websocket_connection_limit_reached", message: "Router WebSocket output limit reached; open a new connection.", status: 400 };
-const encoder = new TextEncoder();
 const terminalTypes = new Map<string, Outcome>([["response.completed", "completed"], ["response.incomplete", "incomplete"], ["response.failed", "failed"], ["error", "error"]]);
 
 interface Operation {
   lane: string;
-  frame: string | null;
+  // Parsed once at receipt; it becomes the selection body, never a second copy.
+  frame: Frame | null;
   bytes: number;
+  lease: BodyLease;
   requestId: string;
   started: number;
   controller: AbortController;
@@ -70,7 +76,7 @@ export class ResponsesWebSocketSession {
   private client: ResponsesSocket;
   private options: SessionOptions;
   private limits: typeof DEFAULT_LIMITS;
-  private lanes = new Map<string, Array<{ frame: string; bytes: number }>>();
+  private lanes = new Map<string, Array<{ frame: Frame; bytes: number; lease: BodyLease }>>();
   private active = new Map<string, Operation>();
   private settling = new Set<Operation>();
   private dispatched = new Map<string, Operation>();
@@ -112,42 +118,61 @@ export class ResponsesWebSocketSession {
       this.close("client_protocol_error", 1003, { code: "unsupported_event", message: "Responses WebSockets accept JSON text events only.", status: 400 });
       return;
     }
-    const bytes = encoder.encode(data).byteLength;
+    const bytes = utf8Length(data);
     if (bytes > this.limits.frameBytes) {
       this.error("request_too_large", "Event exceeds the router WebSocket frame limit.", 413);
       return;
     }
+    // Lease before parsing: under memory pressure a refused create must not
+    // first allocate its parsed body. The lane is unknown until then.
+    const lease = new BodyLease();
+    if (!lease.grow(bytes)) {
+      this.error("server_overloaded", "Large request capacity is busy; retry shortly.", 503);
+      return;
+    }
+    if (!this.accept(data, bytes, lease)) lease.release();
+  }
+
+  // True when the create is queued and owns the lease from here.
+  private accept(data: string, bytes: number, lease: BodyLease): boolean {
     let frame: Frame;
     try {
-      const parsed = JSON.parse(data);
+      // Like HTTP ingress: expanded creates get structural bounds, since 32 MB
+      // of tiny values could otherwise expand past the isolate before admission.
+      const parsed = bytes > expandedFrameBytes ? parseBoundedJson(data) : JSON.parse(data);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-      frame = parsed;
-    } catch { this.error("invalid_json", "Expected a JSON event object.", 400); return; }
+      frame = parsed as Frame;
+    } catch (error) {
+      if (error instanceof JsonBodyStructureLimit) this.error("request_too_large", "Event exceeds the router JSON structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers).", 413);
+      else this.error("invalid_json", "Expected a JSON event object.", 400);
+      return false;
+    }
     const lane = frame.stream_id === undefined ? "" : frame.stream_id;
     if (typeof lane !== "string" || (frame.stream_id !== undefined && !/^[A-Za-z0-9_.-]{1,256}$/.test(lane))) {
       this.error("invalid_stream_id", "stream_id must contain 1–256 letters, numbers, underscores, hyphens, or periods.", 400);
-      return;
+      return false;
     }
-    if (frame.type === "response.interrupt") { this.interrupt(frame, data, lane); return; }
+    if (frame.type === "response.interrupt") { this.interrupt(frame, data, lane); return false; }
     if (frame.type !== "response.create" || frame.background === true) {
       this.observeControl(frame, "unsupported_event");
       this.error("unsupported_event", "Only response.create without background execution and response.interrupt are supported.", 400, lane);
-      return;
+      return false;
     }
     if (!this.lanes.has(lane) && lane && [...this.lanes.keys()].filter(Boolean).length >= this.limits.lanes) {
       this.error("websocket_stream_limit_reached", "Named stream limit reached; reuse a stream_id or open a new connection.", 400, lane);
-      return;
+      return false;
     }
     if (this.bufferedCount >= this.limits.buffered || this.bufferedBytes + bytes > this.limits.bufferedBytes) {
       this.error("websocket_queue_full", "Router request queue is full; wait for an active response to finish.", 429, lane);
-      return;
+      return false;
     }
     const queue = this.lanes.get(lane) ?? [];
     this.lanes.set(lane, queue);
-    queue.push({ frame: data, bytes });
+    queue.push({ frame, bytes, lease });
     this.bufferedCount++;
     this.bufferedBytes += bytes;
     this.schedule();
+    return true;
   }
 
   private interrupt(frame: Frame, data: string, lane: string): void {
@@ -204,10 +229,10 @@ export class ResponsesWebSocketSession {
   }
 
   private async dispatch(op: Operation): Promise<void> {
-    if (this.ending || op.ending) { this.releaseFrame(op); this.active.delete(op.lane); return; }
+    if (this.ending || op.ending) { this.retire(op); this.active.delete(op.lane); return; }
     let establishing = false;
     try {
-      const body = JSON.parse(op.frame!);
+      const body = op.frame!;
       delete body.type;
       delete body.stream_id;
       // Current Codex serializes HTTP transport fields in response.create.
@@ -240,7 +265,7 @@ export class ResponsesWebSocketSession {
     } catch (error) {
       await this.dispatchFailure(op, error, establishing);
     } finally {
-      if (!op.admitted) { this.releaseFrame(op); this.active.delete(op.lane); this.schedule(); }
+      if (!op.admitted) { this.retire(op); this.active.delete(op.lane); this.schedule(); }
     }
   }
 
@@ -277,7 +302,7 @@ export class ResponsesWebSocketSession {
 
   private upstreamMessage(data: unknown): void {
     if (this.ending) return;
-    if (typeof data !== "string" || encoder.encode(data).byteLength > this.limits.frameBytes * 2) { this.close("upstream_protocol_error", 1009); return; }
+    if (typeof data !== "string" || utf8Length(data) > this.limits.upstreamFrameBytes) { this.close("upstream_protocol_error", 1009); return; }
     let event: Frame;
     try { event = JSON.parse(data); } catch { this.close("upstream_protocol_error", 1011); return; }
     if (!event || typeof event !== "object" || Array.isArray(event)) { this.close("upstream_protocol_error", 1011); return; }
@@ -330,7 +355,7 @@ export class ResponsesWebSocketSession {
   }
 
   private publish(data: string, op: Operation | undefined, identities: ResponseIdentity[], event: Frame): void {
-    const bytes = encoder.encode(data).byteLength;
+    const bytes = utf8Length(data);
     if (this.publishingCount >= this.limits.buffered || this.publishingBytes + bytes > this.limits.bufferedBytes || !this.reserveOutput(bytes)) {
       this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
       return;
@@ -379,7 +404,7 @@ export class ResponsesWebSocketSession {
     }).catch(() => {
       this.close("router_error", 1000, { code: "accounting_unavailable", message: "Response accounting could not finish; open a new connection.", status: 503, lane: op.lane });
     }).finally(() => {
-      this.releaseFrame(op);
+      this.retire(op);
       this.settling.delete(op);
       if (this.active.get(op.lane) === op) this.active.delete(op.lane);
       if (this.dispatched.get(op.lane) === op) this.dispatched.delete(op.lane);
@@ -401,6 +426,12 @@ export class ResponsesWebSocketSession {
     this.bufferedCount--;
   }
 
+  // Accounting can own the body until settlement; only then return its lease.
+  private retire(op: Operation): void {
+    this.releaseFrame(op);
+    op.lease.release();
+  }
+
   private error(code: string, message: string, status: number, lane = ""): void {
     if (this.ending) return;
     this.forward(JSON.stringify(this.errorFrame({ code, message, status, lane })));
@@ -412,7 +443,7 @@ export class ResponsesWebSocketSession {
 
   private forward(message: string): void {
     if (this.ending) return;
-    if (this.reserveOutput(encoder.encode(message).byteLength)) this.send(message);
+    if (this.reserveOutput(utf8Length(message))) this.send(message);
   }
 
   private reserveOutput(bytes: number): boolean {
@@ -436,7 +467,7 @@ export class ResponsesWebSocketSession {
     this.witnesses.close();
     clearTimeout(this.connectionTimer);
     for (const queue of this.lanes.values()) {
-      for (const item of queue) { this.bufferedBytes -= item.bytes; this.bufferedCount--; }
+      for (const item of queue) { this.bufferedBytes -= item.bytes; this.bufferedCount--; item.lease.release(); }
       queue.length = 0;
     }
     const operations = [...this.active.values(), ...this.settling];
@@ -447,7 +478,7 @@ export class ResponsesWebSocketSession {
     }
     // Cause ownership precedes abort, error delivery and reciprocal close events.
     if (notice) {
-      if (typeof notice === "string" && this.outputBytes + encoder.encode(notice).byteLength > this.limits.outputBytes) { notice = OUTPUT_LIMIT_ERROR; code = 1009; }
+      if (typeof notice === "string" && this.outputBytes + utf8Length(notice) > this.limits.outputBytes) { notice = OUTPUT_LIMIT_ERROR; code = 1009; }
       try { this.client.send(typeof notice === "string" ? notice : JSON.stringify(this.errorFrame(notice))); } catch { /* Peer already closed. */ }
     }
     try { this.upstream?.close(code, "session closed"); } catch { /* Socket already closed. */ }

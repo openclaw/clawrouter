@@ -150,9 +150,9 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
 
-## Claude request sizes
+## Media request sizes
 
-Claude Messages and token counting accept up to **32 MB (32,000,000 bytes)** through unified, native, and manifest routes (including the manifest envelope). Other JSON routes keep **8 MiB**. Bodies within 8 MiB keep the existing JSON parser; above it the Worker authenticates before expanded parsing and applies structural limits. At most **two expanded requests per isolate** remain in flight through response completion or observed cancellation. Excess authenticated requests receive a nonbillable HTTP **503**, `Retry-After: 1`, and a native-shaped `{"type":"error","error":{"type":"overloaded_error","message":"…"}}` body, before budget reservation or provider dispatch. See [Claude JSON request limits](anthropic-request-limits.md) for byte counting, structural safeguards and platform caveats.
+Claude Messages and token counting, OpenAI-format Responses (create, compact, input tokens) and Chat Completions accept up to **32 MB (32,000,000 bytes)** through unified, native, and manifest routes (including the manifest envelope). Other JSON routes keep **8 MiB**. Bodies within 8 MiB keep the existing JSON parser; above it the Worker authenticates before expanded parsing and applies structural limits. Bodies of 1 MiB or more lease twice their bytes from a 96 MiB per-isolate body budget through response completion or observed cancellation. Requests past the budget receive a nonbillable HTTP **503** with `Retry-After: 1` before budget reservation or provider dispatch: Claude routes return `{"type":"error","error":{"type":"overloaded_error","message":"…"}}`, other routes `error.code: server_overloaded`. See [Media JSON request limits](media-request-limits.md) for byte counting, transport copies, structural safeguards and platform caveats.
 
 ## OpenAI Decisions
 
@@ -525,8 +525,9 @@ settlement/charge and its durable recovery both fail, or usage publication fails
 socket reports `accounting_unavailable` and closes before sending more work.
 
 Limits per connection are 16 active responses (including those still settling),
-32 named lanes plus the default lane, 48 buffered creates, 4 MiB per incoming
-frame, 8 MiB total buffered create bytes, at most 48 output frames/8 MiB awaiting
+32 named lanes plus the default lane, 48 buffered creates, 32 MB per incoming
+frame (the HTTP media envelope; Cloudflare delivers at most 32 MiB), 32 MB total
+buffered create bytes, 8 MiB per upstream frame, at most 48 output frames/8 MiB awaiting
 publication, 16 MiB cumulative downstream output, and 128 forwarded interrupts
 (including repeats). Interrupt identities remain bounded by this lifetime cap
 to correlate late acknowledgements. The output limit bounds a slow

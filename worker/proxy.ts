@@ -5,7 +5,8 @@ import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
-import { jsonBodyBytes, jsonBodyStream } from "./json-body.ts";
+import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
+import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
 import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
 import { identitySelectionDenied } from "./native-request-headers.ts";
@@ -53,37 +54,59 @@ import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./p
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
-  errorResponse, HttpError, json, maxAnthropicJsonBodyBytes, maxJsonBodyBytes, randomId, readJson,
+  errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
 
-// Shared by native, unified and manifest routes in this isolate. Keep the slot
-// through response delivery: accounting closures can still own the input body.
-let expandedJsonInFlight = 0;
-class ExpandedJsonAdmission {
-  private acquired = false;
+// Media-bearing generation formats take the 32 MB envelope on every route form.
+const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions"]);
+const mediaPaths = new Set(["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/chat/completions"]);
+const mediaEnvelope = (endpoint: { request_format: string }) => mediaFormats.has(endpoint.request_format);
+const bodyLimit = (endpoint: { request_format: string }) => mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
+// Unified paths admit the media envelope before the model resolves a format.
+const expandedTooLarge = () => errorResponse("request_too_large", `JSON request body exceeds the ${maxJsonBodyBytes} byte limit for this route`, 413);
+
+// Leases this isolate's body budget (see body-budget.ts), authenticating before
+// any lease so anonymous callers cannot hold it, and again before expansion past
+// 8 MiB. Keep the lease through response delivery: accounting closures can
+// still own the input body.
+class JsonAdmission implements JsonIntake {
   completion?: Promise<unknown>;
+  expanded = false;
+  private authenticated = false;
+  private readonly lease = new BodyLease();
   private readonly request: Request;
   private readonly env: Env;
   private readonly mode: AuthMode;
-  private readonly providerId: string;
-  constructor(request: Request, env: Env, mode: AuthMode, providerId: string) {
+  private readonly providerId: string | undefined;
+  constructor(request: Request, env: Env, mode: AuthMode, providerId?: string) {
     this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
   }
-  expand = async (): Promise<void> => {
-    const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
-    if (auth instanceof Response) throw auth;
-    if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
-    if (expandedJsonInFlight >= 2) throw json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" });
-    expandedJsonInFlight++;
-    this.acquired = true;
+  reserve = async (bytes: number): Promise<void> => {
+    if (bytes >= bodyLeaseMinimum) await this.authenticate();
+    if (this.lease.grow(bytes)) return;
+    throw this.providerId === "anthropic"
+      ? json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" })
+      : errorResponse("server_overloaded", "Large request capacity is busy; retry shortly.", 503, undefined, { "retry-after": "1" });
   };
+  expand = async (): Promise<void> => {
+    await this.authenticate();
+    this.expanded = true;
+  };
+  private async authenticate(): Promise<void> {
+    if (!this.authenticated) {
+      const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
+      if (auth instanceof Response) throw auth;
+      this.authenticated = true;
+    }
+    if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+  }
   finish(context: ExecutionContext): void {
-    if (!this.acquired) return;
+    if (!this.lease.leased) return;
     context.waitUntil((async () => {
       try { await this.completion; }
-      finally { this.acquired = false; expandedJsonInFlight--; }
+      finally { this.lease.release(); }
     })());
   }
 }
@@ -115,9 +138,16 @@ interface ReservedProxyBudget {
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
+  const admission = new JsonAdmission(request, env, mode);
+  try { return await proxyUnifiedOpenAi(request, env, context, path, mode, admission); }
+  finally { admission.finish(context); }
+}
+
+async function proxyUnifiedOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode, admission: JsonAdmission): Promise<Response> {
   let body: Record<string, unknown>;
-  try { body = requestObject(await readJson<unknown>(request)); }
+  try { body = requestObject(await readJson<unknown>(request, undefined, mediaPaths.has(path) ? maxMediaJsonBodyBytes : undefined, admission)); }
   catch (error) {
+    if (error instanceof Response) return error;
     const auth = await preauthenticate(request, env, mode);
     if (auth instanceof Response) return auth;
     throw error;
@@ -130,12 +160,14 @@ export async function proxyOpenAi(request: Request, env: Env, context: Execution
   const preauthenticated = await preauthenticate(request, env, mode, mode === "proxy_key" ? modelRoute(modelId, capabilityForPath(path) ?? undefined)?.provider.id : undefined, undefined, isSelectionFailure(earlySelection) ? undefined : earlySelection);
   if (preauthenticated instanceof Response) return preauthenticated;
   if (!modelId) return errorResponse("model_required", "model is required", 400);
+  // Fusion fans one body out to several advisers; only the bounded envelope may.
   if (modelId === FUSION_MODEL_ID) {
     if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
+    if (admission.expanded) return expandedTooLarge();
     return proxyFusion(request, env, context, mode, body, preauthenticated);
   }
-  if (!isSelectionFailure(earlySelection)) return proxySelected(request, env, context, mode, earlySelection, new URL(request.url).searchParams, preauthenticated);
-  return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated);
+  if (!isSelectionFailure(earlySelection)) return admission.expanded && !mediaEnvelope(earlySelection.endpoint) ? expandedTooLarge() : proxySelected(request, env, context, mode, earlySelection, new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
+  return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated, undefined, undefined, undefined, undefined, admission);
 }
 
 async function proxyConcreteOpenAi(
@@ -150,13 +182,15 @@ async function proxyConcreteOpenAi(
   reservedBudget?: ReservedProxyBudget,
   compound?: CompoundRequestContext,
   auditAuth?: AuthorizedIdentity,
+  admission?: JsonAdmission,
 ): Promise<Response> {
   const result = concreteOpenAiSelection(path, body, env, timeoutMs);
   if (isSelectionFailure(result)) {
     if (compound && result.auditSelection) await auditSelectionFailure(request, env, context, mode, result.auditSelection, preauthenticated, result.response.status, compound, auditAuth);
     return result.response;
   }
-  return proxySelected(request, env, context, mode, result, new URL(request.url).searchParams, preauthenticated, reservedBudget, compound, auditAuth);
+  if (admission?.expanded && !mediaEnvelope(result.endpoint)) return expandedTooLarge();
+  return proxySelected(request, env, context, mode, result, new URL(request.url).searchParams, preauthenticated, reservedBudget, compound, auditAuth, admission);
 }
 
 async function proxyFusion(
@@ -253,11 +287,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
-  const admission = provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? new ExpandedJsonAdmission(request, env, mode, provider.id) : undefined;
+  const admission = new JsonAdmission(request, env, mode, provider.id);
   try {
     let envelope, prepared;
     try {
-      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined, admission?.expand));
+      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission));
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
     } catch (error) {
       if (error instanceof Response) return error;
@@ -272,7 +306,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     if (preauthenticated instanceof Response) return preauthenticated;
     const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
     return await proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
-  } finally { admission?.finish(context); }
+  } finally { admission.finish(context); }
 }
 
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
@@ -291,11 +325,11 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
   }
-  const admission = provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? new ExpandedJsonAdmission(request, env, "proxy_key", provider.id) : undefined;
+  const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
     let prepared;
     try {
-      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, provider.id === "anthropic" && endpoint.request_format === "anthropic.messages" ? maxAnthropicJsonBodyBytes : undefined, admission?.expand);
+      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission);
       prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
     } catch (error) {
       if (error instanceof Response) return error;
@@ -308,10 +342,10 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
     if (preauthenticated instanceof Response) return preauthenticated;
     return await proxySelected(request, env, context, "proxy_key", selection, isModelDiscovery(endpoint) ? discoveryQuery(new URL(request.url).searchParams) : new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
-  } finally { admission?.finish(context); }
+  } finally { admission.finish(context); }
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: ExpandedJsonAdmission): Promise<Response> {
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
@@ -683,13 +717,16 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const configuredOwnerUrl = new URL(url);
     applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
     const body = transformTransportBody(upstream.transport, selection.body);
-    // Claude's enlarged envelope must not coexist with full-document pricing,
-    // transport and retention copies in the Worker's 128 MB isolate. Keep small
-    // requests on the existing path; large unsigned Claude JSON streams out.
-    const bytes = selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages"
-      && !selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4") ? jsonBodyBytes(body) : 0;
-    const streamBody = bytes > maxJsonBodyBytes;
-    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
+    // The 32 MB media envelope must not coexist with whole-document transport
+    // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media
+    // splice it in as raw chunks; other Claude bodies above 8 MiB use the
+    // chunked serializer. WebSocket creates send their own frame instead.
+    const signed = selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4");
+    const bodyless = ["GET", "HEAD"].includes(selection.method) || transport === "websocket";
+    const media = bodyless || signed ? null : mediaJsonBody(body);
+    const bytes = media ? media.bytes : !bodyless && !signed && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(body) : 0;
+    const streamBody = media !== null || bytes > maxJsonBodyBytes;
+    const requestBody = bodyless ? undefined : media ? media.stream().pipeThrough(new FixedLengthStream(bytes)) : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
     if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search) {

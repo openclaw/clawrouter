@@ -25,7 +25,7 @@ or array) or an owned `previous_response_id`. `instructions`, cache options,
 `service_tier`, and provider extras are forwarded unchanged except for the existing
 model namespace transformation and public API default-tier pin: omitted or auto
 tiers become default after authorization, never the project's possibly paid tier.
-Existing 8 MiB JSON admission applies.
+The 32 MB media JSON envelope applies; see [Media JSON request limits](media-request-limits.md).
 Query options are not supported. A streaming request receives
 `400 unsupported_compact_stream` before upstream dispatch; there is no fabricated
 SSE implementation. Background jobs are likewise explicitly unsupported.
