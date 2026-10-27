@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
 - Document how many screenshots fit in the 32 MB media envelope (about 60 text-heavy or 12 photo-heavy 2048 px screenshots), production-probed over HTTP and WebSocket, plus the remaining limitations: a hard 413 above 32 MB that compaction may not clear, per-isolate 503s under concurrent large bodies, and Claude's 2000 px rule above 20 images.
 - Make image-heavy turns work: OpenAI-format Responses (create, compact, input tokens) and Chat Completions now accept the 32 MB media envelope Claude already had, instead of 413 at 8 MiB, and Responses WebSocket creates accept 32 MB frames instead of 4 MiB. Bodies carrying media splice their large strings into a known-length upstream/R2 stream instead of whole-document copies (a 6.7 MiB image turn holds 7 MiB at dispatch instead of 20.5 MiB; WebSocket creates are parsed once and no longer build an unused HTTP body), and a 96 MiB per-isolate body budget replaces the two-request limit, refusing excess large bodies with a nonbillable `503` + `Retry-After: 1` before they can exceed isolate memory (eight concurrent 6.7 MiB turns: 55 MiB live instead of 122 MiB).
 - Add GPT-6.1 Terra with sourced text/image metadata, Responses tool calling, Standard/Fast/Flex pricing and long-context budget bounds.

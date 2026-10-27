@@ -16,7 +16,7 @@
     "lucide-react": "^1.61.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "simple-icons": "^16.35.0",
+    "simple-icons": "^16.36.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
   },
