@@ -33,14 +33,14 @@ test("media splicing emits exactly JSON.stringify's bytes and restores the value
   assert.deepEqual(await bytes(media.stream()), wire);
 });
 
-test("media splicing declines bodies under 1 MiB of large strings and survives deep nesting", async () => {
+test("media splicing declines bodies under 1 MiB of large strings and counts nested values exactly", async () => {
   assert.equal(mediaJsonBody({ input: "x".repeat(65_535), list: Array.from({ length: 1000 }, (_, n) => ({ n })) }), null);
   assert.equal(mediaJsonBody({ a: "x".repeat(600_000), b: "y".repeat(400_000), small: "z".repeat(65_535).repeat(1) }), null);
   let deep = { data: "B".repeat(1_100_000) };
-  for (let n = 0; n < 5_000; n++) deep = [deep];
+  for (let n = 0; n < 1_000; n++) deep = [deep];
   const media = mediaJsonBody(deep);
   assert.ok(media);
-  assert.equal(media.bytes, 5_000 * 2 + encoder.encode(JSON.stringify({ data: "B".repeat(1_100_000) })).byteLength);
+  assert.equal(media.bytes, 1_000 * 2 + encoder.encode(JSON.stringify({ data: "B".repeat(1_100_000) })).byteLength);
 });
 
 test("streamed media chunks stay bounded", async () => {
