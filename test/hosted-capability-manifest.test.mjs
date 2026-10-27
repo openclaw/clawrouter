@@ -19,7 +19,7 @@ test("compiler preserves exact declared hosted tools and rejects unsupported con
   }
   const valid = compile(); assert.equal(valid.status, 0, valid.stderr);
   const provider = JSON.parse(valid.stdout).providers[0];
-  assert.deepEqual(provider.models.filter(model => model.nativeCapabilities?.endpoints.responses?.hostedTools).map(model => model.id).sort(), ["openai/gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6.1-sol"].sort());
+  assert.deepEqual(provider.models.filter(model => model.nativeCapabilities?.endpoints.responses?.hostedTools).map(model => model.id).sort(), ["openai/gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-terra"].sort());
   assert.equal(provider.models.find(model => model.id === "openai/gpt-4.1-mini").nativeCapabilities, undefined);
   for (const mutate of [
     manifest => { sol(manifest).nativeCapabilities.endpoints.responses.hostedTools = ["future_tool"]; },

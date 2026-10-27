@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add GPT-6.1 Terra with sourced text/image metadata, Responses tool calling, Standard/Fast/Flex pricing and long-context budget bounds.
+
 - Cut streamed Responses inspection CPU in cold (interpreted) isolates by 25–35%: SSE lines are split with a native search instead of a per-character loop, and adjacent JSON string chunks of a feed are merged before reaching the projections instead of one dispatch per escape; evidence, limits and error semantics are unchanged.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
 

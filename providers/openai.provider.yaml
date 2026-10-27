@@ -40,7 +40,7 @@ adapter:
       - from: max_tokens
         to: max_completion_tokens
         paths: [/v1/chat/completions]
-        upstreams: [gpt-6-astra, gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4]
+        upstreams: [gpt-6-astra, gpt-6.1-sol, gpt-6.1-terra, gpt-6-sol, gpt-6-luna, gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4]
 quota:
   responseHeaders:
     - id: rpm
@@ -132,7 +132,7 @@ endpoints:
     responseFormat: openai.responses
     streaming: sse
     websocket: openai.responses
-    toolPricing: {"version": "openai-web-search-2026-10-20", "effectiveAt": "2026-10-20", "source": "https://developers.openai.com/api/docs/pricing#tools", "webSearchMicrosPerCall": 10000, "previewMicrosPerCallByModel": {"gpt-6-astra": 10000, "gpt-6.1-sol": 10000, "gpt-6-sol": 10000, "gpt-6-luna": 10000, "gpt-5.6": 10000, "gpt-5.6-sol": 10000, "gpt-5.6-terra": 10000, "gpt-5.6-luna": 10000, "gpt-5.5": 10000, "gpt-5.4": 10000, "gpt-4.1-mini": 25000}}
+    toolPricing: {"version": "openai-web-search-2026-10-20", "effectiveAt": "2026-10-20", "source": "https://developers.openai.com/api/docs/pricing#tools", "webSearchMicrosPerCall": 10000, "previewMicrosPerCallByModel": {"gpt-6-astra": 10000, "gpt-6.1-sol": 10000, "gpt-6.1-terra": 10000, "gpt-6-sol": 10000, "gpt-6-luna": 10000, "gpt-5.6": 10000, "gpt-5.6-sol": 10000, "gpt-5.6-terra": 10000, "gpt-5.6-luna": 10000, "gpt-5.5": 10000, "gpt-5.4": 10000, "gpt-4.1-mini": 25000}}
     responsesLifecycle:
       retrieve: responses_retrieve
       cancel: responses_cancel
@@ -410,51 +410,37 @@ models:
           cacheWriteInputMicrosPerMillion: 5000000
           outputMicrosPerMillion: 15000000
         serviceTiers:
-          - id: default
-            inputMicrosPerMillion: 2000000
-            cachedInputMicrosPerMillion: 100000
-            cacheWriteInputMicrosPerMillion: 2500000
-            outputMicrosPerMillion: 10000000
-            longContext:
-              thresholdInputTokens: 272000
-              inputMicrosPerMillion: 4000000
-              cachedInputMicrosPerMillion: 200000
-              cacheWriteInputMicrosPerMillion: 5000000
-              outputMicrosPerMillion: 15000000
-          - id: priority
-            aliases: [fast]
-            inputMicrosPerMillion: 4000000
-            cachedInputMicrosPerMillion: 200000
-            cacheWriteInputMicrosPerMillion: 5000000
-            outputMicrosPerMillion: 20000000
-            longContext:
-              thresholdInputTokens: 272000
-              inputMicrosPerMillion: 8000000
-              cachedInputMicrosPerMillion: 400000
-              cacheWriteInputMicrosPerMillion: 10000000
-              outputMicrosPerMillion: 30000000
-          - id: flex
-            inputMicrosPerMillion: 1000000
-            cachedInputMicrosPerMillion: 50000
-            cacheWriteInputMicrosPerMillion: 1250000
-            outputMicrosPerMillion: 5000000
-            longContext:
-              thresholdInputTokens: 272000
-              inputMicrosPerMillion: 2000000
-              cachedInputMicrosPerMillion: 100000
-              cacheWriteInputMicrosPerMillion: 2500000
-              outputMicrosPerMillion: 7500000
-          - id: ultrafast
-            inputMicrosPerMillion: 12000000
-            cachedInputMicrosPerMillion: 600000
-            cacheWriteInputMicrosPerMillion: 15000000
-            outputMicrosPerMillion: 60000000
-            longContext:
-              thresholdInputTokens: 272000
-              inputMicrosPerMillion: 24000000
-              cachedInputMicrosPerMillion: 1200000
-              cacheWriteInputMicrosPerMillion: 30000000
-              outputMicrosPerMillion: 90000000
+          - {"id":"default","inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":4000000,"cachedInputMicrosPerMillion":200000,"cacheWriteInputMicrosPerMillion":5000000,"outputMicrosPerMillion":15000000}}
+          - {"id":"priority","aliases":["fast"],"inputMicrosPerMillion":4000000,"cachedInputMicrosPerMillion":200000,"cacheWriteInputMicrosPerMillion":5000000,"outputMicrosPerMillion":20000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":8000000,"cachedInputMicrosPerMillion":400000,"cacheWriteInputMicrosPerMillion":10000000,"outputMicrosPerMillion":30000000}}
+          - {"id":"flex","inputMicrosPerMillion":1000000,"cachedInputMicrosPerMillion":50000,"cacheWriteInputMicrosPerMillion":1250000,"outputMicrosPerMillion":5000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":7500000}}
+          - {"id":"ultrafast","inputMicrosPerMillion":12000000,"cachedInputMicrosPerMillion":600000,"cacheWriteInputMicrosPerMillion":15000000,"outputMicrosPerMillion":60000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":24000000,"cachedInputMicrosPerMillion":1200000,"cacheWriteInputMicrosPerMillion":30000000,"outputMicrosPerMillion":90000000}}
+    - id: openai/gpt-6.1-terra
+      upstream: gpt-6.1-terra
+      capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens, search.web]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions: {"sources":["https://developers.openai.com/api/docs/models/gpt-6.1-terra","https://developers.openai.com/api/docs/pricing","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-10-26","input":["text","image"],"contextWindow":1050000,"contextTokens":272000,"maxOutputTokens":128000,"supportedServiceTiers":["default","priority","flex"],"inference":{"chat":true}}
+          responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6.1-terra","https://developers.openai.com/api/docs/pricing","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-10-26","input":["text","image"],"contextWindow":1050000,"contextTokens":272000,"maxOutputTokens":128000,"supportedServiceTiers":["default","priority","flex"],"inference":{"chat":true},"hostedTools":["web_search"]}
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6.1-terra","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-10-26","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"supported"}
+        chat_completions: {"sources":["https://developers.openai.com/api/docs/models/gpt-6.1-terra","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-10-26","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"unsupported"}
+      pricingRef: openai-gpt-6.1-terra-tiers-2026-10-26
+      pricing:
+        effectiveAt: "2026-10-26"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 1000000
+        cachedInputMicrosPerMillion: 50000
+        cacheWriteInputMicrosPerMillion: 1250000
+        outputMicrosPerMillion: 5000000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext: {"thresholdInputTokens":272000,"inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":7500000}
+        serviceTiers:
+          - {"id":"default","inputMicrosPerMillion":1000000,"cachedInputMicrosPerMillion":50000,"cacheWriteInputMicrosPerMillion":1250000,"outputMicrosPerMillion":5000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":7500000}}
+          - {"id":"priority","aliases":["fast"],"inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":4000000,"cachedInputMicrosPerMillion":200000,"cacheWriteInputMicrosPerMillion":5000000,"outputMicrosPerMillion":15000000}}
+          - {"id":"flex","inputMicrosPerMillion":500000,"cachedInputMicrosPerMillion":25000,"cacheWriteInputMicrosPerMillion":625000,"outputMicrosPerMillion":2500000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":1000000,"cachedInputMicrosPerMillion":50000,"cacheWriteInputMicrosPerMillion":1250000,"outputMicrosPerMillion":3750000}}
     - id: openai/gpt-6-sol
       upstream: gpt-6-sol
       capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]

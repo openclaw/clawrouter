@@ -154,3 +154,38 @@ test("catalog support does not grant a disallowed tier or model at the public di
   assert.equal(sent[0].body.service_tier, "default");
   assert.equal(sent[0].body.reasoning.effort, "high");
 });
+
+test("Terra is published only to allowed keys and dispatches its exact Responses model", async t => {
+  const f = await fixture(t), provider = await catalog(f), terra = "openai/gpt-6.1-terra";
+  const model = provider.models.find(model => model.id === terra);
+  assert.ok(model, "an allowed key must discover Terra in the actual HTTP catalog");
+  assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal(model.requestParameters.responses.toolCalling, "supported");
+  assert.equal(model.requestParameters.chat_completions.toolCalling, "unsupported");
+  const offers = provider.offers.filter(offer => offer.modelId === terra && offer.endpoint === "responses");
+  assert.ok(offers.length > 0);
+  for (const offer of offers) {
+    assert.equal(offer.eligible, true);
+    assert.deepEqual(offer.permittedServiceTiers, ["default", "priority", "flex"]);
+  }
+  const limited = await catalog(f, "limited");
+  assert.ok(limited.models.every(model => model.id !== terra), "adding a model never expands a key's allowlist");
+  const denied = await f.post("limited", "/v1/responses", { model: terra, input: "synthetic fixture" });
+  assert.equal(denied.status, 403);
+  assert.equal((await denied.json()).error.code, "model_not_allowed");
+  assert.equal(f.upstream.mock.callCount(), 0, "denial and catalog discovery make no provider request");
+  const sent = [];
+  f.upstream.mock.mockImplementation(async (url, init) => {
+    sent.push({ url: String(url), body: JSON.parse(init.body) });
+    return Response.json({ output: [], usage: { input_tokens: 1, output_tokens: 1 } });
+  });
+  const accepted = await f.post("full", "/v1/responses", { model: terra, input: "synthetic fixture", reasoning: { effort: "none" }, service_tier: "fast", tools: [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }] });
+  assert.equal(accepted.status, 200, await accepted.clone().text());
+  await accepted.arrayBuffer();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "https://api.openai.com/v1/responses");
+  assert.equal(sent[0].body.model, "gpt-6.1-terra");
+  assert.equal(sent[0].body.reasoning.effort, "none");
+  assert.equal(sent[0].body.service_tier, "fast");
+  assert.equal(sent[0].body.tools[0].name, "lookup");
+});

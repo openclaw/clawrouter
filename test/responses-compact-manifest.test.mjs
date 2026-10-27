@@ -20,7 +20,7 @@ test("compiled compact is a distinct unary registered-model contract", t => {
   assert.equal(compact.path, "/v1/responses/compact"); assert.deepEqual(compact.methods, ["POST"]);
   assert.equal(compact.request_format, "openai.responses_compact"); assert.equal(compact.response_format, "openai.responses_compact");
   assert.ok(!compact.streaming); assert.ok(!compact.websocket); assert.ok(!compact.modelPassthrough); assert.ok(!compact.outputTokenLimit); assert.ok(!compact.responsesLifecycle);
-  assert.deepEqual(provider.models.filter(model => model.capabilities.includes("llm.responses.compact")).map(model => model.id), ["openai/gpt-6-astra", "openai/gpt-6.1-sol"]);
+  assert.deepEqual(provider.models.filter(model => model.capabilities.includes("llm.responses.compact")).map(model => model.id), ["openai/gpt-6-astra", "openai/gpt-6.1-sol", "openai/gpt-6.1-terra"]);
   assert.deepEqual(snapshot.capability_index["llm.responses.compact"], [{ provider: "openai", endpoint: "responses_compact", methods: ["POST"] }]);
 });
 function removePricing(manifest) {
