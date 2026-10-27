@@ -2,6 +2,40 @@
 
 ClawRouter accepts up to **32 MB (32,000,000 bytes)** on media-bearing generation routes: Claude Messages and token counting, OpenAI-format Responses (create, compact and input-token counting), and Chat Completions. This covers their unified, native, and manifest-envelope forms, and every provider using those request formats. Other JSON routes retain the 8 MiB limit. For the manifest route, the envelope counts toward the ingress limit too. Unified `/v1/responses` and `/v1/chat/completions` admit the larger envelope before the model is resolved; a body above 8 MiB that resolves to another format, or to `clawrouter/fusion`, receives 413.
 
+## What fits, and what does not
+
+The limit applies to the **whole request**, and over HTTP that means the whole conversation: Codex and other agents resend every earlier screenshot on every turn, so images accumulate until the history crosses 32 MB. Codex prepares high-detail images at up to 2048 px and 2,500 patches (about 2048×1248), so a screenshot costs roughly:
+
+| Screenshot content | Base64 per image | Images per 32 MB request |
+| --- | --- | --- |
+| Text-heavy UI (editor, terminal, docs) | ~0.5 MiB | ~60 |
+| UI with photos or gradients (about a quarter of the area) | ~2.5 MiB | ~12 |
+| Incompressible worst case (noise, dense photos) | ~9.8 MiB | 3 |
+
+Production probe, 2026-10-27, synthetic screenshots of those three kinds at 2048×1248, `openai/gpt-6.1-sol`:
+
+| Request | Size | Result |
+| --- | --- | --- |
+| Responses input tokens, 10 / 25 / 50 UI screenshots | 4.8 / 12.1 / 24.2 MiB | 200 (30k / 75k / 150k tokens) |
+| Responses input tokens, 11 mixed / 3 worst-case images | 27.0 / 29.3 MiB | 200 |
+| Chat Completions, 40 UI screenshots | 19.4 MiB | 200 |
+| Responses WebSocket `generate: false`, 25 UI / 3 worst-case images | 12.1 / 29.3 MiB | `response.completed` |
+| 4 concurrent 22 MiB Responses requests from one client | 4 × 22.1 MiB | all 200 |
+| Responses input tokens, 4 worst-case images | 39 MiB | 413 `request_too_large` |
+| Responses WebSocket frame | 33.2 MB | `error` event, status 413 `request_too_large` |
+
+The probe key could not reach Claude models, so Claude routes are covered by the Worker tests (29 MiB turns), not this probe.
+
+### Limitations
+
+- **Over 32 MB is a hard 413.** Nothing is buffered or spilled elsewhere. Codex retries a 413 and then fails the turn; because the next turn resends the same history, the thread stays over the limit. Remote compaction sends that history too, so it can hit the same 413. Start a new thread, or drop or downscale images before the history crosses the limit.
+- **WebSocket sends only new input per turn.** Over a Responses WebSocket, a continuation carries just the new items plus `previous_response_id`, so the 32 MB applies to one turn's additions rather than the whole history. Prefer it for long, screenshot-heavy sessions.
+- **Concurrent large requests may get 503.** Requests in one isolate share the 96 MiB body budget below, so a burst of near-limit bodies can receive a nonbillable `503` with `Retry-After: 1`. Codex retries it. Bursts are often spread across isolates; the probe above saw none.
+- **Upload time scales with size.** A 25–30 MB body took 14–16 s end to end on the probe's connection, nearly all of it upload.
+- **Providers have their own rules.** Claude rejects any image over 10 MB of base64, accepts at most 100 or 600 images per request depending on the model, and when a request has **more than 20 images** rejects any image over 2000 px on either side ([Claude vision limits](https://platform.claude.com/docs/en/build-with-claude/vision#request-limits)). Screenshots wider than 2000 px, such as Codex's 2048 px ones, therefore fail on Claude once a request holds 21 of them. ClawRouter does not resize images, so these surface as provider errors.
+
+## Ingress parsing
+
 Ingress reads incrementally, checks actual byte counts before decoding each chunk, and cancels at the first over-limit chunk. A `Content-Length` above the limit is rejected without reading the body; an absent or understated length cannot bypass the limit. Bodies **at or below 8 MiB** retain `JSON.parse` semantics and cost. Only after crossing 8 MiB does ingress switch to the streaming JSON tokenizer with 4 KiB feeds. It assembles values directly rather than retaining a second whole decoded document. Until then ingress holds raw bytes, not a decoded prefix: parser values sliced from one decoded 8 MiB string would keep all of it alive. Malformed JSON remains a 400; oversized or structurally excessive expanded input is a 413.
 
 ## Isolate body budget
