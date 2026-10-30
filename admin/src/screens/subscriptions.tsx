@@ -1,7 +1,7 @@
 import { GrantRefreshHealth } from "../grant-health";
 import { GrantExpiry } from "../grant-expiry";
 import { Status } from "../components";
-import { canProbeGrant, modelHeadroom, planLabel, policyGrants, quotaFree, resetLabel, subscriptionFamilies } from "../subscriptions-data";
+import { canProbeGrant, currentSubscriptions, modelHeadroom, planLabel, policyGrants, quotaFree, resetLabel, subscriptionFamilies } from "../subscriptions-data";
 import type { useSubscriptions } from "../hooks/use-subscriptions";
 import type { AccessPolicy, ProviderRow, UpstreamGrant } from "../ui-types";
 
@@ -13,9 +13,9 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
   data: ReturnType<typeof useSubscriptions>; policies: AccessPolicy[]; grants: UpstreamGrant[]; providers: ProviderRow[];
   refreshQuota: (grant: UpstreamGrant) => Promise<void>; busy: boolean; actionError: string;
 }) {
-  const policy = policies.find(policy => policy.policyId === data.policyId);
-  const pool = policyGrants(policy, grants);
-  const subscriptions = pool.filter(grant => grant.provider === "anthropic" && (grant.kind === "subscription" || grant.kind === "oauth"));
+  const policy = data.visiblePolicies.find(policy => policy.policyId === data.policyId);
+  const pool = policyGrants(policy, grants).filter(grant => data.showRetired || !grant.revokedAt);
+  const subscriptions = currentSubscriptions(pool);
   const families = subscriptionFamilies(subscriptions);
   const lanes = data.usage?.lanes.filter(lane => lane.provider === "anthropic");
   const included = lanes?.filter(lane => lane.grantLane === "subscription").reduce((sum, lane) => sum + lane.requests, 0);
@@ -23,10 +23,11 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
   return <div className="subscriptionsScreen">
     <section className="panel subscriptionSummary">
       <div className="subscriptionToolbar">
-        <label>Policy<select value={data.policyId} onChange={event => data.setPolicyId(event.target.value)} aria-label="Subscription policy">{policies.map(policy => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+        <label>Policy<select disabled={!data.visiblePolicies.length} value={data.policyId} onChange={event => data.setPolicyId(event.target.value)} aria-label="Subscription policy">{data.visiblePolicies.map(policy => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}{!policy.enabled ? " (disabled)" : ""}</option>)}</select></label>
         <label>Usage range<select value={data.days} onChange={event => data.setDays(Number(event.target.value))}><option value={1}>24 hours</option><option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={31}>31 days</option></select></label>
-        <button type="button" className="buttonSecondary" disabled={data.loading} onClick={data.refresh}>Refresh usage</button>
+        <button type="button" className="buttonSecondary" disabled={data.loading || !policy} onClick={data.refresh}>Refresh usage</button>
       </div>
+      <label className="checkLabel"><input type="checkbox" checked={data.showRetired} onChange={event => data.setShowRetired(event.target.checked)} /><span>Show retired / disabled history</span></label>
       <h2>Claude included quota first</h2>
       <p>Reserve {policy?.grantRouting.includedQuotaReservePercent ?? 0}% · Paid environment fallback {policy?.grantRouting.environmentFallback ? "enabled" : "disabled"}. Quota is the latest provider reading; in-flight requests can cross the reserve.</p>
       <div className="subscriptionHeadroom">{policy && families.map(family => {
@@ -42,12 +43,13 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
       {actionError ? <p role="alert">{actionError}</p> : null}
     </section>
     {!policies.length ? <section className="panel"><h2>No policies yet</h2><p>Create a policy in Access, then attach Claude subscriptions.</p></section>
-      : !subscriptions.length ? <section className="panel"><h2>No Claude subscriptions in this policy</h2><p>Add a subscription grant in Access or choose another policy.</p></section> : null}
+      : !data.visiblePolicies.length ? <section className="panel"><h2>No enabled policies</h2><p>Show retired / disabled history to inspect disabled policies, or enable a policy in Access.</p></section>
+      : !subscriptions.length ? <section className="panel"><h2>No current Claude subscriptions in this policy</h2><p>Add a subscription grant in Access or choose another policy.</p></section> : null}
     <div className="subscriptionGrid">{pool.map(grant => {
       const totals = data.usage?.grants.find(row => row.grantKey === grant.key);
       const canRefresh = canProbeGrant(grant, providers.find(provider => provider.id === grant.provider));
       return <section className="panel subscriptionCard" key={grant.key}>
-        <header><div><h2>{grant.label || grant.tokenRef}</h2><p>{grant.account?.email ?? "Account not observed"}</p></div><Status label={grant.credentialStatus === "reauth_required" ? "reauth required" : grant.usable ? "active" : "unavailable"} tone={grant.usable ? "active" : "revoked"} /></header>
+        <header><div><h2>{grant.label || grant.tokenRef}</h2><p>{grant.account?.email ?? "Account not observed"}</p></div><Status label={grant.revokedAt ? "Revoked" : grant.credentialStatus === "reauth_required" ? "reauth required" : !grant.enabled ? "Paused" : grant.usable ? "active" : "unavailable"} tone={grant.revokedAt || !grant.usable ? "revoked" : grant.enabled ? "active" : "neutral"} /></header>
         <GrantRefreshHealth grant={grant} />
         <p>{planLabel(grant.account?.rateLimitTier)} · {grant.provider} · {grant.account?.subscriptionStatus ?? "Status unknown"} · {grant.enabled ? "enabled" : "disabled"} · {grant.kind === "api_key" ? "api_key" : "subscription"} lane</p>
         <GrantExpiry grant={grant} />
@@ -56,12 +58,12 @@ export function SubscriptionsScreen({ data, policies, grants, providers, refresh
           const label = window.models?.length ? `${window.models.map(familyLabel).join(" / ")} weekly` : window.window === "five_hour" ? "5-hour" : "Weekly";
           return <div key={window.id}><div className="quotaLabel"><strong>{label}</strong><span>{free === null ? "Unknown" : `${Math.round(free)}% free`}</span></div><progress max={100} value={free ?? 0} aria-label={`${label} percent free`} /><small>{resetLabel(window.resetAt)}{window.resetAt ? <> · <time dateTime={window.resetAt}>{new Date(window.resetAt).toLocaleString()}</time></> : null}</small></div>;
         })}{!grant.quotaWindows.some(window => window.kind === "subscription") ? <p>Quota not yet observed.</p> : null}</div>
-        <p className="subscriptionEligibility">{policy && grant.provider === "anthropic" && families.map(family => { const value = modelHeadroom(grant, family, policy); return <span key={family}>{familyLabel(family)}: {value.eligible ? "eligible" : "unavailable"}{value.stale ? " (stale quota)" : value.free === null ? " (quota unknown)" : ""}</span>; })}</p>
+        <p className="subscriptionEligibility">{policy && grant.provider === "anthropic" && families.map(family => { const value = modelHeadroom(grant, family, policy); return <span key={family}>{familyLabel(family)}: {grant.revokedAt ? "revoked" : value.eligible ? "eligible" : "unavailable"}{value.stale ? " (stale quota)" : value.free === null ? " (quota unknown)" : ""}</span>; })}</p>
         <p>Extra usage: {grant.extraUsage?.enabled ?? grant.account?.extraUsageEnabled ? "enabled" : "disabled / unknown"}{grant.extraUsage ? ` · ${creditMoney(grant.extraUsage.usedCredits, grant.extraUsage.currency)} / ${creditMoney(grant.extraUsage.monthlyLimit, grant.extraUsage.currency)}${grant.extraUsage.spendLimitReached ? " · limit reached" : ""}` : ""}</p>
         <div className="subscriptionMetrics"><span><strong>{data.usage ? number(totals?.requests ?? 0) : "—"}</strong> requests</span><span><strong>{data.usage ? number((totals?.inputTokens ?? 0) + (totals?.outputTokens ?? 0)) : "—"}</strong> tokens</span><span><strong>{data.usage ? money(totals?.costMicros ?? 0) : "—"}</strong> API-equivalent value</span></div>
         <p><small>Last selected: {grant.lastSelectedAt ? new Date(grant.lastSelectedAt).toLocaleString() : "Never"} · Quota observed: {grant.quotaObservedAt ? new Date(grant.quotaObservedAt).toLocaleString() : "Never"}</small></p>
         <button type="button" className="buttonSecondary" disabled={busy || !canRefresh} onClick={() => void refreshQuota(grant)}>Refresh quota</button>
-        {!canRefresh ? <small> Quota probing is unavailable for this credential; inference headers can still supply quota readings.</small> : null}
+        {grant.revokedAt ? <small> Retired credential; quota probing is disabled.</small> : !canRefresh ? <small> Quota probing is unavailable for this credential; inference headers can still supply quota readings.</small> : null}
       </section>;
     })}</div>
   </div>;

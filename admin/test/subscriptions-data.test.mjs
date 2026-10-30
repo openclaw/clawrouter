@@ -45,6 +45,10 @@ test("probe availability follows the manifest rather than assuming refresh token
   assert.equal(canProbeGrant(noRefresh, { quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } }), true);
   assert.equal(canProbeGrant(noRefresh, { quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: true }] } }), false);
   assert.equal(canProbeGrant(noRefresh, undefined), false);
+  const provider = { quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } };
+  assert.equal(canProbeGrant({ ...grant, enabled: false }, provider), false);
+  assert.equal(canProbeGrant({ ...grant, usable: false }, provider), false);
+  assert.equal(canProbeGrant({ ...grant, revokedAt: "2026-10-01T00:00:00Z" }, provider), false);
 });
 
 test("model freshness uses retained window timestamps rather than recent unrelated traffic", () => {
