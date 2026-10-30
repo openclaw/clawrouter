@@ -609,6 +609,97 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   assert.equal(offer.transport, "http");
 });
 
+for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown preserves ${providerId} inventory across discovery surfaces and recovery`, async t => {
+  const f = await fusionDiscoveryFixture(t);
+  f.policy.providers = [providerId]; f.policy.monthlyBudgetMicros = null; f.config.enabled = false;
+  f.connections.splice(0, f.connections.length, { providerId, enabled: true });
+  const key = `oauth/fixture/${providerId}`;
+  f.records.set(key, { provider: providerId, kind: "api_key", credential: "fixture-api-key", enabled: true });
+  const baseline = new Map(), baselineOffers = new Map();
+  for (const phase of ["before", "during", "after"]) {
+    if (phase === "during") f.states[key] = { grantRevision: null, status: "cooldown", lastSignal: "rate_limited", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
+    if (phase === "after") f.states[key].cooldownUntil = new Date(Date.now() - 1).toISOString();
+    for (const mode of ["key", "session"]) {
+      for (const handler of [catalogResponse, ...(mode === "session" ? [sessionResponse, entitlementResponse] : [])]) {
+        const response = await handler(f.request(mode), f.env); assert.equal(response.status, 200);
+        const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+        const view = catalog.providers.find(({ id }) => id === providerId);
+        const inventory = { models: view.models, routes: view.routes, nativeBaseUrl: view.nativeBaseUrl };
+        if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
+        assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
+        if (providerId === "anthropic") {
+          assert.equal(view.models.length, 10);
+          assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
+          assert.equal(view.routes.length, 4);
+        } else {
+          assert.ok(view.models.some(({ id }) => id === "openai/gpt-6-astra"));
+          assert.equal(view.routes.some(({ websocket }) => websocket === "openai.responses"), mode === "key");
+        }
+        assert.deepEqual(inventory, baseline.get(mode), `${phase} ${mode}: metadata is stable`);
+        assert.equal(view.executable, phase !== "during");
+        assert.equal(view.readiness.executable, phase !== "during");
+        if (phase === "during") {
+          assert.deepEqual(view.readiness.executableEndpoints, []);
+          assert.ok(view.offers.length > 0 && view.offers.every(offer => !offer.eligible));
+          assert.ok(view.offers.filter((_, index) => baselineOffers.get(mode)[index].eligible).every(offer => offer.reasonCode === "upstream_grant_pool_unavailable"));
+        }
+      }
+      for (const anthropic of [false, true]) {
+        const request = f.request(mode); if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+        const models = await (await modelsResponse(request, f.env)).json();
+        assert.deepEqual(models.data.map(({ id }) => id), baseline.get(mode).models.filter(model => !anthropic || model.capabilities.includes("llm.messages")).map(({ id }) => id));
+      }
+    }
+  }
+  assert.equal(f.calls.some(({ path }) => path === "/grant-pools/select"), false, "discovery stays read-only");
+  f.states[key].cooldownUntil = new Date(Date.now() + 60_000).toISOString();
+  f.policy.models = [];
+  assert.deepEqual((await (await modelsResponse(f.request("key"), f.env)).json()).data, [], "model denial still removes identity during cooldown");
+  f.policy.models = null;
+  f.records.delete(key);
+  if (providerId === "openai") delete f.env.OPENAI_API_KEY;
+  let removed = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.deepEqual(removed.providers.find(({ id }) => id === providerId).models, [], "configuration removal does not reuse cooling inventory");
+  f.policy.providers = ["unconfigured-fixture-provider"];
+  removed = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.deepEqual(removed.providers, [], "provider access removal is authoritative");
+  f.credential.enabled = false;
+  for (const handler of [catalogResponse, modelsResponse]) assert.equal((await handler(f.request("key"), f.env)).status, 403);
+});
+
+test("later compatible policy retains cooling inventory without changing unavailable offer ownership", async t => {
+  const f = await fusionDiscoveryFixture(t);
+  f.config.enabled = false; f.policy.providers = ["openai"]; f.policy.monthlyBudgetMicros = null;
+  f.policies.push({ policyId: "api", policy: { ...f.policy } });
+  f.records.set("oauth/fixture/subscription", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  const key = "oauth/api/openai";
+  f.records.set(key, { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const view = async () => (await (await catalogResponse(f.request("session"), f.env)).json()).providers.find(({ id }) => id === "openai");
+  const before = await view();
+  assert.ok(before.models.some(({ id }) => id === "openai/tts-1"));
+  f.states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), lastSignal: "rate_limited", windows: [] };
+  const during = await view();
+  assert.deepEqual(during.models, before.models);
+  assert.deepEqual(during.routes, before.routes);
+  const speech = during.offers.filter(({ endpoint }) => endpoint === "speech");
+  assert.ok(speech.length > 0 && speech.every(offer => !offer.eligible && offer.policyId === "fixture"));
+  assert.ok(during.offers.some(offer => offer.endpoint === "responses" && offer.eligible && offer.policyId === "fixture"));
+  f.policies[1].policy.monthlyBudgetMicros = 0;
+  assert.equal((await view()).models.some(({ id }) => id === "openai/tts-1"), false, "retention still uses the recovering owner's budget");
+  f.policies[1].policy.monthlyBudgetMicros = null;
+  f.states[key].cooldownUntil = new Date(Date.now() - 1).toISOString();
+  assert.deepEqual((await view()).models, before.models);
+  f.records.delete(key);
+  assert.equal((await view()).models.some(({ id }) => id === "openai/tts-1"), false, "removing the later grant removes its identity");
+  f.records.delete("oauth/fixture/subscription"); // First policy now uses configured environment auth.
+  f.records.set(key, { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  f.states[key].cooldownUntil = new Date(Date.now() + 60_000).toISOString();
+  f.policies[1].policy.monthlyBudgetMicros = 0;
+  const environment = await view();
+  assert.ok(environment.offers.some(offer => offer.endpoint === "speech" && offer.eligible && offer.policyId === "fixture"));
+  assert.ok(environment.models.some(({ id }) => id === "openai/tts-1"), "a blocked recovering owner cannot hide currently executable environment-backed identity");
+});
+
 test("catalog balances are principal scoped, fresh, and use the dispatch default tenant", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   Object.assign(fixture.policy, { tenantId: null, budgetScope: "principal", requestCostMicros: 20 });
