@@ -336,43 +336,67 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       const candidates = endpoint.request_format === "cloudflare_ai_gateway.universal" ? group.pools.filter(pool => pool.entry.policy.models == null) : group.pools;
       const selected = selectPolicyCandidates(candidates, requirement);
       if (!selected) return null;
-      const auth = selected.entry;
-      let reasonCode: string | undefined;
-      try {
-        await assertProviderAccess(provider, auth, env, connection);
-        const available = activeOperationCandidates(selected.candidates.available, env, requirement);
-        if (!available.length) {
-          if (selected.candidates.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
-          assertOperationConfiguration(requirement, null, env);
+      const inspect = async (selection: NonNullable<typeof selected>) => {
+        const auth = selection.entry;
+        let reasonCode: string | undefined;
+        let temporarilyUnavailable = false;
+        try {
+          await assertProviderAccess(provider, auth, env, connection);
+          const available = activeOperationCandidates(selection.candidates.available, env, requirement);
+          // Recovering candidates have already passed credential, scope and
+          // stale-state checks. Requalify this exact operation's configuration;
+          // the generic pool-unavailable reason alone cannot retain inventory.
+          const configuredGrants = available.length ? available : activeOperationCandidates((selection.candidates.recovering ?? []).map(({ entry }) => entry), env, requirement);
+          if (!available.length) {
+            if (selection.candidates.hasConfiguredGrant) {
+              if (!configuredGrants.length) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
+              temporarilyUnavailable = true;
+            } else assertOperationConfiguration(requirement, null, env);
+          }
+          if (isStandaloneSearch(endpoint)) {
+            assertSearchTariff(auth);
+            await assertSingleOpenAiAccount(auth, env, { transport: null, grantKey: configuredGrants[0]?.key ?? null, grant: configuredGrants[0]?.grant ?? null }, "search");
+          }
+          configured = true;
+        } catch (error) {
+          reasonCode = error instanceof HttpError ? error.code : "provider_not_configured";
         }
-        if (isStandaloneSearch(endpoint)) {
-          assertSearchTariff(auth);
-          await assertSingleOpenAiAccount(auth, env, { transport: null, grantKey: available[0]?.key ?? null, grant: available[0]?.grant ?? null }, "search");
+        let observation;
+        if (!reasonCode) {
+          // Request-local observations retain the selected identity. They never
+          // participate in policy choice or authorize a later dispatch.
+          if (!policyBalances.has(auth.policyId)) policyBalances.set(auth.policyId, budgetStatus(env, auth.policyId, auth.policy, budgetPrincipal(auth)));
+          if (connection.monthlyBudgetMicros != null) providerBalance ??= providerBudgetStatus(env, provider.id, connection.monthlyBudgetMicros);
+          const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
+          observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, weeklyRemaining: policy.weekly.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
         }
-        configured = true;
-      } catch (error) {
-        reasonCode = error instanceof HttpError ? error.code : "provider_not_configured";
-      }
-      let observation;
-      if (!reasonCode) {
-        // Request-local observations retain the selected identity. They never
-        // participate in policy choice or authorize a later dispatch.
-        if (!policyBalances.has(auth.policyId)) policyBalances.set(auth.policyId, budgetStatus(env, auth.policyId, auth.policy, budgetPrincipal(auth)));
-        if (connection.monthlyBudgetMicros != null) providerBalance ??= providerBudgetStatus(env, provider.id, connection.monthlyBudgetMicros);
-        const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
-        observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, weeklyRemaining: policy.weekly.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
-      }
-      return { endpoint, mode, auth, reasonCode, observation, modelIds: group.modelIds, passthrough: group.passthrough };
+        return { endpoint, mode, auth, reasonCode, temporarilyUnavailable, observation, modelIds: group.modelIds, passthrough: group.passthrough };
+      };
+      const execution = await inspect(selected);
+      // When every compatible pool is cooling, execution still falls back to
+      // its original first policy. Inventory separately retains the ordered
+      // owner that would be selected after a known recovery, never by budget.
+      const inventoryOwner = !selected.candidates.available.length ? selectPolicyCandidates(candidates.map(pool => ({
+        ...pool, candidates: { ...pool.candidates, available: [...pool.candidates.available, ...(pool.candidates.recovering ?? []).map(({ entry }) => entry)] },
+      })), requirement) : selected;
+      const inventory = inventoryOwner && inventoryOwner.entry !== selected.entry
+        ? await inspect(selectPolicyCandidates(candidates.filter(pool => pool.entry === inventoryOwner.entry), requirement)!) : execution;
+      return { execution, inventory };
     }))));
-    const effective = contexts.filter((context): context is NonNullable<typeof context> => context !== null);
+    const resolved = contexts.filter((context): context is NonNullable<typeof context> => context !== null);
+    const effective = resolved.map(context => context.execution);
+    // Recovery augments current identity; environment-backed execution has no
+    // pooled candidates and must not be replaced by a blocked recovering owner.
+    const inventoryContexts = resolved.flatMap(context => context.inventory === context.execution ? [context.execution] : [context.execution, context.inventory]);
     const contextHasModel = (context: typeof effective[number], model: CompiledModel | null) => context.modelIds.has(model?.id ?? null)
       || !!model && context.passthrough && !provider.models.some(candidate => candidate.id === model.id);
-    const eligibility = (context: typeof effective[number], model: CompiledModel | null, capability: string) => {
+    const eligibility = (context: typeof effective[number], model: CompiledModel | null, capability: string, inventory = false) => {
       if (!contextHasModel(context, model)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (context.auth.policy.models != null && context.endpoint.request_format === "cloudflare_ai_gateway.universal") return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (model && !policyAllowsModel(context.auth.policy, provider.id, model.id)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (!model && context.auth.policy.models != null && (capability.startsWith("llm.") || context.endpoint.request_format === "cloudflare_ai_gateway.universal") && !provider.models.some(candidate => policyAllowsModel(context.auth.policy, provider.id, candidate.id))) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (context.reasonCode) return { status: "exact-blocked" as const, reasonCode: context.reasonCode };
+      if (context.temporarilyUnavailable && !inventory) return { status: "exact-blocked" as const, reasonCode: "upstream_grant_pool_unavailable" };
       if (model) {
         try { resolveTemplate(provider, model.upstream, env); }
         catch (error) { if (error instanceof HttpError) return { status: "exact-blocked" as const, reasonCode: error.code }; throw error; }
@@ -380,11 +404,11 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
     };
     const models = provider.models.filter(model => pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
-      const capabilities = model.capabilities.filter((capability) => effective.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability).status !== "exact-blocked"));
+      const capabilities = model.capabilities.filter((capability) => inventoryContexts.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability, true).status !== "exact-blocked"));
       if (!capabilities.length) return [];
-      const visibleEndpoints = new Set(effective.filter(context => modelSupportsEndpoint(provider, model, context.endpoint)
+      const visibleEndpoints = new Set(inventoryContexts.filter(context => modelSupportsEndpoint(provider, model, context.endpoint)
         && provider.capabilities.some(item => item.endpoint === context.endpoint.id && capabilities.includes(item.id))
-        && eligibility(context, model, provider.capabilities.find(item => item.endpoint === context.endpoint.id)!.id).status !== "exact-blocked").map(context => context.endpoint.id));
+        && eligibility(context, model, provider.capabilities.find(item => item.endpoint === context.endpoint.id)!.id, true).status !== "exact-blocked").map(context => context.endpoint.id));
       const { nativeCapabilities, requestParameters, ...base } = model;
       const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)).map(([id, facts]) => {
         const { hostedTools, ...baseFacts } = facts;
@@ -396,6 +420,13 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         ...(Object.keys(parameters).length ? { requestParameters: parameters } : {}),
       }];
     });
+    const inventoryEndpoints = { http: new Set<string>(), websocket: new Set<string>() };
+    for (const context of inventoryContexts) {
+      const { endpoint, mode } = context;
+      const models = provider.models.filter(model => context.modelIds.has(model.id) && modelSupportsEndpoint(provider, model, endpoint));
+      const capability = provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+      if ((mode === "websocket" ? models : [...models, null]).some(model => eligibility(context, model, capability, true).status !== "exact-blocked")) inventoryEndpoints[mode].add(endpoint.id);
+    }
     const offers: CatalogOffer[] = effective.flatMap((context) => {
       const { endpoint, mode, auth } = context;
       const models = provider.models.filter((model) => context.modelIds.has(model.id) && modelSupportsEndpoint(provider, model, endpoint));
@@ -435,7 +466,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       if (!context || !selection.model || Array.isArray(selection.body)) return null;
       return { ...context, providerId: provider.id, model: selection.model, body: selection.body, connection, availability: eligibility(context, selection.model, selection.capability) };
     };
-    return [provider.id, { configured: !!configured, endpoints, websockets, models, operation, offers, readiness }] as const;
+    return [provider.id, { configured: !!configured, endpoints: [...inventoryEndpoints.http], websockets: [...inventoryEndpoints.websocket], models, operation, offers, readiness }] as const;
   }));
   return new Map(views);
 }
