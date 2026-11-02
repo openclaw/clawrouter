@@ -34,8 +34,11 @@ async function cursorUsage(page: Page) {
     end: () => new Date(now).toISOString(),
   };
 }
-const calls = (page: Page) => page.locator('.personalEvents > li');
+const calls = (page: Page) => page.locator('.personalActivityTable tbody > tr');
+async function activity(page: Page) { await page.getByRole('tab', { name: /^Activity/ }).click(); }
+async function details(page: Page) { await page.getByRole('tab', { name: 'Details', exact: true }).click(); }
 async function pageTwo(page: Page) {
+  await activity(page);
   await expect(calls(page)).toHaveCount(25);
   await page.getByRole('button', { name: 'Next page', exact: true }).click();
   await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
@@ -48,6 +51,7 @@ async function catalog(page: Page) {
 async function myUsage(page: Page) {
   await page.getByRole('button', { name: 'My usage', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'My usage', exact: true })).toBeVisible();
+  await activity(page);
 }
 
 test('expired rolling report reentry clears cursor and previous stack before new-bound events; report/event Retry stays anchored', async ({ page }) => {
@@ -140,7 +144,9 @@ for (const timezone of ['UTC', 'America/Los_Angeles']) {
         await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
         await expect(page.getByRole('button', { name: 'Next page', exact: true })).toBeDisabled();
-        await expect(page.getByRole('button', { name: 'Export this page CSV', exact: true })).toBeDisabled();
+        await details(page);
+        await expect(page.getByRole('button', { name: 'Export activity page 1 CSV', exact: true })).toBeDisabled();
+        await activity(page);
         await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
         await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
         await expect(page.getByLabel('Timezone', { exact: true })).toHaveValue(timezone);
@@ -153,12 +159,14 @@ for (const timezone of ['UTC', 'America/Los_Angeles']) {
       };
       await assertEmpty();
       await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('provider');
-      await expect(page.getByRole('heading', { name: 'By provider', exact: true })).toBeVisible(); await assertEmpty();
+      await details(page);
+      await expect(page.getByRole('heading', { name: 'By provider', exact: true })).toBeVisible();
+      await activity(page); await assertEmpty();
       await page.getByLabel('Model (exact)', { exact: true }).fill('missing-model');
       await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-      await expect(page.locator('.personalWarning').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model'); await assertEmpty();
+      await expect(page.locator('.personalActiveFilters').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model'); await assertEmpty();
       await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
-      await expect(page.locator('.personalWarning').filter({ hasText: 'Exact filters:' })).toHaveCount(0); await assertEmpty();
+      await expect(page.locator('.personalActiveFilters').filter({ hasText: 'Exact filters:' })).toHaveCount(0); await assertEmpty();
       await page.getByRole('button', { name: 'Refresh report', exact: true }).click(); await assertEmpty();
       fixture.failNextReport(); await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
       await expect(page.getByRole('alert')).toContainText('Injected report failure');
@@ -173,7 +181,7 @@ for (const timezone of ['UTC', 'America/Los_Angeles']) {
   test('partially expired custom uses clipped event instants but original controls and pinned refresh: ' + timezone, async ({ page }) => {
     const fixture = await cursorUsage(page);
     try {
-      await page.goto('/dashboard/my-usage'); await expect(calls(page)).toHaveCount(25);
+      await page.goto('/dashboard/my-usage'); await activity(page); await expect(calls(page)).toHaveCount(25);
       const from = '2026-10-02', to = '2026-11-01';
       const clipped = new Date(fixtureNow - 30 * 86400000).toISOString();
       const resolvedEnd = timezone === 'UTC' ? '2026-11-01T00:00:00.000Z' : '2026-11-01T07:00:00.000Z';
@@ -189,10 +197,12 @@ for (const timezone of ['UTC', 'America/Los_Angeles']) {
       await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
       expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(failed.search);
       await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
+      await details(page);
       await expect(page.getByRole('heading', { name: 'By key', exact: true })).toBeVisible();
+      await activity(page);
       await page.getByLabel('Model (exact)', { exact: true }).fill('missing-model');
       await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-      await expect(page.locator('.personalWarning').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model');
+      await expect(page.locator('.personalActiveFilters').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model');
       await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
       await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
       await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
@@ -209,7 +219,7 @@ for (const timezone of ['UTC', 'America/Los_Angeles']) {
   test('current custom interval with no calls still fetches a valid event page and Retry: ' + timezone, async ({ page }) => {
     const fixture = await cursorUsage(page);
     try {
-      await page.goto('/dashboard/my-usage'); await expect(calls(page)).toHaveCount(25);
+      await page.goto('/dashboard/my-usage'); await activity(page); await expect(calls(page)).toHaveCount(25);
       const eventsBefore = fixture.queries.filter(url => url.pathname.endsWith('/events')).length;
       fixture.failNextEvents(); await customDates(page, '2026-11-01', '2026-11-02', timezone);
       await expect(page.getByText('No model calls in this period for these filters.', { exact: true })).toBeVisible();

@@ -38,8 +38,8 @@ test("members see personal model calls without shared policy totals in analytics
   await serve(page, "user");
   await page.goto("/");
   const personalUsage = page.getByRole("region", { name: "Your personal usage", exact: true });
-  await expect(personalUsage.locator(".personalCallStats dd").first()).toHaveText("7");
-  await expect(personalUsage).toContainText("MODEL CALLS");
+  await expect(personalUsage.locator(".personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)").first()).toHaveText("7");
+  await expect(personalUsage).toContainText("Model calls");
   await expect(personalUsage).toContainText("300");
   await expect(personalUsage).not.toContainText("120 across your policy pools");
   await expect(page.locator(".dashboardAnalyticsGrid")).toHaveCount(0);

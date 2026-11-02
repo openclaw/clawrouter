@@ -67,7 +67,7 @@ export function viewTitle(view: View) {
 export function viewSubtitle(view: View) {
   return {
     home: "Services, quotas, and gateway posture",
-    "my-usage": "Your model calls, token coverage, and costs",
+    "my-usage": "Tokens & costs",
     catalog: "Service access catalog",
     playground: "Run through the same access path",
     policies: "Policies, credentials, and principal bindings",
