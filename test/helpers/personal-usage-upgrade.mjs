@@ -10,7 +10,7 @@ import { costEvidenceLedgerRoute, costRouterRoutes, costUpstream, exercisePerson
 export const personalUsageBaseline = "6fceb88d4d165ba66281c931b74c3047772a2ef5";
 const sessionCookie = "clawrouter_session=" + "a".repeat(64);
 const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "proof-tenant", monthlyBudgetMicros: 1000000, requestCostMicros: 17, budgetScope: "principal", budgetMode: "reserve", retainRequestContent: false };
-function router(source, candidate, proofOffset) { return `
+export function router(source, candidate, proofOffset) { return `
  export * from "${source}/worker/index.ts";
  import handler from "${source}/worker/index.ts";
  import { UsageLedgerObject as Ledger, budgetStatus, usageStub } from "${source}/worker/ledgers.ts";
@@ -71,7 +71,7 @@ function router(source, candidate, proofOffset) { return `
  }};
  export default proofHandler;
 `; }
-const upstream = `export default { async fetch(request) {
+export const upstream = `export default { async fetch(request) {
  ${costUpstream}
  if (request.method !== "POST") return new Response("unexpected", { status: 500 });
  return Response.json({ id: "synthetic-" + crypto.randomUUID(), object: "response", status: "completed", service_tier: "default", output: [], usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 40, cache_write_tokens: 0 }, output_tokens_details: { reasoning_tokens: 10 } } });

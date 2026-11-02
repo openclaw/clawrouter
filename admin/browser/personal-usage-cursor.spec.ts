@@ -3,7 +3,7 @@ import { cursorUsageFixture } from '../test/helpers/personal-usage-cursor.mjs';
 import { fixtureNow, fixtureResponses } from './fixtures/personal-usage';
 
 async function cursorUsage(page: Page) {
-  let now = fixtureNow, failReport = false, failEvents = false;
+  let now = fixtureNow, failReport = false, failEvents = false, failAnyEvents = false;
   const server = cursorUsageFixture(now), queries: URL[] = [], invalid: string[] = [];
   await page.clock.setFixedTime(new Date(now));
   await page.route('**/v1/**', async route => {
@@ -17,7 +17,7 @@ async function cursorUsage(page: Page) {
       // event pagination, even those whose transport fails below.
       const body = await server.read(url.href, now);
       if (url.pathname.endsWith('/report') && failReport) { failReport = false; throw new Error('Injected report failure'); }
-      if (url.pathname.endsWith('/events') && failEvents && url.searchParams.get('to') === new Date(now).toISOString()) { failEvents = false; throw new Error('Injected event failure'); }
+      if (url.pathname.endsWith('/events') && (failAnyEvents || failEvents && url.searchParams.get('to') === new Date(now).toISOString())) { failEvents = false; failAnyEvents = false; throw new Error('Injected event failure'); }
       await route.fulfill({ json: body });
     } catch (error) {
       const message = String(error instanceof Error ? error.message : error);
@@ -29,6 +29,8 @@ async function cursorUsage(page: Page) {
     queries, invalid, close: () => server.close(),
     expire: async () => { now += 16_000; await page.clock.setFixedTime(new Date(now)); },
     failNextReportAndEvents: () => { failReport = true; failEvents = true; },
+    failNextReport: () => { failReport = true; },
+    failNextEvents: () => { failAnyEvents = true; },
     end: () => new Date(now).toISOString(),
   };
 }
@@ -112,3 +114,116 @@ test('same-anchor cached navigation preserves valid page two; expired pinned cus
     expect(fixture.invalid).toEqual([]);
   } finally { fixture.close(); }
 });
+
+
+async function customDates(page: Page, from: string, to: string, timezone: string) {
+  const advanced = page.locator('.personalAdvanced');
+  if (!await advanced.evaluate(element => element.hasAttribute('open'))) await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  await page.getByLabel('Start', { exact: true }).fill(from);
+  await page.getByLabel('End (exclusive)', { exact: true }).fill(to);
+  await page.getByLabel('Timezone', { exact: true }).fill(timezone);
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+}
+
+for (const timezone of ['UTC', 'America/Los_Angeles']) {
+  test('fully expired custom controls stay usable across grouping, filters, refresh and report Retry: ' + timezone, async ({ page }) => {
+    const fixture = await cursorUsage(page);
+    try {
+      await page.goto('/dashboard/my-usage'); await pageTwo(page);
+      const eventsBefore = fixture.queries.filter(url => url.pathname.endsWith('/events')).length;
+      const from = '2026-10-01', to = '2026-10-02';
+      const resolvedEnd = timezone === 'UTC' ? '2026-10-02T00:00:00.000Z' : '2026-10-02T07:00:00.000Z';
+      await customDates(page, from, to, timezone);
+      const assertEmpty = async () => {
+        await expect(page.locator('.personalRange')).toContainText(resolvedEnd + ' → ' + resolvedEnd);
+        await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
+        await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Previous page', exact: true })).toBeDisabled();
+        await expect(page.getByRole('button', { name: 'Next page', exact: true })).toBeDisabled();
+        await expect(page.getByRole('button', { name: 'Export this page CSV', exact: true })).toBeDisabled();
+        await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
+        await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
+        await expect(page.getByLabel('Timezone', { exact: true })).toHaveValue(timezone);
+        await expect(page.getByRole('alert')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Retry recent calls', exact: true })).toHaveCount(0);
+        expect(fixture.queries.filter(url => url.pathname.endsWith('/events'))).toHaveLength(eventsBefore);
+        const reportRead = fixture.queries.filter(url => url.pathname.endsWith('/report')).at(-1)!;
+        expect(reportRead.searchParams.get('from')).toBe(from); expect(reportRead.searchParams.get('to')).toBe(to);
+        expect(reportRead.searchParams.get('timezone')).toBe(timezone);
+      };
+      await assertEmpty();
+      await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('provider');
+      await expect(page.getByRole('heading', { name: 'By provider', exact: true })).toBeVisible(); await assertEmpty();
+      await page.getByLabel('Model (exact)', { exact: true }).fill('missing-model');
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+      await expect(page.locator('.personalWarning').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model'); await assertEmpty();
+      await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+      await expect(page.locator('.personalWarning').filter({ hasText: 'Exact filters:' })).toHaveCount(0); await assertEmpty();
+      await page.getByRole('button', { name: 'Refresh report', exact: true }).click(); await assertEmpty();
+      fixture.failNextReport(); await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+      await expect(page.getByRole('alert')).toContainText('Injected report failure');
+      await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
+      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
+      await page.getByRole('button', { name: 'Retry report', exact: true }).click(); await assertEmpty();
+      const count = fixture.queries.length; await page.waitForTimeout(100); expect(fixture.queries).toHaveLength(count);
+      expect(fixture.invalid).toEqual([]);
+    } finally { fixture.close(); }
+  });
+
+  test('partially expired custom uses clipped event instants but original controls and pinned refresh: ' + timezone, async ({ page }) => {
+    const fixture = await cursorUsage(page);
+    try {
+      await page.goto('/dashboard/my-usage'); await expect(calls(page)).toHaveCount(25);
+      const from = '2026-10-02', to = '2026-11-01';
+      const clipped = new Date(fixtureNow - 30 * 86400000).toISOString();
+      const resolvedEnd = timezone === 'UTC' ? '2026-11-01T00:00:00.000Z' : '2026-11-01T07:00:00.000Z';
+      fixture.failNextEvents(); await customDates(page, from, to, timezone);
+      await expect(page.locator('.personalRange')).toContainText(clipped + ' → ' + resolvedEnd);
+      await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
+      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
+      await expect(page.getByRole('alert')).toContainText('Injected event failure');
+      const failed = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!;
+      expect(failed.searchParams.get('from')).toBe(clipped); expect(failed.searchParams.get('to')).toBe(resolvedEnd);
+      expect(Date.parse(failed.searchParams.get('to')!)).toBeLessThanOrEqual(fixtureNow); expect(failed.searchParams.has('cursor')).toBe(false);
+      await page.getByRole('button', { name: 'Retry recent calls', exact: true }).click();
+      await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
+      expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(failed.search);
+      await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
+      await expect(page.getByRole('heading', { name: 'By key', exact: true })).toBeVisible();
+      await page.getByLabel('Model (exact)', { exact: true }).fill('missing-model');
+      await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+      await expect(page.locator('.personalWarning').filter({ hasText: 'Exact filters:' })).toContainText('model = missing-model');
+      await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+      await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
+      await expect(page.getByLabel('Start', { exact: true })).toHaveValue(from);
+      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(to);
+      const reports = fixture.queries.filter(url => url.pathname.endsWith('/report') && url.searchParams.has('from'));
+      expect(reports.every(url => url.searchParams.get('from') === from && url.searchParams.get('to') === to && url.searchParams.get('timezone') === timezone)).toBe(true);
+      const events = fixture.queries.filter(url => url.pathname.endsWith('/events') && url.searchParams.get('to') === resolvedEnd);
+      expect(events.length).toBeGreaterThanOrEqual(4);
+      expect(events.every(url => url.searchParams.get('from') === clipped && !url.searchParams.has('cursor'))).toBe(true);
+      expect(fixture.invalid).toEqual([]);
+    } finally { fixture.close(); }
+  });
+
+  test('current custom interval with no calls still fetches a valid event page and Retry: ' + timezone, async ({ page }) => {
+    const fixture = await cursorUsage(page);
+    try {
+      await page.goto('/dashboard/my-usage'); await expect(calls(page)).toHaveCount(25);
+      const eventsBefore = fixture.queries.filter(url => url.pathname.endsWith('/events')).length;
+      fixture.failNextEvents(); await customDates(page, '2026-11-01', '2026-11-02', timezone);
+      await expect(page.getByText('No model calls in this period for these filters.', { exact: true })).toBeVisible();
+      await expect(page.getByRole('alert')).toContainText('Injected event failure');
+      const failed = fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!;
+      expect(Date.parse(failed.searchParams.get('from')!)).toBeLessThan(Date.parse(failed.searchParams.get('to')!));
+      expect(Date.parse(failed.searchParams.get('to')!)).toBeLessThanOrEqual(fixtureNow);
+      await page.getByRole('button', { name: 'Retry recent calls', exact: true }).click();
+      await expect(page.getByText('No recent model calls for these filters.', { exact: true })).toBeVisible();
+      expect(fixture.queries.filter(url => url.pathname.endsWith('/events'))).toHaveLength(eventsBefore + 2);
+      expect(fixture.queries.filter(url => url.pathname.endsWith('/events')).at(-1)!.search).toBe(failed.search);
+      await expect(page.getByLabel('Start', { exact: true })).toHaveValue('2026-11-01');
+      await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-11-02');
+      expect(fixture.invalid).toEqual([]);
+    } finally { fixture.close(); }
+  });
+}

@@ -43,10 +43,11 @@ export function usePersonalUsage({ request, scope, active, full }: { request: Co
     return () => { current = false; controller.abort(); };
   }, [active, queryKey, revision]);
   const visibleReport: ReadState<PersonalUsageReport> = report.key === queryKey ? report : { key: queryKey, loading: active, error: '' };
-  // Display server-confirmed boundaries without changing request state (which
-  // would refetch custom dates and lose the explicit rolling preset marker).
-  const displayQuery = useMemo(() => visibleReport.value ? resolvedUsageQuery(query, visibleReport.value) : query, [query, visibleReport.value]);
-  const eventQuery = visibleReport.value ? usageQueryString({ ...displayQuery, rollingDays: undefined }) : '';
+  // Rolling controls show their server-time anchor; custom controls keep the
+  // original usable request, even when retention clips it to an empty interval.
+  // The summary already displays report.range independently of these controls.
+  const displayQuery = useMemo(() => query.rollingDays && visibleReport.value ? resolvedUsageQuery(query, visibleReport.value) : query, [query, visibleReport.value]);
+  const eventQuery = visibleReport.value ? usageQueryString({ ...resolvedUsageQuery(query, visibleReport.value), rollingDays: undefined }) : '';
   const eventAnchor = visibleReport.value ? scopeKey + ':' + eventQuery : '';
   // Also gate reads during scope/query transitions: no render can pair a new
   // anchor with an old cursor, independently of React's state-update batching.
@@ -54,6 +55,14 @@ export function usePersonalUsage({ request, scope, active, full }: { request: Co
   const eventKey = queryKey + ':' + eventQuery + ':' + (cursor ?? '');
   useEffect(() => {
     if (!active || !full || !visibleReport.value || scope.demo) return;
+    const value = visibleReport.value;
+    if (value.range.from === value.range.to) {
+      // A valid custom request can resolve wholly outside retention. Equal
+      // bounds cannot be parsed as a new request; the report proves this page
+      // empty, without inventing usage, prices or history coverage.
+      setEvents({ key: eventKey, loading: false, error: '', value: { events: [], nextCursor: null, historyComplete: value.historyComplete, historySource: value.historySource, projectionComplete: value.projectionComplete } });
+      return;
+    }
     const controller = new AbortController();
     let current = true;
     setEvents({ key: eventKey, loading: true, error: '' });

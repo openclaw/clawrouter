@@ -2,7 +2,11 @@
 
 Review base: **6fceb88d4d165ba66281c931b74c3047772a2ef5**. This focused follow-up descends from **af23e0bb9f55810bb85a3ca7cc8777ae5f0b278a**. The final head is supplied by the committed bundle receipt, not guessed here. No package/lock/provider snapshot or production Worker/accounting changes in this follow-up.
 
-## Current local results
+## Latest fully expired custom-range follow-up
+
+See [expired-custom-remediation.md](expired-custom-remediation.md) and [navigation-runtime.json](navigation-runtime.json). Current affected checks:29hook/275admin unit/16focused browser cases passed, plus admin check/build. The previous broad Worker/browser results below belong to the bbf qualification and were accepted without a repeat. The small new runtime trace executes shipped report/events routes and distinguishes a synthetic post-response delivery fault from native status. Original6f controls confirm CLI/WebSocket failures, while the JSON body-reuse case remains unclassified; do not interpret the prior af23 controls as a full-PR baseline waiver.
+
+## Prior bbf local results
 
 Linux x64, Node v26.12.1, locked dependencies. Inherited network/proxy policy is unchanged.
 

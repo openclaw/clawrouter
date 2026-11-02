@@ -119,13 +119,13 @@ for (const offset of [-60_000, 60_000]) test('actual hook uses server preset clo
   assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.get('to'), hook.query.to);
   fixture.retire();
 });
-test('custom hook refresh remains pinned; canonical display fields cause no report refetch loop', async () => {
+test('custom hook refresh and controls remain pinned; resolved fields cause no report refetch loop', async () => {
   const fixture = mount(); let hook = fixture.render();
   const query = { ...hook.query, rollingDays: undefined, from: '2026-10-28', to: '2026-10-29', timezone: 'UTC' };
   hook.setQuery(query); fixture.render();
   const response = reportFixture({}, Date.parse('2026-10-28T00:00:00Z'), Date.parse('2026-10-29T00:00:00Z')); response.range.timezone = 'UTC';
   fixture.requests.at(-1).resolve(response); await flush(); hook = fixture.render();
-  assert.equal(hook.query.from, '2026-10-28T00:00:00.000Z'); assert.equal(hook.query.rollingDays, undefined);
+  assert.equal(hook.query.from, query.from); assert.equal(hook.query.rollingDays, undefined);
   const count = fixture.requests.length; for (let index = 0; index < 5; index++) fixture.render();
   assert.equal(fixture.requests.length, count);
   hook.reload(); fixture.render();
@@ -250,4 +250,101 @@ test('filter transition and cached return to the former query never restore its 
   assert.equal(fixture.requests.filter(request => request.path.includes('/report?')).length, count, 'original query still uses its valid report cache');
   assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.has('cursor'), false);
   await answer(fixture.requests.at(-1)); assert.equal(fixture.render().events.value.events.length, 25);
+});
+
+
+const retentionMs = 30 * 86400000;
+for (const timezone of ['UTC', 'America/Los_Angeles']) {
+  test('fully expired custom range preserves original controls across grouping, filters, Retry and refresh: ' + timezone, async t => {
+    const { fixture, server, answer } = await cursorPageTwo(t);
+    const original = { ...fixture.render().query, rollingDays: undefined, from: '2026-10-01', to: '2026-10-02', timezone };
+    const eventCount = () => fixture.requests.filter(read => read.path.includes('/events?')).length;
+    const before = eventCount();
+    const assertRequest = read => {
+      const params = new URL(read.path, fixture.props.scope.origin).searchParams;
+      assert.equal(params.get('from'), original.from); assert.equal(params.get('to'), original.to);
+      assert.equal(params.get('timezone'), timezone); assert.equal(params.has('days'), false);
+    };
+    const acceptEmpty = async () => {
+      const read = fixture.requests.at(-1); assertRequest(read);
+      const response = await answer(read);
+      assert.equal(response.range.from, response.range.to); assert.equal(response.range.clampedStart, true);
+      assert.equal(response.generatedAt, serverNow);
+      await assert.rejects(server.read('/v1/session/usage/events?' + usageQueryString({ ...resolvedUsageQuery(original, response), rollingDays: undefined }), serverNow), /range must be positive/);
+      let hook = fixture.render(); hook = fixture.render();
+      assert.equal(hook.query.from, original.from); assert.equal(hook.query.to, original.to); assert.equal(hook.query.timezone, timezone);
+      assert.equal(hook.report.value, response, 'keep the server report and all of its usage/history metadata intact');
+      assert.equal(hook.page, 1); assert.equal(hook.events.loading, false); assert.equal(hook.events.error, '');
+      assert.deepEqual(hook.events.value, { events: [], nextCursor: null, historyComplete: response.historyComplete, historySource: response.historySource, projectionComplete: response.projectionComplete });
+      assert.equal(eventCount(), before, 'no equal-bound event HTTP request');
+      return hook;
+    };
+    fixture.render().setQuery(original); fixture.render(); let hook = await acceptEmpty();
+    const count = fixture.requests.length; hook.nextPage(); hook.previousPage(); fixture.render(); fixture.render();
+    assert.equal(fixture.render().page, 1); assert.equal(fixture.requests.length, count);
+    hook.retryEvents(); fixture.render(); hook = fixture.render();
+    assert.equal(hook.events.loading, false); assert.deepEqual(hook.events.value.events, []); assert.equal(fixture.requests.length, count);
+    hook.setQuery({ ...hook.query, groupBy: 'provider' }); fixture.render(); hook = await acceptEmpty();
+    assert.equal(hook.report.value.groupBy, 'provider');
+    hook.setQuery({ ...hook.query, filters: { ...hook.query.filters, model: 'missing-model' } }); fixture.render(); hook = await acceptEmpty();
+    assert.equal(hook.query.filters.model, 'missing-model');
+    hook.reload(); fixture.render(); assertRequest(fixture.requests.at(-1));
+    fixture.requests.at(-1).reject(new Error('temporary expired report failure')); await flush();
+    hook = fixture.render(); assert.equal(hook.report.error, 'temporary expired report failure');
+    hook.reload(); fixture.render(); await acceptEmpty();
+    const stable = fixture.requests.length; for (let i = 0; i < 5; i++) fixture.render();
+    assert.equal(fixture.requests.length, stable, 'no render/refetch loop');
+  });
+
+  test('partially expired custom controls stay original while every event read uses clipped server bounds: ' + timezone, async t => {
+    const { fixture, answer } = await cursorPageTwo(t);
+    const original = { ...fixture.render().query, rollingDays: undefined, from: '2026-10-02', to: '2026-11-01', timezone };
+    fixture.render().setQuery(original); fixture.render();
+    const response = await answer(fixture.requests.at(-1));
+    assert.equal(response.range.from, serverNow - retentionMs); assert.ok(response.range.from < response.range.to);
+    assert.equal(response.range.clampedStart, true);
+    assert.equal(new Date(response.range.to).toISOString(), timezone === 'UTC' ? '2026-11-01T00:00:00.000Z' : '2026-11-01T07:00:00.000Z');
+    let hook = fixture.render();
+    assert.equal(hook.query.from, original.from); assert.equal(hook.query.to, original.to);
+    const eventRead = fixture.requests.at(-1), params = new URL(eventRead.path, fixture.props.scope.origin).searchParams;
+    assert.equal(params.get('from'), new Date(response.range.from).toISOString()); assert.equal(params.get('to'), new Date(response.range.to).toISOString());
+    assert.ok(Date.parse(params.get('to')) <= serverNow); assert.equal(params.has('cursor'), false);
+    eventRead.reject(new Error('temporary clipped event failure')); await flush();
+    hook = fixture.render(); assert.equal(hook.events.error, 'temporary clipped event failure'); hook.retryEvents(); fixture.render();
+    assert.equal(fixture.requests.at(-1).path, eventRead.path); await answer(fixture.requests.at(-1));
+    hook = fixture.render(); assert.equal(hook.events.value.events.length, 0);
+    hook.setQuery({ ...hook.query, groupBy: 'key', filters: { ...hook.query.filters, model: 'missing-model' } }); fixture.render();
+    const changed = new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams;
+    assert.equal(changed.get('from'), original.from); assert.equal(changed.get('to'), original.to);
+    const changedResponse = await answer(fixture.requests.at(-1)); fixture.render();
+    const changedEvents = new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams;
+    assert.equal(changedEvents.get('from'), new Date(changedResponse.range.from).toISOString()); assert.equal(changedEvents.get('to'), params.get('to'));
+    await answer(fixture.requests.at(-1)); fixture.render().reload(); fixture.render();
+    const refreshed = new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams;
+    assert.equal(refreshed.get('from'), original.from); assert.equal(refreshed.get('to'), original.to);
+  });
+
+  test('valid nonempty current range with no calls still reads events and retries normally: ' + timezone, async t => {
+    const { fixture, answer } = await cursorPageTwo(t);
+    const original = { ...fixture.render().query, rollingDays: undefined, from: '2026-11-01', to: '2026-11-02', timezone };
+    fixture.render().setQuery(original); fixture.render();
+    const response = await answer(fixture.requests.at(-1)); assert.equal(response.metrics.calls, 0);
+    assert.equal(response.range.clampedStart, false); assert.ok(response.range.from < response.range.to);
+    const count = fixture.requests.length; let hook = fixture.render();
+    assert.equal(fixture.requests.length, count + 1, 'empty metrics do not suppress a valid event read');
+    assert.equal(hook.query.from, original.from); assert.equal(hook.query.to, original.to);
+    const read = fixture.requests.at(-1); read.reject(new Error('temporary empty event failure')); await flush();
+    hook = fixture.render(); assert.equal(hook.events.error, 'temporary empty event failure'); hook.retryEvents(); fixture.render();
+    assert.equal(fixture.requests.at(-1).path, read.path); const events = await answer(fixture.requests.at(-1));
+    assert.deepEqual(events.events, []); assert.equal(fixture.render().events.loading, false);
+  });
+}
+
+test('locally empty event page preserves incomplete retained-ledger metadata without altering report values', async () => {
+  const fixture = mount(); fixture.render();
+  const response = reportFixture({ historyComplete: false, projectionComplete: false, historySource: 'retained_ledger', generatedAt: serverNow }, serverNow - 31 * 86400000, serverNow - 31 * 86400000);
+  fixture.requests[0].resolve(response); await flush(); fixture.render(); const hook = fixture.render();
+  assert.equal(fixture.requests.length, 1); assert.equal(hook.report.value, response);
+  assert.deepEqual(hook.events.value, { events: [], nextCursor: null, historyComplete: false, historySource: 'retained_ledger', projectionComplete: false });
+  fixture.retire();
 });
