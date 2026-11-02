@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { startWorkerdFixture } from "./workerd.mjs";
+import { costEvidenceLedgerRoute, costRouterRoutes, costUpstream, exercisePersonalUsageCosts } from "./personal-usage-cost-runtime.mjs";
 
 export const personalUsageBaseline = "6fceb88d4d165ba66281c931b74c3047772a2ef5";
 const sessionCookie = "clawrouter_session=" + "a".repeat(64);
@@ -23,6 +24,7 @@ function router(source, candidate, proofOffset) { return `
  Date.now = () => wallClockNow() + ${proofOffset};
  export class UsageLedgerObject extends Ledger {
   async fetch(request) {
+   ${candidate ? costEvidenceLedgerRoute : ""}
    if (new URL(request.url).pathname !== "/_proof/state") return super.fetch(request);
    const rows = [...this.sql.exec("SELECT id, event_json FROM usage_events ORDER BY id")];
    const exists = [...this.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_report_events'")].length > 0;
@@ -30,9 +32,10 @@ function router(source, candidate, proofOffset) { return `
    return Response.json({ rawCount: rows.length, rawDigest: await sha256Hex(JSON.stringify(rows)), projection });
   }
  }
- export default { ...handler, async fetch(request, env, context) {
+ const proofHandler = { ...handler, async fetch(request, env, context) {
   env = { ...env, CLAWROUTER_LOCAL_AUTH: "enabled" };
   const url = new URL(request.url);
+  ${candidate ? costRouterRoutes : ""}
   if (url.pathname === "/_proof/setup") {
    await authorityCall(env, "/policies/initialize-all", [{ policyId: "proof", policy }]);
    await authorityCall(env, "/connections/initialize-all", [{ providerId: "openai", enabled: true, monthlyBudgetMicros: null }]);
@@ -66,8 +69,10 @@ function router(source, candidate, proofOffset) { return `
   ${candidate ? 'if (url.pathname === "/_proof/migrate") return Response.json(await migrateUsageReportShard(env, { tenantId: "proof-tenant", policyId: "proof" }, await request.json()));' : ''}
   return handler.fetch(request, env, context);
  }};
+ export default proofHandler;
 `; }
 const upstream = `export default { async fetch(request) {
+ ${costUpstream}
  if (request.method !== "POST") return new Response("unexpected", { status: 500 });
  return Response.json({ id: "synthetic-" + crypto.randomUUID(), object: "response", status: "completed", service_tier: "default", output: [], usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 40, cache_write_tokens: 0 }, output_tokens_details: { reasoning_tokens: 10 } } });
 }};`;
@@ -82,7 +87,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
  execFileSync("tar", ["-xf", "-", "-C", baseline], { input: archive });
  const wallNow = Date.now(), calendar = new Date(wallNow);
  const proofOffset = Date.UTC(calendar.getUTCFullYear(), calendar.getUTCMonth(), calendar.getUTCDate(), 12) - wallNow;
- const options = { persistencePath: join(temporary, "resources"), preventEviction: true };
+ const options = { persistencePath: join(temporary, "resources"), preventEviction: true, bindings: { ANTHROPIC_API_KEY: "fixture-upstream-key" } };
  let worker;
  const read = async (path, init = {}) => worker.dispatchFetch("https://router.example" + path, { ...init, headers: { cookie: sessionCookie, ...init.headers } });
  const json = async path => { const response = await read(path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
@@ -132,9 +137,15 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   let applied; do { applied=await migrate({apply:true,batchSize:200}); } while(!applied.complete);
   const indexed=await samples("/v1/session/usage/report?days=7"), final=await json("/_proof/state");
   assert.equal(indexed.body.metrics.calls,eventsPerOwner+1); assert.equal(indexed.body.projectionComplete,true); assert.equal(indexed.body.historySource,"projection"); assert.equal(final.rawDigest,withNew.rawDigest); assert.equal(final.budget.spentMicros,withNew.budget.spentMicros); assert.deepEqual(final.config,before.config);
-  const sourcePaths = ["worker/index.ts", "worker/access.ts", "worker/local-auth.ts", "worker/proxy-accounting.ts", "worker/accounting.ts", "worker/ledgers.ts", "worker/usage-report-cost.ts", "worker/usage-report-store.ts", "worker/usage-report-range.ts", "worker/usage-report.ts", "worker/usage-report-session.ts", "shared/usage-report.ts", "test/helpers/personal-usage-upgrade.mjs"];
+  const candidateCostRuntime = await exercisePersonalUsageCosts({ read, json, until, restart: async () => {
+   await worker.dispose(); worker = null;
+   worker = await startWorkerdFixture(temporary, router(resolve("."), true, proofOffset), upstream, options);
+  } });
+  const fixedAfterCosts = await json("/_proof/state");
+  assert.equal(fixedAfterCosts.rawDigest, final.rawDigest); assert.equal(fixedAfterCosts.budget.spentMicros, final.budget.spentMicros);
+  const sourcePaths = ["worker/index.ts", "worker/access.ts", "worker/local-auth.ts", "worker/proxy.ts", "worker/proxy-auth.ts", "worker/proxy-selection.ts", "worker/providers.ts", "worker/generated/provider-snapshot.json", "providers/anthropic.provider.yaml", "providers/openai.provider.yaml", "worker/provider-auth.ts", "worker/authority.ts", "worker/authority-admission.ts", "worker/anthropic-price-response.ts", "worker/anthropic-pricing.ts", "worker/proxy-response.ts", "worker/responses-hosted-usage.ts", "worker/responses-tool-evidence.ts", "worker/token-usage.ts", "worker/pricing.ts", "worker/soft-budget.ts", "worker/budget-scope.ts", "worker/proxy-accounting.ts", "worker/accounting.ts", "worker/ledgers.ts", "worker/usage-report-cost.ts", "worker/usage-report-store.ts", "worker/usage-report-range.ts", "worker/usage-report.ts", "worker/usage-report-session.ts", "shared/usage-report.ts", "admin/src/personal-usage.ts", "test/helpers/personal-usage-upgrade.mjs", "test/helpers/personal-usage-cost-runtime.mjs", "test/helpers/workerd.mjs", "scripts/prove-personal-usage-upgrade.mjs", "worker/test/usage-report-upgrade-runtime.test.mjs"];
   const candidateSourceHashes = Object.fromEntries(await Promise.all(sourcePaths.map(async path => [path, createHash("sha256").update(await readFile(path)).digest("hex")])));
-  const proof={baseline:personalUsageBaseline,candidateSourceHashes,synthetic:true,liveProductionEvidence:false,eventsPerOwner,baselineAccountingEvents:eventsPerOwner*2,newAccountingEvents:2,observed:{legacyPersonalCalls:legacy.usage.personal.summary.requestCount,immediateReportCalls:report.metrics.calls,rawRowsBefore:before.rawCount,rawRowsAfterRead:afterRead.rawCount,projectionRowsAfterRead:afterRead.projection,rawRowsAfterNewCall:withNew.rawCount,projectionRowsAfterNewCall:withNew.projection,reportCallsAfterNewCall:mixed.metrics.calls,projectionRowsAfterExplicitLocalApply:final.projection,historicalReasoningCoverage:report.metrics.reasoningReportedCalls,newReasoningCoverage:mixed.metrics.reasoningReportedCalls,newReasoningTokens:mixed.metrics.reasoningOutputTokens},actualShippedSessionAuthorization:true,strictFutureCustomRejected:true,actualProxyAccountingAndQueueIngestion:true,persistedBaselineToCandidateRestart:true,originalUsageSettingsAndDebitsPreserved:true,credentialAndConnectionSettingsPreserved:true,historyReadBeforeApplyWithoutWrites:true,otherOwnerExcluded:true,revokedPolicyFailClosed:true,disabledPolicyAndProxyKeyDenied:true,missingHistoricalReasoningNotInvented:true,localExplicitMigrationTestOnly:true,transitionReport:{...transition,body:undefined},comparableBeforeProjectionReport:{...beforeProjection,body:undefined},comparableOwnerCalls:eventsPerOwner+1,indexedReport:{...indexed,body:undefined},budgetBefore:before.budget.spentMicros,budgetAfterNewCall:final.budget.spentMicros,limits:["Local synthetic upstream and credential/session setup only; no production calls or credentials","Fixture Worker clock uses a fixed UTC-noon offset across restart to prevent calendar-month rollover while remaining monotonic; performance.now latency measurement remains live","Latency includes real local session/authority/report routes, not WAN/Cloudflare Access verification","Small authenticated upgrade corpus complements the separate large retained-volume benchmark"]};
+  const proof={baseline:personalUsageBaseline,candidateCostRuntime,candidateSourceHashes,synthetic:true,liveProductionEvidence:false,eventsPerOwner,baselineAccountingEvents:eventsPerOwner*2,newAccountingEvents:2,newAccountingEventsScope:"original fixed-tariff preservation phase",candidateCostAccountingEvents:2,totalCandidateAccountingEvents:4,observed:{legacyPersonalCalls:legacy.usage.personal.summary.requestCount,immediateReportCalls:report.metrics.calls,rawRowsBefore:before.rawCount,rawRowsAfterRead:afterRead.rawCount,projectionRowsAfterRead:afterRead.projection,rawRowsAfterNewCall:withNew.rawCount,projectionRowsAfterNewCall:withNew.projection,reportCallsAfterNewCall:mixed.metrics.calls,projectionRowsAfterExplicitLocalApply:final.projection,historicalReasoningCoverage:report.metrics.reasoningReportedCalls,newReasoningCoverage:mixed.metrics.reasoningReportedCalls,newReasoningTokens:mixed.metrics.reasoningOutputTokens},actualShippedSessionAuthorization:true,strictFutureCustomRejected:true,actualProxyAccountingAndQueueIngestion:true,persistedBaselineToCandidateRestart:true,originalUsageSettingsAndDebitsPreserved:true,credentialAndConnectionSettingsPreserved:true,historyReadBeforeApplyWithoutWrites:true,otherOwnerExcluded:true,revokedPolicyFailClosed:true,disabledPolicyAndProxyKeyDenied:true,missingHistoricalReasoningNotInvented:true,localExplicitMigrationTestOnly:true,transitionReport:{...transition,body:undefined},comparableBeforeProjectionReport:{...beforeProjection,body:undefined},comparableOwnerCalls:eventsPerOwner+1,indexedReport:{...indexed,body:undefined},budgetBefore:before.budget.spentMicros,budgetAfterNewCall:final.budget.spentMicros,limits:["Local synthetic upstream and credential/session setup only; no production calls or credentials","Fixture Worker clock uses a fixed UTC-noon offset across restart to prevent calendar-month rollover while remaining monotonic; performance.now latency measurement remains live","Latency includes real local session/authority/report routes, not WAN/Cloudflare Access verification","Small authenticated upgrade corpus complements the separate large retained-volume benchmark"]};
   if(artifactPath)await writeFile(artifactPath,JSON.stringify(proof,null,2)+String.fromCharCode(10));
   return proof;
  } finally {await worker?.dispose();await rm(temporary,{recursive:true,force:true});}

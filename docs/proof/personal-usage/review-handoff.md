@@ -1,6 +1,6 @@
 # Local ClawSweeper review handoff
 
-This candidate is local only. Hannes authorized publication through this existing Team session after tests and the pinned local ClawSweeper review. The previous full review of ffdc0c5 completed with two P2 findings. Full pinned re-review of this replacement is **pending**. Merge, deployment and production migration remain unauthorized.
+This candidate is local only. Hannes authorized publication through this existing Team session after tests and the pinned local ClawSweeper review. The previous full reviews of ffdc0c5 and af23e0b completed without final acceptance. The coordinator reported the af23 actual model receipt as internal/medium despite requested Sol; preserve that actual receipt. This focused follow-up repairs the new cursor/cache P2 and extends native cost-path evidence. Full pinned re-review of the new replacement is **pending**. Merge, deployment and production migration remain unauthorized.
 
 ## Exact runner support
 

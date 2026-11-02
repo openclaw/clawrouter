@@ -1,5 +1,7 @@
 # Personal usage: transition performance proof
 
+Measurement point: **af23e0bb9f55810bb85a3ca7cc8777ae5f0b278a**. The large-corpus timings/screenshots and asset identities below are retained evidence for that candidate, not silently relabeled as measurements of the later cursor-lifecycle fix. The later fix has dedicated real-cursor navigation/retry browser regressions; current native cost-path proof is recorded separately.
+
 Read-through run: 2026-11-02T19:49:14.806Z. [Raw samples/source and asset hashes](measurements.json). Separate projected fixture: 2026-11-02T19:50:01.501Z, [measurements](projected/measurements.json). All data is synthetic, local and provider-free. No production deployment/backfill.
 
 ## Workload and interpretation
@@ -70,7 +72,7 @@ The large benchmark isolates query/render cost: its session metadata is syntheti
 
 It generated 600 baseline accounting events (300 per owner), observed 300 personal calls before and 300 immediately after upgrade, with 0 projection rows and no raw/settings/debit changes caused by reads. Two new calls yield 301 owned calls, not a partial history. Other-owner exclusion, removed bindings, disabled policies, proxy rejection and strict future-custom validation are asserted. Historical reasoning coverage stays zero; only the new owned call reports ten reasoning tokens.
 
-For the same 301 owned calls on authenticated shipped report routes, local pre-projection median is 6.7 ms and post-explicit-local-projection median 3.1 ms. Policy/credential/connection settings are digest-checked; old budget debit 5100 micros stays unchanged until one new owned call adds 17, yielding 5117. The local migration phase is explicit and fixture-only. These small-corpus timings complement, not replace, the large benchmark.
+The authenticated proof JSON records paired local timings for the same 301 owned calls before/after an explicit synthetic projection. Its source-hashed observations are refreshed independently from the af23 large-corpus benchmark. The local migration phase remains fixture-only; these small-corpus timings are not production latency or a replacement for retained-volume measurements.
 
 ## Rendered proof and limits
 

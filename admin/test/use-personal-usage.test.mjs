@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
+import { cursorUsageFixture } from './helpers/personal-usage-cursor.mjs';
 import { refreshUsageQuery, resolvedUsageQuery, rollingUsageQuery, UsageQueryCache, usageQueryString } from '../src/personal-usage.ts';
 const source = stripTypeScriptTypes(await readFile(new URL('../src/hooks/use-personal-usage.ts', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function usePersonalUsage', 'function usePersonalUsage');
 const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
@@ -140,4 +141,113 @@ test('selecting the same rolling preset still resolves a fresh server anchor ins
   const params = new URL(fixture.requests[1].path, fixture.props.scope.origin).searchParams;
   assert.equal(params.get('days'), '7'); assert.equal(params.has('from'), false); assert.equal(params.has('to'), false);
   fixture.retire();
+});
+
+async function cursorPageTwo(t, custom = false) {
+  let now = serverNow;
+  t.mock.method(Date, 'now', () => now);
+  const server = cursorUsageFixture(now); t.after(() => server.close());
+  const fixture = mount(); t.after(() => fixture.retire());
+  fixture.props.scope.session = { tenantId: 'tenant', email: 'member@example.com' };
+  const initial = fixture.render();
+  if (custom) { initial.setQuery({ ...initial.query, rollingDays: undefined, from: new Date(serverNow - 2 * 3600000).toISOString(), to: new Date(serverNow).toISOString() }); fixture.render(); }
+  const answer = async request => {
+    const value = await server.read(request.path, now, { principal: fixture.props.scope.session.email, policies: [{ tenantId: fixture.props.scope.session.tenantId, policyId: 'policy' }] });
+    request.resolve(value); await flush(); return value;
+  };
+  await answer(fixture.requests.at(-1)); fixture.render();
+  const first = await answer(fixture.requests.at(-1));
+  assert.equal(first.events.length, 25);
+  fixture.render().nextPage(); fixture.render();
+  const second = await answer(fixture.requests.at(-1));
+  assert.equal(second.events.length, 17); assert.equal(second.nextCursor, null);
+  assert.equal(fixture.render().page, 2);
+  return { fixture, server, answer, advance: ms => { now += ms; } };
+}
+
+test('expired rolling cache accepts a new anchor with no transient old cursor or previous-page stack', async t => {
+  const { fixture, server, answer, advance } = await cursorPageTwo(t);
+  const oldPage = new URL(fixture.requests.at(-1).path, fixture.props.scope.origin);
+  fixture.props.active = false; fixture.render(); advance(16_000);
+  fixture.props.active = true; fixture.render();
+  const reportRead = fixture.requests.findLast(request => request.path.includes('/report?'));
+  await answer(reportRead); const hook = fixture.render();
+  const firstRead = fixture.requests.at(-1), params = new URL(firstRead.path, fixture.props.scope.origin).searchParams;
+  assert.notEqual(params.get('to'), oldPage.searchParams.get('to'));
+  assert.equal(params.has('cursor'), false, 'not even the first event request for the accepted anchor may reuse the cursor');
+  assert.equal(hook.page, 1, 'the previous-page stack belongs to the old anchor too');
+  const invalid = new URL(firstRead.path, fixture.props.scope.origin); invalid.searchParams.set('cursor', oldPage.searchParams.get('cursor'));
+  await assert.rejects(server.read(invalid.href, serverNow + 16_000), /to must not be in the future/);
+  invalid.searchParams.set('to', oldPage.searchParams.get('to'));
+  await assert.rejects(server.read(invalid.href, serverNow + 16_000), /cursor does not match/);
+  await answer(firstRead); fixture.render().nextPage(); fixture.render();
+  const secondRead = fixture.requests.at(-1); secondRead.reject(new Error('temporary page-two failure')); await flush();
+  assert.equal(fixture.render().page, 2); fixture.render().retryEvents(); fixture.render();
+  assert.equal(fixture.requests.at(-1).path, secondRead.path, 'event retry keeps its new anchor and real cursor');
+  await answer(fixture.requests.at(-1)); assert.equal(fixture.render().page, 2);
+  fixture.render().previousPage(); fixture.render();
+  assert.equal(fixture.render().page, 1); assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.has('cursor'), false);
+});
+
+test('same-anchor cached reentry keeps a valid second page without refetching the report', async t => {
+  const { fixture, answer, advance } = await cursorPageTwo(t);
+  const previous = fixture.requests.at(-1).path, reportReads = fixture.requests.filter(request => request.path.includes('/report?')).length;
+  fixture.props.active = false; fixture.render(); advance(1_000);
+  fixture.props.active = true; fixture.render();
+  assert.equal(fixture.render().page, 2); assert.equal(fixture.requests.at(-1).path, previous);
+  assert.equal(fixture.requests.filter(request => request.path.includes('/report?')).length, reportReads);
+  await answer(fixture.requests.at(-1)); assert.equal(fixture.render().events.value.events.length, 17);
+});
+
+for (const field of ['epoch', 'origin', 'tenantId', 'email', 'subject']) test('accepted scope change clears both cursor and previous-page stack: ' + field, async t => {
+  const { fixture, answer } = await cursorPageTwo(t);
+  if (field === 'epoch') fixture.props.scope.epoch++;
+  else if (field === 'origin') fixture.props.scope.origin = 'https://new-console.example';
+  else fixture.props.scope.session = { ...fixture.props.scope.session, [field]: field === 'email' ? 'new@example.com' : 'new-' + field };
+  fixture.render(); await answer(fixture.requests.at(-1));
+  const hook = fixture.render();
+  assert.equal(hook.page, 1);
+  assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.has('cursor'), false);
+});
+
+test('expired report failure and retry, then event failure and retry, remain on the newly accepted anchor', async t => {
+  const { fixture, answer, advance } = await cursorPageTwo(t);
+  fixture.props.active = false; fixture.render(); advance(16_000); fixture.props.active = true; fixture.render();
+  fixture.requests.findLast(request => request.path.includes('/report?')).reject(new Error('temporary report failure')); await flush();
+  fixture.render().reload(); fixture.render(); await answer(fixture.requests.at(-1)); fixture.render();
+  const firstRead = fixture.requests.at(-1); firstRead.reject(new Error('temporary event failure')); await flush();
+  const hook = fixture.render(); assert.equal(hook.page, 1); assert.equal(hook.events.error, 'temporary event failure');
+  advance(60_000); hook.retryEvents(); fixture.render();
+  assert.equal(fixture.requests.at(-1).path, firstRead.path);
+  assert.equal(new URL(firstRead.path, fixture.props.scope.origin).searchParams.has('cursor'), false);
+  await answer(fixture.requests.at(-1)); assert.equal(fixture.render().events.value.events.length, 25);
+});
+
+test('expired pinned custom report preserves valid page two; explicit refresh stays pinned but resets pagination', async t => {
+  const { fixture, answer, advance } = await cursorPageTwo(t, true);
+  const pinned = fixture.requests.findLast(request => request.path.includes('/report?')).path, pageTwo = fixture.requests.at(-1).path;
+  fixture.props.active = false; fixture.render(); advance(16_000); fixture.props.active = true; fixture.render();
+  const fresh = fixture.requests.findLast(request => request.path.includes('/report?'));
+  assert.equal(fresh.path, pinned); await answer(fresh); fixture.render();
+  assert.equal(fixture.render().page, 2); assert.equal(fixture.requests.at(-1).path, pageTwo);
+  await answer(fixture.requests.at(-1)); fixture.render().reload(); fixture.render();
+  assert.equal(fixture.requests.at(-1).path, pinned); await answer(fixture.requests.at(-1)); fixture.render();
+  assert.equal(fixture.render().page, 1); assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.has('cursor'), false);
+  await answer(fixture.requests.at(-1)); const count = fixture.requests.length;
+  for (let i = 0; i < 5; i++) fixture.render();
+  assert.equal(fixture.requests.length, count, 'accepting identical bounds cannot refetch-loop');
+});
+
+test('filter transition and cached return to the former query never restore its previous-page stack', async t => {
+  const { fixture, answer } = await cursorPageTwo(t);
+  const original = fixture.render().query;
+  fixture.render().setQuery({ ...original, filters: { ...original.filters, model: 'different-model' } }); fixture.render();
+  assert.equal(fixture.render().page, 1); await answer(fixture.requests.at(-1)); fixture.render();
+  assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.has('cursor'), false);
+  await answer(fixture.requests.at(-1)); const count = fixture.requests.filter(request => request.path.includes('/report?')).length;
+  fixture.render().setQuery(original); fixture.render(); fixture.render();
+  assert.equal(fixture.render().page, 1);
+  assert.equal(fixture.requests.filter(request => request.path.includes('/report?')).length, count, 'original query still uses its valid report cache');
+  assert.equal(new URL(fixture.requests.at(-1).path, fixture.props.scope.origin).searchParams.has('cursor'), false);
+  await answer(fixture.requests.at(-1)); assert.equal(fixture.render().events.value.events.length, 25);
 });

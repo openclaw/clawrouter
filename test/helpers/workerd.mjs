@@ -15,10 +15,12 @@ export async function startWorkerdFixture(temporary, routerScript, upstreamScrip
 // Wall-clock cadence fixtures opt out; production objects are not co-scheduled.
 // hotCache: fixtures exercise per-request authority semantics unless they opt in
 // to the production isolate hot cache (load harness, hot-path smoke).
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer, preventEviction, log, r2Buckets, hotCache = false } = {}) {
+// bindings: fixture-only overrides (e.g. synthetic provider keys); never source
+// production environment changes or real credentials for native tests.
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer, preventEviction, log, r2Buckets, hotCache = false, bindings = {} } = {}) {
   const mf = new Miniflare(convertV4MiniflareOptions({ ...(log ? { log } : {}), resourceTmpPath: temporary, ...(persistencePath ? { resourcePersistencePath: persistencePath } : {}), workers: [{
     name: "router", modules: true, script: routerScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
-    bindings: { OPENAI_API_KEY: "fixture-upstream-key", ...(hotCache ? {} : { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: "0" }) },
+    bindings: { OPENAI_API_KEY: "fixture-upstream-key", ...(hotCache ? {} : { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: "0" }), ...bindings },
     kvNamespaces: ["POLICY_KV"], r2Buckets,
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([binding, className]) => [binding, { className, useSQLite: true, ...(preventEviction ? { unsafePreventEviction: true } : {}) }])),
     queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: queueConsumer ?? { maxBatchSize: 1, maxBatchTimeout: 0 } },

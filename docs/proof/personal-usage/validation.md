@@ -1,45 +1,56 @@
 # Personal usage candidate verification
 
-Baseline: **6fceb88d4d165ba66281c931b74c3047772a2ef5**. Refetched main after implementation; unchanged. The final head is supplied in the handoff/bundle receipt, not guessed in this document.
+Review base: **6fceb88d4d165ba66281c931b74c3047772a2ef5**. This focused follow-up descends from **af23e0bb9f55810bb85a3ca7cc8777ae5f0b278a**. The final head is supplied by the committed bundle receipt, not guessed here. No package/lock/provider snapshot or production Worker/accounting changes in this follow-up.
 
-## Final local results
+## Current local results
 
-Linux x64, Node v26.12.1, locked pnpm dependencies; no package/lock/provider snapshot changes.
+Linux x64, Node v26.12.1, locked dependencies. Inherited network/proxy policy is unchanged.
 
-| Gate | Command | Result |
-| --- | --- | --- |
-| Worker TypeScript + tests | NO_PROXY=127.0.0.1,localhost pnpm worker:check | **2,840 passed**, zero failed/skipped |
-| Admin TypeScript | npm --prefix admin run check | passed |
-| Admin unit tests | npm --prefix admin test | **258 passed** |
-| Script/workerd integration tests | NO_PROXY=127.0.0.1,localhost node --test --test-concurrency=1 test/*.test.mjs | **964 passed, 20 skipped**, zero failed |
-| Admin production build | npm --prefix admin run build | passed |
-| Full Chromium browser suite | NO_PROXY=127.0.0.1,localhost node node_modules/@playwright/test/cli.js test --workers=4 (from admin) | **480 passed**, desktop/mobile |
-| Local protocol smokes | NO_PROXY=127.0.0.1,localhost pnpm worker:e2e | HTTP, Responses WebSocket and content cleanup passed |
-| Whitespace | git diff --check | passed |
-| End-to-end performance | NO_PROXY=127.0.0.1,localhost BROWSER=1 node scripts/benchmark-personal-usage.mjs | completed, 200,000 retained synthetic events; zero browser errors |
+| Gate | Result |
+|---|---|
+| pnpm worker:check (TypeScript + Worker tests) | **2,840 passed**, zero failed/skipped |
+| Admin TypeScript and production build | passed |
+| Admin unit tests | **268 passed**, including 22 hook tests |
+| Focused real-cursor browser cases | **4 passed**, desktop/mobile |
+| Complete Chromium browser suite | **484 passed**, desktop/mobile, no snapshot updates |
+| Full native upgrade/cost proof script | completed with 600 actual baseline proxy/accounting events, two original candidate preservation calls and two critical cost-path calls |
+| Latest focused native upgrade test | passed; real guard/partial/report/export assertions included |
+| Broader serial script/workerd suite | **960 passed, 4 failed, 20 skipped**; not claimed green; see exceptions below |
+| Local HTTP Worker smoke | passed |
+| Content cleanup smoke, run separately | passed |
+| External WebSocket smoke | non-green external-abort assertion; same assertion reproduces on pristine af23 |
+| Whitespace/source-proof identities | checked before commit/bundle |
 
-Full browser coverage includes duplicate cross-shard event IDs with unique page-local anchors, non-URI-safe ledger IDs, actual producer estimate-reason warnings, WCAG AA axe checks, report loading/errors/empty states, independent event failures, filters, key grouping, safe CSV, cancellation, identity replacement, pool isolation and rolling/custom range refresh. Existing administrator Linux baselines are unchanged; new personal-report snapshots are intentional synthetic fixtures. Administrator access to My usage is tested through the existing Usage page, avoiding unrelated shell/snapshot churn. macOS was not available for native execution; no Darwin baseline was fabricated or replaced.
+## Cursor P2: red/green and real behavior
 
-Native workerd date tests include Kolkata, Kathmandu, Chatham, both New York DST transitions, Lord Howe half-hour DST, midnight gaps/skipped dates and arbitrary half-open boundaries. Ownership tests exercise real local session authority, tenant/policy/principal/key constraints, cursor/query binding, duplicate IDs across shards, SQL index plans and fail-closed fanout. Migration tests cover interruption/resume, atomic rollback, default dry-run and original ledger payload/debit preservation. Token/pricing tests preserve settlement amounts/bases, cache subset semantics, reasoning inclusion exactly once, unknown vs genuine no-charge and optional reporting-only estimates.
+The frozen af23 hook failed six added unit assertions, including expired-cache pagination and five scope transitions. The fixed hook passes all 268 admin tests. Its pagination state owns resolved anchor, cursor and previous-page stack together. Accepted changed bounds retire both coordinates before publication; a render-time anchor gate prevents a transient old cursor/new range combination independently of React batching. Same-anchor cached/custom reentry preserves valid pages; explicit Refresh resets pages without moving pinned custom bounds. Retired event reads cannot provide a Next-page cursor.
 
-## Initial failures and reruns
+The browser fixture uses shipped personalUsage, actual range/cursor parsing/binding and real SQLite reporting/events queries. Only session authority, synthetic stored metadata and Durable Object transport are adapters. It creates 42 calls, reaches page two via real controls, leaves for Catalog, expires the 15-second cache and returns. Tests assert page one, disabled Previous, no invalid request, and report/event failure plus Retry recovery. Same-anchor cached navigation and expired pinned custom-range navigation are also covered. It is not an opaque cursor echo.
 
-The first combined parallel run had two local WebSocket CLI fixture failures and one realtime freshness timing failure (373 ms); the serial script run above passed the same assertions without widening thresholds or changing those production/test paths. The browser launcher initially routed loopback through the host proxy and rejected a Host/authority mismatch. Explicit NO_PROXY for localhost/127.0.0.1 resolved that local harness condition. These are disclosed local-run observations, not a claim about production reliability or a universal introducing cause.
+The ordinary Node HTTP URL-readiness probe failed before any browser test executed: Host/request authority mismatch for 127.0.0.1:4317 versus the inherited proxy's authority. Installed Playwright1.64.1 documents webServer.wait.stdout. A temporary configuration imported the original projects/baseURL/viewports/timezone/snapshots/assertions and used Vite stdout readiness, then actual Chromium navigation. All proxy environment/policy remained intact; no bypass list or security guard was disabled. Focused four and full484 cases passed with this launcher. A redundant launcher experiment was cancelled and is not counted as acceptance evidence. See cursor-browser-launcher.md for the reproducible options.
 
-The local HTTP smoke initially matched the word completion in the new request_format metadata value. It now asserts the exact expected format and applies its unchanged content/secret sentinel regex to all remaining metadata. No privacy checks were removed.
+## Native critical cost-path proof
 
-## Reporting-only history preview
+See authenticated-upgrade.json and test/helpers/personal-usage-cost-runtime.mjs. This extends the persisted baseline proof beyond fixed tariff. Actual shipped entrypoint, proxy-key admission, authority, transforms, guard, accounting, USAGE_QUEUE producer, unchanged handler.queue consumer, SQL ingestion, authenticated report/events and shipped CSV exporters run. Setup/state inspection, fixture clock and synthetic provider wire are adapters, not stubs for those operations.
 
-[dry-run.json](dry-run.json) is an actual default read-only CLI preview over the actual Anthropic guard and soft hosted-tool receipt producers using synthetic input. Its SQLite file SHA-256 was identical before/after. It proposes an unknown 7,626-micro retained reservation and a genuine 56-micro partial component, with recorded debit values separate. No original charges or payloads change. Resumable apply is tested only against local synthetic fixtures.
+- Unsupported Anthropic served priority tier: real client HTTP502, retained reservation/debit **7,775 micros**, explicit known component null, UNKNOWN detail amount null, recorded charge preserved, CSV monetary reporting fields blank.
+- Soft hosted search: real HTTP200, stock observer marks hosted completeness false and fee null, measured token component/debit **56 micros**, PARTIAL amount56 and CSV USD0.000056.
+- Both persist through same-candidate restart. Reads preserve receipt digests, projection counts, settings and budget debit. UNKNOWN summary zero is only the existing additive sentinel, not a price.
+- Original fixed-tariff upgrade still preserves 600 original events, 300 owned calls before/immediately after upgrade and zero historical projection writes from reads. One new owned call yields301 and adds exactly17 micros: 5,100 ->5,117. Missing historical reasoning stays unreported; only the new owned call adds ten reasoning tokens. Other-owner exclusion and revocation remain asserted.
+- All37 listed source SHA-256 identities are verified against the final files. Redacted outputs exclude raw headers, provider responses, credentials, prompts and completions. This is shipped local-session KV/authority evidence, not Cloudflare JWT acceptance, live production or real provider billing.
 
-**No production usage read, production impact preview, backfill, deployment or budget migration was executed.** Live impact counts remain unavailable until separately authorized owner/operator metadata is available. The supported-baseline upgrade preserves historical visibility immediately using read-only indexed canonical history while the reporting projection is incomplete. Historical migration only projects retained evidence; it never prices old events with today's rate card or reconstructs missing reasoning/counters.
+## Broader non-green checks and controls
 
-## Publication and review
+The broad script suite is **not** represented as all passing. Four failed records include two deploy-cli WebSocket lifecycle cases and the parent/subcase for JSON refresh HTTP300 without Location reporting Body-already-read. The serial run was repeated, with the same failures. Exact clean-af23 controls under inherited routing reproduce the deploy-cli failures and the external WebSocket cancel-stream abort failure; the full af23 script comparison also returns **960 passed, 4 failed, 20 skipped**, with the same four failed records. See validation-comparison.json for exact inputs/counters. This bounds introduction claims; it does not diagnose a universal cause or waive those checks.
 
-Hannes authorized an open PR through the existing Team managed publisher after tests and the required exact-source local ClawSweeper review. No merge, deployment or production backfill is authorized. Pinned source 7af0b3df82e30c661bd041fa09216724b3587658 supports openclaw/clawrouter through its generic OpenClaw profile, and Hannes completed its non-passing review on ffdc0c5. The requested Studio runner remains operator-controlled; this replacement needs full re-review. The [handoff](review-handoff.md) specifies the immutable range and Studio command. Full pinned re-review of this replacement is **pending**, not replaced by ordinary AutoReview or these tests. Publication must wait for the exact-head review result.
+The credential-redirect file also has an isolated 76/76 passing run. A temporary old-helper control and current helper isolated controls were used to avoid guessing about the additive fixture binding option; observed variability is retained rather than widening assertions or changing production redirect/cancellation code. The fixture extension remains minimal: explicit synthetic environment binding overrides. No proxy values/bypass lists were changed to manufacture green. HTTP and content-cleanup checks passed independently; the chained worker:e2e command stops at its non-green WebSocket stage.
 
-Ignored .openclaw scratch, registry cache, baseline archives, logs and raw request traces are preserved locally but excluded from the candidate. Only focused source/tests/docs and intentional rendered proof are committed.
+These are named remaining validation limitations for review/CI on its authorized runtime. They are not approval to publish, merge, deploy or alter unrelated production paths. All affected cursor and native-cost acceptance tests pass.
 
-## Review acceptance additions
+## Historical evidence, scope and review gate
 
-See [review-remediation.md](review-remediation.md) for the two P2 fixes, bounded history transition, actual producer ingestion/migration/export regressions and the authenticated persisted baseline-to-candidate runtime proof. [authenticated-upgrade.json](authenticated-upgrade.json) records observed counts, preserved debits/settings, source hashes, revocation and strict range validation. The current source preserves historical visibility before any explicit apply; no production operation was performed.
+The large-corpus performance samples/screenshots remain labeled **af23** with their original source/asset identities, not falsely relabeled as a fresh benchmark of the pagination fix. The disclosed 30-day read-through overhead remains for usability review. The current native proof is refreshed separately with its own source identities. Earlier mock-producer JSON/SSE regressions and read-only dry-run preview are retained as additional evidence, not substitutes for the new shipped-entrypoint proof.
+
+The coordinator relayed the complete/non-passing af23 pinned review, actual model receipt **internal/medium** despite requested Sol, and source artifact path; this Team session has not independently read that Studio artifact. See review-af23e0b-receipt.json and review-af23e0b-remediation.md. Prior P2s were reported fixed/security clear; the new cursor P2 and evidence gap are addressed here. Full pinned re-review of the new head is pending and is not replaced by ordinary AutoReview.
+
+Hannes already authorized the plan/PR and delegated default choices; seven/thirty-day selection is not a new owner-approval blocker. Maintainers review product-contract adoption in the PR; no merge approval is implied. Publication remains held through the existing Team path. **No production traffic/credentials/data read, production preview/backfill, deployment or budget migration was performed.** Explicit projection apply occurs only in local synthetic proof. Ignored caches, temporary launchers, captures and diagnostic logs are excluded from the candidate. No administrator or new screenshot baselines were churned.
