@@ -21,6 +21,7 @@ test('overview foregrounds honest cards, trend and ranked models without account
  await expect(summary(page)).toContainText('5,310');await expect(summary(page)).toContainText('Subscription equivalent');
  await expect(page.getByRole('region',{name:'Daily usage trend',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Top models',exact:true})).toBeVisible();
  await expect(page.getByRole('tab',{name:'Overview',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('.personalActivityTable')).toHaveCount(0);await expect(page.locator('.personalCosts')).toHaveCount(0);await expect(page.locator('.personalAdvanced')).not.toHaveAttribute('open');
+ await afterPaint(page);expect(eventReads(q),'Overview must not read event pages').toBe(0);
  const axis=await page.locator('.personalChartViewport .chartAxisLabel').evaluateAll(nodes=>nodes.map(node=>{const e=node as SVGTextElement;return{font:parseFloat(getComputedStyle(e).fontSize)*(e.getScreenCTM()?.a??1),text:e.textContent};}));expect(axis.every(v=>v.font>=10)).toBe(true);
  const geometry=await page.evaluate(()=>{const b=(s:string)=>{const r=document.querySelector(s)!.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};return{viewport:{width:innerWidth,height:innerHeight},documentWidth:document.documentElement.scrollWidth,documentHeight:document.documentElement.scrollHeight,nodes:document.querySelectorAll('*').length,glance:b('.personalGlance'),trend:b('.personalTrendPanel'),ranking:b('.personalRanksPanel')};});
  expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport.width);expect(geometry.trend.right).toBeLessThanOrEqual(geometry.viewport.width);expect(geometry.ranking.right).toBeLessThanOrEqual(geometry.viewport.width);if(info.project.name==='desktop')expect(geometry.trend.bottom).toBeLessThanOrEqual(geometry.viewport.height+20);
@@ -29,7 +30,7 @@ test('overview foregrounds honest cards, trend and ranked models without account
 });
 
 test('metric switches remain client-only, preserve selection across periods and expose real gap/keyboard values',async({page},info)=>{
- const q=await story(page);await page.goto('/dashboard/my-usage');await expect(page.getByRole('heading',{name:'Tokens over time',exact:true})).toBeVisible();await expect.poll(()=>eventReads(q)).toBe(1);
+ const q=await story(page);await page.goto('/dashboard/my-usage');await expect(page.getByRole('heading',{name:'Tokens over time',exact:true})).toBeVisible();await afterPaint(page);expect(eventReads(q)).toBe(0);
  const before={report:reports(q),events:eventReads(q)},timings=[];
  for(const label of ['API cost','Calls','Tokens','API cost']){const start=await page.evaluate(()=>performance.now());await metric(page).getByRole('button',{name:label,exact:true}).click();await expect(page.getByRole('heading',{name:label+' over time',exact:true})).toBeVisible();await afterPaint(page);timings.push({metric:label,actionToVisibleMs:await page.evaluate(t=>performance.now()-t,start)});}
  expect(reports(q)).toBe(before.report);expect(eventReads(q)).toBe(before.events);
@@ -43,7 +44,7 @@ test('metric switches remain client-only, preserve selection across periods and 
 
 test('Activity and Details progressively disclose paging, metadata and exports with keyboard tabs',async({page})=>{
  const q=await story(page);await page.goto('/dashboard/my-usage');await expect(page.getByRole('heading',{name:'Tokens over time',exact:true})).toBeVisible();
- const tabs=page.getByRole('tablist',{name:'Personal usage views',exact:true});await tabs.getByRole('tab',{name:'Overview',exact:true}).focus();await page.keyboard.press('ArrowRight');await expect(tabs.getByRole('tab',{name:'Activity',exact:true})).toBeFocused();await expect(tabs.getByRole('tab',{name:'Overview',exact:true})).toHaveAttribute('aria-selected','true');await page.keyboard.press('Enter');await expect(rows(page)).toHaveCount(25);
+ const tabs=page.getByRole('tablist',{name:'Personal usage views',exact:true});await tabs.getByRole('tab',{name:'Overview',exact:true}).focus();await page.keyboard.press('ArrowRight');await expect(tabs.getByRole('tab',{name:'Activity',exact:true})).toBeFocused();await expect(tabs.getByRole('tab',{name:'Overview',exact:true})).toHaveAttribute('aria-selected','true');expect(eventReads(q)).toBe(0);await page.keyboard.press('Enter');await expect(rows(page)).toHaveCount(25);expect(eventReads(q)).toBe(1);
  const r=reports(q);await page.getByRole('button',{name:'Next page',exact:true}).click();await expect(rows(page)).toHaveCount(5);await expect(page.getByText('Page 2',{exact:true})).toBeVisible();expect(reports(q)).toBe(r);
  await page.getByRole('tab',{name:'Details',exact:true}).click();await expect(page.getByRole('region',{name:'Costs by billing lane',exact:true})).toBeVisible();await expect(page.getByRole('region',{name:'Daily usage data',exact:true})).toBeVisible();
  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export activity page 2 CSV',exact:true}).click();expect((await download).suggestedFilename()).toBe('my-usage-events-page-2.csv');

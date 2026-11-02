@@ -38,7 +38,7 @@
 .personalHelpContent p + p { margin-top: 8px; }
 .personalControls { overflow: visible; }
 .personalControls .personalSectionHeader { margin-bottom: 10px; }
-.personalControls > label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-right: 20px; }
+.personalControls > label { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; margin-right: 20px; white-space: nowrap; }
 .personalControls > label select { min-width: 120px; }
 .personalAdvanced { display: inline-block; vertical-align: top; }
 .personalAdvanced[open] { display: block; margin-top: 10px; }

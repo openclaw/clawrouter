@@ -8,7 +8,7 @@ const source = stripTypeScriptTypes(await readFile(new URL('../src/hooks/use-per
 const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 const serverNow = Date.parse('2026-11-02T12:00:00.789Z');
 const reportFixture = (extra = {}, from = serverNow - 7 * 86400000, to = serverNow) => ({ range: { from, to, timezone: 'Asia/Kathmandu' }, groupBy: 'model', ...extra });
-function mount() {
+function mount({ events = true } = {}) {
   const slots = [], effects = [], pending = [], requests = [];
   let cursor = 0, alive = true;
   const props = { active: true, full: true, scope: { origin: 'https://console.example', epoch: 1, session: { tenantId: 'tenant-a', email: 'a@example.com' }, isCurrent: () => alive }, request: (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, signal: init.signal, resolve, reject })) };
@@ -17,8 +17,21 @@ function mount() {
   const useEffect = (setup, deps) => { const index = cursor++; const previous = effects[index]; if (!previous || deps.some((value, i) => !Object.is(value, previous.deps[i]))) pending.push(() => { previous?.cleanup?.(); effects[index] = { deps, cleanup: setup() }; }); };
   const useMemo = (create, deps) => { const memo = useRef(); if (!memo.current || deps.some((value, i) => !Object.is(value, memo.current.deps[i]))) memo.current = { deps, value: create() }; return memo.current.value; };
   const useHook = new Function('useState', 'useRef', 'useEffect', 'useMemo', 'refreshUsageQuery', 'resolvedUsageQuery', 'rollingUsageQuery', 'UsageQueryCache', 'usageQueryString', source + '\nreturn usePersonalUsage;')(useState, useRef, useEffect, useMemo, refreshUsageQuery, resolvedUsageQuery, rollingUsageQuery, UsageQueryCache, usageQueryString);
-  return { props, requests, retire: () => { alive = false; for (const effect of effects) effect?.cleanup?.(); }, render: () => { cursor = 0; const result = useHook(props); while (pending.length) pending.shift()(); return result; } };
+  return { props, requests, retire: () => { alive = false; for (const effect of effects) effect?.cleanup?.(); }, render: () => { cursor = 0; const result = useHook(props); while (pending.length) pending.shift()(); if (events) result.showEvents(true); return result; } };
 }
+test('event pages load only while a view requests them, then stop', async () => {
+  const fixture = mount({ events: false }); fixture.render();
+  fixture.requests[0].resolve(reportFixture({ metrics: { calls: 3 } })); await flush();
+  let hook = fixture.render(); fixture.render();
+  assert.equal(fixture.requests.length, 1, 'no events read for the overview');
+  assert.equal(hook.events.loading, false);
+  hook.showEvents(true); fixture.render(); hook = fixture.render();
+  assert.equal(fixture.requests.length, 2); assert.match(fixture.requests[1].path, /^\/v1\/session\/usage\/events\?/);
+  assert.equal(hook.events.loading, true);
+  hook.showEvents(false); fixture.render();
+  assert.equal(fixture.requests[1].signal.aborted, true);
+  fixture.retire();
+});
 test('report loads first; events are a separate bounded read and pagination keeps report', async () => {
   const fixture = mount(); fixture.render();
   assert.equal(fixture.render().report.loading, true); assert.equal(fixture.requests.length, 1);

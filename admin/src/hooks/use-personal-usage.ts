@@ -14,6 +14,9 @@ export function usePersonalUsage({ request, scope, active, full }: { request: Co
   const [pagination, setPagination] = useState<Pagination>(firstPage);
   const [report, setReport] = useState<ReadState<PersonalUsageReport>>({ key: '', loading: false, error: '' });
   const [events, setEvents] = useState<ReadState<PersonalUsageEvents>>({ key: '', loading: false, error: '' });
+  // Event pages load only while a view that shows or exports them is open.
+  const [eventsShown, showEvents] = useState(false);
+  const wantEvents = active && full && eventsShown;
   const cache = useRef(new UsageQueryCache<PersonalUsageReport>());
   const scopeKey = JSON.stringify([scope.origin, scope.epoch, scope.session.tenantId, scope.session.email, scope.session.subject]);
   const queryKey = scopeKey + ':' + usageQueryString(query);
@@ -54,7 +57,7 @@ export function usePersonalUsage({ request, scope, active, full }: { request: Co
   const { cursor, previousCursors } = pagination.anchor === eventAnchor ? pagination : firstPage;
   const eventKey = queryKey + ':' + eventQuery + ':' + (cursor ?? '');
   useEffect(() => {
-    if (!active || !full || !visibleReport.value || scope.demo) return;
+    if (!wantEvents || !visibleReport.value || scope.demo) return;
     const value = visibleReport.value;
     if (value.range.from === value.range.to) {
       // A valid custom request can resolve wholly outside retention. Equal
@@ -74,7 +77,7 @@ export function usePersonalUsage({ request, scope, active, full }: { request: Co
       if (current && scope.isCurrent()) setEvents({ key: eventKey, value, loading: false, error: '' });
     }).catch(error => { if (current && scope.isCurrent()) setEvents({ key: eventKey, loading: false, error: String(error instanceof Error ? error.message : error) }); });
     return () => { current = false; controller.abort(); };
-  }, [active, full, eventKey, Boolean(visibleReport.value), revision, eventsRevision]);
+  }, [wantEvents, eventKey, Boolean(visibleReport.value), revision, eventsRevision]);
   function changeQuery(next: PersonalUsageQuery) {
     setPagination(firstPage);
     // Selecting the already-active preset is still an explicit fresh read.
@@ -91,7 +94,7 @@ export function usePersonalUsage({ request, scope, active, full }: { request: Co
     const timer = setInterval(() => { if (scope.isCurrent() && (typeof document === 'undefined' || document.visibilityState === 'visible')) reload(); }, 30_000);
     return () => clearInterval(timer);
   }, [active, full, scopeKey, queryKey]);
-  return { query: displayQuery, setQuery: changeQuery, report: visibleReport, events: events.key === eventKey ? events : { key: eventKey, loading: active && full, error: '' } as ReadState<PersonalUsageEvents>, reload,
+  return { query: displayQuery, setQuery: changeQuery, report: visibleReport, events: events.key === eventKey ? events : { key: eventKey, loading: wantEvents, error: '' } as ReadState<PersonalUsageEvents>, reload, showEvents,
     retryEvents: () => { setEvents({ key: eventKey, loading: true, error: '' }); setEventsRevision(value => value + 1); },
     page: previousCursors.length + 1,
     nextPage: () => { if (events.key !== eventKey || !events.value?.nextCursor) return; setPagination({ anchor: eventAnchor, previousCursors: [...previousCursors, cursor], cursor: events.value.nextCursor }); },

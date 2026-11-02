@@ -141,23 +141,31 @@ const metricExpressions: Record<keyof UsageMetrics, string> = {
 export const usageMetricKeys = Object.keys(metricExpressions) as Array<keyof UsageMetrics>;
 export function emptyUsageMetrics(): UsageMetrics { return Object.fromEntries(usageMetricKeys.map(key => [key, 0])) as unknown as UsageMetrics; }
 const metricSql = Object.entries(metricExpressions).map(([key, expr]) => 'COALESCE(' + expr + ', 0) AS "' + key + '"').join(", ");
+const filterColumns = { model: "model", provider: "provider", key: "key_id", status: "status", costClass: "cost_class", lane: "lane" };
+function filterTerms(query: UsageReportQuery) {
+  const terms: string[] = [], bindings: Array<string | number | null> = [];
+  for (const [key, column] of Object.entries(filterColumns)) {
+    const value = query.filters[key as keyof typeof filterColumns];
+    if (value !== undefined) { terms.push(column + " = ?"); bindings.push(value); }
+  }
+  return { terms, bindings };
+}
 export function reportWhere(query: UsageReportQuery) {
-  if (!Number.isSafeInteger(query.range.from) || !Number.isSafeInteger(query.range.to) || query.range.from > query.range.to || query.range.to - query.range.from > reportRetentionMs) throw new Error("reporting SQL requires a bounded retained range of at most 30 days");
-  const terms = ["tenant_id = ?", "policy_id = ?", "principal_key = ?", "occurred_at_ms >= ?", "occurred_at_ms < ?"];
-  const bindings: Array<string | number | null> = [query.tenantId, query.policyId, query.principal, query.range.from, query.range.to];
-  const columns = { model: "model", provider: "provider", key: "key_id", status: "status", costClass: "cost_class", lane: "lane" };
-  for (const [key, column] of Object.entries(columns)) { const value = query.filters[key as keyof typeof columns]; if (value !== undefined) { terms.push(column + " = ?"); bindings.push(value); } }
-  return { where: terms.join(" AND "), bindings };
+  const { from, to } = query.range;
+  if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from > to || to - from > reportRetentionMs) throw new Error("reporting SQL requires a bounded retained range of at most 30 days");
+  const filters = filterTerms(query);
+  return {
+    where: ["tenant_id = ?", "policy_id = ?", "principal_key = ?", "occurred_at_ms >= ?", "occurred_at_ms < ?", ...filters.terms].join(" AND "),
+    bindings: [query.tenantId, query.policyId, query.principal, from, to, ...filters.bindings] as Array<string | number | null>,
+  };
 }
 export interface UsageAggregateRow extends UsageMetrics { dimension: string; value: string | number | null; lane: UsageCostLane; costClass: UsageCostClass; amountMicros: number }
 export interface UsageReportHistory { historyComplete: boolean; projectionComplete?: boolean; historySource?: "projection" | "retained_ledger" }
 export interface UsageReportShard extends UsageReportHistory { rows: UsageAggregateRow[]; groupsTruncated: boolean }
 
 const scalarColumns = "model, provider, key_id, occurred_at_ms, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros";
-const filterColumns = { model: "model", provider: "provider", key: "key_id", status: "status", costClass: "cost_class", lane: "lane" };
 function reportFilters(query: UsageReportQuery) {
-  const terms: string[] = [], bindings: Array<string | number | null> = [];
-  for (const [key, column] of Object.entries(filterColumns)) { const value = query.filters[key as keyof typeof filterColumns]; if (value !== undefined) { terms.push(column + " = ?"); bindings.push(value); } }
+  const { terms, bindings } = filterTerms(query);
   return { where: terms.length ? terms.join(" AND ") : "1", bindings };
 }
 const jsonText = (field: string) => "CASE WHEN json_type(event_json, '$." + field + "') = 'text' THEN json_extract(event_json, '$." + field + "') END";
