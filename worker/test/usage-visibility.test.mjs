@@ -296,6 +296,37 @@ test("personal reads add caller-owned totals and admin reads add a per-principal
   assert.equal(admin.principals.reduce((count, row) => count + row.summary.requestCount, 0), admin.summary.requestCount);
 });
 
+for (const budgetScope of ["policy", "principal"]) {
+  test(budgetScope + " budgets-only session reads preserve quotas without querying any usage shard", async (t) => {
+    const f = await fixture(t, budgetScope);
+    await f.ingest("owned-model-call", { principal_id: "alice@example.com", credential_id: "alice" });
+    const cookie = await f.login("alice@example.com");
+    const originalUsage = f.env.USAGE_LEDGER, originalBudgets = f.env.BUDGET_LEDGER;
+    let usageReads = 0, budgetReads = 0;
+    f.env.USAGE_LEDGER = { idFromName: originalUsage.idFromName, get(name) { usageReads++; return originalUsage.get(name); } };
+    f.env.BUDGET_LEDGER = { idFromName: originalBudgets.idFromName, get(name) { budgetReads++; return originalBudgets.get(name); } };
+    const baseline = await f.read("/v1/session/usage", cookie);
+    assert.equal(baseline.status, 200); assert.equal(baseline.body.usage.summary.requestCount, 1); assert.equal(usageReads, 1);
+    usageReads = 0; budgetReads = 0;
+    const response = await f.read("/v1/session/usage?budgets_only=true", cookie);
+    assert.equal(response.status, 200); assert.equal(usageReads, 0); assert.ok(budgetReads > 0);
+    assert.deepEqual(response.body.session, baseline.body.session); assert.deepEqual(response.body.policies, baseline.body.policies);
+    assert.equal(response.body.policies[0].budget.configured, true);
+    assert.equal(response.body.usage.ledger, "not_requested");
+    assert.ok(Object.values(response.body.usage.summary).every(value => value === 0));
+    assert.deepEqual(response.body.usage.providers, []); assert.deepEqual(response.body.usage.daily, []); assert.deepEqual(response.body.usage.events, []);
+    for (const query of ["budgets_only=false", "budgets_only=1", "budgets_only=True", "budgets_only=", "budgets_only=true&budgets_only=false"]) {
+      usageReads = 0;
+      const full = await f.read("/v1/session/usage?" + query, cookie);
+      assert.equal(full.status, 200); assert.equal(usageReads, 1); assert.equal(full.body.usage.summary.requestCount, 1);
+    }
+    usageReads = 0;
+    assert.equal((await f.read("/v1/session/usage?budgets_only=true", {})).status, 401);
+    assert.equal((await f.read("/v1/session/usage?budgets_only=true", f.key("alice"))).status, 401);
+    assert.equal(usageReads, 0);
+  });
+}
+
 function ids(snapshot) { return snapshot.events.map(event => event.id).sort(); }
 function totals({ summary, providers, daily }) { return { summary, providers, daily }; }
 

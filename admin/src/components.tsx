@@ -61,12 +61,13 @@ export function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }
 }
 
 export function viewTitle(view: View) {
-  return ({ home: "Dashboard", catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage", subscriptions: "Subscriptions" } as const)[view];
+  return ({ "my-usage": "My usage", home: "Dashboard", catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage", subscriptions: "Subscriptions" } as const)[view];
 }
 
 export function viewSubtitle(view: View) {
   return {
     home: "Services, quotas, and gateway posture",
+    "my-usage": "Your model calls, token coverage, and costs",
     catalog: "Service access catalog",
     playground: "Run through the same access path",
     policies: "Policies, credentials, and principal bindings",

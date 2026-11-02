@@ -307,6 +307,11 @@ export interface AuthorizedIdentity {
 }
 
 export interface UsageEvent {
+  /** Reporting metadata only. Not used by budget settlement. */
+  request_format?: string;
+  reporting_estimated_cost_micros?: number | null;
+  reporting_estimate_reason?: string | null;
+  reasoning_output_tokens?: number | null;
   realtime_usage?: { item_id?: string | null; unit_id: string; response_id: string | null; output_cap: number; text_input_tokens?: number; audio_input_tokens?: number; cached_text_input_tokens?: number; cached_audio_input_tokens?: number; text_output_tokens?: number; audio_output_tokens?: number };
   hosted_tool_calls?: { web_search: number };
   hosted_tool_calls_complete?: boolean;

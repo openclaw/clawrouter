@@ -1,0 +1,50 @@
+{
+  "scope": "Synthetic local fixture only; not a production impact proposal",
+  "sourceUnchanged": true,
+  "receipt": {
+    "dryRun": true,
+    "examined": 5,
+    "projected": 5,
+    "lastRowid": 5,
+    "upperRowid": 5,
+    "complete": true,
+    "previouslyComplete": false,
+    "effects": [
+      {
+        "lane": "api",
+        "costClass": "calculated",
+        "calls": 1,
+        "proposedReportingMicros": 1200,
+        "recordedChargeMicros": 1200
+      },
+      {
+        "lane": "api",
+        "costClass": "estimated",
+        "calls": 1,
+        "proposedReportingMicros": 150,
+        "recordedChargeMicros": 0
+      },
+      {
+        "lane": "api",
+        "costClass": "partial",
+        "calls": 1,
+        "proposedReportingMicros": 42,
+        "recordedChargeMicros": 42
+      },
+      {
+        "lane": "subscription",
+        "costClass": "fixed",
+        "calls": 1,
+        "proposedReportingMicros": 300,
+        "recordedChargeMicros": 300
+      },
+      {
+        "lane": "unattributed",
+        "costClass": "unknown",
+        "calls": 1,
+        "proposedReportingMicros": null,
+        "recordedChargeMicros": 0
+      }
+    ]
+  }
+}

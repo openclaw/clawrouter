@@ -1,0 +1,56 @@
+.personalUsageCanvas { display: grid; gap: 20px; min-width: 0; }
+.personalUsageSummary, .personalControls, .personalSection { padding: 24px; min-width: 0; }
+.personalUsageSummary h2, .personalControls h2, .personalSection h2 { margin: 0; font-size: 20px; }
+.personalSectionHeader { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.personalSectionHeader p { font-size: 13px; margin: 6px 0 0; color: var(--muted); }
+.personalRange, .personalNote { font-size: 12px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.personalRange { font-variant-numeric: tabular-nums; }
+.personalWarning { padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--accent); font-size: 13px; line-height: 1.6; }
+.personalCallStats, .personalTokenStats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 24px 0; }
+.personalTokenStats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.personalCallStats > div, .personalTokenStats > div { border-left: 2px solid var(--line); padding-left: 14px; min-width: 0; }
+.personalCallStats dt, .personalTokenStats dt { font-size: 12px; color: var(--muted); }
+.personalCallStats dd, .personalTokenStats dd { margin: 6px 0; font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 650; overflow-wrap: anywhere; }
+.personalTokenStats dd { font-size: 20px; }
+.personalCallStats small, .personalTokenStats small { font-size: 11px; color: var(--muted); }
+.personalFilterGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.personalFilterGrid label { display: grid; gap: 6px; font-size: 12px; min-width: 0; }
+.personalFilterGrid input, .personalFilterGrid select { width: 100%; min-width: 0; }
+.personalActions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.personalTableWrap { overflow-x: auto; max-width: 100%; margin-top: 16px; }
+.personalTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.personalTable caption { text-align: left; font-size: 12px; color: var(--muted); padding: 0 0 12px; }
+.personalTable th, .personalTable td { padding: 13px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.personalTable thead th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.personalTable td small { display: block; margin-top: 4px; color: var(--muted); }
+.personalTable th:first-child { padding-left: 0; }
+.personalTable td:last-child { padding-right: 0; }
+.personalCosts { min-width: 620px; }
+.personalTable:not(.personalCosts) { min-width: 580px; }
+.personalGroupButton { background: transparent; color: var(--text); border: 0; padding: 0; text-align: left; text-decoration: underline; text-underline-offset: 3px; max-width: 260px; overflow-wrap: anywhere; }
+.personalCostList { margin: 0; padding: 0; list-style: none; min-width: 190px; font-size: 12px; line-height: 1.8; }
+.personalCostList small { display: inline !important; }
+.personalEvents { list-style: none; padding: 0; margin: 0 0 20px; }
+.personalEvents > li { padding: 18px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 20px; }
+.personalEvents > li:target { outline: 2px solid var(--accent); outline-offset: 4px; }
+.personalEventHeading { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.personalEventHeading strong { overflow-wrap: anywhere; }
+.personalEventHeading time, .personalEvents p { font-size: 12px; line-height: 1.6; color: var(--muted); }
+.personalEvents summary { cursor: pointer; font-size: 13px; width: fit-content; padding: 5px 0; }
+.personalEventDetails { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; font-size: 12px; }
+.personalEventDetails dt { color: var(--muted); margin-bottom: 4px; }
+.personalEventDetails dd { margin: 0; overflow-wrap: anywhere; }
+.personalEvents a { color: var(--text); text-decoration: underline; }
+@media (max-width: 1000px) { .personalTokenStats { grid-template-columns: repeat(3, minmax(0, 1fr)); } .personalFilterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) {
+  .personalUsageSummary, .personalControls, .personalSection { padding: 16px; }
+  .personalFilterGrid { grid-template-columns: 1fr; }
+  .personalCallStats, .personalTokenStats, .personalEventDetails { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .personalSectionHeader { align-items: start; }
+  .personalCallStats dd { font-size: 24px; }
+}
+.personalCallStats .personalMetricNote, .personalTokenStats .personalMetricNote { font-size: 11px; font-weight: 400; margin: 0; }
+.personalControls > label { display: inline-grid; gap: 6px; font-size: 12px; min-width: 180px; margin-right: 20px; }
+.personalAdvanced { margin-top: 18px; }
+.personalAdvanced > summary { cursor: pointer; font-size: 13px; padding: 8px 0; }
+.personalNote { margin: 10px 0; }

@@ -49,6 +49,8 @@ export const pathViews: Record<string, View> = {
   "/dashboard/catalog": "catalog",
   "/dashboard/playground": "playground",
   "/dashboard/usage": "usage",
+  "/dashboard/my-usage": "my-usage",
+  "/my-usage": "my-usage",
   "/dashboard/users": "users",
   "/policies": "policies",
   "/playground": "playground",
@@ -62,6 +64,7 @@ export const pathViews: Record<string, View> = {
 
 export const viewPaths: Record<View, string> = {
   home: "/dashboard/home",
+  "my-usage": "/dashboard/my-usage",
   catalog: "/dashboard/catalog",
   playground: "/dashboard/playground",
   policies: "/dashboard/access",
@@ -155,6 +158,7 @@ export const rolePresets = {
 
 export const navItems: Array<{ id: View; label: string; icon: IconComponent; section: "workspace" | "admin" }> = [
   { id: "home", label: "Dashboard", icon: LayoutDashboard, section: "workspace" },
+  { id: "my-usage", label: "My usage", icon: BarChart3, section: "workspace" },
   { id: "catalog", label: "Catalog", icon: Boxes, section: "workspace" },
   { id: "playground", label: "Playground", icon: FlaskConical, section: "workspace" },
   { id: "policies", label: "Access", icon: KeyRound, section: "admin" },

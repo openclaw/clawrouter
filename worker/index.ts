@@ -1,3 +1,5 @@
+import { emptyUsageSnapshot } from "./usage-sharding.ts";
+import { sessionUsageReport } from "./usage-report-session.ts";
 import { consoleAsset } from "./console-assets.ts";
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
 import { withNativeLocalError } from "./native-errors.ts";
@@ -97,6 +99,8 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "POST" && path === "/v1/session/logout") return localLogout(request, env);
   if (request.method === "GET" && path === "/v1/session/avatar") return avatarResponse(request, env);
   if (request.method === "GET" && path === "/v1/entitlements") return entitlementResponse(request, env);
+  if (request.method === "GET" && path === "/v1/session/usage/report") return sessionUsageReport(request, env);
+  if (request.method === "GET" && path === "/v1/session/usage/events") return sessionUsageReport(request, env, true);
   if (request.method === "GET" && path === "/v1/session/usage") return sessionUsage(request, env);
   if (path === "/v1/session/credentials" || path.startsWith("/v1/session/credentials/")) return sessionCredentialsApi(request, env, path);
   if (request.method === "GET" && path === "/v1/me") return meResponse(request, env);
@@ -168,7 +172,9 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const policies = await sessionPolicies(session, env);
-  const usage = await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "principal", id: session.email });
+  const params = new URL(request.url).searchParams;
+  const budgetsOnly = params.getAll("budgets_only").length === 1 && params.get("budgets_only") === "true";
+  const usage = budgetsOnly ? emptyUsageSnapshot("not_requested") : await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "principal", id: session.email });
   const policyRows = await Promise.all(policies.map(async (entry) => ({ policyId: entry.policyId, kid: entry.policyId, tenantId: entry.policy.tenantId ?? "default", enabled: entry.policy.enabled, providers: entry.policy.providers, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", budget: await budgetStatus(env, entry.policyId, entry.policy, budgetPrincipal({ credentialId: null, principalId: session.email, policy: entry.policy })) })));
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }

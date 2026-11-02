@@ -1,0 +1,1389 @@
+{
+  "generatedAt": "2026-11-02T19:06:00.996Z",
+  "sourceHashes": {
+    "worker/ledgers.ts": "3ee2ee42b8c1564445076f7e9c3f53e8ebea5919fb57fc5f612d74fd72dee830",
+    "worker/usage-report.ts": "4e810fbbbe0ddd2750236dcde1d62e01ebb27ddc6b0d6c58bf5e168ca11e51db",
+    "worker/usage-report-store.ts": "2788605db0d88405402803f45c7aedda3a21bd4b3f2cdc1cbd20ca429f9e91c3",
+    "worker/usage-report-range.ts": "bce5f9b9eb6edccad8bd226ceb38493aa605179a28d00fce98be0a055fe362aa",
+    "shared/usage-report.ts": "a27f6fd51b4b6b6e4f0977db9612b53f099ef2e51eb69f9b2c3bb049f95015f3",
+    "scripts/benchmark-personal-usage.mjs": "672a24a96dd9f12c8b1d37723af728849afd1fc71db1b626f871ce03c9c0461a"
+  },
+  "runtime": "v26.12.1",
+  "environment": {
+    "os": "linux",
+    "release": "7.0.0-38-generic",
+    "architecture": "x64",
+    "cpuModel": "AMD EPYC 9555 64-Core Processor",
+    "logicalCpus": 128,
+    "memoryBytes": 201828433920
+  },
+  "transport": "loopback HTTP -> Worker -> four SQLite Durable Objects -> merge -> JSON (synthetic authority; excludes Access verification)",
+  "volume": {
+    "totalEvents": 200000,
+    "eventsPerShard": 50000,
+    "ownerEvents": 40000,
+    "ownerShare": "20% (every fifth event)",
+    "days": 29,
+    "eventPaddingBytes": 1024
+  },
+  "methodology": {
+    "api": "Each query: first request followed by 11 sequential warm requests; timing includes Node fetch, body read and JSON.parse. No artificial delay. Seeded DOs are already resident; first is not disk/process cold.",
+    "backend": "Current production usageSnapshots and personalUsage functions, four SQLite DO shards; seed inserts raw and reporting rows and marks migrations complete. Legacy function is not an archived implementation.",
+    "limits": [
+      "Synthetic owner and policy authority; no Cloudflare Access verification, policy resolution, budget lookup, provider call, network WAN or production storage",
+      "Local workerd co-schedules objects and disables idle eviction; not production Cloudflare topology",
+      "Shared development host, no CPU/network throttling, no performance acceptance target",
+      "Per-call token/cost metadata and provider/model/key distribution are synthetic; no prompt/completion content",
+      "API and browser first samples run after seeding; browser measurements additionally follow API warmup"
+    ]
+  },
+  "results": {
+    "legacy30": {
+      "firstMs": 599.0296639999997,
+      "samplesMs": [
+        412.8500349999995,
+        433.8423909999983,
+        404.0813449999987,
+        402.5023860000001,
+        405.25229299999955,
+        408.62125899999955,
+        404.8645809999998,
+        403.85159099999873,
+        403.61291300000084,
+        404.6344559999998,
+        400.9735010000004
+      ],
+      "medianMs": 404.6344559999998,
+      "p95Ms": 433.8423909999983,
+      "payloadBytes": 172810,
+      "calls": 40000
+    },
+    "report7": {
+      "firstMs": 45.273386000000755,
+      "samplesMs": [
+        34.78653699999995,
+        34.08774900000026,
+        33.79775300000074,
+        34.48625699999866,
+        33.715360000000146,
+        33.59638099999938,
+        35.74578699999984,
+        33.94358199999988,
+        34.091865000000325,
+        33.9802380000001,
+        34.65360800000053
+      ],
+      "medianMs": 34.08774900000026,
+      "p95Ms": 35.74578699999984,
+      "payloadBytes": 14249,
+      "calls": 9656
+    },
+    "report30": {
+      "firstMs": 158.9155609999998,
+      "samplesMs": [
+        158.60911000000124,
+        154.7975699999988,
+        154.3141140000007,
+        152.0331619999979,
+        152.78333699999712,
+        153.99554599999828,
+        158.24395299999742,
+        162.02132199999687,
+        156.0243819999996,
+        157.76469400000133,
+        156.93778200000088
+      ],
+      "medianMs": 156.0243819999996,
+      "p95Ms": 162.02132199999687,
+      "payloadBytes": 33134,
+      "calls": 40000
+    },
+    "filtered7": {
+      "firstMs": 28.14361799999824,
+      "samplesMs": [
+        25.637167000000773,
+        26.32376700000168,
+        26.223445999999967,
+        26.898699999997916,
+        27.194072999998752,
+        26.200101000002178,
+        25.43653600000107,
+        25.647171000000526,
+        25.740710999998555,
+        25.90704099999857,
+        26.92108300000109
+      ],
+      "medianMs": 26.200101000002178,
+      "p95Ms": 27.194072999998752,
+      "payloadBytes": 10477,
+      "calls": 6436
+    },
+    "events25": {
+      "firstMs": 3.6884160000008706,
+      "samplesMs": [
+        2.7135119999984454,
+        2.470737999999983,
+        2.3030569999973522,
+        2.3780990000013844,
+        2.2518290000007255,
+        2.2018849999985832,
+        2.173242000000755,
+        3.869166000000405,
+        2.2391109999989567,
+        2.147652999999991,
+        2.064308000000892
+      ],
+      "medianMs": 2.2518290000007255,
+      "p95Ms": 3.869166000000405,
+      "payloadBytes": 14790,
+      "calls": 25
+    }
+  },
+  "browser": {
+    "chromium": "156.0.8078.4",
+    "baselineCommit": "6fceb88",
+    "assets": {
+      "baseline": [
+        {
+          "path": "/assets/index-DDfx_qo9.js",
+          "bytes": 720475,
+          "sha256": "ec80808450029f5508b344e8c7fb59da546d88b3bf78710d65e3865f00e001f8"
+        },
+        {
+          "path": "/assets/index-De3JfG0c.css",
+          "bytes": 79713,
+          "sha256": "82f535dd3a2b18b92cf57a3abf595fd6a49b96cca939b2697f1846a273038ea2"
+        }
+      ],
+      "candidate": [
+        {
+          "path": "/assets/index-CzlTvyDq.js",
+          "bytes": 743537,
+          "sha256": "202f827e5ee0df7750943c4eb931f81d3b33bc913a41024146421caa5bd0d01d"
+        },
+        {
+          "path": "/assets/index-BMx8LOvS.css",
+          "bytes": 84116,
+          "sha256": "c0aa933a6f82fdcacc8b60f71a37c456f5f8ee35a28bb476eb0c68a8fc8588f3"
+        }
+      ]
+    },
+    "methodology": {
+      "bridge": "Playwright intercepts /v1 metadata only; report/events and non-budgets-only usage perform real Node loopback HTTP to the same seeded workerd. No mock report values/delays. Empty budgets-only metadata bypasses legacy scan only when requested by UI.",
+      "navigation": "8 navigations/frontend, alternating baseline/candidate. First = fresh browser context; warm = 7 reloads. Routing disables browser HTTP cache. Backend already API-warm. Baseline usable = Connected + loaded legacy usage; candidate usable = Connected + personal summary rendered. Both end after two animation frames. Detached requests drain to networkidle outside timing before the next trial; no cross-trial backend overlap. Candidate assets are frozen at browser-run start.",
+      "interaction": "Click/select through report-render-ready plus two animation frames. First/repeated samples remain separate; firstFetchedReport and requests identify frontend cache misses. Refresh clears report cache; matching grouping/filter repeats may hit it. No assertion of process/disk-cold backend. Full My usage separately records report-ready and events-ready.",
+      "auth": "Controlled synthetic authenticated owner metadata; actual Cloudflare Access verification and policy/budget metadata resolution are excluded."
+    },
+    "home": {
+      "baseline": {
+        "firstFreshContextMs": 541.5568189999976,
+        "warm": {
+          "samplesMs": [
+            510.66655900000114,
+            474.51338899999973,
+            601.3127599999971,
+            477.13930099999925,
+            520.3911340000013,
+            481.8912020000025,
+            516.0481760000002
+          ],
+          "medianMs": 510.66655900000114,
+          "p95Ms": 601.3127599999971
+        }
+      },
+      "candidate": {
+        "firstFreshContextMs": 175.75542399999904,
+        "warm": {
+          "samplesMs": [
+            115.45507500000167,
+            112.52947499999937,
+            109.78017800000089,
+            139.1878629999992,
+            116.48441000000093,
+            116.06585099999938,
+            196.61675200000172
+          ],
+          "medianMs": 116.06585099999938,
+          "p95Ms": 196.61675200000172
+        }
+      }
+    },
+    "navigationSamples": [
+      {
+        "variant": "baseline",
+        "sample": 0,
+        "navigationMs": 541.5568189999976,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 0,
+        "navigationMs": 175.75542399999904,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 1,
+        "navigationMs": 115.45507500000167,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 1,
+        "navigationMs": 510.66655900000114,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 2,
+        "navigationMs": 474.51338899999973,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 2,
+        "navigationMs": 112.52947499999937,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 3,
+        "navigationMs": 109.78017800000089,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 3,
+        "navigationMs": 601.3127599999971,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 4,
+        "navigationMs": 477.13930099999925,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 4,
+        "navigationMs": 139.1878629999992,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 5,
+        "navigationMs": 116.48441000000093,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 5,
+        "navigationMs": 520.3911340000013,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 6,
+        "navigationMs": 481.8912020000025,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 6,
+        "navigationMs": 116.06585099999938,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "candidate",
+        "sample": 7,
+        "navigationMs": 196.61675200000172,
+        "domNodes": 280,
+        "requests": {
+          "reports": 1,
+          "events": 0,
+          "budgetOnly": 1,
+          "legacyScans": 0
+        }
+      },
+      {
+        "variant": "baseline",
+        "sample": 7,
+        "navigationMs": 516.0481760000002,
+        "domNodes": 400,
+        "requests": {
+          "reports": 0,
+          "events": 0,
+          "budgetOnly": 0,
+          "legacyScans": 1
+        }
+      }
+    ],
+    "openMyUsage": {
+      "reportReady": {
+        "firstMs": 93.4230490000009,
+        "warm": {
+          "samplesMs": [
+            119.0575319999989,
+            95.89299699999901,
+            91.22341900000174,
+            101.43437199999971,
+            102.58760400000028
+          ],
+          "medianMs": 101.43437199999971,
+          "p95Ms": 119.0575319999989
+        }
+      },
+      "eventsReady": {
+        "firstMs": 125.3837960000019,
+        "warm": {
+          "samplesMs": [
+            150.55235899999752,
+            127.48296699999992,
+            123.31941799999913,
+            133.52365199999986,
+            135.26104000000123
+          ],
+          "medianMs": 133.52365199999986,
+          "p95Ms": 150.55235899999752
+        }
+      }
+    },
+    "directMyUsage": {
+      "reportReady": {
+        "firstFreshContextMs": 174.70071100000132,
+        "warmReloads": {
+          "samplesMs": [
+            157.47746200000256,
+            166.7409650000045,
+            214.6659110000037,
+            269.81896499999857,
+            216.58426999999938
+          ],
+          "medianMs": 214.6659110000037,
+          "p95Ms": 269.81896499999857
+        }
+      },
+      "eventsReady": {
+        "firstFreshContextMs": 206.58973999999944,
+        "warmReloads": {
+          "samplesMs": [
+            190.10587099999975,
+            199.53824700000405,
+            247.07468000000517,
+            301.37230999999883,
+            248.32101999999577
+          ],
+          "medianMs": 247.07468000000517,
+          "p95Ms": 301.37230999999883
+        }
+      }
+    },
+    "interactions": {
+      "group-provider": {
+        "firstMs": 105.05816100000084,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            127.38658199999918,
+            95.99816400000418,
+            96.38413299999957,
+            96.07357700000284,
+            80.82509199999913
+          ],
+          "medianMs": 96.07357700000284,
+          "p95Ms": 127.38658199999918
+        },
+        "samples": [
+          {
+            "ms": 105.05816100000084,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 127.38658199999918,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 95.99816400000418,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 96.38413299999957,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 96.07357700000284,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 80.82509199999913,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "group-key": {
+        "firstMs": 127.77698800000508,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            112.12798099999782,
+            95.77090399999724,
+            112.02799099999538,
+            95.6132460000008,
+            95.89875499999471
+          ],
+          "medianMs": 95.89875499999471,
+          "p95Ms": 112.12798099999782
+        },
+        "samples": [
+          {
+            "ms": 127.77698800000508,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 112.12798099999782,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 95.77090399999724,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 112.02799099999538,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 95.6132460000008,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 95.89875499999471,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "group-model": {
+        "firstMs": 48.62577799999417,
+        "firstFetchedReport": false,
+        "repeated": {
+          "samplesMs": [
+            47.922301999999036,
+            64.37786800000322,
+            64.01036699999531,
+            48.83241799999814,
+            63.85161899999366
+          ],
+          "medianMs": 63.85161899999366,
+          "p95Ms": 64.37786800000322
+        },
+        "samples": [
+          {
+            "ms": 48.62577799999417,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 47.922301999999036,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 64.37786800000322,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 64.01036699999531,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 48.83241799999814,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 63.85161899999366,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "filter-model": {
+        "firstMs": 79.79578700000275,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            80.03109100000438,
+            111.43455099999846,
+            112.85729599999468,
+            111.38543699999718,
+            95.37173400000029
+          ],
+          "medianMs": 111.38543699999718,
+          "p95Ms": 112.85729599999468
+        },
+        "samples": [
+          {
+            "ms": 79.79578700000275,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 80.03109100000438,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.43455099999846,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 112.85729599999468,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.38543699999718,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 95.37173400000029,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "clear-model-filter": {
+        "firstMs": 95.50839899999846,
+        "firstFetchedReport": false,
+        "repeated": {
+          "samplesMs": [
+            77.34630100000504,
+            94.07420699999784,
+            92.49625799999922,
+            93.14331999999558,
+            78.44133499999589
+          ],
+          "medianMs": 92.49625799999922,
+          "p95Ms": 94.07420699999784
+        },
+        "samples": [
+          {
+            "ms": 95.50839899999846,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 77.34630100000504,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 94.07420699999784,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 92.49625799999922,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 93.14331999999558,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 78.44133499999589,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "filter-provider": {
+        "firstMs": 99.15742600000522,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            111.99177700000291,
+            124.24718099999882,
+            128.00971699999354,
+            160.4584460000042,
+            111.6967650000006
+          ],
+          "medianMs": 124.24718099999882,
+          "p95Ms": 160.4584460000042
+        },
+        "samples": [
+          {
+            "ms": 99.15742600000522,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.99177700000291,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 124.24718099999882,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 128.00971699999354,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 160.4584460000042,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.6967650000006,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "clear-provider-filter": {
+        "firstMs": 89.85076800000388,
+        "firstFetchedReport": false,
+        "repeated": {
+          "samplesMs": [
+            108.73648200000025,
+            109.7197279999964,
+            109.45219599999837,
+            108.93924599999445,
+            77.79528500000015
+          ],
+          "medianMs": 108.93924599999445,
+          "p95Ms": 109.7197279999964
+        },
+        "samples": [
+          {
+            "ms": 89.85076800000388,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 108.73648200000025,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 109.7197279999964,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 109.45219599999837,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 108.93924599999445,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 77.79528500000015,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "filter-key": {
+        "firstMs": 96.51072299999942,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            126.816777,
+            112.0094140000001,
+            128.18038299999898,
+            100.60853299999872,
+            80.43249300000025
+          ],
+          "medianMs": 112.0094140000001,
+          "p95Ms": 128.18038299999898
+        },
+        "samples": [
+          {
+            "ms": 96.51072299999942,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 126.816777,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 112.0094140000001,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 128.18038299999898,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 100.60853299999872,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 80.43249300000025,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "clear-key-filter": {
+        "firstMs": 94.3431000000055,
+        "firstFetchedReport": false,
+        "repeated": {
+          "samplesMs": [
+            109.8716659999991,
+            109.18057899999985,
+            125.21191800000088,
+            109.98583700000017,
+            92.3258119999955
+          ],
+          "medianMs": 109.8716659999991,
+          "p95Ms": 125.21191800000088
+        },
+        "samples": [
+          {
+            "ms": 94.3431000000055,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 109.8716659999991,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 109.18057899999985,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 125.21191800000088,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 109.98583700000017,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 92.3258119999955,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "refresh-model-report": {
+        "firstMs": 160.17179600000236,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            111.1794779999982,
+            127.83568599999853,
+            127.48931599999923,
+            111.24883200000477,
+            111.8861590000015
+          ],
+          "medianMs": 111.8861590000015,
+          "p95Ms": 127.83568599999853
+        },
+        "samples": [
+          {
+            "ms": 160.17179600000236,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.1794779999982,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 127.83568599999853,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 127.48931599999923,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.24883200000477,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.8861590000015,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "range-30d": {
+        "firstMs": 304.5877659999969,
+        "firstFetchedReport": true,
+        "repeated": {
+          "samplesMs": [
+            96.37681199999497,
+            111.92966399999568,
+            96.09443900000042,
+            128.17718800000148,
+            127.46797399999923
+          ],
+          "medianMs": 111.92966399999568,
+          "p95Ms": 128.17718800000148
+        },
+        "samples": [
+          {
+            "ms": 304.5877659999969,
+            "requests": {
+              "reports": 1,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 96.37681199999497,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.92966399999568,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 96.09443900000042,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 128.17718800000148,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 127.46797399999923,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      },
+      "range-7d": {
+        "firstMs": 95.22464300000138,
+        "firstFetchedReport": false,
+        "repeated": {
+          "samplesMs": [
+            96.3818289999981,
+            96.13528999999835,
+            111.57264800000121,
+            127.8830569999991,
+            80.25011000000086
+          ],
+          "medianMs": 96.3818289999981,
+          "p95Ms": 127.8830569999991
+        },
+        "samples": [
+          {
+            "ms": 95.22464300000138,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 96.3818289999981,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 96.13528999999835,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 111.57264800000121,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 127.8830569999991,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 80.25011000000086,
+            "requests": {
+              "reports": 0,
+              "events": 1,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          }
+        ]
+      }
+    },
+    "screenshots": [
+      {
+        "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/baseline-home-desktop.png",
+        "bytes": 158598,
+        "viewport": {
+          "width": 1440,
+          "height": 1000
+        },
+        "metadataOnly": true
+      },
+      {
+        "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/candidate-home-desktop.png",
+        "bytes": 177288,
+        "viewport": {
+          "width": 1440,
+          "height": 1000
+        },
+        "metadataOnly": true
+      },
+      {
+        "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/candidate-my-usage-desktop.png",
+        "bytes": 697263,
+        "viewport": {
+          "width": 1440,
+          "height": 1000
+        },
+        "metadataOnly": true
+      },
+      {
+        "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/candidate-my-usage-mobile.png",
+        "bytes": 447381,
+        "viewport": {
+          "width": 393,
+          "height": 851
+        },
+        "metadataOnly": true
+      }
+    ],
+    "mobileOverflow": {
+      "scrollWidth": 393,
+      "viewportWidth": 393
+    },
+    "errors": [],
+    "requestCounts": {
+      "baseline": {
+        "reports": 0,
+        "events": 0,
+        "budgetOnly": 0,
+        "legacyScans": 8
+      },
+      "candidate": {
+        "reports": 45,
+        "events": 96,
+        "budgetOnly": 8,
+        "legacyScans": 0
+      },
+      "candidate-direct": {
+        "reports": 6,
+        "events": 6,
+        "budgetOnly": 6,
+        "legacyScans": 0
+      },
+      "candidate-mobile": {
+        "reports": 1,
+        "events": 1,
+        "budgetOnly": 1,
+        "legacyScans": 0
+      }
+    }
+  }
+}

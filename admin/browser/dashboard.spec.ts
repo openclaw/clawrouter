@@ -35,15 +35,16 @@ test("real demo shows the bundled provider inventory and remains WCAG AA clean",
     .toEqual(snapshot.providers.map((provider) => provider.display_name).sort());
 });
 
-test("dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
+test("admin dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
   const summary = { requestCount: 2, successCount: 2, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 2 };
   const provider = { ...summary, provider: "openai" };
   const responses: Record<string, unknown> = {
+    ...fusionFixture().responses,
     "/v1/providers": { providers: [] },
     "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
     "/v1/session/credentials": { credentials: [] },
-    "/v1/session/usage": { policies: [], usage: { ledger: "ready", summary, providers: [provider], daily: [], events: [] } },
+    "/v1/admin/usage": { policies: [], usage: { ledger: "ready", summary, providers: [provider], daily: [], events: [] } },
   };
   await page.route("**/v1/**", async (route) => {
     const body = responses[new URL(route.request().url()).pathname];
@@ -345,3 +346,13 @@ async function expectA11yClean(page: Page) {
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
   expect(results.violations).toEqual([]);
 }
+
+
+test("administrators open personal usage from Usage without changing the overview shell", async ({ page }) => {
+  await openDemo(page);
+  await expect(page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "My usage", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Usage", exact: true }).click();
+  await page.getByRole("button", { name: "My usage", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "My usage", exact: true })).toBeVisible();
+  await expect(page.getByText("Personal reporting is not connected in local demo mode. No live usage is shown.")).toBeVisible();
+});

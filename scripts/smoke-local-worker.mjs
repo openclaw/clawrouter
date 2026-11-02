@@ -786,7 +786,9 @@ try {
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(attributedEvent), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const { request_format: reportedFormat, ...attributedMetadata } = attributedEvent;
+  assert.equal(reportedFormat, "openai.chat_completions");
+  assert.doesNotMatch(JSON.stringify(attributedMetadata), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
   const invalidTrace = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -824,7 +826,9 @@ try {
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(invalidTraceEvent), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const { request_format: invalidTraceFormat, ...invalidTraceMetadata } = invalidTraceEvent;
+  assert.equal(invalidTraceFormat, "openai.chat_completions");
+  assert.doesNotMatch(JSON.stringify(invalidTraceMetadata), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
   for (const [tokenRef, credential] of [["no-fail-a", "no-fail-primary"], ["no-fail-b", "no-fail-backup"]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/no_failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
     assert.equal(stored.status, 200);
