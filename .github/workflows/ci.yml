@@ -230,6 +230,14 @@ jobs:
             process.exitCode = 1;
           }
           NODE
+      # Native personal-usage upgrade/rollback tests run the released baseline
+      # and fail (not skip) in CI when it is missing.
+      - name: Fetch personal-usage baseline
+        run: |
+          baseline="$(sed -n 's/^export const personalUsageBaseline = "\([0-9a-f]\{40\}\)";$/\1/p' test/helpers/personal-usage-upgrade.mjs)"
+          test -n "$baseline"
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git cat-file -e "$baseline^{commit}"
       - run: pnpm worker:check
       - run: pnpm worker:e2e
       - run: pnpm provider:smoke-plan
