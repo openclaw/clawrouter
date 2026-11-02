@@ -1,4 +1,4 @@
-import { ensureUsageReportSchema, insertUsageReportEvent, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
+import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
 import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
@@ -202,7 +202,7 @@ export class UsageLedgerObject implements DurableObject {
     if (first(this.sql.exec("SELECT id FROM usage_events WHERE id = ?", event.id))) return { eventId: event.id, outcome: "duplicate" };
     if (event.occurred_at_ms < cutoff) return { eventId: event.id, outcome: "expired_by_retention" };
     event.policy_id ||= event.key_id;
-    this.state.storage.transactionSync(() => {
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
       const inserted = first<{ id: string }>(this.sql.exec(
         "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, grant_key, grant_lane, principal_id, principal_key, credential_id, cost_basis, principal_nontext) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
         event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
@@ -211,7 +211,7 @@ export class UsageLedgerObject implements DurableObject {
       ));
       if (inserted?.id !== event.id) throw new Error("usage ledger did not confirm insertion");
       if (!insertUsageReportEvent(this.sql, event)) throw new Error("usage ledger did not confirm reporting projection");
-    });
+    }));
     return { eventId: event.id, outcome: "stored" };
   }
 
@@ -322,8 +322,10 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   private cleanup(cutoff = Date.now() - usageRetentionMs): void {
-    this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff);
-    this.sql.exec("DELETE FROM usage_report_events WHERE occurred_at_ms < ?", cutoff);
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
+      this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff);
+      this.sql.exec("DELETE FROM usage_report_events WHERE occurred_at_ms < ?", cutoff);
+    }));
   }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
@@ -340,7 +342,7 @@ export class UsageLedgerObject implements DurableObject {
         this.sql.exec("INSERT INTO usage_attribution_migration (id, last_rowid, upper_rowid, complete) SELECT 1, 0, COALESCE(MAX(rowid), 0), CASE WHEN MAX(rowid) IS NULL THEN 1 ELSE 0 END FROM usage_events");
       }
     });
-    ensureUsageReportSchema(this.sql);
+    this.state.storage.transactionSync(() => ensureUsageReportSchema(this.sql));
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");

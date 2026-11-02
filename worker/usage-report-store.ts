@@ -43,6 +43,23 @@ export function ensureUsageReportSchema(sql: ReportSql): void {
   // No historical projection here or in alarms/reads. Empty shards have no history to recover;
   // preexisting ledger history uses bounded read-through until explicit operator apply.
   if (![...sql.exec("SELECT id FROM usage_report_migration WHERE id = 1")].length) sql.exec("INSERT INTO usage_report_migration SELECT 1, 0, COALESCE(MAX(rowid), 0), CASE WHEN COALESCE(MAX(rowid), 0) = 0 THEN 1 ELSE 0 END FROM usage_events");
+  // Persistent across old-writer rollback. A saved complete marker predating these
+  // triggers proves nothing: only a truly empty canonical AND projection starts trusted.
+  // Never derive coverage from MAX(rowid)/counts: retention permits rowid reuse.
+  sql.exec("CREATE TABLE IF NOT EXISTS usage_report_coverage (id INTEGER PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL CHECK (generation BETWEEN 0 AND 9007199254740991), verified_generation INTEGER NOT NULL, round_generation INTEGER NOT NULL)");
+  sql.exec("INSERT OR IGNORE INTO usage_report_coverage SELECT 1, 0, CASE WHEN NOT EXISTS (SELECT 1 FROM usage_events LIMIT 1) AND NOT EXISTS (SELECT 1 FROM usage_report_events LIMIT 1) THEN 0 ELSE -1 END, -1");
+  sql.exec("CREATE TRIGGER IF NOT EXISTS usage_report_canonical_insert AFTER INSERT ON usage_events BEGIN UPDATE usage_report_coverage SET generation = generation + 1 WHERE id = 1; END");
+  sql.exec("CREATE TRIGGER IF NOT EXISTS usage_report_canonical_delete AFTER DELETE ON usage_events BEGIN DELETE FROM usage_report_events WHERE id = OLD.id; UPDATE usage_report_coverage SET generation = generation + 1 WHERE id = 1; END");
+  sql.exec("CREATE TRIGGER IF NOT EXISTS usage_report_canonical_update AFTER UPDATE ON usage_events BEGIN DELETE FROM usage_report_events WHERE id = OLD.id; UPDATE usage_report_coverage SET generation = generation + 1 WHERE id = 1; END");
+}
+/** Must run INSIDE the caller's synchronous transaction, around paired canonical /
+ * projection writes only. Advance acknowledgements only if already current; a
+ * new successful ingest/retention pass must never erase an older writer's gap.
+ * No persistent bypass flag: crashes roll back both writes and acknowledgements. */
+export function withUsageReportPair(sql: ReportSql, write: () => void): void {
+  const generation = Number([...sql.exec("SELECT generation FROM usage_report_coverage WHERE id = 1")][0].generation);
+  write();
+  sql.exec("UPDATE usage_report_coverage SET verified_generation = CASE WHEN verified_generation = ? THEN generation ELSE verified_generation END, round_generation = CASE WHEN round_generation = ? THEN generation ELSE round_generation END WHERE id = 1", generation, generation);
 }
 export function insertUsageReportEvent(sql: ReportSql, event: UsageEvent): boolean {
   const detail = projectUsageEvent(event);
@@ -52,7 +69,7 @@ export function insertUsageReportEvent(sql: ReportSql, event: UsageEvent): boole
   return inserted[0]?.id === event.id;
 }
 /** Projection progress is not retained-history coverage. No read mutates either watermark. */
-export function usageReportProjectionComplete(sql: ReportSql): boolean { return [...sql.exec("SELECT complete FROM usage_report_migration WHERE id = 1")][0]?.complete === 1; }
+export function usageReportProjectionComplete(sql: ReportSql): boolean { return [...sql.exec("SELECT migration.complete FROM usage_report_migration AS migration JOIN usage_report_coverage AS coverage ON coverage.id = migration.id WHERE migration.id = 1 AND coverage.verified_generation = coverage.generation")][0]?.complete === 1; }
 export function usageReportHistoryComplete(sql: ReportSql): boolean { return reportHistory(sql).historyComplete; }
 function reportHistory(sql: ReportSql) {
   const projectionComplete = usageReportProjectionComplete(sql);
@@ -62,38 +79,57 @@ function reportHistory(sql: ReportSql) {
 export interface UsageReportMigrationEffect { lane: UsageCostLane; costClass: UsageCostClass; calls: number; proposedReportingMicros: number | null; recordedChargeMicros: number }
 export interface UsageReportMigrationOptions { apply?: boolean; batchSize?: number; now?: number; afterRowid?: number }
 /** Internal/offline only. Default dry-run does not initialize or update any schema/state.
- * Apply writes reporting tables only, atomically advancing its fixed historical watermark. */
+ * A round pins both an upper rowid and a coverage generation. Unpaired changes
+ * restart at zero with a fresh bound (including reused rowids below the cursor).
+ * Paired current-writer inserts do not widen or restart an interrupted round.
+ * Apply reads/writes in one transaction; it never mutates canonical history. */
 export function migrateUsageReport(sql: ReportSql, transaction: (fn: () => void) => void, options: UsageReportMigrationOptions = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options) || options.apply !== undefined && typeof options.apply !== "boolean") throw new Error("apply must be an explicit boolean");
   if (options.now !== undefined && (!Number.isSafeInteger(options.now) || options.now < 0)) throw new Error("invalid migration time");
   if (options.apply && options.afterRowid !== undefined) throw new Error("apply resumes its persisted watermark");
-  const batchSize = options.batchSize ?? 500;
+  const batchSize = options.batchSize ?? 500, cutoff = (options.now ?? Date.now()) - reportRetentionMs;
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 2000) throw new Error("batchSize must be 1..2000");
-  const exists = [...sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_report_migration'")].length > 0;
-  const saved = exists ? [...sql.exec("SELECT last_rowid, upper_rowid, complete FROM usage_report_migration WHERE id = 1")][0] : undefined;
-  const upper = Number(saved?.upper_rowid ?? [...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS upper_rowid FROM usage_events")][0].upper_rowid);
-  const last = Number(options.apply ? saved?.last_rowid ?? 0 : options.afterRowid ?? saved?.last_rowid ?? 0);
-  if (!Number.isSafeInteger(last) || last < 0 || last > upper) throw new Error("invalid migration watermark");
-  const batch = [...sql.exec("SELECT rowid, occurred_at_ms, event_json FROM usage_events WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?", last, upper, batchSize)];
-  const next = Number(batch.at(-1)?.rowid ?? upper), complete = batch.length < batchSize || next === upper;
-  const projected = batch.filter(row => Number(row.occurred_at_ms) >= (options.now ?? Date.now()) - reportRetentionMs).map(row => { const event = JSON.parse(String(row.event_json)) as UsageEvent; projectUsageEvent(event); return event; });
-  const effects = new Map<string, UsageReportMigrationEffect>();
-  for (const event of projected) {
-    const detail = projectUsageEvent(event), key = detail.lane + ":" + detail.costClass;
-    const effect = effects.get(key) ?? { lane: detail.lane, costClass: detail.costClass, calls: 0, proposedReportingMicros: detail.reportingCostMicros === null ? null : 0, recordedChargeMicros: 0 };
-    effect.calls++; effect.recordedChargeMicros += detail.recordedChargeMicros;
-    if (effect.proposedReportingMicros !== null) effect.proposedReportingMicros += detail.reportingCostMicros ?? 0;
-    if (!Number.isSafeInteger(effect.recordedChargeMicros) || effect.proposedReportingMicros !== null && !Number.isSafeInteger(effect.proposedReportingMicros)) throw new Error("migration effect exceeds exact numeric bounds");
-    effects.set(key, effect);
-  }
-  if (options.apply) transaction(() => {
-    ensureUsageReportSchema(sql);
+  const run = () => {
+    if (options.apply) ensureUsageReportSchema(sql);
+    const tables = new Set([...sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('usage_report_migration', 'usage_report_coverage', 'usage_report_events')")].map(row => row.name));
+    const saved = tables.has("usage_report_migration") ? [...sql.exec("SELECT last_rowid, upper_rowid, complete FROM usage_report_migration WHERE id = 1")][0] : undefined;
+    const coverage = tables.has("usage_report_coverage") ? [...sql.exec("SELECT generation, verified_generation, round_generation FROM usage_report_coverage WHERE id = 1")][0] : undefined;
+    const previouslyComplete = saved?.complete === 1 && coverage !== undefined && coverage.verified_generation === coverage.generation;
+    const freshRound = !previouslyComplete && (!coverage || coverage.round_generation !== coverage.generation);
+    const upper = Number(freshRound || !saved ? [...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS upper_rowid FROM usage_events")][0].upper_rowid : saved.upper_rowid);
+    const last = Number(options.afterRowid ?? (freshRound ? 0 : saved?.last_rowid ?? 0));
+    if (!Number.isSafeInteger(last) || last < 0 || last > upper || !Number.isSafeInteger(upper)) throw new Error("invalid migration watermark");
+    const batch = previouslyComplete && options.afterRowid === undefined ? [] : [...sql.exec("SELECT rowid, id, occurred_at_ms, event_json FROM usage_events WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?", last, upper, batchSize)];
+    const next = Number(batch.at(-1)?.rowid ?? upper), scanned = batch.length < batchSize || next === upper;
+    const projected = batch.filter(row => Number(row.occurred_at_ms) >= cutoff).map(row => { const event = JSON.parse(String(row.event_json)) as UsageEvent; projectUsageEvent(event); return event; });
+    // Explicit migration only: prune pre-trigger orphan/expired metadata, at most
+    // one batch of deletes. Never perform this anti-join on a reporting read.
+    const obsolete = !previouslyComplete && scanned && tables.has("usage_report_events") ? [...sql.exec("SELECT report.id FROM usage_report_events AS report LEFT JOIN usage_events AS ledger ON ledger.id = report.id WHERE ledger.id IS NULL OR report.occurred_at_ms < ? ORDER BY report.id LIMIT ?", cutoff, batchSize)] : [];
+    const complete = scanned && obsolete.length < batchSize;
+    const effects = new Map<string, UsageReportMigrationEffect>();
     for (const event of projected) {
-      if (!insertUsageReportEvent(sql, event) && ![...sql.exec("SELECT id FROM usage_report_events WHERE id = ?", event.id)].length) throw new Error("reporting migration did not confirm projection");
+      const detail = projectUsageEvent(event), key = detail.lane + ":" + detail.costClass;
+      const effect = effects.get(key) ?? { lane: detail.lane, costClass: detail.costClass, calls: 0, proposedReportingMicros: detail.reportingCostMicros === null ? null : 0, recordedChargeMicros: 0 };
+      effect.calls++; effect.recordedChargeMicros += detail.recordedChargeMicros;
+      if (effect.proposedReportingMicros !== null) effect.proposedReportingMicros += detail.reportingCostMicros ?? 0;
+      if (!Number.isSafeInteger(effect.recordedChargeMicros) || effect.proposedReportingMicros !== null && !Number.isSafeInteger(effect.proposedReportingMicros)) throw new Error("migration effect exceeds exact numeric bounds");
+      effects.set(key, effect);
     }
-    sql.exec("UPDATE usage_report_migration SET last_rowid = ?, complete = ? WHERE id = 1", next, complete ? 1 : 0);
-  });
-  return { dryRun: !options.apply, examined: batch.length, projected: projected.length, lastRowid: next, upperRowid: upper, complete, previouslyComplete: saved?.complete === 1, effects: [...effects.values()].sort((a, b) => a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.costClass < b.costClass ? -1 : a.costClass > b.costClass ? 1 : 0) };
+    if (options.apply) {
+      // Refresh, not INSERT OR IGNORE over unverified pre-trigger metadata. Also
+      // remove projections for expired canonical rows without parsing their JSON.
+      for (const row of obsolete) sql.exec("DELETE FROM usage_report_events WHERE id = ?", String(row.id));
+      for (const row of batch) sql.exec("DELETE FROM usage_report_events WHERE id = ?", String(row.id));
+      for (const event of projected) if (!insertUsageReportEvent(sql, event)) throw new Error("reporting migration did not confirm projection");
+      sql.exec("UPDATE usage_report_migration SET last_rowid = ?, upper_rowid = ?, complete = ? WHERE id = 1", next, upper, complete ? 1 : 0);
+      sql.exec("UPDATE usage_report_coverage SET round_generation = generation, verified_generation = CASE WHEN ? = 1 THEN generation ELSE verified_generation END WHERE id = 1", complete ? 1 : 0);
+    }
+    return { dryRun: !options.apply, examined: batch.length, projected: projected.length, lastRowid: next, upperRowid: upper, complete, previouslyComplete, effects: [...effects.values()].sort((a, b) => a.lane < b.lane ? -1 : a.lane > b.lane ? 1 : a.costClass < b.costClass ? -1 : a.costClass > b.costClass ? 1 : 0) };
+  };
+  if (!options.apply) return run();
+  let result: ReturnType<typeof run> | undefined;
+  transaction(() => { result = run(); });
+  return result!;
 }
 
 const metricExpressions: Record<keyof UsageMetrics, string> = {

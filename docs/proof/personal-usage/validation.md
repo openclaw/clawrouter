@@ -2,7 +2,11 @@
 
 Review base: **6fceb88d4d165ba66281c931b74c3047772a2ef5**. This focused follow-up descends from **af23e0bb9f55810bb85a3ca7cc8777ae5f0b278a**. The final head is supplied by the committed bundle receipt, not guessed here. No package/lock/provider snapshot or production Worker/accounting changes in this follow-up.
 
-## Latest fully expired custom-range follow-up
+## Latest rollback/re-upgrade follow-up
+
+See [rollback-remediation.md](rollback-remediation.md) and [rollback-reupgrade.json](rollback-reupgrade.json):110affected usage tests and Worker TypeScript passed. Persisted empty/completed projections cover old3cb omission, original6f ingestion and repaired read-through/explicit repair, including a second future rollback. No broad unrelated suite, screenshots or AutoReview was rerun. Existing navigation/cost proof remains accepted at its **3cb source point**; its hashes are verified against3cb, not falsely claimed to cover later store changes. Source correctness review of the new head is the publication hold; qualified non-green baseline limitations stay disclosed, not repaired here.
+
+## Prior fully expired custom-range follow-up
 
 See [expired-custom-remediation.md](expired-custom-remediation.md) and [navigation-runtime.json](navigation-runtime.json). Current affected checks:29hook/275admin unit/16focused browser cases passed, plus admin check/build. The previous broad Worker/browser results below belong to the bbf qualification and were accepted without a repeat. The small new runtime trace executes shipped report/events routes and distinguishes a synthetic post-response delivery fault from native status. Original6f controls confirm CLI/WebSocket failures, while the JSON body-reuse case remains unclassified; do not interpret the prior af23 controls as a full-PR baseline waiver.
 
