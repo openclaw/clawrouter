@@ -2,6 +2,8 @@ import type { PersonalUsageEvent, UsageCostClass, UsageCostLane, UsageGroupBy, U
 import type { UsageEvent } from "./types.ts";
 import { normalizeEmail } from "./utils.ts";
 import { reportRetentionMs } from "./usage-report-range.ts";
+import { reportingCost, knownBasisClasses } from "./usage-report-cost.ts";
+export { reportingCost } from "./usage-report-cost.ts";
 
 export interface ReportSql { exec(query: string, ...bindings: Array<string | number | null>): Iterable<Record<string, unknown>> }
 export interface UsageReportQuery { principal: string; tenantId: string; policyId: string; range: UsageReportRange; groupBy: UsageGroupBy; filters: Partial<Record<"model" | "provider" | "key" | "status" | "costClass" | "lane", string>> }
@@ -13,25 +15,6 @@ const subsetCounter = (v: unknown, inclusive: number | null): number | null => {
   return value !== null && inclusive !== null && value <= inclusive ? value : null;
 };
 
-/** Evidence classification only: never recompute prices, charges, or reservation settlement. */
-export function reportingCost(event: UsageEvent): { lane: UsageCostLane; costClass: UsageCostClass; amount: number | null } {
-  const lane: UsageCostLane = event.grant_lane === "subscription" ? "subscription" : event.grant_lane === "api_key" || event.grant_lane === "environment" ? "api" : "unattributed";
-  const basis = event.cost_basis;
-  let costClass: UsageCostClass = basis === "none" ? "no_charge" : basis === "policy_fixed" ? "fixed"
-    : basis === "request_character_estimate" || basis === "manifest_reservation" ? "estimated"
-    : basis === "manifest_rate_upper_bound" || basis === "realtime_full_context_bound" ? "upper_bound"
-    : basis === "manifest_pricing" || basis === "realtime_modality_usage" || basis === "realtime_input_transcription_usage" ? "calculated" : basis === "partial" || basis === "partial_usage" ? "partial" : "unknown";
-  let amount = counter(event.actual_cost_micros);
-  // Contradictory evidence is not a no-charge assertion; unknown recorded debits remain separately visible.
-  if (amount === null || costClass === "no_charge" && amount !== 0) costClass = "unknown";
-  if (costClass === "unknown" && typeof basis === "string" && basis.startsWith("unpriced_") && amount !== null && amount > 0) costClass = "partial";
-  if (costClass === "unknown") {
-    const estimate = counter(event.reporting_estimated_cost_micros);
-    if (amount === 0 && estimate !== null && typeof event.reporting_estimate_reason === "string" && event.reporting_estimate_reason.length > 0) { costClass = "estimated"; amount = estimate; }
-    else amount = null;
-  }
-  return { lane, costClass, amount };
-}
 export function projectUsageEvent(event: UsageEvent): PersonalUsageEvent {
   const cost = reportingCost(event);
   const inputTokens = counter(event.input_tokens), outputTokens = counter(event.output_tokens);
@@ -58,7 +41,7 @@ export function ensureUsageReportSchema(sql: ReportSql): void {
   sql.exec("CREATE INDEX IF NOT EXISTS usage_report_retention ON usage_report_events (occurred_at_ms)");
   sql.exec("CREATE TABLE IF NOT EXISTS usage_report_migration (id INTEGER PRIMARY KEY CHECK (id = 1), last_rowid INTEGER NOT NULL, upper_rowid INTEGER NOT NULL, complete INTEGER NOT NULL)");
   // No historical projection here or in alarms/reads. Empty shards have no history to recover;
-  // any preexisting ledger history stays pending until explicit operator apply.
+  // preexisting ledger history uses bounded read-through until explicit operator apply.
   if (![...sql.exec("SELECT id FROM usage_report_migration WHERE id = 1")].length) sql.exec("INSERT INTO usage_report_migration SELECT 1, 0, COALESCE(MAX(rowid), 0), CASE WHEN COALESCE(MAX(rowid), 0) = 0 THEN 1 ELSE 0 END FROM usage_events");
 }
 export function insertUsageReportEvent(sql: ReportSql, event: UsageEvent): boolean {
@@ -68,7 +51,14 @@ export function insertUsageReportEvent(sql: ReportSql, event: UsageEvent): boole
     detail.inputTokens, detail.outputTokens, detail.cachedInputTokens, detail.cacheWriteInputTokens, detail.reasoningOutputTokens, detail.lane, detail.costClass, detail.reportingCostMicros, JSON.stringify(detail))];
   return inserted[0]?.id === event.id;
 }
-export function usageReportHistoryComplete(sql: ReportSql): boolean { return [...sql.exec("SELECT complete FROM usage_report_migration WHERE id = 1")][0]?.complete === 1; }
+/** Projection progress is not retained-history coverage. No read mutates either watermark. */
+export function usageReportProjectionComplete(sql: ReportSql): boolean { return [...sql.exec("SELECT complete FROM usage_report_migration WHERE id = 1")][0]?.complete === 1; }
+export function usageReportHistoryComplete(sql: ReportSql): boolean { return reportHistory(sql).historyComplete; }
+function reportHistory(sql: ReportSql) {
+  const projectionComplete = usageReportProjectionComplete(sql);
+  const historyComplete = projectionComplete || [...sql.exec("SELECT complete FROM usage_attribution_migration WHERE id = 1")][0]?.complete === 1;
+  return { projectionComplete, historyComplete, historySource: projectionComplete ? "projection" as const : "retained_ledger" as const };
+}
 export interface UsageReportMigrationEffect { lane: UsageCostLane; costClass: UsageCostClass; calls: number; proposedReportingMicros: number | null; recordedChargeMicros: number }
 export interface UsageReportMigrationOptions { apply?: boolean; batchSize?: number; now?: number; afterRowid?: number }
 /** Internal/offline only. Default dry-run does not initialize or update any schema/state.
@@ -116,6 +106,7 @@ export const usageMetricKeys = Object.keys(metricExpressions) as Array<keyof Usa
 export function emptyUsageMetrics(): UsageMetrics { return Object.fromEntries(usageMetricKeys.map(key => [key, 0])) as unknown as UsageMetrics; }
 const metricSql = Object.entries(metricExpressions).map(([key, expr]) => 'COALESCE(' + expr + ', 0) AS "' + key + '"').join(", ");
 export function reportWhere(query: UsageReportQuery) {
+  if (!Number.isSafeInteger(query.range.from) || !Number.isSafeInteger(query.range.to) || query.range.from > query.range.to || query.range.to - query.range.from > reportRetentionMs) throw new Error("reporting SQL requires a bounded retained range of at most 30 days");
   const terms = ["tenant_id = ?", "policy_id = ?", "principal_key = ?", "occurred_at_ms >= ?", "occurred_at_ms < ?"];
   const bindings: Array<string | number | null> = [query.tenantId, query.policyId, query.principal, query.range.from, query.range.to];
   const columns = { model: "model", provider: "provider", key: "key_id", status: "status", costClass: "cost_class", lane: "lane" };
@@ -123,31 +114,90 @@ export function reportWhere(query: UsageReportQuery) {
   return { where: terms.join(" AND "), bindings };
 }
 export interface UsageAggregateRow extends UsageMetrics { dimension: string; value: string | number | null; lane: UsageCostLane; costClass: UsageCostClass; amountMicros: number }
-export interface UsageReportShard { rows: UsageAggregateRow[]; groupsTruncated: boolean; historyComplete: boolean }
-/** One indexed range materialization; all three dimensions share it. No event JSON read.
+export interface UsageReportHistory { historyComplete: boolean; projectionComplete?: boolean; historySource?: "projection" | "retained_ledger" }
+export interface UsageReportShard extends UsageReportHistory { rows: UsageAggregateRow[]; groupsTruncated: boolean }
+
+const scalarColumns = "model, provider, key_id, occurred_at_ms, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros";
+const filterColumns = { model: "model", provider: "provider", key: "key_id", status: "status", costClass: "cost_class", lane: "lane" };
+function reportFilters(query: UsageReportQuery) {
+  const terms: string[] = [], bindings: Array<string | number | null> = [];
+  for (const [key, column] of Object.entries(filterColumns)) { const value = query.filters[key as keyof typeof filterColumns]; if (value !== undefined) { terms.push(column + " = ?"); bindings.push(value); } }
+  return { where: terms.length ? terms.join(" AND ") : "1", bindings };
+}
+const jsonText = (field: string) => "CASE WHEN json_type(event_json, '$." + field + "') = 'text' THEN json_extract(event_json, '$." + field + "') END";
+const jsonCounter = (field: string) => {
+  const value = "json_extract(event_json, '$." + field + "')";
+  return "CASE WHEN json_type(event_json, '$." + field + "') IN ('integer', 'real') AND " + value + " BETWEEN 0 AND 9007199254740991 AND " + value + " = CAST(" + value + " AS INTEGER) THEN CAST(" + value + " AS INTEGER) END";
+};
+/** Scalar-only SQL twin of projectUsageEvent. The only JSON evaluated belongs to
+ * this indexed canonical owner range. Never expand aliases or infer old ownership.
+ * The ledger, not a UNION with sparse projection rows, is the sole source until
+ * migration completes: each retained original occurs exactly once. */
+function retainedSource(query: UsageReportQuery, keyset = "", keysetBindings: Array<string | number | null> = []) {
+  const range = reportWhere({ ...query, filters: {} });
+  const counters = ["input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens", "actual_cost_micros", "reporting_known_cost_micros", "reporting_estimated_cost_micros"];
+  const texts = ["model", "credential_id", "cost_basis", "grant_lane", "request_format", "capability", "reporting_estimate_reason"];
+  const basisCase = "CASE cost_basis " + Object.entries(knownBasisClasses).map(([basis, cls]) => "WHEN '" + basis + "' THEN '" + cls + "'").join(" ") + " ELSE 'unknown' END";
+  return { cte: "owned AS MATERIALIZED (SELECT id, occurred_at_ms, provider, status, " +
+    counters.map(field => jsonCounter(field) + " AS " + field).concat(texts.map(field => jsonText(field) + " AS " + field)).join(", ") +
+    " FROM usage_events INDEXED BY usage_events_policy_principal WHERE " + range.where + keyset + "), " +
+    "validated AS (SELECT *, " + basisCase + " AS basis_class, " +
+    "CASE WHEN cached_input_tokens <= input_tokens THEN cached_input_tokens END AS cache_read, " +
+    "CASE WHEN cache_write_input_tokens <= input_tokens THEN cache_write_input_tokens END AS cache_write, " +
+    "CASE WHEN reasoning_output_tokens <= output_tokens THEN reasoning_output_tokens END AS reasoning FROM owned), " +
+    "classified AS (SELECT *, CASE WHEN actual_cost_micros IS NULL OR (basis_class = 'no_charge' AND actual_cost_micros != 0) THEN 'unknown' " +
+    "WHEN basis_class != 'unknown' THEN basis_class " +
+    "WHEN substr(cost_basis, 1, 9) = 'unpriced_' AND reporting_known_cost_micros > 0 AND reporting_known_cost_micros <= actual_cost_micros THEN 'partial' " +
+    "WHEN actual_cost_micros = 0 AND reporting_estimated_cost_micros IS NOT NULL AND reporting_estimate_reason != '' THEN 'estimated' ELSE 'unknown' END AS cost_class FROM validated), " +
+    "source AS (SELECT id, occurred_at_ms, provider, status, model, credential_id AS key_id, input_tokens, output_tokens, " +
+    "CASE WHEN cache_read > input_tokens - cache_write THEN NULL ELSE cache_read END AS cached_input_tokens, " +
+    "CASE WHEN cache_read > input_tokens - cache_write THEN NULL ELSE cache_write END AS cache_write_input_tokens, reasoning AS reasoning_output_tokens, " +
+    "CASE WHEN request_format IN (" + [...utilityFormats].map(format => "'" + format + "'").join(", ") + ") OR (request_format = 'anthropic.messages' AND capability = 'llm.count_tokens') THEN 'utility' ELSE 'generation' END AS call_kind, " +
+    "CASE grant_lane WHEN 'subscription' THEN 'subscription' WHEN 'api_key' THEN 'api' WHEN 'environment' THEN 'api' ELSE 'unattributed' END AS lane, cost_class, " +
+    "CASE WHEN cost_class = 'unknown' THEN NULL WHEN basis_class = 'unknown' AND cost_class = 'partial' THEN reporting_known_cost_micros " +
+    "WHEN basis_class = 'unknown' AND cost_class = 'estimated' THEN reporting_estimated_cost_micros ELSE actual_cost_micros END AS reporting_cost_micros FROM classified)",
+    bindings: [...range.bindings, ...keysetBindings] };
+}
+/** One indexed scalar range materialization; all three dimensions share it.
  * Lexical group selection is deterministic across shards; totals/buckets always include omitted groups. */
 export function queryUsageReport(sql: ReportSql, query: UsageReportQuery): UsageReportShard {
-  const range = reportWhere(query), column = { model: "model", provider: "provider", key: "key_id" }[query.groupBy];
+  const history = reportHistory(sql), range = reportWhere(query), column = { model: "model", provider: "provider", key: "key_id" }[query.groupBy];
   const bucket = "CASE " + query.range.buckets.map((b, i) => "WHEN occurred_at_ms >= " + b.start + " AND occurred_at_ms < " + b.end + " THEN " + i).join(" ") + " ELSE -1 END";
+  const filters = reportFilters(query), retained = history.projectionComplete ? null : retainedSource(query);
   const result = [...sql.exec(
-    "WITH filtered AS MATERIALIZED (" +
-    "SELECT model, provider, key_id, occurred_at_ms, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros " +
-    "FROM usage_report_events INDEXED BY usage_report_owner_range WHERE " + range.where +
+    "WITH " + (retained ? retained.cte + ", " : "") + "filtered AS MATERIALIZED (" +
+    "SELECT " + scalarColumns + " FROM " + (retained ? "source WHERE " + filters.where : "usage_report_events INDEXED BY usage_report_owner_range WHERE " + range.where) +
     "), selected AS (SELECT DISTINCT " + column + " AS value FROM filtered ORDER BY value COLLATE BINARY LIMIT 101), " +
     "dimensions AS (SELECT 'total' AS dimension UNION ALL SELECT 'bucket' UNION ALL SELECT 'group'), " +
     "expanded AS (SELECT filtered.*, dimension, CASE dimension WHEN 'group' THEN " + column + " WHEN 'bucket' THEN " + (query.range.buckets.length ? bucket : "-1") + " ELSE NULL END AS dimension_value " +
     "FROM filtered CROSS JOIN dimensions WHERE dimension != 'group' OR (" + column + " IS NULL AND EXISTS (SELECT 1 FROM selected WHERE value IS NULL)) OR " + column + " IN (SELECT value FROM selected)) " +
     "SELECT dimension, dimension_value AS value, lane, cost_class AS costClass, " + metricSql + ", COALESCE(SUM(reporting_cost_micros), 0) AS amountMicros " +
     "FROM expanded GROUP BY dimension, dimension_value, lane, cost_class ORDER BY dimension, dimension_value COLLATE BINARY, lane, cost_class",
-    ...range.bindings)] as unknown as UsageAggregateRow[];
+    ...(retained ? [...retained.bindings, ...filters.bindings] : range.bindings))] as unknown as UsageAggregateRow[];
   const groups = new Set(result.filter(row => row.dimension === "group").map(row => row.value));
-  return { rows: result, groupsTruncated: groups.size > 100, historyComplete: usageReportHistoryComplete(sql) };
+  return { rows: result, groupsTruncated: groups.size > 100, ...history };
 }
 export interface UsageEventPosition { at: number; id: string }
-export function queryUsageEvents(sql: ReportSql, query: UsageReportQuery, limit: number, before?: UsageEventPosition, includeEqualId = false): { events: PersonalUsageEvent[]; historyComplete: boolean } {
-  const range = reportWhere(query);
+export function queryUsageEvents(sql: ReportSql, query: UsageReportQuery, limit: number, before?: UsageEventPosition, includeEqualId = false): { events: PersonalUsageEvent[] } & UsageReportHistory {
+  const history = reportHistory(sql), range = reportWhere(query);
   const keyset = before ? " AND (occurred_at_ms < ? OR (occurred_at_ms = ? AND id " + (includeEqualId ? "<=" : "<") + " ? COLLATE BINARY))" : "";
-  const bindings = before ? [...range.bindings, before.at, before.at, before.id] : range.bindings;
-  const events = [...sql.exec("SELECT detail_json FROM usage_report_events INDEXED BY usage_report_owner_range WHERE " + range.where + keyset + " ORDER BY occurred_at_ms DESC, id COLLATE BINARY DESC LIMIT ?", ...bindings, limit + 1)].map(row => JSON.parse(String(row.detail_json)) as PersonalUsageEvent);
-  return { events, historyComplete: usageReportHistoryComplete(sql) };
+  const positions = before ? [before.at, before.at, before.id] : [];
+  if (history.projectionComplete) {
+    const events = [...sql.exec("SELECT detail_json FROM usage_report_events INDEXED BY usage_report_owner_range WHERE " + range.where + keyset + " ORDER BY occurred_at_ms DESC, id COLLATE BINARY DESC LIMIT ?", ...range.bindings, ...positions, limit + 1)].map(row => JSON.parse(String(row.detail_json)) as PersonalUsageEvent);
+    return { events, ...history };
+  }
+  if (Object.values(query.filters).every(value => value === undefined)) {
+    // The common unfiltered page does not classify the rest of the retained
+    // range. Read only the indexed keyset page and project its metadata in JS.
+    const events = [...sql.exec("SELECT event_json FROM usage_events INDEXED BY usage_events_policy_principal WHERE " + range.where + keyset + " ORDER BY occurred_at_ms DESC, id COLLATE BINARY DESC LIMIT ?", ...range.bindings, ...positions, limit + 1)]
+      .map(row => projectUsageEvent(JSON.parse(String(row.event_json)) as UsageEvent));
+    return { events, ...history };
+  }
+  const retained = retainedSource(query, keyset, positions), filters = reportFilters(query);
+  // Only the bounded selected page fetches raw JSON. Classification/filtering and
+  // stable keysets precede LIMIT; only scalar owner metadata is materialized.
+  const events = [...sql.exec("WITH " + retained.cte + ", page AS MATERIALIZED (SELECT id, occurred_at_ms FROM source WHERE " + filters.where +
+    " ORDER BY occurred_at_ms DESC, id COLLATE BINARY DESC LIMIT ?) SELECT ledger.event_json FROM page JOIN usage_events AS ledger ON ledger.id = page.id ORDER BY page.occurred_at_ms DESC, page.id COLLATE BINARY DESC",
+    ...retained.bindings, ...filters.bindings, limit + 1)].map(row => projectUsageEvent(JSON.parse(String(row.event_json)) as UsageEvent));
+  return { events, ...history };
 }

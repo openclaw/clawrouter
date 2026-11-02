@@ -3,14 +3,14 @@ import { usageStub } from "./ledgers.ts";
 import type { Env } from "./types.ts";
 import { HttpError, normalizeEmail } from "./utils.ts";
 import { parseUsageReportRange } from "./usage-report-range.ts";
-import { emptyUsageMetrics, usageMetricKeys, type UsageAggregateRow, type UsageEventPosition, type UsageReportQuery, type UsageReportShard, type UsageReportMigrationOptions, type UsageReportMigrationEffect } from "./usage-report-store.ts";
+import { emptyUsageMetrics, usageMetricKeys, type UsageAggregateRow, type UsageEventPosition, type UsageReportQuery, type UsageReportShard, type UsageReportMigrationOptions, type UsageReportMigrationEffect, type UsageReportHistory } from "./usage-report-store.ts";
 
 const filterNames = ["model", "provider", "key", "status", "costClass", "lane"] as const;
 const classes = new Set(["calculated", "fixed", "estimated", "upper_bound", "partial", "unknown", "no_charge"]);
 const lanes = new Set(["api", "subscription", "unattributed"]);
 function invalid(message: string): never { throw new HttpError(400, "invalid_usage_query", message); }
 export function parseUsageReportQuery(params: URLSearchParams, now = Date.now()) {
-  for (const key of params.keys()) if (!["from", "to", "timezone", "groupBy", "cursor", "limit", ...filterNames].includes(key)) invalid("unsupported usage parameter: " + key);
+  for (const key of params.keys()) if (!["from", "to", "days", "timezone", "groupBy", "cursor", "limit", ...filterNames].includes(key)) invalid("unsupported usage parameter: " + key);
   for (const key of params.keys()) if (params.getAll(key).length > 1) invalid("duplicate usage parameters are not allowed");
   const groupBy = params.get("groupBy") ?? "model";
   if (!["model", "provider", "key"].includes(groupBy)) invalid("groupBy must be model, provider, or key");
@@ -64,7 +64,7 @@ export function compareUsageIds(a: string, b: string): number {
   return x.length - y.length;
 }
 export function mergeUsageReports(shards: UsageReportShard[], query: ReturnType<typeof parseUsageReportQuery>, now = Date.now()): PersonalUsageReport {
-  const report: PersonalUsageReport = { range: query.range, groupBy: query.groupBy, metrics: emptyUsageMetrics(), costs: [], groups: [], buckets: query.range.buckets.map(b => ({ ...b, metrics: emptyUsageMetrics(), costs: [] })), groupsTruncated: shards.some(s => s.groupsTruncated), historyComplete: shards.every(s => s.historyComplete), generatedAt: now };
+  const report: PersonalUsageReport = { range: query.range, groupBy: query.groupBy, metrics: emptyUsageMetrics(), costs: [], groups: [], buckets: query.range.buckets.map(b => ({ ...b, metrics: emptyUsageMetrics(), costs: [] })), groupsTruncated: shards.some(s => s.groupsTruncated), historyComplete: shards.every(s => s.historyComplete), projectionComplete: shards.every(s => s.projectionComplete !== false), historySource: shards.some(s => s.historySource === "retained_ledger") ? "retained_ledger" : "projection", generatedAt: now };
   const groups = new Map<string | null, UsageReportGroup>();
   for (const shard of shards) for (const row of shard.rows) {
     if (row.dimension === "total") { addMetrics(report.metrics, row); addCost(report.costs, row); }
@@ -80,11 +80,11 @@ export function mergeUsageReports(shards: UsageReportShard[], query: ReturnType<
   report.groups = [...groups.values()].sort((a, b) => a.value === null ? b.value === null ? 0 : -1 : b.value === null ? 1 : compareUsageIds(a.value, b.value)).slice(0, 100);
   return report;
 }
-interface EventShard { shard?: string; events: PersonalUsageEvent[]; historyComplete: boolean }
+interface EventShard extends UsageReportHistory { shard?: string; events: PersonalUsageEvent[] }
 export function mergeUsageEvents(shards: EventShard[], limit: number) {
   const ordered = shards.flatMap(s => s.events.map(event => ({ event, shard: s.shard ?? "" }))).sort((a, b) => b.event.occurredAt - a.event.occurredAt || compareUsageIds(b.event.id, a.event.id) || compareUsageIds(b.shard, a.shard));
   const selected = ordered.slice(0, limit), last = selected.at(-1);
-  return { events: selected.map(row => row.event), lastShard: last?.shard, hasMore: ordered.length > limit, historyComplete: shards.every(s => s.historyComplete) };
+  return { events: selected.map(row => row.event), lastShard: last?.shard, hasMore: ordered.length > limit, historyComplete: shards.every(s => s.historyComplete), projectionComplete: shards.every(s => s.projectionComplete !== false), historySource: shards.some(s => s.historySource === "retained_ledger") ? "retained_ledger" as const : "projection" as const };
 }
 /** Principal and policy scope are arguments supplied exclusively by verified session authority. */
 export async function personalUsage(env: Env, policies: Policy[], principalId: string, params: URLSearchParams, events = false, now = Date.now()): Promise<PersonalUsageReport | PersonalUsageEvents> {
@@ -108,7 +108,7 @@ export async function personalUsage(env: Env, policies: Policy[], principalId: s
   });
   if (!events) return mergeUsageReports(shards as UsageReportShard[], query, now);
   const merged = mergeUsageEvents(shards as EventShard[], query.limit), last = merged.events.at(-1);
-  return { events: merged.events, historyComplete: merged.historyComplete, nextCursor: merged.hasMore && last ? encodeCursor({ v: 1, binding, now: cursor?.now ?? now, position: { at: last.occurredAt, id: last.id, shard: merged.lastShard! } }) : null };
+  return { events: merged.events, historyComplete: merged.historyComplete, projectionComplete: merged.projectionComplete, historySource: merged.historySource, nextCursor: merged.hasMore && last ? encodeCursor({ v: 1, binding, now: cursor?.now ?? now, position: { at: last.occurredAt, id: last.id, shard: merged.lastShard! } }) : null };
 }
 
 /** Operator/private tooling only: deliberately not wired to any public route.

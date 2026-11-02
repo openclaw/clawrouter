@@ -1,12 +1,13 @@
 {
-  "generatedAt": "2026-11-02T19:18:28.674Z",
+  "generatedAt": "2026-11-02T19:49:14.806Z",
   "sourceHashes": {
+    "worker/usage-report-cost.ts": "904b0ac703d17c1116ef6f38848e07f4f09ec18410c36dc3a2605a048ed6b9a2",
     "worker/ledgers.ts": "3ee2ee42b8c1564445076f7e9c3f53e8ebea5919fb57fc5f612d74fd72dee830",
-    "worker/usage-report.ts": "4e810fbbbe0ddd2750236dcde1d62e01ebb27ddc6b0d6c58bf5e168ca11e51db",
-    "worker/usage-report-store.ts": "2788605db0d88405402803f45c7aedda3a21bd4b3f2cdc1cbd20ca429f9e91c3",
-    "worker/usage-report-range.ts": "bce5f9b9eb6edccad8bd226ceb38493aa605179a28d00fce98be0a055fe362aa",
-    "shared/usage-report.ts": "a27f6fd51b4b6b6e4f0977db9612b53f099ef2e51eb69f9b2c3bb049f95015f3",
-    "scripts/benchmark-personal-usage.mjs": "672a24a96dd9f12c8b1d37723af728849afd1fc71db1b626f871ce03c9c0461a"
+    "worker/usage-report.ts": "73efec59e8120c42ff41b9e4908660fa91a5e9639ff65e8d3bbd701e53fb4c6e",
+    "worker/usage-report-store.ts": "5e208939f71d1c7cf9f88170fe0a692116a20cceb0a42e7e3f08eb7af025171f",
+    "worker/usage-report-range.ts": "3ca63d8a19bb8f0fb2091b327ae14bc3aabf4658d3bed0aabfd7ef37871fa9f2",
+    "shared/usage-report.ts": "b86b32b3cc84db98f3e926e5be16250b7731d9639e1d472e84bdc1305ddaac0d",
+    "scripts/benchmark-personal-usage.mjs": "ee54c1fbe3aabe2406613f55e60a5e1aaef3ed65156d1ebd0e5d4a61be6d3e97"
   },
   "runtime": "v26.12.1",
   "environment": {
@@ -23,12 +24,13 @@
     "eventsPerShard": 50000,
     "ownerEvents": 40000,
     "ownerShare": "20% (every fifth event)",
+    "reportingProjectionSeeded": false,
     "days": 29,
     "eventPaddingBytes": 1024
   },
   "methodology": {
     "api": "Each query: first request followed by 11 sequential warm requests; timing includes Node fetch, body read and JSON.parse. No artificial delay. Seeded DOs are already resident; first is not disk/process cold.",
-    "backend": "Current production usageSnapshots and personalUsage functions, four SQLite DO shards; seed inserts raw and reporting rows and marks migrations complete. Legacy function is not an archived implementation.",
+    "backend": "Current repository usageSnapshots and personalUsage functions, four SQLite DO shards; seed inserts canonical owner-attributed raw rows only, with reporting projection empty/incomplete. Legacy function is not an archived implementation.",
     "limits": [
       "Synthetic owner and policy authority; no Cloudflare Access verification, policy resolution, budget lookup, provider call, network WAN or production storage",
       "Local workerd co-schedules objects and disables idle eviction; not production Cloudflare topology",
@@ -39,103 +41,103 @@
   },
   "results": {
     "legacy30": {
-      "firstMs": 401.27086699999927,
+      "firstMs": 376.5769340000006,
       "samplesMs": [
-        405.8356480000002,
-        400.7320289999989,
-        411.43674400000054,
-        399.8360439999997,
-        399.30094100000133,
-        399.311416999999,
-        398.7316959999989,
-        396.95124399999986,
-        398.27725400000054,
-        398.266939000001,
-        388.62640999999894
+        372.89339500000006,
+        372.57264399999985,
+        372.12370999999985,
+        371.67970400000013,
+        378.71838800000023,
+        373.34615400000075,
+        377.3368550000014,
+        370.4117299999998,
+        367.7180670000016,
+        370.88331800000014,
+        370.6370080000015
       ],
-      "medianMs": 399.30094100000133,
-      "p95Ms": 411.43674400000054,
+      "medianMs": 372.12370999999985,
+      "p95Ms": 378.71838800000023,
       "payloadBytes": 172810,
       "calls": 40000
     },
     "report7": {
-      "firstMs": 45.31870499999968,
+      "firstMs": 130.4722700000002,
       "samplesMs": [
-        34.61251699999957,
-        34.88460599999962,
-        34.697494999998526,
-        36.30192299999908,
-        34.877425000000585,
-        35.056493999998565,
-        34.27577200000087,
-        35.28226299999915,
-        34.032225999999355,
-        33.77422000000115,
-        33.96252200000163
+        117.66036800000074,
+        118.65972900000088,
+        116.32250100000056,
+        116.41327699999965,
+        116.18989200000033,
+        118.03138600000057,
+        117.68967299999895,
+        116.76533500000005,
+        116.58291099999951,
+        117.5591170000007,
+        117.52138999999988
       ],
-      "medianMs": 34.697494999998526,
-      "p95Ms": 36.30192299999908,
-      "payloadBytes": 14249,
+      "medianMs": 117.52138999999988,
+      "p95Ms": 118.65972900000088,
+      "payloadBytes": 14308,
       "calls": 9656
     },
     "report30": {
-      "firstMs": 151.22047600000042,
+      "firstMs": 498.575734,
       "samplesMs": [
-        151.04238799999985,
-        150.60373000000072,
-        150.1191120000003,
-        150.09378399999878,
-        152.38056599999982,
-        150.68523199999981,
-        150.9782320000013,
-        150.82944900000075,
-        149.0581200000015,
-        149.39723900000172,
-        151.3157280000014
+        499.7609940000002,
+        498.6736919999985,
+        496.1075099999998,
+        500.78914799999984,
+        492.52813699999933,
+        507.93816799999877,
+        496.90820200000053,
+        494.797364,
+        497.7328490000018,
+        498.2696250000008,
+        496.7042450000008
       ],
-      "medianMs": 150.68523199999981,
-      "p95Ms": 152.38056599999982,
-      "payloadBytes": 33134,
+      "medianMs": 497.7328490000018,
+      "p95Ms": 507.93816799999877,
+      "payloadBytes": 33194,
       "calls": 40000
     },
     "filtered7": {
-      "firstMs": 26.770438000003196,
+      "firstMs": 110.40382599999793,
       "samplesMs": [
-        25.07671599999958,
-        28.98701500000243,
-        25.263646999999764,
-        27.677779000001465,
-        25.75602599999911,
-        24.475864,
-        24.58250400000179,
-        24.314330999997765,
-        24.211778000000777,
-        24.22587900000144,
-        24.452488999999332
+        106.80167000000074,
+        107.90570700000171,
+        105.76416199999949,
+        105.06616500000018,
+        106.04028699999981,
+        106.8028919999997,
+        104.87688100000014,
+        106.03523000000132,
+        105.16935000000012,
+        105.39299499999834,
+        105.89739299999928
       ],
-      "medianMs": 24.58250400000179,
-      "p95Ms": 28.98701500000243,
-      "payloadBytes": 10477,
+      "medianMs": 105.89739299999928,
+      "p95Ms": 107.90570700000171,
+      "payloadBytes": 10537,
       "calls": 6436
     },
     "events25": {
-      "firstMs": 3.024528999998438,
+      "firstMs": 3.936508999999205,
       "samplesMs": [
-        2.3436970000002475,
-        2.3236780000006547,
-        2.1504469999999856,
-        2.2360959999969054,
-        2.166431999998167,
-        2.120662999997876,
-        2.0985900000014226,
-        2.119160999998712,
-        2.1615039999996952,
-        2.14437800000087,
-        3.4804540000004636
+        2.512090000000171,
+        2.444379000000481,
+        3.0596130000012636,
+        2.3977689999992435,
+        2.268804999999702,
+        2.2440289999976812,
+        2.2368979999992007,
+        2.214073000002827,
+        2.2436280000001716,
+        2.2377789999991364,
+        2.261453999999503
       ],
-      "medianMs": 2.1615039999996952,
-      "p95Ms": 3.4804540000004636,
-      "payloadBytes": 14790,
+      "medianMs": 2.261453999999503,
+      "p95Ms": 3.0596130000012636,
+      "payloadBytes": 14851,
       "calls": 25
     }
   },
@@ -157,9 +159,9 @@
       ],
       "candidate": [
         {
-          "path": "/assets/index-CmjxwHii.js",
-          "bytes": 743637,
-          "sha256": "bfb2e2cd92b7947f5fbe22c09d2971c515447445a373614868a8ebf38982d958"
+          "path": "/assets/index-2wBHsWsJ.js",
+          "bytes": 744447,
+          "sha256": "ae07b678f09386367e59e6c48c29ceefa077957de65f43583f9bc0c8536e3c8a"
         },
         {
           "path": "/assets/index-BMx8LOvS.css",
@@ -176,35 +178,35 @@
     },
     "home": {
       "baseline": {
-        "firstFreshContextMs": 525.3556769999996,
+        "firstFreshContextMs": 509.2574080000013,
         "warm": {
           "samplesMs": [
-            476.30455900000015,
-            471.97711499999787,
-            473.10025099999984,
-            477.90867699999944,
-            474.16845399999875,
-            479.11607899999944,
-            473.71737700000085
+            476.06818099999873,
+            481.5335440000017,
+            470.0307590000011,
+            454.9321450000025,
+            457.7080529999985,
+            454.342270000001,
+            459.27798800000164
           ],
-          "medianMs": 474.16845399999875,
-          "p95Ms": 479.11607899999944
+          "medianMs": 459.27798800000164,
+          "p95Ms": 481.5335440000017
         }
       },
       "candidate": {
-        "firstFreshContextMs": 138.75604800000292,
+        "firstFreshContextMs": 227.83162699999957,
         "warm": {
           "samplesMs": [
-            115.5520940000024,
-            102.58935800000108,
-            103.82168900000033,
-            102.53495699999985,
-            104.78008599999885,
-            104.89586000000054,
-            105.3762220000026
+            212.9751670000005,
+            193.6972710000009,
+            189.03087600000072,
+            202.1919310000012,
+            194.78011600000173,
+            201.3740629999993,
+            196.45916600000055
           ],
-          "medianMs": 104.78008599999885,
-          "p95Ms": 115.5520940000024
+          "medianMs": 196.45916600000055,
+          "p95Ms": 212.9751670000005
         }
       }
     },
@@ -212,7 +214,7 @@
       {
         "variant": "baseline",
         "sample": 0,
-        "navigationMs": 525.3556769999996,
+        "navigationMs": 509.2574080000013,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -224,8 +226,8 @@
       {
         "variant": "candidate",
         "sample": 0,
-        "navigationMs": 138.75604800000292,
-        "domNodes": 280,
+        "navigationMs": 227.83162699999957,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -236,8 +238,8 @@
       {
         "variant": "candidate",
         "sample": 1,
-        "navigationMs": 115.5520940000024,
-        "domNodes": 280,
+        "navigationMs": 212.9751670000005,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -248,7 +250,7 @@
       {
         "variant": "baseline",
         "sample": 1,
-        "navigationMs": 476.30455900000015,
+        "navigationMs": 476.06818099999873,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -260,7 +262,7 @@
       {
         "variant": "baseline",
         "sample": 2,
-        "navigationMs": 471.97711499999787,
+        "navigationMs": 481.5335440000017,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -272,8 +274,8 @@
       {
         "variant": "candidate",
         "sample": 2,
-        "navigationMs": 102.58935800000108,
-        "domNodes": 280,
+        "navigationMs": 193.6972710000009,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -284,8 +286,8 @@
       {
         "variant": "candidate",
         "sample": 3,
-        "navigationMs": 103.82168900000033,
-        "domNodes": 280,
+        "navigationMs": 189.03087600000072,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -296,7 +298,7 @@
       {
         "variant": "baseline",
         "sample": 3,
-        "navigationMs": 473.10025099999984,
+        "navigationMs": 470.0307590000011,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -308,7 +310,7 @@
       {
         "variant": "baseline",
         "sample": 4,
-        "navigationMs": 477.90867699999944,
+        "navigationMs": 454.9321450000025,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -320,8 +322,8 @@
       {
         "variant": "candidate",
         "sample": 4,
-        "navigationMs": 102.53495699999985,
-        "domNodes": 280,
+        "navigationMs": 202.1919310000012,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -332,8 +334,8 @@
       {
         "variant": "candidate",
         "sample": 5,
-        "navigationMs": 104.78008599999885,
-        "domNodes": 280,
+        "navigationMs": 194.78011600000173,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -344,7 +346,7 @@
       {
         "variant": "baseline",
         "sample": 5,
-        "navigationMs": 474.16845399999875,
+        "navigationMs": 457.7080529999985,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -356,7 +358,7 @@
       {
         "variant": "baseline",
         "sample": 6,
-        "navigationMs": 479.11607899999944,
+        "navigationMs": 454.342270000001,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -368,8 +370,8 @@
       {
         "variant": "candidate",
         "sample": 6,
-        "navigationMs": 104.89586000000054,
-        "domNodes": 280,
+        "navigationMs": 201.3740629999993,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -380,8 +382,8 @@
       {
         "variant": "candidate",
         "sample": 7,
-        "navigationMs": 105.3762220000026,
-        "domNodes": 280,
+        "navigationMs": 196.45916600000055,
+        "domNodes": 281,
         "requests": {
           "reports": 1,
           "events": 0,
@@ -392,7 +394,7 @@
       {
         "variant": "baseline",
         "sample": 7,
-        "navigationMs": 473.71737700000085,
+        "navigationMs": 459.27798800000164,
         "domNodes": 400,
         "requests": {
           "reports": 0,
@@ -404,82 +406,82 @@
     ],
     "openMyUsage": {
       "reportReady": {
-        "firstMs": 76.24555199999668,
+        "firstMs": 75.72926000000007,
         "warm": {
           "samplesMs": [
-            85.24715099999958,
-            79.74093800000264,
-            74.46550000000207,
-            83.76829200000066,
-            82.48510600000009
+            89.51010600000154,
+            83.38846699999704,
+            78.12557699999888,
+            88.05505099999573,
+            82.14231599999766
           ],
-          "medianMs": 82.48510600000009,
-          "p95Ms": 85.24715099999958
+          "medianMs": 83.38846699999704,
+          "p95Ms": 89.51010600000154
         }
       },
       "eventsReady": {
-        "firstMs": 108.54307499999777,
+        "firstMs": 107.09580200000346,
         "warm": {
           "samplesMs": [
-            117.33963699999731,
-            112.05465499999991,
-            106.56184100000246,
-            115.87022100000104,
-            110.78476899999805
+            120.97923099999753,
+            114.6176509999932,
+            110.32506899999862,
+            119.88777299999492,
+            114.39296399999876
           ],
-          "medianMs": 112.05465499999991,
-          "p95Ms": 117.33963699999731
+          "medianMs": 114.6176509999932,
+          "p95Ms": 120.97923099999753
         }
       }
     },
     "directMyUsage": {
       "reportReady": {
-        "firstFreshContextMs": 159.62080300000162,
+        "firstFreshContextMs": 255.38455400000385,
         "warmReloads": {
           "samplesMs": [
-            127.79812200000015,
-            150.72497100000328,
-            138.8931639999937,
-            132.04855099999986,
-            139.5247920000038
+            222.73460599999817,
+            215.28083799999877,
+            213.180515,
+            217.42767000000458,
+            212.24711400000524
           ],
-          "medianMs": 138.8931639999937,
-          "p95Ms": 150.72497100000328
+          "medianMs": 215.28083799999877,
+          "p95Ms": 222.73460599999817
         }
       },
       "eventsReady": {
-        "firstFreshContextMs": 191.79449000000022,
+        "firstFreshContextMs": 287.6210310000024,
         "warmReloads": {
           "samplesMs": [
-            159.92646100000275,
-            183.1468010000026,
-            171.210616999997,
-            163.3304199999984,
-            171.81547500000306
+            254.9581939999989,
+            247.48314299999765,
+            244.44233900000108,
+            249.64525900000444,
+            243.51311500000156
           ],
-          "medianMs": 171.210616999997,
-          "p95Ms": 183.1468010000026
+          "medianMs": 247.48314299999765,
+          "p95Ms": 254.9581939999989
         }
       }
     },
     "interactions": {
       "group-provider": {
-        "firstMs": 82.62692800000514,
+        "firstMs": 179.43446199999744,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            80.01752200000192,
-            80.79252600000473,
-            80.17500799999834,
-            83.98556799999642,
-            80.15261499999906
+            159.5971259999933,
+            176.34185999999318,
+            160.1647379999995,
+            159.9360849999939,
+            175.6298519999982
           ],
-          "medianMs": 80.17500799999834,
-          "p95Ms": 83.98556799999642
+          "medianMs": 160.1647379999995,
+          "p95Ms": 176.34185999999318
         },
         "samples": [
           {
-            "ms": 82.62692800000514,
+            "ms": 179.43446199999744,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -488,7 +490,7 @@
             }
           },
           {
-            "ms": 80.01752200000192,
+            "ms": 159.5971259999933,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -497,7 +499,7 @@
             }
           },
           {
-            "ms": 80.79252600000473,
+            "ms": 176.34185999999318,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -506,7 +508,7 @@
             }
           },
           {
-            "ms": 80.17500799999834,
+            "ms": 160.1647379999995,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -515,7 +517,7 @@
             }
           },
           {
-            "ms": 83.98556799999642,
+            "ms": 159.9360849999939,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -524,7 +526,7 @@
             }
           },
           {
-            "ms": 80.15261499999906,
+            "ms": 175.6298519999982,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -535,22 +537,22 @@
         ]
       },
       "group-key": {
-        "firstMs": 80.08672600000136,
+        "firstMs": 175.681098999994,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            80.11839399999735,
-            79.25163299999986,
-            79.72115699999995,
-            76.0057220000017,
-            79.36549400000513
+            176.54597700000159,
+            176.32252100000187,
+            176.01798400000553,
+            159.6697359999962,
+            175.59382700000424
           ],
-          "medianMs": 79.36549400000513,
-          "p95Ms": 80.11839399999735
+          "medianMs": 176.01798400000553,
+          "p95Ms": 176.54597700000159
         },
         "samples": [
           {
-            "ms": 80.08672600000136,
+            "ms": 175.681098999994,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -559,7 +561,7 @@
             }
           },
           {
-            "ms": 80.11839399999735,
+            "ms": 176.54597700000159,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -568,7 +570,7 @@
             }
           },
           {
-            "ms": 79.25163299999986,
+            "ms": 176.32252100000187,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -577,7 +579,7 @@
             }
           },
           {
-            "ms": 79.72115699999995,
+            "ms": 176.01798400000553,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -586,7 +588,7 @@
             }
           },
           {
-            "ms": 76.0057220000017,
+            "ms": 159.6697359999962,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -595,7 +597,7 @@
             }
           },
           {
-            "ms": 79.36549400000513,
+            "ms": 175.59382700000424,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -606,22 +608,22 @@
         ]
       },
       "group-model": {
-        "firstMs": 48.347671000003174,
+        "firstMs": 48.075691999998526,
         "firstFetchedReport": false,
         "repeated": {
           "samplesMs": [
-            47.915202999996836,
-            47.947159999996074,
-            48.0944909999962,
-            48.026850000002014,
-            47.95464099999663
+            47.24837999999727,
+            47.826177000002644,
+            47.86308299999655,
+            48.358125999999174,
+            48.147289000000455
           ],
-          "medianMs": 47.95464099999663,
-          "p95Ms": 48.0944909999962
+          "medianMs": 47.86308299999655,
+          "p95Ms": 48.358125999999174
         },
         "samples": [
           {
-            "ms": 48.347671000003174,
+            "ms": 48.075691999998526,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -630,7 +632,7 @@
             }
           },
           {
-            "ms": 47.915202999996836,
+            "ms": 47.24837999999727,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -639,7 +641,7 @@
             }
           },
           {
-            "ms": 47.947159999996074,
+            "ms": 47.826177000002644,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -648,7 +650,7 @@
             }
           },
           {
-            "ms": 48.0944909999962,
+            "ms": 47.86308299999655,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -657,7 +659,7 @@
             }
           },
           {
-            "ms": 48.026850000002014,
+            "ms": 48.358125999999174,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -666,7 +668,7 @@
             }
           },
           {
-            "ms": 47.95464099999663,
+            "ms": 48.147289000000455,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -677,70 +679,70 @@
         ]
       },
       "filter-model": {
-        "firstMs": 63.7665829999969,
+        "firstMs": 160.095064000001,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            80.43936499999836,
-            64.19250099999772,
-            80.57572000000073,
-            80.2516140000007,
-            64.18800400000327
+            144.6614580000023,
+            176.358785000004,
+            160.3111179999978,
+            159.88964500000293,
+            159.77097700000013
           ],
-          "medianMs": 80.2516140000007,
-          "p95Ms": 80.57572000000073
+          "medianMs": 159.88964500000293,
+          "p95Ms": 176.358785000004
         },
         "samples": [
           {
-            "ms": 63.7665829999969,
+            "ms": 160.095064000001,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.43936499999836,
+            "ms": 144.6614580000023,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 64.19250099999772,
+            "ms": 176.358785000004,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.57572000000073,
+            "ms": 160.3111179999978,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.2516140000007,
+            "ms": 159.88964500000293,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 64.18800400000327,
+            "ms": 159.77097700000013,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
@@ -748,70 +750,70 @@
         ]
       },
       "clear-model-filter": {
-        "firstMs": 81.35066299999744,
+        "firstMs": 87.8667190000051,
         "firstFetchedReport": false,
         "repeated": {
           "samplesMs": [
-            94.67832500000077,
-            79.2671560000017,
-            62.662695999999414,
-            94.72411499999725,
-            78.56518199999846
+            78.87138599999889,
+            78.43365900000208,
+            78.75396000000183,
+            64.44322999999713,
+            79.41188800000236
           ],
-          "medianMs": 79.2671560000017,
-          "p95Ms": 94.72411499999725
+          "medianMs": 78.75396000000183,
+          "p95Ms": 79.41188800000236
         },
         "samples": [
           {
-            "ms": 81.35066299999744,
+            "ms": 87.8667190000051,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 94.67832500000077,
+            "ms": 78.87138599999889,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.2671560000017,
+            "ms": 78.43365900000208,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 62.662695999999414,
+            "ms": 78.75396000000183,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 94.72411499999725,
+            "ms": 64.44322999999713,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 78.56518199999846,
+            "ms": 79.41188800000236,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
@@ -819,70 +821,70 @@
         ]
       },
       "filter-provider": {
-        "firstMs": 95.91246799999499,
+        "firstMs": 160.167432000002,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            79.99539899999945,
-            95.89400000000023,
-            79.36404200000106,
-            80.16993200000434,
-            79.3340659999958
+            159.80972499999916,
+            176.04167000000598,
+            160.24230499999976,
+            175.92872999999963,
+            160.31859899999836
           ],
-          "medianMs": 79.99539899999945,
-          "p95Ms": 95.89400000000023
+          "medianMs": 160.31859899999836,
+          "p95Ms": 176.04167000000598
         },
         "samples": [
           {
-            "ms": 95.91246799999499,
+            "ms": 160.167432000002,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.99539899999945,
+            "ms": 159.80972499999916,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 95.89400000000023,
+            "ms": 176.04167000000598,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.36404200000106,
+            "ms": 160.24230499999976,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.16993200000434,
+            "ms": 175.92872999999963,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.3340659999958,
+            "ms": 160.31859899999836,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
@@ -890,70 +892,70 @@
         ]
       },
       "clear-provider-filter": {
-        "firstMs": 94.73467000000528,
+        "firstMs": 94.67203299999528,
         "firstFetchedReport": false,
         "repeated": {
           "samplesMs": [
-            62.472170000000915,
-            79.07693100000324,
-            94.77490100000432,
-            79.28996000000188,
-            79.18865799999912
+            71.71820900000603,
+            79.64846199999738,
+            79.0538000000015,
+            63.472381999999925,
+            94.74621399999887
           ],
-          "medianMs": 79.18865799999912,
-          "p95Ms": 94.77490100000432
+          "medianMs": 79.0538000000015,
+          "p95Ms": 94.74621399999887
         },
         "samples": [
           {
-            "ms": 94.73467000000528,
+            "ms": 94.67203299999528,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 62.472170000000915,
+            "ms": 71.71820900000603,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.07693100000324,
+            "ms": 79.64846199999738,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 94.77490100000432,
+            "ms": 79.0538000000015,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.28996000000188,
+            "ms": 63.472381999999925,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.18865799999912,
+            "ms": 94.74621399999887,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
@@ -961,70 +963,70 @@
         ]
       },
       "filter-key": {
-        "firstMs": 79.92258000000584,
+        "firstMs": 159.76608999999735,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            80.23967599999742,
-            94.2513340000005,
-            80.04489399999875,
-            95.70342399999936,
-            80.52292099999613
+            158.9883919999993,
+            192.16038300000218,
+            144.11617000000115,
+            143.93862299999455,
+            127.02329199999804
           ],
-          "medianMs": 80.52292099999613,
-          "p95Ms": 95.70342399999936
+          "medianMs": 144.11617000000115,
+          "p95Ms": 192.16038300000218
         },
         "samples": [
           {
-            "ms": 79.92258000000584,
+            "ms": 159.76608999999735,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.23967599999742,
+            "ms": 158.9883919999993,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 94.2513340000005,
+            "ms": 192.16038300000218,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.04489399999875,
+            "ms": 144.11617000000115,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 95.70342399999936,
+            "ms": 143.93862299999455,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 80.52292099999613,
+            "ms": 127.02329199999804,
             "requests": {
               "reports": 1,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
@@ -1032,22 +1034,40 @@
         ]
       },
       "clear-key-filter": {
-        "firstMs": 79.18618399999832,
+        "firstMs": 95.72033600000577,
         "firstFetchedReport": false,
         "repeated": {
           "samplesMs": [
-            78.74244900000485,
-            78.82304000000295,
-            79.47264500000165,
-            94.9756320000015,
-            94.3303339999984
+            63.12783499999932,
+            47.414819999998144,
+            67.57389899999544,
+            79.55159700000513,
+            64.24744600000122
           ],
-          "medianMs": 79.47264500000165,
-          "p95Ms": 94.9756320000015
+          "medianMs": 64.24744600000122,
+          "p95Ms": 79.55159700000513
         },
         "samples": [
           {
-            "ms": 79.18618399999832,
+            "ms": 95.72033600000577,
+            "requests": {
+              "reports": 0,
+              "events": 2,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 63.12783499999932,
+            "requests": {
+              "reports": 0,
+              "events": 2,
+              "budgetOnly": 0,
+              "legacyScans": 0
+            }
+          },
+          {
+            "ms": 47.414819999998144,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1056,46 +1076,28 @@
             }
           },
           {
-            "ms": 78.74244900000485,
+            "ms": 67.57389899999544,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 78.82304000000295,
+            "ms": 79.55159700000513,
             "requests": {
               "reports": 0,
-              "events": 1,
+              "events": 2,
               "budgetOnly": 0,
               "legacyScans": 0
             }
           },
           {
-            "ms": 79.47264500000165,
+            "ms": 64.24744600000122,
             "requests": {
               "reports": 0,
-              "events": 1,
-              "budgetOnly": 0,
-              "legacyScans": 0
-            }
-          },
-          {
-            "ms": 94.9756320000015,
-            "requests": {
-              "reports": 0,
-              "events": 1,
-              "budgetOnly": 0,
-              "legacyScans": 0
-            }
-          },
-          {
-            "ms": 94.3303339999984,
-            "requests": {
-              "reports": 0,
-              "events": 1,
+              "events": 0,
               "budgetOnly": 0,
               "legacyScans": 0
             }
@@ -1103,22 +1105,22 @@
         ]
       },
       "refresh-model-report": {
-        "firstMs": 127.58972999999969,
+        "firstMs": 207.7190680000058,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            95.6686320000008,
-            112.02525999999489,
-            95.85972899999615,
-            96.31640399999742,
-            112.00735400000121
+            191.72005300000455,
+            176.16651699999784,
+            191.97672800000146,
+            176.6929969999983,
+            208.38810199999716
           ],
-          "medianMs": 96.31640399999742,
-          "p95Ms": 112.02525999999489
+          "medianMs": 191.72005300000455,
+          "p95Ms": 208.38810199999716
         },
         "samples": [
           {
-            "ms": 127.58972999999969,
+            "ms": 207.7190680000058,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1127,7 +1129,7 @@
             }
           },
           {
-            "ms": 95.6686320000008,
+            "ms": 191.72005300000455,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1136,7 +1138,7 @@
             }
           },
           {
-            "ms": 112.02525999999489,
+            "ms": 176.16651699999784,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1145,7 +1147,7 @@
             }
           },
           {
-            "ms": 95.85972899999615,
+            "ms": 191.97672800000146,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1154,7 +1156,7 @@
             }
           },
           {
-            "ms": 96.31640399999742,
+            "ms": 176.6929969999983,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1163,7 +1165,7 @@
             }
           },
           {
-            "ms": 112.00735400000121,
+            "ms": 208.38810199999716,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1174,22 +1176,22 @@
         ]
       },
       "range-30d": {
-        "firstMs": 239.88984300000448,
+        "firstMs": 592.3624490000002,
         "firstFetchedReport": true,
         "repeated": {
           "samplesMs": [
-            111.75814900000114,
-            95.77890699999989,
-            80.38398199999938,
-            96.30192300000635,
-            96.16905199999746
+            112.22196599999734,
+            80.49231000000145,
+            79.476505000006,
+            95.57715199999802,
+            95.97849399999541
           ],
-          "medianMs": 96.16905199999746,
-          "p95Ms": 111.75814900000114
+          "medianMs": 95.57715199999802,
+          "p95Ms": 112.22196599999734
         },
         "samples": [
           {
-            "ms": 239.88984300000448,
+            "ms": 592.3624490000002,
             "requests": {
               "reports": 1,
               "events": 1,
@@ -1198,7 +1200,7 @@
             }
           },
           {
-            "ms": 111.75814900000114,
+            "ms": 112.22196599999734,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1207,7 +1209,7 @@
             }
           },
           {
-            "ms": 95.77890699999989,
+            "ms": 80.49231000000145,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1216,7 +1218,7 @@
             }
           },
           {
-            "ms": 80.38398199999938,
+            "ms": 79.476505000006,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1225,7 +1227,7 @@
             }
           },
           {
-            "ms": 96.30192300000635,
+            "ms": 95.57715199999802,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1234,7 +1236,7 @@
             }
           },
           {
-            "ms": 96.16905199999746,
+            "ms": 95.97849399999541,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1245,22 +1247,22 @@
         ]
       },
       "range-7d": {
-        "firstMs": 64.10512100000051,
+        "firstMs": 79.25347000000329,
         "firstFetchedReport": false,
         "repeated": {
           "samplesMs": [
-            64.23063800000091,
-            79.95052199999918,
-            79.26852800000052,
-            64.26652199999808,
-            80.0150880000001
+            79.94419599999674,
+            80.10381600000255,
+            80.12805300000036,
+            80.54624999999942,
+            96.07917499999894
           ],
-          "medianMs": 79.26852800000052,
-          "p95Ms": 80.0150880000001
+          "medianMs": 80.12805300000036,
+          "p95Ms": 96.07917499999894
         },
         "samples": [
           {
-            "ms": 64.10512100000051,
+            "ms": 79.25347000000329,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1269,7 +1271,7 @@
             }
           },
           {
-            "ms": 64.23063800000091,
+            "ms": 79.94419599999674,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1278,7 +1280,7 @@
             }
           },
           {
-            "ms": 79.95052199999918,
+            "ms": 80.10381600000255,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1287,7 +1289,7 @@
             }
           },
           {
-            "ms": 79.26852800000052,
+            "ms": 80.12805300000036,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1296,7 +1298,7 @@
             }
           },
           {
-            "ms": 64.26652199999808,
+            "ms": 80.54624999999942,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1305,7 +1307,7 @@
             }
           },
           {
-            "ms": 80.0150880000001,
+            "ms": 96.07917499999894,
             "requests": {
               "reports": 0,
               "events": 1,
@@ -1319,7 +1321,7 @@
     "screenshots": [
       {
         "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/baseline-home-desktop.png",
-        "bytes": 158485,
+        "bytes": 158752,
         "viewport": {
           "width": 1440,
           "height": 1000
@@ -1328,7 +1330,7 @@
       },
       {
         "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/candidate-home-desktop.png",
-        "bytes": 176929,
+        "bytes": 182170,
         "viewport": {
           "width": 1440,
           "height": 1000
@@ -1337,7 +1339,7 @@
       },
       {
         "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/candidate-my-usage-desktop.png",
-        "bytes": 697631,
+        "bytes": 703052,
         "viewport": {
           "width": 1440,
           "height": 1000
@@ -1346,7 +1348,7 @@
       },
       {
         "path": "/home/openclaw/.openclaw/worktrees/460f852b93431966/clawrouter-dashboard-usage-and-cost-audit/docs/performance/personal-usage/candidate-my-usage-mobile.png",
-        "bytes": 447706,
+        "bytes": 454199,
         "viewport": {
           "width": 393,
           "height": 851

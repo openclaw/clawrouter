@@ -37,6 +37,15 @@ filters, bounded pagination, independent event errors, cancellation, member
 pool isolation, and accepted-identity replacement. Desktop/mobile screenshots
 and WCAG AA checks exercise the same production screen.
 
+Rolling presets send `days=7|30` without `from`/`to`; the Worker clock resolves
+every fresh read. Browser-clock ±1-minute tests exercise home, full reports,
+refresh, pagination and custom/preset transitions. Event pages and retries use
+the report's exact returned ISO boundaries, timezone, grouping and filters,
+never a new rolling request. Custom dates stay pinned on refresh; future custom
+ends remain errors. Server-confirmed dates populate the form without a refetch
+loop. Projection-transition fixtures disclose retained-personal-history reads
+without labeling represented history as missing or inventing field coverage.
+
 The JSON reporter retains `synthetic-report-performance` and
 `responsive-navigation` attachments. Navigation is timed with an event read
 held open; the 1.5-second bound is a UI responsiveness regression guard, not

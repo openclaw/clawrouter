@@ -1,49 +1,30 @@
 {
-  "scope": "Synthetic local fixture only; not a production impact proposal",
+  "scope": "Synthetic actual Anthropic guard and soft hosted-tool receipt producers; not a production impact proposal",
   "sourceUnchanged": true,
+  "guardRecordedChargeMicros": 7626,
+  "softKnownComponentMicros": 56,
   "receipt": {
     "dryRun": true,
-    "examined": 5,
-    "projected": 5,
-    "lastRowid": 5,
-    "upperRowid": 5,
+    "examined": 2,
+    "projected": 2,
+    "lastRowid": 2,
+    "upperRowid": 2,
     "complete": true,
     "previouslyComplete": false,
     "effects": [
       {
         "lane": "api",
-        "costClass": "calculated",
-        "calls": 1,
-        "proposedReportingMicros": 1200,
-        "recordedChargeMicros": 1200
-      },
-      {
-        "lane": "api",
-        "costClass": "estimated",
-        "calls": 1,
-        "proposedReportingMicros": 150,
-        "recordedChargeMicros": 0
-      },
-      {
-        "lane": "api",
         "costClass": "partial",
         "calls": 1,
-        "proposedReportingMicros": 42,
-        "recordedChargeMicros": 42
+        "proposedReportingMicros": 56,
+        "recordedChargeMicros": 56
       },
       {
-        "lane": "subscription",
-        "costClass": "fixed",
-        "calls": 1,
-        "proposedReportingMicros": 300,
-        "recordedChargeMicros": 300
-      },
-      {
-        "lane": "unattributed",
+        "lane": "api",
         "costClass": "unknown",
         "calls": 1,
         "proposedReportingMicros": null,
-        "recordedChargeMicros": 0
+        "recordedChargeMicros": 7626
       }
     ]
   }

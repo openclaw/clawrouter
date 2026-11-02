@@ -5,7 +5,7 @@ export const costLanes: UsageCostLane[] = ['api', 'subscription', 'unattributed'
 export const costClassLabel: Record<UsageCostClass, string> = { calculated: 'Calculated', fixed: 'Fixed tariff', estimated: 'Estimate', upper_bound: 'Upper bound', partial: 'Partial', unknown: 'Unknown price', no_charge: 'No charge' };
 export const laneLabel: Record<UsageCostLane, string> = { api: 'API', subscription: 'Subscription', unattributed: 'Unattributed' };
 export type UsageFilters = Record<'model' | 'provider' | 'key' | 'status' | 'costClass' | 'lane', string>;
-export interface PersonalUsageQuery { rollingDays?: number; from: string; to: string; timezone: string; groupBy: UsageGroupBy; filters: UsageFilters }
+export interface PersonalUsageQuery { rollingDays?: 7 | 30; from: string; to: string; timezone: string; groupBy: UsageGroupBy; filters: UsageFilters }
 export interface UsageKeyName { credentialId: string; name?: string | null }
 export function usageKeyLabel(keyId: string | null, keys: readonly UsageKeyName[] = []): string {
   if (keyId === null) return 'Dashboard session';
@@ -18,15 +18,22 @@ export function usageGroupLabel(groupBy: UsageGroupBy, value: string | null): st
   return value ?? (groupBy === 'key' ? 'Dashboard session' : 'Unattributed');
 }
 export const emptyFilters: UsageFilters = { model: '', provider: '', key: '', status: '', costClass: '', lane: '' };
-export function rollingUsageQuery(days = 7, now = Date.now()): PersonalUsageQuery {
-  return { rollingDays: days, from: new Date(now - days * 86400000).toISOString(), to: new Date(now).toISOString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', groupBy: 'model', filters: { ...emptyFilters } };
+export function rollingUsageQuery(days: 7 | 30 = 7): PersonalUsageQuery {
+  // Presets are resolved by the Worker clock, never the browser clock. Fields
+  // remain blank until the server supplies the authoritative display range.
+  return { rollingDays: days, from: '', to: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', groupBy: 'model', filters: { ...emptyFilters } };
 }
-export function refreshUsageQuery(query: PersonalUsageQuery, now = Date.now()): PersonalUsageQuery {
-  if (!query.rollingDays) return query;
-  return { ...query, from: new Date(now - query.rollingDays * 86400000).toISOString(), to: new Date(now).toISOString() };
+/** Keep the explicit preset marker; each uncached read resolves it on the server. */
+export function refreshUsageQuery(query: PersonalUsageQuery): PersonalUsageQuery {
+  return query;
+}
+export function resolvedUsageQuery(query: PersonalUsageQuery, report: PersonalUsageReport): PersonalUsageQuery {
+  return { ...query, from: new Date(report.range.from).toISOString(), to: new Date(report.range.to).toISOString(), timezone: report.range.timezone, groupBy: report.groupBy };
 }
 export function usageQueryString(query: PersonalUsageQuery): string {
-  const params = new URLSearchParams({ from: query.from, to: query.to, timezone: query.timezone, groupBy: query.groupBy });
+  const params = new URLSearchParams({ timezone: query.timezone, groupBy: query.groupBy });
+  if (query.rollingDays) params.set('days', String(query.rollingDays));
+  else { params.set('from', query.from); params.set('to', query.to); }
   for (const [key, value] of Object.entries(query.filters)) if (value) params.set(key, value);
   return params.toString();
 }

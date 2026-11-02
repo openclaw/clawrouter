@@ -9,10 +9,11 @@ import { performance } from "node:perf_hooks";
 import { startWorkerdFixture } from "../test/helpers/workerd.mjs";
 // Run from repository root. BROWSER=1 expects baseline/candidate dist already built.
 const root = resolve(".openclaw/tmp"); await mkdir(root, { recursive: true });
-const sourcePaths = ["worker/ledgers.ts", "worker/usage-report.ts", "worker/usage-report-store.ts", "worker/usage-report-range.ts", "shared/usage-report.ts", "scripts/benchmark-personal-usage.mjs"];
+const sourcePaths = ["worker/usage-report-cost.ts", "worker/ledgers.ts", "worker/usage-report.ts", "worker/usage-report-store.ts", "worker/usage-report-range.ts", "shared/usage-report.ts", "scripts/benchmark-personal-usage.mjs"];
 const sourceHashes = Object.fromEntries(await Promise.all(sourcePaths.map(async path => [path, createHash("sha256").update(await readFile(path)).digest("hex")])));
 const temporary = await mkdtemp(join(root, "usage-benchmark-"));
 const perShard = Number(process.env.EVENTS_PER_SHARD ?? 50000), shardCount = 4;
+const seedProjection = process.env.PROJECTION !== "0";
 if (!Number.isSafeInteger(perShard) || perShard < 5) throw new Error("EVENTS_PER_SHARD must be an integer >= 5");
 const evidenceDir = resolve(process.env.EVIDENCE_DIR ?? "docs/performance/personal-usage");
 const summaries = values => { const sorted = [...values].sort((a, b) => a - b); return { samplesMs: values, medianMs: sorted[Math.floor(sorted.length / 2)], p95Ms: sorted[Math.ceil(sorted.length * .95) - 1] }; };
@@ -33,9 +34,9 @@ try {
             const event = { id: "s" + shard + "-" + String(i).padStart(8, "0"), type: "clawrouter.usage.v1", occurred_at_ms: now - 1 - i * (29 * 86400000 / count), tenant_id: "synthetic-tenant", policy_id: "policy-" + shard, provider: i % 3 ? "openai" : "anthropic", model: "model-" + i % 12, capability: "llm.responses", request_format: "openai.responses", credential_id: "key-" + i % 8, key_id: "key-" + i % 8, principal_id: i % 5 ? "other-" + i % 20 + "@example.test" : "owner@example.test", grant_lane: i % 3 ? "api_key" : "subscription", status: i % 19 ? "success" : "provider_error", status_code: i % 19 ? 200 : 502, input_tokens: 1000, output_tokens: 200, total_tokens: 1200, cached_input_tokens: 400, cache_write_input_tokens: 0, reasoning_output_tokens: i % 2 ? 120 : null, actual_cost_micros: i % 7 ? 3240 : 0, cost_basis: i % 7 ? "manifest_pricing" : "unpriced_usage", metadata: "x".repeat(1024) };
             event.occurred_at_ms = Math.floor(event.occurred_at_ms);
             this.sql.exec("INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, principal_id, principal_key, credential_id, cost_basis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code, event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event), event.principal_id, event.principal_id, event.credential_id, event.cost_basis);
-            insertUsageReportEvent(this.sql, event);
+            if (${seedProjection ? "true" : "false"}) insertUsageReportEvent(this.sql, event);
           }
-          this.sql.exec("UPDATE usage_report_migration SET complete = 1 WHERE id = 1");
+          this.sql.exec("UPDATE usage_report_migration SET upper_rowid = (SELECT COALESCE(MAX(rowid), 0) FROM usage_events), complete = ? WHERE id = 1", ${seedProjection ? 1 : 0});
           this.sql.exec("UPDATE usage_attribution_migration SET complete = 1 WHERE id = 1");
         });
         return Response.json({ seeded: count });
@@ -72,7 +73,7 @@ try {
   const expectedOwnerEvents = Math.ceil(perShard / 5) * shardCount;
   if (results.legacy30.calls !== expectedOwnerEvents || results.report30.calls !== expectedOwnerEvents) throw new Error("30-day owner totals differ from seeded volume");
   if (results.events25.calls !== Math.min(25, results.report7.calls)) throw new Error("Event page size differs from report volume/limit");
-  const output = { generatedAt: new Date().toISOString(), sourceHashes, runtime: process.version, environment: { os: platform(), release: release(), architecture: process.arch, cpuModel: cpus()[0]?.model, logicalCpus: cpus().length, memoryBytes: totalmem() }, transport: "loopback HTTP -> Worker -> four SQLite Durable Objects -> merge -> JSON (synthetic authority; excludes Access verification)", volume: { totalEvents: perShard * shardCount, eventsPerShard: perShard, ownerEvents: Math.ceil(perShard / 5) * shardCount, ownerShare: "20% (every fifth event)", days: 29, eventPaddingBytes: 1024 }, methodology: { api: "Each query: first request followed by 11 sequential warm requests; timing includes Node fetch, body read and JSON.parse. No artificial delay. Seeded DOs are already resident; first is not disk/process cold.", backend: "Current production usageSnapshots and personalUsage functions, four SQLite DO shards; seed inserts raw and reporting rows and marks migrations complete. Legacy function is not an archived implementation.", limits: ["Synthetic owner and policy authority; no Cloudflare Access verification, policy resolution, budget lookup, provider call, network WAN or production storage", "Local workerd co-schedules objects and disables idle eviction; not production Cloudflare topology", "Shared development host, no CPU/network throttling, no performance acceptance target", "Per-call token/cost metadata and provider/model/key distribution are synthetic; no prompt/completion content", "API and browser first samples run after seeding; browser measurements additionally follow API warmup"] }, results };
+  const output = { generatedAt: new Date().toISOString(), sourceHashes, runtime: process.version, environment: { os: platform(), release: release(), architecture: process.arch, cpuModel: cpus()[0]?.model, logicalCpus: cpus().length, memoryBytes: totalmem() }, transport: "loopback HTTP -> Worker -> four SQLite Durable Objects -> merge -> JSON (synthetic authority; excludes Access verification)", volume: { totalEvents: perShard * shardCount, eventsPerShard: perShard, ownerEvents: Math.ceil(perShard / 5) * shardCount, ownerShare: "20% (every fifth event)", reportingProjectionSeeded: seedProjection, days: 29, eventPaddingBytes: 1024 }, methodology: { api: "Each query: first request followed by 11 sequential warm requests; timing includes Node fetch, body read and JSON.parse. No artificial delay. Seeded DOs are already resident; first is not disk/process cold.", backend: "Current repository usageSnapshots and personalUsage functions, four SQLite DO shards; " + (seedProjection ? "seed inserts raw and reporting rows and marks projection complete" : "seed inserts canonical owner-attributed raw rows only, with reporting projection empty/incomplete") + ". Legacy function is not an archived implementation.", limits: ["Synthetic owner and policy authority; no Cloudflare Access verification, policy resolution, budget lookup, provider call, network WAN or production storage", "Local workerd co-schedules objects and disables idle eviction; not production Cloudflare topology", "Shared development host, no CPU/network throttling, no performance acceptance target", "Per-call token/cost metadata and provider/model/key distribution are synthetic; no prompt/completion content", "API and browser first samples run after seeding; browser measurements additionally follow API warmup"] }, results };
   if (process.env.BROWSER === "1") output.browser = await browserBenchmark(url, now);
   // Keep full per-request traces local. Committed proof contains raw latency samples
   // plus request-class counts, without thousands of duplicated query strings.
@@ -97,7 +98,7 @@ try {
   }
   const json = JSON.stringify(output, null, 2);
   await writeFile(join(root, "personal-usage-benchmark.json"), json);
-  if (process.env.BROWSER === "1") { await mkdir(evidenceDir, { recursive: true }); await writeFile(join(evidenceDir, "measurements.json"), json + "\n"); }
+  if (process.env.BROWSER === "1" || process.env.EVIDENCE_DIR) { await mkdir(evidenceDir, { recursive: true }); await writeFile(join(evidenceDir, "measurements.json"), json + "\n"); }
   console.log(json);
 } finally { await worker?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 

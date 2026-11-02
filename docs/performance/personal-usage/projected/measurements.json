@@ -1,0 +1,144 @@
+{
+  "generatedAt": "2026-11-02T19:50:01.501Z",
+  "sourceHashes": {
+    "worker/usage-report-cost.ts": "904b0ac703d17c1116ef6f38848e07f4f09ec18410c36dc3a2605a048ed6b9a2",
+    "worker/ledgers.ts": "3ee2ee42b8c1564445076f7e9c3f53e8ebea5919fb57fc5f612d74fd72dee830",
+    "worker/usage-report.ts": "73efec59e8120c42ff41b9e4908660fa91a5e9639ff65e8d3bbd701e53fb4c6e",
+    "worker/usage-report-store.ts": "5e208939f71d1c7cf9f88170fe0a692116a20cceb0a42e7e3f08eb7af025171f",
+    "worker/usage-report-range.ts": "3ca63d8a19bb8f0fb2091b327ae14bc3aabf4658d3bed0aabfd7ef37871fa9f2",
+    "shared/usage-report.ts": "b86b32b3cc84db98f3e926e5be16250b7731d9639e1d472e84bdc1305ddaac0d",
+    "scripts/benchmark-personal-usage.mjs": "ee54c1fbe3aabe2406613f55e60a5e1aaef3ed65156d1ebd0e5d4a61be6d3e97"
+  },
+  "runtime": "v26.12.1",
+  "environment": {
+    "os": "linux",
+    "release": "7.0.0-38-generic",
+    "architecture": "x64",
+    "cpuModel": "AMD EPYC 9555 64-Core Processor",
+    "logicalCpus": 128,
+    "memoryBytes": 201828433920
+  },
+  "transport": "loopback HTTP -> Worker -> four SQLite Durable Objects -> merge -> JSON (synthetic authority; excludes Access verification)",
+  "volume": {
+    "totalEvents": 200000,
+    "eventsPerShard": 50000,
+    "ownerEvents": 40000,
+    "ownerShare": "20% (every fifth event)",
+    "reportingProjectionSeeded": true,
+    "days": 29,
+    "eventPaddingBytes": 1024
+  },
+  "methodology": {
+    "api": "Each query: first request followed by 11 sequential warm requests; timing includes Node fetch, body read and JSON.parse. No artificial delay. Seeded DOs are already resident; first is not disk/process cold.",
+    "backend": "Current repository usageSnapshots and personalUsage functions, four SQLite DO shards; seed inserts raw and reporting rows and marks projection complete. Legacy function is not an archived implementation.",
+    "limits": [
+      "Synthetic owner and policy authority; no Cloudflare Access verification, policy resolution, budget lookup, provider call, network WAN or production storage",
+      "Local workerd co-schedules objects and disables idle eviction; not production Cloudflare topology",
+      "Shared development host, no CPU/network throttling, no performance acceptance target",
+      "Per-call token/cost metadata and provider/model/key distribution are synthetic; no prompt/completion content",
+      "API and browser first samples run after seeding; browser measurements additionally follow API warmup"
+    ]
+  },
+  "results": {
+    "legacy30": {
+      "firstMs": 402.7249619999984,
+      "samplesMs": [
+        411.3753660000002,
+        407.27380000000085,
+        401.63524700000016,
+        401.2154159999991,
+        401.01220099999955,
+        400.35069900000053,
+        399.64221499999985,
+        406.2267090000005,
+        404.47920499999964,
+        400.7538430000004,
+        402.3285080000005
+      ],
+      "medianMs": 401.63524700000016,
+      "p95Ms": 411.3753660000002,
+      "payloadBytes": 172810,
+      "calls": 40000
+    },
+    "report7": {
+      "firstMs": 45.2088590000003,
+      "samplesMs": [
+        34.02263799999855,
+        34.5518430000011,
+        34.552873999999065,
+        34.57445700000062,
+        33.60122500000034,
+        34.25419499999953,
+        34.344029999998384,
+        34.78691599999911,
+        33.37683900000047,
+        33.4090070000002,
+        33.343447999999626
+      ],
+      "medianMs": 34.25419499999953,
+      "p95Ms": 34.78691599999911,
+      "payloadBytes": 14302,
+      "calls": 9656
+    },
+    "report30": {
+      "firstMs": 149.937817,
+      "samplesMs": [
+        150.10376700000052,
+        148.043995,
+        149.50666100000126,
+        149.87503300000026,
+        148.74565799999982,
+        147.95865700000104,
+        148.49440099999993,
+        148.13380999999936,
+        147.90311399999882,
+        146.6449250000005,
+        147.97455099999934
+      ],
+      "medianMs": 148.13380999999936,
+      "p95Ms": 150.10376700000052,
+      "payloadBytes": 33188,
+      "calls": 40000
+    },
+    "filtered7": {
+      "firstMs": 26.07776300000114,
+      "samplesMs": [
+        24.461065999999846,
+        25.169609999997192,
+        24.348457000000053,
+        23.99152200000026,
+        24.086444000000483,
+        23.942236999999295,
+        23.81565699999919,
+        23.850039000000834,
+        24.28508199999851,
+        24.090439999999944,
+        24.10831700000199
+      ],
+      "medianMs": 24.090439999999944,
+      "p95Ms": 25.169609999997192,
+      "payloadBytes": 10531,
+      "calls": 6436
+    },
+    "events25": {
+      "firstMs": 3.0641299999988405,
+      "samplesMs": [
+        2.3678639999998268,
+        2.252701999997953,
+        2.134753999998793,
+        2.212450999999419,
+        2.1845590000011725,
+        2.1120300000002317,
+        2.168954999997368,
+        2.098549999998795,
+        2.0964569999996456,
+        3.637670000000071,
+        2.083918000000267
+      ],
+      "medianMs": 2.168954999997368,
+      "p95Ms": 3.637670000000071,
+      "payloadBytes": 14845,
+      "calls": 25
+    }
+  }
+}

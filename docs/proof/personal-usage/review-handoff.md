@@ -1,6 +1,6 @@
 # Local ClawSweeper review handoff
 
-This candidate is local only. Hannes authorized publication through this existing Team session after tests and the pinned local ClawSweeper review. That review is **not yet complete**. Merge, deployment and production migration remain unauthorized.
+This candidate is local only. Hannes authorized publication through this existing Team session after tests and the pinned local ClawSweeper review. The previous full review of ffdc0c5 completed with two P2 findings. Full pinned re-review of this replacement is **pending**. Merge, deployment and production migration remain unauthorized.
 
 ## Exact runner support
 

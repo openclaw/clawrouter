@@ -1,82 +1,94 @@
-# Personal usage: local performance evidence
+# Personal usage: transition performance proof
 
-Final measurement: 2026-11-02T19:18:28.674Z. Raw latency samples, response sizes, source/built-asset SHA-256 hashes and per-action request-class counts: [measurements.json](measurements.json). No production deployment or provider call.
+Read-through run: 2026-11-02T19:49:14.806Z. [Raw samples/source and asset hashes](measurements.json). Separate projected fixture: 2026-11-02T19:50:01.501Z, [measurements](projected/measurements.json). All data is synthetic, local and provider-free. No production deployment/backfill.
 
-## Workload and limits
+## Workload and interpretation
 
-- 200,000 synthetic retained events across four SQLite Durable Objects, 50,000 per shard. 40,000 owner events (20%); 29 days, 1,024 padding bytes per raw event. Two providers, 12 models, eight keys, mixed outcomes and priced/unpriced usage.
-- Node v26.12.1, Linux x64, AMD EPYC 9555 shared host (128 logical CPUs), unthrottled. Headless Chromium 156.0.8078.4. Desktop 1440×1000; mobile 393×851, UTC/light/reduced-motion.
-- Browser baseline is an immutable UI archive of 6fceb88. Backend for both is current usageSnapshots/personalUsage, not an archived Worker binary. Candidate assets were frozen at browser-run start; hashes identify the exact measured build.
-- Actual Node loopback HTTP → Worker → four SQLite DOs → merge → body read/JSON.parse. Browser report/events obtain those real responses. Synthetic session/policy authority and empty budget metadata exclude Cloudflare Access verification, policy resolution and budget lookup. No mock report latency or artificial provider delay.
-- Seed inserts raw/reporting rows and marks projection complete. Does not benchmark migration, queue ingestion/settlement throughput, cleanup, WAN latency, browser throttling or high-cardinality worst cases. Local workerd co-schedules DOs and disables idle eviction; this is not production Cloudflare topology.
+- 200,000 retained events across four SQLite DOs, 50,000 per shard; 40,000 owned by the selected principal (20%), spanning 29 days with 1,024 padding bytes per raw event. Two providers, 12 models, eight keys, mixed outcomes/pricing.
+- Main run is **immediate cutover before any projection apply**: canonical owner-attributed ledger populated, reporting projection empty/incomplete. Retained history is read through, not silently backfilled. The second run seeds the same-size typed projection as an explicitly labeled steady-state fixture.
+- Node v26.12.1, Linux x64 shared AMD EPYC host, 128 logical CPUs; Chromium 156.0.8078.4, unthrottled. Browser baseline UI archive 6fceb88; backend legacy function is current repository usageSnapshots, not an archived binary. Candidate assets are frozen/hash-bound.
+- Loopback HTTP → Worker → four SQLite DOs → merge → body read/JSON.parse. API first plus 11 sequential warm requests. First follows seeding/resident objects, **not** process/disk-cold. Small-sample nearest-rank p95 is not a production percentile/SLO.
 
-## API: first plus 11 sequential warm requests
+## Large-corpus API measurements
 
-First is query-first after seeding, not process/disk-cold; objects are resident. p95 uses nearest rank on small local samples, not a production SLO.
+| Mode | Query | First ms | Warm median ms | Warm p95 ms | JSON bytes | Owned calls / page rows |
+|---|---|---:|---:|---:|---:|---:|
+| Read-through before apply | legacy30 | 376.6 | 372.1 | 378.7 | 172,810 | 40,000 |
+| Read-through before apply | report7 | 130.5 | 117.5 | 118.7 | 14,308 | 9,656 |
+| Read-through before apply | report30 | 498.6 | 497.7 | 507.9 | 33,194 | 40,000 |
+| Read-through before apply | filtered7 | 110.4 | 105.9 | 107.9 | 10,537 | 6,436 |
+| Read-through before apply | events25 | 3.9 | 2.3 | 3.1 | 14,851 | 25 |
+| Projected fixture | legacy30 | 402.7 | 401.6 | 411.4 | 172,810 | 40,000 |
+| Projected fixture | report7 | 45.2 | 34.3 | 34.8 | 14,302 | 9,656 |
+| Projected fixture | report30 | 149.9 | 148.1 | 150.1 | 33,188 | 40,000 |
+| Projected fixture | filtered7 | 26.1 | 24.1 | 25.2 | 10,531 | 6,436 |
+| Projected fixture | events25 | 3.1 | 2.2 | 3.6 | 14,845 | 25 |
 
-| Query | First ms | Warm median ms | Warm p95 ms | JSON bytes | Owner calls / page rows |
-|---|---:|---:|---:|---:|---:|
-| legacy30 | 401.3 | 399.3 | 411.4 | 172,810 | 40,000 |
-| report7 | 45.3 | 34.7 | 36.3 | 14,249 | 9,656 |
-| report30 | 151.2 | 150.7 | 152.4 | 33,134 | 40,000 |
-| filtered7 | 26.8 | 24.6 | 29.0 | 10,477 | 6,436 |
-| events25 | 3.0 | 2.2 | 3.5 | 14,790 | 25 |
+**Tradeoff, not hidden:** same-30-day read-through is 497.7 ms versus 372.1 ms legacy in that run, 33.8% slower while preserving all history and producing the richer personal report. Default seven-day read-through is 117.5 ms. Unfiltered 25-event pages remain 2.3 ms and do not classify the entire retained range.
 
-Equal 30-day/40,000-owner-call report median is 62.3% lower, with 80.8% less JSON. Legacy returns pool aggregates plus owner summary/raw recent events; the new report returns personal groups, daily buckets and cost quality. Default seven days is a smaller workload, not an equal-work comparison.
+The typed projected path is 148.1 ms for 30 days in its separate run (legacy 401.6 ms). This is not permission to apply a production migration. Both paths return roughly 33 KB instead of 173 KB for the equal 30-day workload, about 80.8% less JSON. Shared-host baseline variation between runs is retained. Seven-day results are smaller workloads, not equal-work 30-day speedups.
 
-## Browser: navigation to usable statistics
+## Browser before/after default experience
 
-Eight home navigations per UI, alternating order: first fresh context and seven reloads. Full direct report and in-app opening each have one first plus five repeats. Timings include action/navigation delivery, rendered ready state and two animation frames. Backend was already warmed; browser request routing disables HTTP cache. Detached reads drain to networkidle outside each trial. This is not an INP/paint/Web Vitals measurement.
+Eight alternating home navigations per UI: first fresh browser context and seven reloads. Direct and in-app My usage each have one first plus five repeats. Times include action delivery, ready UI state and two animation frames; not INP/paint/Web Vitals. Browser routing disables HTTP cache, backend is API-warm, detached reads drain outside timings. Baseline readiness is Connected plus legacy data; candidate is Connected plus personal statistics. Baseline defaults to 30-day pool/owner view; candidate defaults to seven personal days. Events do not gate summary.
 
 | View | First ms | Repeated median ms | Repeated p95 ms |
 |---|---:|---:|---:|
-| Baseline home | 525.4 | 474.2 | 479.1 |
-| Candidate home | 138.8 | 104.8 | 115.6 |
-| Direct My usage: report | 159.6 | 138.9 | 150.7 |
-| Direct My usage: events | 191.8 | 171.2 | 183.1 |
-| Home → My usage: report | 76.2 | 82.5 | 85.2 |
-| Home → My usage: events | 108.5 | 112.1 | 117.3 |
+| Baseline home | 509.3 | 459.3 | 481.5 |
+| Candidate home, read-through | 227.8 | 196.5 | 213.0 |
+| Direct My usage: report | 255.4 | 215.3 | 222.7 |
+| Direct My usage: events | 287.6 | 247.5 | 255.0 |
+| Home → My usage: report | 75.7 | 83.4 | 89.5 |
+| Home → My usage: events | 107.1 | 114.6 | 121.0 |
 
-Baseline readiness = Connected + legacy usage loaded; candidate = Connected + personal report rendered. Baseline home shows the previous 30-day policy/owner experience, candidate defaults to seven personal days. Events do not gate summary readiness. In-app opening reuses the fresh home report where possible.
+Candidate variants made **zero** legacy usage scans; baseline made 8. Budget-only reads remain separate from personal analytics. A real shipped-route test verifies budgets_only=true performs zero usage-shard reads.
 
-**Budget-only integration verified:** baseline made 8 legacy scans; all candidate variants made zero. Candidate home/direct/mobile budget-only read counts: 8/6/1. Worker visibility tests independently verify the real budgets_only=true route makes zero usage-shard reads. Budget lookup time remains outside this synthetic benchmark.
+## Browser controls
 
-## Browser: click/select to report rendered
-
-One first plus five repeats per action. Refresh clears the report cache. Repeats may hit or miss the 15-second frontend cache; JSON retains per-action request-class counts. First uncached 30-day selection and subsequent cached selections are kept distinct.
+One first plus five repeats per action. Report cache freshness is 15 seconds, bounded/scoped by accepted identity. Refresh clears it; JSON contains raw latency samples and request-class counts.
 
 | Action | First ms | Repeat median ms | Repeat p95 ms | First fetched report? |
 |---|---:|---:|---:|---|
-| group-provider | 82.6 | 80.2 | 84.0 | yes |
-| group-key | 80.1 | 79.4 | 80.1 | yes |
-| group-model | 48.3 | 48.0 | 48.1 | no (cached) |
-| filter-model | 63.8 | 80.3 | 80.6 | yes |
-| clear-model-filter | 81.4 | 79.3 | 94.7 | no (cached) |
-| filter-provider | 95.9 | 80.0 | 95.9 | yes |
-| clear-provider-filter | 94.7 | 79.2 | 94.8 | no (cached) |
-| filter-key | 79.9 | 80.5 | 95.7 | yes |
-| clear-key-filter | 79.2 | 79.5 | 95.0 | no (cached) |
-| refresh-model-report | 127.6 | 96.3 | 112.0 | yes |
-| range-30d | 239.9 | 96.2 | 111.8 | yes |
-| range-7d | 64.1 | 79.3 | 80.0 | no (cached) |
+| group-provider | 179.4 | 160.2 | 176.3 | yes |
+| group-key | 175.7 | 176.0 | 176.5 | yes |
+| group-model | 48.1 | 47.9 | 48.4 | no (cached) |
+| filter-model | 160.1 | 159.9 | 176.4 | yes |
+| clear-model-filter | 87.9 | 78.8 | 79.4 | no (cached) |
+| filter-provider | 160.2 | 160.3 | 176.0 | yes |
+| clear-provider-filter | 94.7 | 79.1 | 94.7 | no (cached) |
+| filter-key | 159.8 | 144.1 | 192.2 | yes |
+| clear-key-filter | 95.7 | 64.2 | 79.6 | no (cached) |
+| refresh-model-report | 207.7 | 191.7 | 208.4 | yes |
+| range-30d | 592.4 | 95.6 | 112.2 | yes |
+| range-7d | 79.3 | 80.1 | 96.1 | no (cached) |
 
-Browser/unexpected-route errors: 0. Mobile document width 393 px at 393 px viewport, no document-level horizontal overflow. Shared-host variation is visible in samples. No invented performance acceptance target.
+Browser/unexpected-route errors: 0. Mobile document width 393 at 393 viewport pixels, with horizontally scrollable labeled tables. No invented performance target.
 
-## Rendered proof
+## Authenticated, accounting-driven native upgrade proof
 
-Synthetic owner@example.test and invented model/key metadata only; no prompts, completions, access tokens, provider secrets or real-user data.
+The large benchmark isolates query/render cost: its session metadata is synthetic and it seeds rows directly. It **does not prove authorization or accounting ingestion**. The separate [native proof](../../proof/personal-usage/authenticated-upgrade.json) uses actual shipped local-session verification, authority policy resolution, proxy requests, accounting publication, queue ingestion and persisted SQLite/KV restart from exact baseline 6fceb88. Only setup/state inspection, an offset fixture clock and the upstream are adapters.
 
-- [Baseline home](baseline-home-desktop.png)
-- [Candidate home](candidate-home-desktop.png)
-- [Candidate My usage desktop](candidate-my-usage-desktop.png)
-- [Candidate My usage mobile](candidate-my-usage-mobile.png)
+It generated 600 baseline accounting events (300 per owner), observed 300 personal calls before and 300 immediately after upgrade, with 0 projection rows and no raw/settings/debit changes caused by reads. Two new calls yield 301 owned calls, not a partial history. Other-owner exclusion, removed bindings, disabled policies, proxy rejection and strict future-custom validation are asserted. Historical reasoning coverage stays zero; only the new owned call reports ten reasoning tokens.
+
+For the same 301 owned calls on authenticated shipped report routes, local pre-projection median is 6.7 ms and post-explicit-local-projection median 3.1 ms. Policy/credential/connection settings are digest-checked; old budget debit 5100 micros stays unchanged until one new owned call adds 17, yielding 5117. The local migration phase is explicit and fixture-only. These small-corpus timings complement, not replace, the large benchmark.
+
+## Rendered proof and limits
+
+[Baseline home](baseline-home-desktop.png) · [Candidate read-through home](candidate-home-desktop.png) · [Desktop details](candidate-my-usage-desktop.png) · [Mobile details](candidate-my-usage-mobile.png). Invented metadata only; no prompts/completions, access tokens, provider secrets or real-user usage.
+
+- Large benchmark excludes actual Access verification, policy resolution, budget lookup, queue/ingestion cost and WAN. Native proof covers shipped local-session/authority/accounting paths, **not** live production, real provider billing or Cloudflare Access JWT verification.
+- Native fixture clock uses a monotonic UTC-noon offset across restart to avoid calendar-window flakes; performance.now remains live.
+- Local workerd co-schedules DOs and disables idle eviction; no claim about production topology, worst-case cardinality, browser throttling or production load.
+- Source/asset hashes, raw timing samples and request-class counts are committed. Verbose traces are scratch-only and overwritten per run; they are not required to interpret the retained samples.
 
 ## Reproduce
 
-From the repository root with locked dependencies and Playwright Chromium installed, prepare the baseline by archiving `6fceb88 admin shared worker/generated/provider-snapshot.json` into `.openclaw/tmp/baseline-ui`. Symlink its `admin/node_modules` to the current admin node_modules, then build both admin directories using the direct Node Vite entrypoint. Do not invoke pnpm inside the archived snapshot (it lacks the workspace root and can install a different dependency tree).
+Prepare immutable baseline with git archive 6fceb88 admin shared worker/generated/provider-snapshot.json under .openclaw/tmp/baseline-ui; symlink its admin/node_modules to current locked dependencies. Build each admin with the direct Node Vite entrypoint. Do not invoke pnpm in the archive (no workspace root). Install Playwright Chromium.
 
 ```sh
-NO_PROXY=127.0.0.1,localhost BROWSER=1 node scripts/benchmark-personal-usage.mjs
+NO_PROXY=127.0.0.1,localhost PROJECTION=0 BROWSER=1 node scripts/benchmark-personal-usage.mjs
+NO_PROXY=127.0.0.1,localhost PROJECTION=1 EVIDENCE_DIR=docs/performance/personal-usage/projected node scripts/benchmark-personal-usage.mjs
+NO_PROXY=127.0.0.1,localhost node scripts/prove-personal-usage-upgrade.mjs
 ```
 
-Strict loopback preview ports 4321/4322, temporary workerd/storage and browser children are disposed by the harness. Default is 50,000 events per shard; EVENTS_PER_SHARD=1000 with EVIDENCE_DIR=.openclaw/tmp/personal-usage-smoke is a smaller harness smoke, not this published workload. BASELINE_UI selects another prepared baseline admin directory. Without BROWSER, only API measurements run. Full per-request traces stay excluded in .openclaw/tmp/personal-usage-benchmark-full.json; committed JSON retains raw latency samples and compact counts, not duplicated request query strings.
+Native proof needs the exact baseline Git object; shallow checkouts must fetch it explicitly. Its Worker test reports a skip rather than inventing evidence when absent; the recorded local run executed it. Harness children/storage are disposed. Preview ports 4321/4322 are loopback only. EVENTS_PER_SHARD=1000 is a smaller harness smoke, not the published workload.

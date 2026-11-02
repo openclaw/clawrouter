@@ -2,17 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { costCell, csvCell, csvRows, eventsCsv, reportCsv, rollingUsageQuery, UsageQueryCache, usageGroupLabel, usageKeyLabel, usageQueryString } from '../src/personal-usage.ts';
 
-test('rolling ranges preserve exact instants and exact filters are URL encoded', () => {
-  const now = Date.parse('2026-11-02T12:34:56.789Z');
-  const query = rollingUsageQuery(7, now);
-  assert.equal(query.from, '2026-10-26T12:34:56.789Z');
-  assert.equal(query.to, '2026-11-02T12:34:56.789Z');
-  assert.equal(Date.parse(rollingUsageQuery(30, now).to) - Date.parse(rollingUsageQuery(30, now).from), 30 * 86400000);
+test('rolling presets send server-time days; custom ranges and filters stay exact', () => {
+  const query = rollingUsageQuery(7);
+  assert.equal(query.from, ''); assert.equal(query.to, '');
+  assert.equal(new URLSearchParams(usageQueryString(rollingUsageQuery(30))).get('days'), '30');
   query.filters.model = 'provider/model + custom'; query.filters.key = '=key';
   const params = new URLSearchParams(usageQueryString(query));
+  assert.equal(params.get('days'), '7'); assert.equal(params.has('from'), false); assert.equal(params.has('to'), false);
   assert.equal(params.get('model'), query.filters.model); assert.equal(params.get('key'), '=key');
   assert.equal(params.has('provider'), false);
-  query.from = '2026-10-31'; query.to = '2026-11-02'; query.timezone = 'America/New_York';
+  query.rollingDays = undefined; query.from = '2026-10-31'; query.to = '2026-11-02'; query.timezone = 'America/New_York';
   assert.equal(new URLSearchParams(usageQueryString(query)).get('from'), '2026-10-31');
 });
 test('cost presentation never sums price quality or billing lanes and unknown is never zero', () => {

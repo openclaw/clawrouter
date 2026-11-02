@@ -309,6 +309,8 @@ export interface AuthorizedIdentity {
 export interface UsageEvent {
   /** Reporting metadata only. Not used by budget settlement. */
   request_format?: string;
+  /** Measured token/tool component only; never a reservation or reporting estimate. */
+  reporting_known_cost_micros?: number | null;
   reporting_estimated_cost_micros?: number | null;
   reporting_estimate_reason?: string | null;
   reasoning_output_tokens?: number | null;

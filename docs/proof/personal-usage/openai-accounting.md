@@ -13,7 +13,7 @@ These are distinct contracts. They do not establish that a missing Responses cou
 
 ## Still-reachable current accounting paths
 
-worker/pricing.ts actualModelCost requires cacheWrite when the frozen rate card declares cacheWriteInput; resolveRates requires a recognized served tier when serviceTiers exist. worker/proxy-accounting.ts accountingReceipt retains reservation estimates for reserve/unmetered paths, but soft mode records unknown zero when observed usage cannot be fully priced. Hosted fee/usage gaps remain partial or unknown; a tool declaration is not evidence that its unreported fees are zero.
+worker/pricing.ts actualModelCost requires cacheWrite when the frozen rate card declares cacheWriteInput; resolveRates requires a recognized served tier when serviceTiers exist. worker/proxy-accounting.ts accountingReceipt retains reservation estimates for reserve/unmetered paths, but soft mode records unknown zero when observed usage cannot be fully priced. Hosted fee/usage gaps remain unknown unless the producer explicitly records a genuine known component in reporting_known_cost_micros. A positive unpriced debit may be a retained reservation, not measured partial cost. A tool declaration is not evidence that its unreported fees are zero.
 
 The preserved scratch cost-probe.mjs rerun on current source still reproduces these paths. Focused regression tests in usage-report-counters.test.mjs and reporting-estimate.test.mjs freeze both amount and cost_basis semantics.
 

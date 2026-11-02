@@ -81,7 +81,8 @@ test('filters, grouping and 30d range use exact bounded query parameters', async
   const filtered = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!;
   for (const [key, value] of Object.entries({ model: 'openai/gpt-5-mini', provider: 'anthropic', key: 'studio-key', costClass: 'unknown', lane: 'unattributed' })) expect(filtered.searchParams.get(key)).toBe(value);
   await page.getByRole('button', { name: 'Last 30 days', exact: true }).click();
-  await expect.poll(() => { const params = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams; return Date.parse(params.get('to')!) - Date.parse(params.get('from')!); }).toBe(30 * 86400000);
+  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)?.searchParams.get('days')).toBe('30');
+  expect(queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.has('to')).toBe(false);
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
   await expect(page.getByLabel('Model (exact)', { exact: true })).toHaveValue('');
 });
@@ -242,12 +243,19 @@ test('available key names retain their actual ID and filters; missing key metada
 
 
 test('refresh advances rolling presets but preserves an explicit custom range', async ({ page }) => {
-  const queries = await mockUsage(page);
+  let serverNow = fixtureNow;
+  const queries = await mockUsage(page, async (route, url) => {
+    if (!url.pathname.endsWith('/report')) return false;
+    await route.fulfill({ json: fixtureReport(url.searchParams, serverNow) }); return true;
+  });
   await page.goto('/dashboard/my-usage');
   await expect(summary(page).locator('.personalCallStats dd').first()).toHaveText('42');
   await page.clock.setFixedTime(new Date(fixtureNow + 3600000));
+  serverNow += 60000;
   await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
-  await expect.poll(() => Date.parse(queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('to')!)).toBe(fixtureNow + 3600000);
+  await expect(summary(page).locator('.personalRange')).toContainText(new Date(serverNow).toISOString());
+  const preset = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams;
+  expect(preset.get('days')).toBe('7'); expect(preset.has('from')).toBe(false); expect(preset.has('to')).toBe(false);
   await page.getByText('Custom dates & exact filters', { exact: true }).click();
   await page.getByLabel('Start', { exact: true }).fill('2026-10-28');
   await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29');
@@ -288,4 +296,98 @@ test('duplicate cross-shard IDs keep unique rows and correct peer links; real es
   await expect(rows.first().getByRole('link', { name: 'adviser', exact: true })).toHaveAttribute('href', '#' + ids[1]);
   await expect(rows.first()).toContainText('not a guaranteed upper bound');
   expect(errors).toEqual([]);
+});
+
+
+for (const offset of [-60000, 60000]) test('server-time presets survive browser clock offset ' + offset + ', refresh, pagination and custom transitions', async ({ page }) => {
+  let serverNow = fixtureNow;
+  const queries = await mockUsage(page, async (route, url) => {
+    if (!url.pathname.endsWith('/report')) return false;
+    const p = url.searchParams;
+    if (!p.has('days') && Date.parse(p.get('to')!) > serverNow) {
+      await route.fulfill({ status: 400, json: { error: { code: 'invalid_usage_range', message: 'to must not be in the future' } } });
+    } else await route.fulfill({ json: fixtureReport(p, serverNow) });
+    return true;
+  });
+  await page.clock.setFixedTime(new Date(fixtureNow + offset));
+  await page.goto('/dashboard/home');
+  await expect(summary(page).locator('.personalRange')).toContainText(new Date(serverNow).toISOString());
+  let reportReads = queries.filter(url => url.pathname.endsWith('/report'));
+  expect(reportReads).toHaveLength(1);
+  expect(reportReads[0].searchParams.get('days')).toBe('7');
+  expect(reportReads[0].searchParams.has('from')).toBe(false); expect(reportReads[0].searchParams.has('to')).toBe(false);
+  await page.getByRole('button', { name: 'Open My usage', exact: true }).click();
+  await expect(page.locator('.personalEvents > li')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Last 7 days', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  await expect(page.getByLabel('Start', { exact: true })).toHaveValue(new Date(serverNow - 7 * 86400000).toISOString());
+  await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(new Date(serverNow).toISOString());
+  await page.clock.setFixedTime(new Date(fixtureNow + offset + 120000));
+  await page.getByRole('button', { name: 'Next page', exact: true }).click();
+  await expect(page.locator('.personalEvents > li')).toHaveCount(2);
+  const firstPages = queries.filter(url => url.pathname.endsWith('/events'));
+  expect(firstPages).toHaveLength(2);
+  for (const url of firstPages) {
+    expect(url.searchParams.get('from')).toBe(new Date(serverNow - 7 * 86400000).toISOString());
+    expect(url.searchParams.get('to')).toBe(new Date(serverNow).toISOString());
+    expect(url.searchParams.has('days')).toBe(false);
+  }
+  serverNow += 30000;
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  await expect(summary(page).locator('.personalRange')).toContainText(new Date(serverNow).toISOString());
+  await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue(new Date(serverNow).toISOString());
+  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/events')).at(-1)?.searchParams.get('to')).toBe(new Date(serverNow).toISOString());
+  // Preset transitions preserve even unapplied exact filters and the chosen timezone.
+  await page.getByLabel('Model (exact)', { exact: true }).fill('model + exact');
+  await page.getByLabel('Timezone', { exact: true }).fill('Asia/Kathmandu');
+  await page.getByRole('combobox', { name: 'Billing lane', exact: true }).selectOption('api');
+  await page.getByRole('button', { name: 'Last 30 days', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Last 30 days', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByLabel('Start', { exact: true })).toHaveValue(new Date(serverNow - 30 * 86400000).toISOString());
+  reportReads = queries.filter(url => url.pathname.endsWith('/report'));
+  const preset = reportReads.at(-1)!.searchParams;
+  expect(preset.get('days')).toBe('30'); expect(preset.get('model')).toBe('model + exact'); expect(preset.get('lane')).toBe('api'); expect(preset.get('timezone')).toBe('Asia/Kathmandu');
+  expect(preset.has('from')).toBe(false); expect(preset.has('to')).toBe(false);
+  await page.getByLabel('Start', { exact: true }).fill('2026-10-28T00:00:00Z');
+  await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29T00:00:00Z');
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-10-29T00:00:00.000Z');
+  const customParams = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.toString();
+  expect(new URLSearchParams(customParams).has('days')).toBe(false);
+  serverNow += 30000; await page.clock.setFixedTime(new Date(fixtureNow + offset + 3600000));
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  await expect(summary(page).locator('.personalCallStats dd').first()).toHaveText('42');
+  expect(queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.toString()).toBe(customParams);
+  await page.getByLabel('End (exclusive)', { exact: true }).fill(new Date(serverNow + 60000).toISOString());
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('to must not be in the future');
+  await page.getByRole('button', { name: 'Last 7 days', exact: true }).click();
+  await expect(summary(page).locator('.personalRange')).toContainText(new Date(serverNow).toISOString());
+  await expect(page.getByLabel('Model (exact)', { exact: true })).toHaveValue('model + exact');
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('projection transition clearly uses retained personal history without claiming data loss', async ({ page }) => {
+  let reportTransition = true;
+  await mockUsage(page, async (route, url) => {
+    if (url.pathname.endsWith('/events')) {
+      await route.fulfill({ json: { ...fixtureEvents(url.searchParams), historySource: 'retained_ledger', projectionComplete: false, historyComplete: true } }); return true;
+    }
+    if (!url.pathname.endsWith('/report')) return false;
+    await route.fulfill({ json: { ...fixtureReport(url.searchParams), historySource: reportTransition ? 'retained_ledger' : 'projection', projectionComplete: !reportTransition, historyComplete: true } }); return true;
+  });
+  await page.goto('/dashboard/my-usage');
+  await expect(summary(page)).toContainText('Reporting projection is transitioning.');
+  await expect(summary(page)).toContainText('reads retained personal history directly');
+  await expect(summary(page)).toContainText('field coverage below reflects what was recorded');
+  await expect(summary(page)).not.toContainText('Incomplete history');
+  await expect(summary(page)).not.toContainText('legacy usage may not be represented');
+  await expect(summary(page).locator('.personalCallStats dd').first()).toHaveText('42');
+  await expect(summary(page)).toContainText('40/42 calls reported');
+  reportTransition = false;
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  const recent = page.getByRole('region', { name: 'Recent model calls', exact: true });
+  await expect(recent).toContainText('Recent calls read retained personal history during the reporting projection transition');
+  await expect(recent).not.toContainText('Event history is incomplete');
 });

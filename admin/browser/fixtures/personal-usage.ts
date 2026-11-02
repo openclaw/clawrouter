@@ -18,9 +18,10 @@ function partitionMetrics(weights: number[]): UsageMetrics[] {
     return metrics;
   });
 }
-export function fixtureReport(params = new URLSearchParams()): PersonalUsageReport {
+export function fixtureReport(params = new URLSearchParams(), now = fixtureNow): PersonalUsageReport {
   const groupBy = (params.get('groupBy') ?? 'model') as UsageGroupBy;
-  const from = Date.parse(params.get('from') ?? '2026-10-26T12:00:00.000Z'), to = Date.parse(params.get('to') ?? '2026-11-02T12:00:00.000Z');
+  const to = params.has('to') ? Date.parse(params.get('to')!) : now;
+  const from = params.has('from') ? Date.parse(params.get('from')!) : to - Number(params.get('days') ?? 7) * 86400000;
   const values = groupBy === 'model' ? ['openai/gpt-5-mini', 'anthropic/claude-sonnet', 'tavily/search'] : groupBy === 'provider' ? ['openai', 'anthropic', 'tavily'] : ['studio-key', null];
   const groupMetrics = partitionMetrics(values.length === 3 ? [28, 11, 3] : [28, 14]);
   const boundaries = [];
@@ -43,7 +44,7 @@ export function fixtureReport(params = new URLSearchParams()): PersonalUsageRepo
     }
   }
   const buckets = boundaries.map((boundary, index) => ({ ...boundary, metrics: dayMetrics[index], costs: bucketCosts[index] }));
-  return { range: { from, to, timezone: params.get('timezone') ?? 'UTC', retentionStart: fixtureNow - 30 * 86400000, clampedStart: false, buckets: boundaries }, groupBy, metrics: fixtureMetrics, costs: fixtureCosts, groups: values.map((value, index) => ({ value, metrics: groupMetrics[index], costs: index === 0 ? fixtureCosts.slice(0, 5) : values.length === 2 ? fixtureCosts.slice(5) : index === 1 ? fixtureCosts.slice(5, 7) : fixtureCosts.slice(7) })), buckets, groupsTruncated: false, historyComplete: true, generatedAt: fixtureNow };
+  return { range: { from, to, timezone: params.get('timezone') ?? 'UTC', retentionStart: now - 30 * 86400000, clampedStart: false, buckets: boundaries }, groupBy, metrics: fixtureMetrics, costs: fixtureCosts, groups: values.map((value, index) => ({ value, metrics: groupMetrics[index], costs: index === 0 ? fixtureCosts.slice(0, 5) : values.length === 2 ? fixtureCosts.slice(5) : index === 1 ? fixtureCosts.slice(5, 7) : fixtureCosts.slice(7) })), buckets, groupsTruncated: false, historyComplete: true, generatedAt: now };
 }
 export function fixtureEvents(params = new URLSearchParams()): PersonalUsageEvents {
   const second = params.has('cursor');

@@ -68,7 +68,7 @@ test("utility is only known request format and its costs/tokens and success/erro
 
 test("cost classes preserve actual basis and keep unknown debits separate from no-charge; all lanes", () => {
   const f = usageReportFixture();
-  for (const [basis, expected] of Object.entries({ manifest_pricing: "calculated", realtime_modality_usage: "calculated", realtime_input_transcription_usage: "calculated", policy_fixed: "fixed", request_character_estimate: "estimated", manifest_reservation: "estimated", manifest_rate_upper_bound: "upper_bound", partial_usage: "partial", unpriced_usage: "unknown", flat_fallback: "unknown", unknown_future: "unknown", none: "no_charge" })) {
+  for (const [basis, expected] of Object.entries({ manifest_pricing: "calculated", realtime_modality_usage: "calculated", realtime_input_transcription_usage: "calculated", policy_fixed: "fixed", request_character_estimate: "estimated", manifest_reservation: "estimated", manifest_rate_upper_bound: "upper_bound", partial_usage: "unknown", unpriced_usage: "unknown", flat_fallback: "unknown", unknown_future: "unknown", none: "no_charge" })) {
     const e = f.event(1, { cost_basis: basis, actual_cost_micros: 0 }); assert.equal(reportingCost(e).costClass, expected);
     if (expected === "unknown") assert.equal(projectUsageEvent(e).reportingCostMicros, null);
   }
@@ -88,9 +88,9 @@ test("historical projection defaults dry-run, resumes bounded batches and never 
   const before = f.db.prepare("SELECT * FROM usage_events ORDER BY rowid").all();
   const dry = f.migrate({ batchSize: 2 }); assert.equal(dry.dryRun, true); assert.equal(dry.examined, 2);
   assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'usage_report_events'").get().n, 0);
-  const ledger = f.open(); assert.ok(ledger); assert.equal(f.report().metrics.calls, 0); assert.equal(f.report().historyComplete, false);
-  const a = f.migrate({ apply: true, batchSize: 2 }); assert.equal(a.complete, false); assert.equal(f.report().metrics.calls, 2);
-  const preview = f.migrate({ batchSize: 2 }); assert.equal(preview.lastRowid, 4); assert.equal(f.report().metrics.calls, 2);
+  const ledger = f.open(); assert.ok(ledger); assert.equal(f.report().metrics.calls, 5); assert.equal(f.report().historyComplete, true); assert.equal(f.report().projectionComplete, false);
+  const a = f.migrate({ apply: true, batchSize: 2 }); assert.equal(a.complete, false); assert.equal(f.report().metrics.calls, 5);
+  const preview = f.migrate({ batchSize: 2 }); assert.equal(preview.lastRowid, 4); assert.equal(f.report().metrics.calls, 5);
   f.migrate({ apply: true, batchSize: 2 }); const final = f.migrate({ apply: true, batchSize: 2 }); assert.equal(final.complete, true);
   assert.equal(f.report().metrics.calls, 5); assert.equal(f.report().historyComplete, true);
   assert.deepEqual(f.db.prepare("SELECT * FROM usage_events ORDER BY rowid").all().map(row => Object.fromEntries(Object.keys(before[0]).map(k => [k, row[k]]))), before.map(row => ({ ...row })));
@@ -102,7 +102,7 @@ test("migration projection and progress rollback together on failure", () => {
   const original = f.state.storage.sql.exec;
   const sql = { exec(q, ...bindings) { if (q.startsWith("INSERT OR IGNORE INTO usage_report_events") && bindings[0] === "event-2") throw new Error("disk"); return original(q, ...bindings); } };
   assert.throws(() => migrateUsageReport(sql, f.state.storage.transactionSync, { apply: true }));
-  assert.equal(f.report().metrics.calls, 0); assert.equal(f.db.prepare("SELECT last_rowid FROM usage_report_migration").get().last_rowid, 0);
+  assert.equal(f.report().metrics.calls, 3); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM usage_report_events").get().n, 0); assert.equal(f.db.prepare("SELECT last_rowid FROM usage_report_migration").get().last_rowid, 0);
 });
 
 test("at most 100 lexical groups with honest truncation and complete totals/buckets", () => {
@@ -198,10 +198,11 @@ test("key reporting uses personal credential IDs only; dashboard sessions never 
   const details = f.events().events; assert.deepEqual(details.map(e => e.keyId).sort(), ["personal-key-a", "personal-key-b", null].sort()); assert.ok(!JSON.stringify(details).includes("upstream-handle"));
 });
 
-test("unpriced positive recorded components are partial, realtime measurements calculated, reservation estimates not qualified bounds", () => {
+test("unpriced positive debits need explicit components, realtime measurements calculated, reservation estimates not qualified bounds", () => {
   const f = usageReportFixture();
   for (const cost_basis of ["unpriced_usage", "unpriced_request", "unpriced_modifier", "unpriced_service_tier"]) {
-    assert.deepEqual(reportingCost(f.event(1, { grant_lane: "api_key", cost_basis, actual_cost_micros: 7, reporting_estimated_cost_micros: 99, reporting_estimate_reason: "estimate" })), { lane: "api", costClass: "partial", amount: 7 });
+    assert.deepEqual(reportingCost(f.event(1, { grant_lane: "api_key", cost_basis, actual_cost_micros: 7, reporting_estimated_cost_micros: 99, reporting_estimate_reason: "estimate" })), { lane: "api", costClass: "unknown", amount: null });
+    assert.deepEqual(reportingCost(f.event(1, { grant_lane: "api_key", cost_basis, actual_cost_micros: 7, reporting_known_cost_micros: 3 })), { lane: "api", costClass: "partial", amount: 3 });
   }
   for (const cost_basis of ["realtime_modality_usage", "realtime_input_transcription_usage"]) assert.equal(reportingCost(f.event(1, { cost_basis, actual_cost_micros: 7 })).costClass, "calculated");
   assert.equal(reportingCost(f.event(1, { cost_basis: "manifest_reservation", actual_cost_micros: 7 })).costClass, "estimated");
@@ -223,7 +224,7 @@ test("migration dry-run summarizes lane/class counts and proposed amounts separa
   const preview = f.migrate();
   assert.deepEqual(preview.effects, [
     { lane: "api", costClass: "no_charge", calls: 1, proposedReportingMicros: 0, recordedChargeMicros: 0 },
-    { lane: "api", costClass: "partial", calls: 2, proposedReportingMicros: 12, recordedChargeMicros: 12 },
+    { lane: "api", costClass: "unknown", calls: 2, proposedReportingMicros: null, recordedChargeMicros: 12 },
     { lane: "subscription", costClass: "estimated", calls: 1, proposedReportingMicros: 11, recordedChargeMicros: 0 },
     { lane: "unattributed", costClass: "unknown", calls: 2, proposedReportingMicros: null, recordedChargeMicros: 3 },
   ]);
@@ -234,16 +235,16 @@ test("migration dry-run summarizes lane/class counts and proposed amounts separa
 });
 
 
-test("empty shard starts history-complete while preexisting history stays pending without automatic projection", async () => {
+test("empty shard starts projection-complete while existing indexed history stays visible without automatic projection", async () => {
   const fresh = usageReportFixture(); let ledger = fresh.open();
   assert.equal(fresh.db.prepare("SELECT upper_rowid FROM usage_report_migration").get().upper_rowid, 0);
   assert.equal(fresh.report().historyComplete, true);
   await fresh.ingest(ledger, fresh.event(1, { policy_id: "policy" })); ledger = fresh.open(); await ledger.alarm();
   assert.equal(fresh.report().historyComplete, true); assert.equal(fresh.report().metrics.calls, 1);
   const historical = usageReportFixture(); historical.insert(historical.event(1, { policy_id: "policy" })); ledger = historical.open(); await ledger.alarm();
-  assert.equal(historical.report().historyComplete, false); assert.equal(historical.report().metrics.calls, 0);
+  assert.equal(historical.report().historyComplete, true); assert.equal(historical.report().metrics.calls, 1); assert.equal(historical.report().projectionComplete, false); assert.equal(historical.report().historySource, "retained_ledger");
   assert.equal(historical.db.prepare("SELECT complete FROM usage_report_migration").get().complete, 0);
-  assert.equal(historical.migrate().dryRun, true); assert.equal(historical.report().historyComplete, false);
+  assert.equal(historical.migrate().dryRun, true); assert.equal(historical.report().historyComplete, true); assert.equal(historical.report().projectionComplete, false);
   historical.migrate({ apply: true }); assert.equal(historical.report().historyComplete, true); assert.equal(historical.report().metrics.calls, 1);
 });
 

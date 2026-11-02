@@ -32,6 +32,9 @@ export function usageDateTools(timezone: string) {
 export function nextUsageDate(date: string): string { return new Date(Date.parse(date + "T00:00:00Z") + reportDayMs).toISOString().slice(0, 10); }
 
 export function parseUsageReportRange(params: URLSearchParams, now = Date.now()): UsageReportRange {
+  const days = params.get("days");
+  if (days !== null && days !== "7" && days !== "30") invalid("days must be 7 or 30");
+  if (days !== null && (params.has("from") || params.has("to"))) invalid("days cannot be combined with from/to");
   const timezone = params.get("timezone") ?? "UTC";
   if (timezone.length > 100 || /^[+-]/.test(timezone)) invalid("timezone must be an IANA timezone");
   const tools = usageDateTools(timezone);
@@ -44,7 +47,7 @@ export function parseUsageReportRange(params: URLSearchParams, now = Date.now())
     return at;
   };
   const to = instant(params.get("to"), now);
-  const requestedFrom = instant(params.get("from"), to - 7 * reportDayMs);
+  const requestedFrom = instant(params.get("from"), to - Number(days ?? 7) * reportDayMs);
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
   const calendarRange = dateOnly.test(params.get("from") ?? "") && dateOnly.test(params.get("to") ?? "");
   const calendarDays = calendarRange ? (Date.parse(params.get("to")!) - Date.parse(params.get("from")!)) / reportDayMs : 0;

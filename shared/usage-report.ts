@@ -55,6 +55,9 @@ export interface PersonalUsageReport {
   buckets: UsageReportBucket[];
   groupsTruncated: boolean;
   historyComplete: boolean;
+  /** Retained-ledger read-through preserves history until explicit projection migration. */
+  historySource?: "projection" | "retained_ledger";
+  projectionComplete?: boolean;
   generatedAt: number;
 }
 /** Explicit allowlist: no content, identities, correlation, or upstream credential handles. */
@@ -90,8 +93,12 @@ export interface PersonalUsageEvents {
   events: PersonalUsageEvent[];
   nextCursor: string | null;
   historyComplete: boolean;
+  historySource?: "projection" | "retained_ledger";
+  projectionComplete?: boolean;
 }
-// Query: from/to = ISO dates in timezone or RFC3339 instants; timezone = IANA (default UTC).
+// Query: days=7|30 resolves on the Worker clock; never combine with custom from/to.
+// Custom from/to = ISO dates in timezone or RFC3339 instants; timezone = IANA (default UTC).
+// Event pages use the report's exact returned from/to, not a fresh rolling preset.
 // Defaults: rolling 7 days, day buckets. Max 30 days; <= 32 exact clipped day buckets.
 // groupBy = model|provider|key; provider/model/key/status/costClass/lane are optional exact filters.
 // /v1/session/usage/report: at most 100 groups, no events.
