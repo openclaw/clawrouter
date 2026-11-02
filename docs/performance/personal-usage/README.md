@@ -1,6 +1,6 @@
 # Personal usage: local performance evidence
 
-Final measurement: 2026-11-02T19:06:00.996Z. Raw latency samples, response sizes, source/built-asset SHA-256 hashes and per-action request-class counts: [measurements.json](measurements.json). No production deployment or provider call.
+Final measurement: 2026-11-02T19:18:28.674Z. Raw latency samples, response sizes, source/built-asset SHA-256 hashes and per-action request-class counts: [measurements.json](measurements.json). No production deployment or provider call.
 
 ## Workload and limits
 
@@ -16,13 +16,13 @@ First is query-first after seeding, not process/disk-cold; objects are resident.
 
 | Query | First ms | Warm median ms | Warm p95 ms | JSON bytes | Owner calls / page rows |
 |---|---:|---:|---:|---:|---:|
-| legacy30 | 599.0 | 404.6 | 433.8 | 172,810 | 40,000 |
-| report7 | 45.3 | 34.1 | 35.7 | 14,249 | 9,656 |
-| report30 | 158.9 | 156.0 | 162.0 | 33,134 | 40,000 |
-| filtered7 | 28.1 | 26.2 | 27.2 | 10,477 | 6,436 |
-| events25 | 3.7 | 2.3 | 3.9 | 14,790 | 25 |
+| legacy30 | 401.3 | 399.3 | 411.4 | 172,810 | 40,000 |
+| report7 | 45.3 | 34.7 | 36.3 | 14,249 | 9,656 |
+| report30 | 151.2 | 150.7 | 152.4 | 33,134 | 40,000 |
+| filtered7 | 26.8 | 24.6 | 29.0 | 10,477 | 6,436 |
+| events25 | 3.0 | 2.2 | 3.5 | 14,790 | 25 |
 
-Equal 30-day/40,000-owner-call report median is 61.4% lower, with 80.8% less JSON. Legacy returns pool aggregates plus owner summary/raw recent events; the new report returns personal groups, daily buckets and cost quality. Default seven days is a smaller workload, not an equal-work comparison.
+Equal 30-day/40,000-owner-call report median is 62.3% lower, with 80.8% less JSON. Legacy returns pool aggregates plus owner summary/raw recent events; the new report returns personal groups, daily buckets and cost quality. Default seven days is a smaller workload, not an equal-work comparison.
 
 ## Browser: navigation to usable statistics
 
@@ -30,12 +30,12 @@ Eight home navigations per UI, alternating order: first fresh context and seven 
 
 | View | First ms | Repeated median ms | Repeated p95 ms |
 |---|---:|---:|---:|
-| Baseline home | 541.6 | 510.7 | 601.3 |
-| Candidate home | 175.8 | 116.1 | 196.6 |
-| Direct My usage: report | 174.7 | 214.7 | 269.8 |
-| Direct My usage: events | 206.6 | 247.1 | 301.4 |
-| Home → My usage: report | 93.4 | 101.4 | 119.1 |
-| Home → My usage: events | 125.4 | 133.5 | 150.6 |
+| Baseline home | 525.4 | 474.2 | 479.1 |
+| Candidate home | 138.8 | 104.8 | 115.6 |
+| Direct My usage: report | 159.6 | 138.9 | 150.7 |
+| Direct My usage: events | 191.8 | 171.2 | 183.1 |
+| Home → My usage: report | 76.2 | 82.5 | 85.2 |
+| Home → My usage: events | 108.5 | 112.1 | 117.3 |
 
 Baseline readiness = Connected + legacy usage loaded; candidate = Connected + personal report rendered. Baseline home shows the previous 30-day policy/owner experience, candidate defaults to seven personal days. Events do not gate summary readiness. In-app opening reuses the fresh home report where possible.
 
@@ -47,18 +47,18 @@ One first plus five repeats per action. Refresh clears the report cache. Repeats
 
 | Action | First ms | Repeat median ms | Repeat p95 ms | First fetched report? |
 |---|---:|---:|---:|---|
-| group-provider | 105.1 | 96.1 | 127.4 | yes |
-| group-key | 127.8 | 95.9 | 112.1 | yes |
-| group-model | 48.6 | 63.9 | 64.4 | no (cached) |
-| filter-model | 79.8 | 111.4 | 112.9 | yes |
-| clear-model-filter | 95.5 | 92.5 | 94.1 | no (cached) |
-| filter-provider | 99.2 | 124.2 | 160.5 | yes |
-| clear-provider-filter | 89.9 | 108.9 | 109.7 | no (cached) |
-| filter-key | 96.5 | 112.0 | 128.2 | yes |
-| clear-key-filter | 94.3 | 109.9 | 125.2 | no (cached) |
-| refresh-model-report | 160.2 | 111.9 | 127.8 | yes |
-| range-30d | 304.6 | 111.9 | 128.2 | yes |
-| range-7d | 95.2 | 96.4 | 127.9 | no (cached) |
+| group-provider | 82.6 | 80.2 | 84.0 | yes |
+| group-key | 80.1 | 79.4 | 80.1 | yes |
+| group-model | 48.3 | 48.0 | 48.1 | no (cached) |
+| filter-model | 63.8 | 80.3 | 80.6 | yes |
+| clear-model-filter | 81.4 | 79.3 | 94.7 | no (cached) |
+| filter-provider | 95.9 | 80.0 | 95.9 | yes |
+| clear-provider-filter | 94.7 | 79.2 | 94.8 | no (cached) |
+| filter-key | 79.9 | 80.5 | 95.7 | yes |
+| clear-key-filter | 79.2 | 79.5 | 95.0 | no (cached) |
+| refresh-model-report | 127.6 | 96.3 | 112.0 | yes |
+| range-30d | 239.9 | 96.2 | 111.8 | yes |
+| range-7d | 64.1 | 79.3 | 80.0 | no (cached) |
 
 Browser/unexpected-route errors: 0. Mobile document width 393 px at 393 px viewport, no document-level horizontal overflow. Shared-host variation is visible in samples. No invented performance acceptance target.
 

@@ -39,7 +39,7 @@ test('personal report is accessible, price-safe and responsive with independent 
   await expect(trend).toContainText('Subscription · Calculated:');
   await expect(trend).toContainText('Unattributed · Unknown price: Price unknown');
   await page.getByText('Call details', { exact: true }).first().click();
-  await expect(page.getByRole('link', { name: 'adviser', exact: true })).toHaveAttribute('href', '#usage-event-call-1');
+  await expect(page.getByRole('link', { name: 'adviser', exact: true })).toHaveAttribute('href', '#usage-event-1-1');
   const detail = page.locator('.personalEvents > li').first();
   await expect(detail).toContainText('Estimate reason');
   await expect(detail).toContainText('max_declared_rate');
@@ -260,4 +260,32 @@ test('refresh advances rolling presets but preserves an explicit custom range', 
   const last = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!;
   expect(last.searchParams.get('from')).toBe('2026-10-28');
   expect(last.searchParams.get('to')).toBe('2026-10-29');
+});
+
+
+test('duplicate cross-shard IDs keep unique rows and correct peer links; real estimate reasons are disclosed', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await mockUsage(page, async (route, url) => {
+    if (url.pathname === '/v1/session/avatar') { await route.fulfill({ status: 204 }); return true; }
+    if (!url.pathname.endsWith('/events')) return false;
+    const original = fixtureEvents().events[0];
+    const reason = 'served_tier_unreported_max_declared_rate;cache_write_unreported_max_rate_allocation';
+    await route.fulfill({ json: { historyComplete: true, nextCursor: null, events: [
+      { ...original, id: 'same-ledger-id', compoundStage: 'synthesizer', estimateReason: reason },
+      { ...original, id: 'same-ledger-id', compoundStage: 'adviser', estimateReason: reason },
+      { ...original, id: String.fromCharCode(0xd800), compoundRequestId: null },
+    ] } });
+    return true;
+  });
+  await page.goto('/dashboard/my-usage');
+  const rows = page.locator('.personalEvents > li');
+  await expect(rows).toHaveCount(3);
+  const ids = await rows.evaluateAll(elements => elements.map(element => element.id));
+  expect(new Set(ids).size).toBe(3);
+  await rows.first().getByText('Call details', { exact: true }).click();
+  await expect(rows.first().getByRole('link', { name: 'adviser', exact: true })).toHaveAttribute('href', '#' + ids[1]);
+  await expect(rows.first()).toContainText('not a guaranteed upper bound');
+  expect(errors).toEqual([]);
 });

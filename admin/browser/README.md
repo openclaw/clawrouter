@@ -67,3 +67,5 @@ export covers only its displayed groups, as flagged in `groups_truncated`.
 Event CSV keeps reporting microdollars, recorded budget-charge microdollars
 and estimate reason in separate explicit columns; neither export includes
 extra scope/identity/content/secret fields.
+
+Call-detail anchors are page-local row identifiers, not URI-encoded ledger IDs. Duplicate IDs from separate shards and legacy non-URI-safe IDs retain distinct rows and correct Fusion peer links. Estimate-bound warnings recognize the producer's complete reason string, not only a shortened fixture label.

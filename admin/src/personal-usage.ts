@@ -12,6 +12,8 @@ export function usageKeyLabel(keyId: string | null, keys: readonly UsageKeyName[
   const name = keys.find(key => key.credentialId === keyId)?.name?.trim();
   return name ? name + ' · ' + keyId : keyId;
 }
+/** Page-local anchors do not assume ledger event IDs are globally unique or URI-safe. */
+export function usageEventAnchor(page: number, index: number): string { return 'usage-event-' + page + '-' + index; }
 export function usageGroupLabel(groupBy: UsageGroupBy, value: string | null): string {
   return value ?? (groupBy === 'key' ? 'Dashboard session' : 'Unattributed');
 }

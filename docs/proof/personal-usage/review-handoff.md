@@ -16,13 +16,15 @@ The requested Studio checkout is /Users/hrudolph/Projects/openclaw-tools/clawswe
 
 ## Review the source bundle on Studio
 
-The final delivery supplies the bundle, SHA-256, and immutable head. Clone it into **~/.openclaw-openclaw/worktrees**, never under ~/Projects. The original scratch probe remains outside commits and is not needed by the runner.
+The final delivery supplies a ZIP containing the compact committed-range bundle, SHA-256, immutable head and exact instructions. The bundle requires the baseline below from the public canonical repository. Prepare a clean target in **~/.openclaw-openclaw/worktrees**, never under ~/Projects. The original scratch probe remains outside commits and is not needed by the runner.
 
     target="$HOME/.openclaw-openclaw/worktrees/clawrouter-individual-dashboard-review"
-    git clone /path/to/clawrouter-individual-dashboard.bundle "$target"
+    test ! -e "$target" && git clone https://github.com/openclaw/clawrouter.git "$target"
+    git -C "$target" cat-file -e 6fceb88d4d165ba66281c931b74c3047772a2ef5^{commit}
+    git -C "$target" fetch /absolute/path/to/downloaded-range.bundle HEAD
+    git -C "$target" switch --detach FETCH_HEAD
     git -C "$target" status --short
     git -C "$target" rev-parse HEAD
-    git -C "$target" cat-file -e 6fceb88d4d165ba66281c931b74c3047772a2ef5^{commit}
     cd /Users/hrudolph/Projects/openclaw-tools/clawsweeper-local-review-1756
     git rev-parse HEAD
     pnpm run review -- --local-range --target-repo openclaw/clawrouter \
