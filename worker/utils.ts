@@ -6,7 +6,7 @@ const corsHeaders = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
   "access-control-allow-headers": [
-    "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version", "anthropic-user-profile-id", "anthropic-workspace-id", "openai-organization", "openai-project", "x-client-request-id",
+    "authorization", "content-type", "idempotency-key", "cancel-after", "x-api-key", "anthropic-beta", "anthropic-version", "anthropic-user-profile-id", "anthropic-workspace-id", "openai-organization", "openai-project", "x-client-request-id",
     "x-request-id", "traceparent", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",
     "x-clawrouter-agent-id", "x-clawrouter-parent-agent-id", "x-clawrouter-project-id",
     "x-clawrouter-client", "x-claude-code-session-id", "x-claude-code-agent-id",

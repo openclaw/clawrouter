@@ -275,15 +275,15 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     if (request.method === "GET") {
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
       await requireEmptyResponseControlBody(request);
-      const query = new URL(request.url).searchParams, ids = query.getAll("response_id");
+      const query = new URL(request.url).searchParams, idParam = control.protocol ? "prediction_id" : "response_id", ids = query.getAll(idParam);
       if (ids.length !== 1) throw new HttpError(400, "response_id_required", "one response_id path parameter is required");
-      query.delete("response_id");
-      return proxyResponseControl(request, env, control.action, ids[0], query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
+      query.delete(idParam);
+      return proxyResponseControl(request, env, control.action, ids[0], query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined, control.protocol);
     }
     if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
     const envelope = manifestEnvelope(await readJson<unknown>(request));
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
-    return proxyResponseControl(request, env, control.action, envelope.pathParams.response_id, envelope.query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
+    return proxyResponseControl(request, env, control.action, envelope.pathParams[control.protocol ? "prediction_id" : "response_id"], envelope.query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined, control.protocol);
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
@@ -323,7 +323,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id);
     if (preauthenticated instanceof Response) return preauthenticated;
     await requireEmptyResponseControlBody(request);
-    return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
+    return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2])[control.protocol ? "prediction_id" : "response_id"], new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined, undefined, control.protocol);
   }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
@@ -360,6 +360,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return identityDenial;
   }
   validateSelectedInput(selection);
+  if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
+    const { proxyManagedPrediction } = await import("./managed-predictions.ts");
+    return proxyManagedPrediction(request, env, context, auth, selection, queryInput);
+  }
   const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let background: HttpBackground | undefined;
@@ -690,7 +694,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection) }); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -701,6 +705,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     // Decide once from the materialized transport, before reservation. An
     // ordinary failover cannot promote an already reserved request into a job.
     const backgroundRecovery = recoverBackground && backgroundResponse(selection.endpoint, selection.body) && grantSupports(lifecycle, upstream.grant);
+    if (selection.endpoint.lifecycle) assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: transport, managedLifecycle: true }, upstream.grant, env);
     if (backgroundRecovery) {
       assertOperationConfiguration(lifecycle, upstream.grant, env);
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
@@ -730,7 +735,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const requestBody = bodyless ? undefined : media ? media.stream().pipeThrough(new FixedLengthStream(bytes)) : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
     if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
-    if (selection.capability === "llm.responses" || compact || search) {
+    if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
       if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
@@ -741,7 +746,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         lineage: upstream.grant?.credentialLineage ?? null,
         // A WebSocket GET is only the handshake; both transports execute the
         // same logical Responses POST and must share continuation ownership.
-        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey),
+        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey, selection.endpoint.lifecycle, env),
         policyGeneration: auth.policy.generation,
       };
     }

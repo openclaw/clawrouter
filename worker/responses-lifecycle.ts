@@ -6,8 +6,10 @@ export type ResponsesControlAction = "retrieve" | "cancel";
 
 // Control ownership is declared once on the create endpoint. It never creates
 // a second model capability or a fresh inference/catalog offer.
-export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): { create: CompiledEndpoint; action: ResponsesControlAction } | null {
+export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): { create: CompiledEndpoint; action: ResponsesControlAction; protocol?: "replicate.predictions" } | null {
   for (const create of provider.endpoints) {
+    if (create.lifecycle?.retrieve === endpoint.id) return { create, action: "retrieve", protocol: create.lifecycle.protocol };
+    if (create.lifecycle?.cancel === endpoint.id) return { create, action: "cancel", protocol: create.lifecycle.protocol };
     if (create.responsesLifecycle?.retrieve === endpoint.id) return { create, action: "retrieve" };
     if (create.responsesLifecycle?.cancel === endpoint.id) return { create, action: "cancel" };
   }

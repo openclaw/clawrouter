@@ -3,6 +3,7 @@ import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { backgroundCall } from "./http-background.ts";
 import { continuationScope, identityKey } from "./http-continuation.ts";
+import { managedPredictionKey } from "./managed-prediction-identity.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { assertProviderAccess, providerById } from "./providers.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
@@ -19,7 +20,7 @@ type Binding = { owner: ContinuationOwner; background: Association | null; auth:
 
 export async function proxyResponseControl(request: Request, env: Env, action: ResponsesControlAction, responseId: string,
   queryInput: URLSearchParams | Record<string, unknown>, mode: "proxy_key" | "access", providerId?: string, endpointId?: string,
-  preauthenticated?: AuthorizedIdentity, verifiedSession?: AccessSession): Promise<Response> {
+  preauthenticated?: AuthorizedIdentity, verifiedSession?: AccessSession, protocol?: "replicate.predictions"): Promise<Response> {
   let identities: AuthorizedIdentity[];
   if (mode === "proxy_key") {
     const identity = preauthenticated ?? await authenticateProxyKey(request.headers, env);
@@ -34,10 +35,11 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
   }
   const identity = responseIdentity("response", responseId);
   if (!identity) throw new HttpError(400, "response_id_required", "response ID is required");
-  const query = responsesControlQuery(action, queryInput), operation = new HttpOperation(request.signal, 10_000);
+  if (protocol && (queryInput instanceof URLSearchParams ? queryInput.size : Object.keys(queryInput).length)) throw new HttpError(400, "invalid_prediction_query", "prediction controls do not accept query parameters");
+  const query = protocol ? new URLSearchParams() : responsesControlQuery(action, queryInput), operation = new HttpOperation(request.signal, protocol ? 30_000 : 10_000);
   let response: Response | undefined;
   try {
-    const key = await identityKey(identity), matches: Binding[] = [];
+    const key = protocol ? await managedPredictionKey(responseId) : await identityKey(identity), matches: Binding[] = [];
     for (const auth of identities) {
       const scope = await continuationScope(auth);
       const result = await operation.wait(authorityCall<{ owners: Array<ContinuationOwner | null>; background?: Array<Association | null> }>(env, "/http-continuations", { action: "resolve", keys: [key] }, scope, operation.signal));
@@ -49,8 +51,17 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
     if (matches.length !== 1) throw new HttpError(409, "response_owner_unavailable", "exactly one current authorized response owner is required");
     const binding = matches[0], provider = providerById(binding.owner.providerId);
     const create = provider?.endpoints.find(endpoint => endpoint.id === binding.owner.endpointId);
-    if (!provider || !create?.responsesLifecycle || create.path_params.length) throw new HttpError(409, "response_owner_unavailable", "the original response route is unavailable");
+    if (!provider || !create || !(protocol ? create.lifecycle?.protocol === protocol : create.responsesLifecycle) || create.path_params.length) throw new HttpError(409, "response_owner_unavailable", "the original response route is unavailable");
     await operation.wait(assertProviderAccess(provider, binding.auth, env));
+    if (protocol) {
+      if (!binding.background) throw new HttpError(409, "response_owner_unavailable", "prediction has no original managed job");
+      const { readManagedControl, observePrediction, predictionResponse } = await import("./managed-predictions.ts");
+      const result = await readManagedControl(env, { owner: binding.owner, responseId, action, query: "", stream: false, protocol,
+        route: retainedResponseRoute({}, request.headers), authorization: publicControlAuthorization(binding.auth) }, operation);
+      if (!binding.background.closed) await observePrediction(env, binding.scope, binding.background.id, result.prediction, result.status);
+      operation.stop("complete");
+      return predictionResponse(result.prediction, provider.id, result.status);
+    }
     response = await operation.wait(dispatchResponseControl(env, {
       owner: binding.owner, responseId, action, query: query.toString(), stream: binding.background?.stream === true,
       route: retainedResponseRoute({}, request.headers),
