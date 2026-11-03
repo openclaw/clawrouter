@@ -90,7 +90,7 @@ test("path mapping rejects URLs, normalization, queries, templates and caller pa
 test("upstream path metadata cannot bypass qualified protocols, methods or lifecycle dispatch", () => {
   for (const change of [
     m => { m.endpoints.chat.responseFormat = "anthropic.messages"; },
-    m => { m.endpoints.chat.requestFormat = m.endpoints.chat.responseFormat = "openai.responses"; },
+    m => { m.endpoints.chat.requestFormat = m.endpoints.chat.responseFormat = "openai.responses"; }, // Only the exact Responses create caller path qualifies.
     m => { m.endpoints.chat.requestFormat = m.endpoints.chat.responseFormat = "unknown.protocol"; },
     m => { m.endpoints.models.requestFormat = m.endpoints.models.responseFormat = "synthetic.models"; },
     m => { m.endpoints.chat.method = "DELETE"; }, m => { m.capabilities[0].methods.push("GET"); },
@@ -117,5 +117,78 @@ test("the mapping has one spelling and absent metadata preserves the existing co
   for (const field of ["upstream_path", "upstreamUrl", "upstreamOrigin"]) {
     const manifest = fixture(false); manifest.endpoints.chat[field] = "/openai/v1/chat/completions";
     assert.throws(() => compile(manifest), /invalid manifest/);
+  }
+});
+
+function responsesFixture(product = "go") {
+  const manifest = fixture();
+  manifest.baseUrls.default = "https://opencode.ai";
+  manifest.capabilities = [{ id: "llm.responses", endpoint: "responses", methods: ["POST"] }];
+  manifest.endpoints = { responses: { method: "POST", path: "/v1/responses",
+    upstreamPath: `/inference/${product === "go" ? "go/" : ""}openai/v1/responses`,
+    requestFormat: "openai.responses", responseFormat: "openai.responses", streaming: "sse" } };
+  manifest.models.entries[0].capabilities = ["llm.responses"];
+  return manifest;
+}
+
+test("literal Responses create mapping preserves the caller route, catalog, model and original account configuration", () => {
+  for (const product of ["go", "console"]) {
+    const manifest = responsesFixture(product), provider = compile(manifest).providers[0], endpoint = provider.endpoints[0];
+    const unmapped = structuredClone(manifest); delete unmapped.endpoints.responses.upstreamPath;
+    const baseline = compile(unmapped).providers[0];
+    assert.equal(endpoint.path, "/v1/responses"); assert.equal(endpoint.method, "POST");
+    assert.equal(endpoint.upstreamPath, `/inference/${product === "go" ? "go/" : ""}openai/v1/responses`);
+    assert.equal(endpoint.request_format, "openai.responses"); assert.equal(endpoint.response_format, "openai.responses");
+    assert.equal(endpoint.streaming, "sse"); assert.equal(endpoint.upstream_path, undefined);
+    assert.deepEqual(createRouteCatalog([provider]), createRouteCatalog([baseline]));
+    assert.equal(unifiedPathForEndpoint(provider, endpoint), "/v1/responses");
+    const auth = configuredUpstream(provider, null, { FIXTURE_API_KEY: `synthetic-${product}-key` });
+    assert.equal(auth.baseUrl, "https://opencode.ai"); assert.equal(auth.headers.get("authorization"), `Bearer synthetic-${product}-key`);
+    assert.deepEqual(provider.models, baseline.models);
+  }
+});
+
+test("mapped Responses preparation preserves native input and tool declarations without a body transform", () => {
+  const provider = compile(responsesFixture()).providers[0], endpoint = provider.endpoints[0];
+  const body = { model: "mapping-fixture/model", input: [{ role: "user", content: "synthetic response fixture" }],
+    tools: [{ type: "function", name: "synthetic_client_tool", parameters: { type: "object", properties: {} } }],
+    stream: true, max_output_tokens: 64 };
+  const original = structuredClone(body), selected = prepareManifestRequest(provider, endpoint, body, {}, {});
+  assert.deepEqual(body, original); assert.deepEqual(selected.body, { ...original, model: "native-model" });
+  assert.equal(selected.model.id, original.model); assert.equal(selected.model.pricing, null);
+  assert.deepEqual(selected.pathParams, {});
+});
+
+test("Responses mappings qualify only literal POST create and reject retrieval, WebSocket, template and query expansion", () => {
+  for (const change of [
+    m => { m.endpoints.responses.method = "GET"; }, m => { m.capabilities[0].methods = ["POST", "GET"]; },
+    m => { m.endpoints.responses.path = "/v1/responses/synthetic-id"; },
+    m => { m.endpoints.responses.path = "/v1/chat/completions"; },
+    m => { m.endpoints.responses.upstreamPath = "https://other.example/v1/responses"; },
+    m => { m.endpoints.responses.upstreamPath = "/inference/${product}/openai/v1/responses"; },
+    m => { m.endpoints.responses.upstreamPath += "?product=go"; },
+    m => { m.endpoints.responses.upstreamPath += "#fragment"; },
+    m => { m.endpoints.responses.upstreamPath = "/inference/%2e%2e/responses"; },
+    m => { m.endpoints.responses.pathParams = ["product"]; },
+    m => { m.endpoints.responses.query = { product: "go" }; },
+    m => { m.endpoints.responses.websocket = "openai.responses"; },
+    m => { m.endpoints.responses.responsesLifecycle = { retrieve: "responses", cancel: "responses" }; },
+    m => { m.endpoints.responses.responseFormat = "openai.chat_completions"; },
+    m => { m.endpoints.responses.requestFormat = m.endpoints.responses.responseFormat = "google.interactions"; },
+  ]) { const manifest = responsesFixture(); change(manifest); assert.throws(() => compile(manifest), /upstreamPath|invalid manifest/, String(change)); }
+});
+
+test("Responses dispatch declarations reject conflicting product paths and preserve absent mappings", () => {
+  const manifest = responsesFixture();
+  manifest.auth.grantTransports = { api_key: { endpointPaths: { responses: "/inference/openai/v1/responses" } } };
+  assert.throws(() => compile(manifest), /upstreamPath/);
+  manifest.auth.grantTransports.api_key.endpointPaths.responses = manifest.endpoints.responses.upstreamPath;
+  const provider = compile(manifest).providers[0];
+  assert.equal(provider.auth.grantTransports.api_key.endpointPaths.responses, provider.endpoints[0].upstreamPath);
+  const unmapped = responsesFixture(); delete unmapped.endpoints.responses.upstreamPath;
+  assert.equal(compile(unmapped).providers[0].endpoints[0].upstreamPath, undefined);
+  for (const field of ["upstream_path", "upstreamUrl", "upstreamOrigin"]) {
+    const alias = structuredClone(unmapped); alias.endpoints.responses[field] = "https://other.example";
+    assert.throws(() => compile(alias), /invalid manifest/);
   }
 });
