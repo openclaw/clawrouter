@@ -77,18 +77,21 @@ test("unknown or interrupted native observations do not lower the dispatch bound
   }
 });
 
-test("definition-only tariff does not activate compiler or hard-dollar admission", () => {
+test("compiler registration stays closed while qualified injected tariffs reserve the native maximum", () => {
   const manifest = fixture(), provider = compileProviderSnapshot([manifest]).providers[0];
   const endpoint = provider.endpoints.find(value => value.id === "search");
   assert.equal(endpoint.requestPricing, undefined);
   manifest.endpoints.search.requestPricing = structuredClone(tariff);
   assert.throws(() => compileProviderSnapshot([manifest]), /requestPricing|invalid manifest/);
-  // Even an injected unqualified tariff must not bypass the existing early guard.
+  // Shared runtime qualifies this injected tariff; manifest activation stays separate.
   for (const selected of [endpoint, { ...endpoint, requestPricing: tariff }]) {
     const cost = estimateCost(null, wire.request.body, null, "search.web", selected);
-    assert.equal(cost.requestTariff, undefined);
+    if (selected.requestPricing) assert.equal(cost.reserveMicros, 750);
+    else assert.equal(cost.requestTariff, undefined);
     for (const [caller, providerLimit] of [[10000, null], [null, 10000]]) {
-      assert.throws(() => validateBudgetReservation("search.web", cost, caller, { monthlyBudgetMicros: providerLimit }), error => error.code === "pricing_required");
+      const validate = () => validateBudgetReservation("search.web", cost, caller, { monthlyBudgetMicros: providerLimit });
+      if (selected.requestPricing) assert.doesNotThrow(validate);
+      else assert.throws(validate, error => error.code === "pricing_required");
     }
     for (const fixed of [0, 17]) assert.deepEqual(estimateCost(null, wire.request.body, fixed, "search.web", selected), {
       reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null,
