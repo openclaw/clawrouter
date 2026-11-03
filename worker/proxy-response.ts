@@ -1,3 +1,4 @@
+import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
 import { createNativeEventObserver } from "./native-events.ts";
@@ -71,7 +72,9 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       try {
         text += decoder.decode();
         const value: unknown = JSON.parse(text);
-        inspection = { tokens: extractUsageTokens(value), outcome: responseOutcome(value) };
+        inspection = { tokens: responseFormat === "voyage.embeddings"
+          ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
+          : extractUsageTokens(value), outcome: responseOutcome(value) };
       } catch { inspection.outcome = "provider_error"; }
     }
     responses?.stop(); text = "";

@@ -133,6 +133,7 @@
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
 
 - Add experimental native Voyage text embeddings with explicit Voyage 4 model rows, preserved native vector options, a bounded native smoke request and a focused input-only usage helper for runtime integration; hard-budget token pricing remains unqualified.
+- Dispatch complete successful Voyage embedding receipts to the native usage extractor, preserving observed input counts without inferring splits for generic, failed or partial responses.
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Route Cohere unified Chat through its documented OpenAI compatibility API, publish dated Command A+ endpoint facts, and retain native v2 Chat/Embed and their accounting.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
