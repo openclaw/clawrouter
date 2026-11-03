@@ -32,6 +32,7 @@
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
+- Add the frozen Hugging Face R1, V3.1 and unsuffixed OSS 120B identities while preserving native model names and dynamic-provider pricing guards.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.
 - Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
