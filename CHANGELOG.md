@@ -8,6 +8,7 @@
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
+- Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
 - Add bounded Replicate prediction protocol helpers and executable lifecycle fixtures for scoped async runtime integration, including partial output, cancellation, URL rewriting and explicit unknown-cost boundaries. Route activation and durable settlement remain separate integration work.
 - Add bounded fal queue protocol helpers and portable lifecycle fixtures, distinguishing result readiness from success and queued cancellation from an in-progress cancellation request. Runtime activation and billing integration remain separately qualified.
 
