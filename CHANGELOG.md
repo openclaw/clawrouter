@@ -238,6 +238,7 @@
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
 - Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
+- Add Synthetic native Messages and model discovery beside the preserved Chat route, with distinct dispatch paths, original credentials, qualified frozen model facts and real Worker protocol fixtures.
 
 - Decouple dashboard screenshot fixtures from the evolving provider inventory, while checking the real demo catalog and accessibility separately.
 - Add bounded native Google Live setup/frame codecs for the frozen voice models, preserving PCM, tool ownership, interruption and unknown usage without activating an unqualified WebSocket or browser-token bridge.

@@ -1,4 +1,4 @@
-# Chat API only; qualification: docs/hosted-specialist-providers.md.
+# Native Messages, preserved Chat and discovery: docs/synthetic-native-contracts.md.
 # Endpoint/model source checked 2026-11-03: https://dev.synthetic.new/docs/api/overview
 schema: clawrouter.service-provider.v1
 id: synthetic
@@ -17,7 +17,7 @@ auth:
       format: "Bearer ${secret}"
       secretKind: api_key
 baseUrls:
-  default: https://api.synthetic.new/openai/v1
+  default: https://api.synthetic.new
 routing:
   nativePrefixes: [clawrouter-synthetic, synthetic]
   modelPrefixes: [synthetic/]
@@ -27,13 +27,36 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: llm.messages
+    endpoint: messages
+    methods: [POST]
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  messages:
+    modelPassthrough: {}
+    path: /v1/messages
+    upstreamPath: /anthropic/v1/messages
+    requestHeaders: [anthropic-beta, anthropic-version]
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
+  models_list:
+    method: GET
+    path: /models
+    upstreamPath: /openai/v1/models
+    requestFormat: synthetic.models
+    responseFormat: synthetic.models
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
+    upstreamPath: /openai/v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
@@ -42,7 +65,43 @@ models:
   entries:
     - id: synthetic/syn:large:text
       upstream: syn:large:text
-      capabilities: [llm.chat]
+      capabilities: [llm.chat, llm.messages]
+    - id: synthetic/hf:openai/gpt-oss-120b
+      upstream: hf:openai/gpt-oss-120b
+      capabilities: [llm.chat, llm.messages]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://api.synthetic.new/openai/v1/models, https://dev.synthetic.new/docs/anthropic/messages]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 131072
+            maxOutputTokens: 65536
+          chat_completions:
+            sources: [https://api.synthetic.new/openai/v1/models, https://dev.synthetic.new/docs/openai/chat-completions]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 131072
+            maxOutputTokens: 65536
+    - id: synthetic/hf:zai-org/GLM-4.7-Flash
+      upstream: hf:zai-org/GLM-4.7-Flash
+      capabilities: [llm.chat, llm.messages]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://api.synthetic.new/openai/v1/models, https://dev.synthetic.new/docs/anthropic/messages]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 196608
+            maxOutputTokens: 65536
+          chat_completions:
+            sources: [https://api.synthetic.new/openai/v1/models, https://dev.synthetic.new/docs/openai/chat-completions]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 196608
+            maxOutputTokens: 65536
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

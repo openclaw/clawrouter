@@ -18,12 +18,16 @@ foreign provider grant or subscription interchange is implied.
 | `/v1/messages` | `/anthropic/v1/messages` |
 | `/models` | `/openai/v1/models` |
 
-The required manifest endpoint `upstreamPath` contract is pending with source3;
-compiled `upstream_path`, same-origin assembly and selected-grant behavior remain
-source1-owned. Public route paths must stay stable. No traversal, absolute URL,
+The manifest consumes endpoint `upstreamPath`; source3 owns its schema/compiler
+publication. `CompiledEndpoint.upstreamPath?: string`, same-origin assembly and
+selected-grant behavior remain source1-owned. Public route paths remain the caller route and authorization identity. The first
+slice accepts only literal canonical paths, rejects a conflicting grant-transport
+path, and keeps the original origin/key fixed. No path parameters, templates,
+encoded traversal, query, fragment, absolute URL,
 credential-bearing redirect or alternate-service fallback can substitute for
-that shared implementation. The source4 Synthetic manifest/real Worker fixtures
-will consume this contract in this separate source slice, not PR397.
+that shared implementation. The source4 Synthetic manifest and 29 real Worker
+fixtures consume this contract in a separate source slice, not PR397. They must
+not activate before both common owners' implementation and proof are available.
 
 The [Messages reference](https://dev.synthetic.new/docs/anthropic/messages)
 qualifies user/assistant messages, text/image parts, `tool_use`/`tool_result`,
@@ -80,8 +84,15 @@ Preserve existing response byte/deadline/cancellation, original-grant revocation
 zero inference charge for discovery and unsupported-query guards. The codec
 does not perform HTTP or choose credentials. Keep the OpenAI envelope strict.
 
-The common path mapping, Synthetic manifest/native Worker tests, actual source2
-client and source6 serialized snapshot/consumer proof are required continuations.
-Codec fixtures alone do not complete native Messages or provider parity. No
-inference, login, provisioning, deployment or snapshot regeneration occurs in
-this codec commit.
+The provider declaration retains the Chat alias and adds the two currently
+qualified frozen concrete identities to Chat and Messages. Its model facts use
+current native observations, not copied frozen prices or output limits. The 29
+Worker fixtures cover both route forms, every declared identity, thinking/tool
+replay, fragmented SSE, original credentials, cancellation, usage and dispatch
+path isolation. Discovery uses its actual native envelope and policy filtering.
+
+Common path/discovery implementation, execution of the dependent native Worker
+tests, actual source2 client and source6 serialized snapshot/consumer proof remain
+activation gates. Codec fixtures alone do not complete native Messages or
+provider parity. No inference, login, provisioning, deployment or snapshot
+regeneration occurs in this source slice.
