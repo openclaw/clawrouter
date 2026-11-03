@@ -210,6 +210,7 @@ function normalizePricing(pricing) {
     inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
     ...(pricing.unpricedCosts ? { unpricedCosts: pricing.unpricedCosts } : {}),
     ...(pricing.settlementBasis ? { settlementBasis: pricing.settlementBasis } : {}),
+    ...(pricing.autoServiceTier ? { autoServiceTier: pricing.autoServiceTier } : {}),
     ...(pricing.anthropicModifiers ? { anthropicModifiers: structuredClone(pricing.anthropicModifiers) } : {}),
     longContext: normalizeLongContext(pricing.longContext),
     ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
@@ -235,6 +236,7 @@ function validatePricing(pricing, modelId) {
     return;
   }
   if (pricing.longContext && pricing.longContext.thresholdInputTokens >= pricing.maxInputTokens) throw new Error(`model ${modelId} has an invalid long-context threshold`);
+  if (pricing.autoServiceTier && !pricing.serviceTiers?.length) throw new Error(`model ${modelId} autoServiceTier requires explicit service-tier cards`);
   if (pricing.serviceTiers === undefined) return;
   const tiers = pricing.serviceTiers;
   const fail = (message) => { throw new Error(`model ${modelId} serviceTiers ${message}`); };
