@@ -191,10 +191,7 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
   for (const tool of tools) {
     if (!isObject(tool)) continue;
     // Inspect protocol declarations, never function names or user JSON schemas.
-    if (requestFormat === "openai.chat_completions" && typeof tool.type === "string" && tool.type !== "function") {
-      if (["browser_search", "web_search", "code_interpreter", "file_search", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
-      usageGap = true;
-    }
+    if (requestFormat === "openai.chat_completions" && ["browser_search", "code_interpreter"].includes(String(tool.type))) return "hosted_tool_fee";
     if (requestFormat === "openai.responses" && typeof tool.type === "string") {
       if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["x_search", "file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
       if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";

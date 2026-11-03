@@ -8,7 +8,7 @@ import { actualModelCost, estimateModelCost, requestPricingGap } from "../pricin
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 import { providerById } from "../providers.ts";
-import handler from "../index.ts";
+const { default: handler } = await import("../index.ts");
 
 const manifest = parse(readFileSync(new URL("../../providers/groq.provider.yaml", import.meta.url), "utf8"));
 const snapshot = compileProviderSnapshot([manifest]);
@@ -42,7 +42,7 @@ test("Groq ordinary Chat and client functions stay priced while actual hosted to
       { tools: [{ type: "browser_search" }] },
       { tools: [{ type: "code_interpreter" }] },
     ]) assert.equal(requestPricingGap(pricing, body, "openai.chat_completions"), "hosted_tool_fee");
-    assert.equal(requestPricingGap(pricing, { tools: [{ type: "future_hosted_tool" }] }, "openai.chat_completions"), "hosted_tool_usage");
+    assert.equal(requestPricingGap(pricing, { tools: [{ type: "local_shell" }] }, "openai.chat_completions"), null);
     const tokens = { input: 1000, output: 100, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
     for (const service_tier of [undefined, "on_demand", "flex"]) {
       assert.notEqual(estimateModelCost(pricing, { service_tier, max_tokens: 1 }, { request_format: "openai.chat_completions" }).pricingAvailable, false);
@@ -76,7 +76,6 @@ test("real Worker preserves plain Groq hard-budget Chat and denies conditional g
       [{ tools: [{ type: "function", function: { name: "browser_search", parameters: { type: "object" } } }] }, 200],
       [{ tools: [{ type: "browser_search" }] }, 400],
       [{ tools: [{ type: "code_interpreter" }] }, 400],
-      [{ tools: [{ type: "future_hosted_tool" }] }, 400],
       [{ service_tier: "auto" }, 400],
       [{ service_tier: "performance" }, 400],
       [{ service_tier: "future" }, 400],
