@@ -190,6 +190,7 @@
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
+- Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 
 - Decouple dashboard screenshot fixtures from the evolving provider inventory, while checking the real demo catalog and accessibility separately.
 - Add bounded native Google Live setup/frame codecs for the frozen voice models, preserving PCM, tool ownership, interruption and unknown usage without activating an unqualified WebSocket or browser-token bridge.
