@@ -1,3 +1,5 @@
+import { required } from "./cli-args.mjs";
+
 export function grantTarget(args) {
   if (args.binding !== undefined || args.config !== undefined) {
     throw new Error("grant mutations use the admin API; replace --binding/--config with CLAWROUTER_BASE_URL and CLAWROUTER_ADMIN_TOKEN");
@@ -26,9 +28,4 @@ export function localAdminEnvironment(args, env = process.env) {
     return { ...env, CLAWROUTER_BASE_URL: baseUrl };
   }
   return env;
-}
-
-function required(value, name) {
-  if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
-  return value.trim();
 }

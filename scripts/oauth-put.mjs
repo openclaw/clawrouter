@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { adminRequest } from "./admin-api.mjs";
-import { parseArgs } from "./cli-args.mjs";
+import { parseArgs, required, optionalValue, setOptional } from "./cli-args.mjs";
 import { grantTarget } from "./grant-target.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -38,24 +38,6 @@ setOptional(grant, "subscription", subscriptionMetadata(args));
 setOptional(grant, "refresh", refreshMetadata(args));
 await adminRequest(`${target.path}?mode=replace`, { method: "PUT", body: grant, env: target.env, responseMode: "ack" });
 console.log(`stored authoritative upstream grant ${target.key}; secrets were not printed`);
-
-function required(value, name) {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${name} is required`);
-  }
-  return value.trim();
-}
-
-function optionalValue(args, name) {
-  const value = args[name];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === true) {
-    throw new Error(`--${name} requires a value`);
-  }
-  return value.trim();
-}
 
 function readSecret(args, name) {
   if (args[name] !== undefined) {
@@ -235,10 +217,4 @@ function isSecretFieldName(name) {
 
 function compact(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-function setOptional(target, name, value) {
-  if (value !== undefined) {
-    target[name] = value;
-  }
 }

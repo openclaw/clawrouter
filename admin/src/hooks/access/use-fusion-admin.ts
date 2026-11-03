@@ -1,6 +1,6 @@
 import { policyRequestCost } from "../../../../shared/request-pricing";
 import { type FormEvent, type SetStateAction, useRef, useState } from "react";
-import { errorMessage } from "../../domain";
+import { errorMessage, policyCoversProvider } from "../../domain";
 import { defaultFusion, demo } from "../../ui-config";
 import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, FusionConfig, FusionReadiness } from "../../ui-types";
@@ -106,7 +106,7 @@ function demoReadiness(config: FusionConfig, policy?: AccessPolicy): FusionReadi
   const models = [...config.adviserModels, config.aggregatorModel];
   const calls = models.map((model, index) => {
     const provider = model.startsWith("local/") ? "local-openai" : model.split("/")[0] ?? "unknown";
-    const policyAllowed = policy.enabled && (!policy.providers.length || policy.providers.includes(provider));
+    const policyAllowed = policy.enabled && policyCoversProvider(policy, provider);
     return {
       stage: index === models.length - 1 ? "synthesizer" as const : "adviser" as const,
       index: index === models.length - 1 ? null : index + 1,
