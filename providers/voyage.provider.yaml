@@ -1,0 +1,54 @@
+# Native contract checked 2026-11-03: https://docs.voyageai.com/reference/embeddings-api
+# Input-only usage normalization and tariff admission need runtime qualification.
+schema: clawrouter.service-provider.v1
+id: voyage
+displayName: Voyage AI
+status: experimental
+class: rest_json
+service:
+  platform: voyage
+  kind: model_provider
+  upstreamService: voyage
+  configKeys: [VOYAGE_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.voyageai.com
+routing:
+  nativePrefixes: [clawrouter-voyage, voyage]
+  modelPrefixes: [voyage/]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: llm.embeddings
+    endpoint: embeddings
+    methods: [POST]
+endpoints:
+  embeddings:
+    path: /v1/embeddings
+    requestFormat: voyage.embeddings
+    responseFormat: voyage.embeddings
+    timeoutMs: 120000
+models:
+  entries:
+    - id: voyage/voyage-4-large
+      upstream: voyage-4-large
+      capabilities: [llm.embeddings]
+    - id: voyage/voyage-4
+      upstream: voyage-4
+      capabilities: [llm.embeddings]
+    - id: voyage/voyage-4-lite
+      upstream: voyage-4-lite
+      capabilities: [llm.embeddings]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, model, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
