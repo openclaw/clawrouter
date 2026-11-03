@@ -268,6 +268,7 @@
 - Bind Google speech discovery and dispatch to qualified model transports and the preview cutoff, including cached catalog eligibility.
 - Add frozen Google unary speech codecs for generateContent and stateless Interactions, with speaker binding, complete PCM/WAV validation and an explicit preview-model qualification cutoff.
 - Add a bounded Google unary speech response wrapper with exact frozen-model transport binding, explicit PCM/WAV MIME, atomic audio delivery and conservative unknown-cost accounting.
+- Dispatch qualified Google unary speech through its complete-response wrapper, preserving original credentials, transport-specific model eligibility, preview expiry and conservative audio settlement.
 - Reuse shared Google output-audio classification in pricing and keep both native speech formats unpriced at admission and settlement, preserving policy-fixed charges and frozen preview qualification.
 - Qualify the frozen Google speech declaration formats and unpriced model identities, preserving shared transport/expiry eligibility and keeping ambiguous native Interactions discovery closed.
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
