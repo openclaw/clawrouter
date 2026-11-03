@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Qualify Google Omni Interactions lifecycle and authenticated file endpoint links in the provider compiler, rejecting unbound controls and credential overrides before shared runtime activation.
+
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.

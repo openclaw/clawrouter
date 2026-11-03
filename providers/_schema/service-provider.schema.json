@@ -643,6 +643,25 @@
           "oneOf": [
             {
               "type": "object",
+              "required": ["protocol", "retrieve", "cancel", "files"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "google.omni_video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "cancel": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "files": {
+                  "type": "object",
+                  "required": ["metadata", "download"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "metadata": { "type": "string", "minLength": 1, "maxLength": 64 },
+                    "download": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
               "required": [
                 "protocol",
                 "retrieve"

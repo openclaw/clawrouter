@@ -408,6 +408,17 @@ function validateManifest(manifest) {
 }
 
 const managedLifecycleContracts = {
+  "google.omni_video": {
+    provider: "google-gemini", create: ["/v1beta/interactions"], request: "google.omni_video_create", response: "google.omni_video",
+    controls: {
+      retrieve: ["GET", "/v1beta/interactions/${interaction_id}", "google.omni_video_get", "google.omni_video"],
+      cancel: ["POST", "/v1beta/interactions/${interaction_id}/cancel", "google.omni_video_cancel", "google.omni_video"],
+    },
+    files: {
+      metadata: ["GET", "/v1beta/files/${file_id}", "google.omni_video_file_metadata", "google.omni_video_file"],
+      download: ["GET", "/v1beta/files/${file_id}:download", "google.omni_video_file_download", "google.omni_video_bytes", { alt: "media" }],
+    },
+  },
   "dashscope.video": {
     provider: "alibaba", create: ["/api/v1/services/aigc/video-generation/video-synthesis"], request: "dashscope.video_create", response: "dashscope.video",
     controls: { retrieve: ["GET", "/api/v1/tasks/${task_id}", "dashscope.video_get", "dashscope.video"] },
@@ -447,14 +458,14 @@ function validateManagedLifecycles(manifest) {
     const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct qualified native create/control endpoints`); };
     const protocol = endpoint.lifecycle.protocol;
     const contract = Object.hasOwn(managedLifecycleContracts, protocol) ? managedLifecycleContracts[protocol] : null;
-    const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false || Object.keys(value.query ?? {}).length;
+    const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false;
     const methodsMatch = (endpointId, method) => !manifest.capabilities.some(capability => capability.endpoint === endpointId && capability.methods?.some(value => value !== method));
     const parametersMatch = value => {
       const names = [...value.path.matchAll(/\$\{([^}]+)\}/g)].map(match => match[1]).sort();
       return JSON.stringify([...(value.pathParams ?? [])].sort()) === JSON.stringify(names)
         && !Object.entries(value.pathParamStyles ?? {}).some(([name, style]) => !names.includes(name) || style !== "segment");
     };
-    if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || !parametersMatch(endpoint)
+    if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || Object.keys(endpoint.query ?? {}).length || !parametersMatch(endpoint)
       || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
       || endpoint.requestFormat !== contract.request || endpoint.responseFormat !== contract.response
       || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
@@ -463,25 +474,35 @@ function validateManagedLifecycles(manifest) {
       if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
         !(["x-dashscope-async", "content-type"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "x-dashscope-async" ? "enable" : "application/json")))) fail();
     }
+    if (protocol === "google.omni_video") {
+      // Keep Google's existing origin-only base; the registered wrapper must
+      // translate the codec's /v1beta-relative paths without changing that base.
+      for (const base of Object.values(manifest.baseUrls)) {
+        let url; try { url = new URL(base); } catch { fail(); }
+        if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash || url.pathname !== "/") fail();
+      }
+      if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
+    }
     creates.add(id);
-    for (const [action, [method, path, request, response]] of Object.entries(contract.controls)) {
-      const controlId = endpoint.lifecycle[action];
+    for (const [action, [method, path, request, response, query = {}]] of Object.entries({ ...contract.controls, ...contract.files })) {
+      const controlId = Object.hasOwn(contract.controls, action) ? endpoint.lifecycle[action] : endpoint.lifecycle.files[action];
       const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
       if (!control || controlId === id || controls.has(controlId) || control.lifecycle || incompatible(control) || !parametersMatch(control)
+        || Object.keys(control.query ?? {}).length !== Object.keys(query).length || Object.entries(query).some(([name, value]) => control.query?.[name] !== value)
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
-      if (protocol === "dashscope.video" && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if (["dashscope.video", "google.omni_video"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
       controls.add(controlId);
     }
   }
   // New managed wire formats cannot accidentally expose an unbound raw control.
   // Legacy Replicate manifests retain their existing runtime ownership guard.
   const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
-    .flatMap(([, contract]) => [contract.request, ...Object.values(contract.controls).map(control => control[2])]));
+    .flatMap(([, contract]) => [contract.request, ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])]));
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    const wanFormat = endpoint.requestFormat.startsWith("dashscope.video") || endpoint.responseFormat.startsWith("dashscope.video");
-    if ((formats.has(endpoint.requestFormat) || wanFormat) && !creates.has(id) && !controls.has(id))
+    const reservedFormat = ["dashscope.video", "google.omni_video"].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
+    if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
 }
