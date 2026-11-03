@@ -205,7 +205,7 @@ test("configured local servers accept optional upstream auth without a placehold
   assert.ok(events.every(event => event.credential_id === "fixture" && event.actual_cost_micros === 17));
 });
 
-for (const streaming of [false, true]) test(`LM Studio Messages ${streaming ? "SSE" : "JSON"} preserves native tools and usage`, async t => {
+for (const streaming of [false, true]) for (const manifest of [false, true]) test(`LM Studio Messages ${manifest ? "manifest" : "native"} ${streaming ? "SSE" : "JSON"} preserves native tools and usage`, async t => {
   const f = await fixture(t);
   const body = { model: "lmstudio/configured", max_tokens: 32, stream: streaming, messages: [{ role: "assistant", content: [{ type: "tool_use", id: "call_fixture", name: "lookup", input: { key: "value" } }] }, { role: "user", content: [{ type: "tool_result", tool_use_id: "call_fixture", content: "synthetic result" }] }], tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }] };
   const message = { id: "msg_fixture", type: "message", role: "assistant", model: "tenant/model", content: [{ type: "text", text: "synthetic answer" }], stop_reason: "end_turn", usage: { input_tokens: 17, output_tokens: 4 } };
@@ -219,7 +219,7 @@ for (const streaming of [false, true]) test(`LM Studio Messages ${streaming ? "S
   ];
   const wire = streaming ? events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("") : JSON.stringify(message);
   await f.state([{ wire, headers: { "content-type": streaming ? "text/event-stream" : "application/json" } }]);
-  const response = await f.call("/v1/messages", { method: "POST", body: JSON.stringify(body) });
+  const response = await f.call(manifest ? "/v1/proxy/lmstudio/messages" : "/v1/native/lmstudio/messages", { method: "POST", body: JSON.stringify(manifest ? { body } : { ...body, model: "tenant/model" }) });
   assert.equal(response.status, 200, await response.clone().text());
   assert.equal(await response.text(), wire);
   const sent = (await f.state()).calls.at(-1);
