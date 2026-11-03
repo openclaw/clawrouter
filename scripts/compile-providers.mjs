@@ -325,7 +325,24 @@ function validateManifest(manifest) {
   validateManagedLifecycles(manifest);
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    if (endpoint.requestPricing) {
+    if (endpoint.requestPricing?.outcome) {
+      // A possible charged rejection is additive to the inference reservation.
+      // This contract never attests a free error or a fee from HTTP status alone.
+      if (manifest.id !== "xai" || Object.values(manifest.baseUrls).some(url => url !== "https://api.x.ai")
+        || manifest.auth.schemes.length !== 1 || manifest.auth.schemes[0].type !== "bearer"
+        || manifest.auth.schemes[0].header !== "Authorization" || manifest.auth.schemes[0].format !== "Bearer ${secret}"
+        || manifest.auth.schemes[0].secretKind !== "api_key" || manifest.auth.grantTransports
+        || Object.keys(manifest.adapter.injectHeaders ?? {}).length || Object.keys(manifest.adapter.injectQuery ?? {}).length || manifest.adapter.passthroughHeaders?.length
+        || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST"
+        || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses"
+        || endpoint.auth || Object.keys(endpoint.headers ?? {}).length || endpoint.requestHeaders?.length
+        || endpoint.websocket || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
+        || Object.keys(endpoint.query ?? {}).length || endpoint.pathParams?.length
+        || endpoint.streaming && endpoint.streaming !== "sse"
+        || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "llm.responses")
+        || manifest.capabilities.some(capability => capability.endpoint === id && (capability.id !== "llm.responses" || capability.methods?.some(method => method !== "POST"))))
+        throw new Error(`endpoint ${id} requestPricing requires the qualified xAI Responses outcome contract`);
+    } else if (endpoint.requestPricing) {
       // The runtime can select a flat request tariff without provider branches.
       // Qualification remains explicit until another protocol has sourced billing semantics.
       const pricing = endpoint.requestPricing, variants = pricing.parameterRates;
