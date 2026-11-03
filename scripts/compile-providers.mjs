@@ -272,6 +272,7 @@ function validateManifest(manifest) {
   validateGoogleUnaryMedia(manifest, "image", "image.generate", ["gemini-3.1-flash-image", "gemini-3-pro-image"]);
   validateGoogleUnaryMedia(manifest, "music", "audio.generate", ["lyria-3-clip-preview", "lyria-3-pro-preview"]);
   validateGoogleSpeech(manifest);
+  validateGoogleGroundedSearch(manifest);
   validateXaiImages(manifest);
   validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
   validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
@@ -849,6 +850,36 @@ function validateGoogleSpeech(manifest) {
   if (!models.length || models.some(model => !upstreams.includes(model.upstream)
     || model.id !== `google/${model.upstream}` || model.capabilities.length !== 1 || model.availability?.status === "upstream_alias"
     || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
+}
+
+function validateGoogleGroundedSearch(manifest) {
+  const format = "google.grounded_search";
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
+    || manifest.id === "google-gemini" && manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "search.web"));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("Google grounded search requires its frozen model, explicit manifest route, canonical API-key origin and unpriced endpoint"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== format || endpoint.responseFormat !== format
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+    || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => name !== "model" || style !== "segment")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "search.web"
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("search.web"));
+  // A shared Chat identity may retain its token card; grounding has an explicit
+  // unknown endpoint price until the whole inference + tool bound is qualified.
+  if (models.length !== 1 || models.some(model => model.upstream !== "gemini-3.6-flash" || model.id !== `google/${model.upstream}`
+    || model.availability?.status === "upstream_alias" || model.endpointPricing?.[id]?.pricing !== null
+    || model.requestParameters?.[id] !== undefined)) fail();
 }
 
 function validateGoogleEmbeddings(manifest) {

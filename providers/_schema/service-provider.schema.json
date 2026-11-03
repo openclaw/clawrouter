@@ -680,6 +680,12 @@
         ] },
         "then": { "$ref": "#/$defs/googleSpeechEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^google\\.grounded_search" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^google\\.grounded_search" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/googleGroundedSearchEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
@@ -2075,6 +2081,24 @@
           "requestFormat": { "const": "google.speech_interactions" }, "responseFormat": { "const": "google.speech_interactions" }
         } }
       ],
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleGroundedSearchEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "nativeProxy"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": false },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.grounded_search" }, "responseFormat": { "const": "google.grounded_search" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
       "not": { "anyOf": [
         { "required": ["auth"] }, { "required": ["upstreamPath"] },
         { "required": ["streaming"] }, { "required": ["websocket"] },
