@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-import { estimateModelCost, actualModelCost } from "../pricing.ts";
-import { providerModel } from "../providers.ts";
-import { prepareManifestRequest } from "../proxy-selection.ts";
+const { estimateModelCost, actualModelCost } = await import("../pricing.ts");
+const { providerModel } = await import("../providers.ts");
+const { prepareManifestRequest } = await import("../proxy-selection.ts");
 
 const manifest = parse(readFileSync(new URL("../../providers/mistral.provider.yaml", import.meta.url), "utf8"));
 const snapshot = compileProviderSnapshot([manifest]), provider = snapshot.providers[0];
