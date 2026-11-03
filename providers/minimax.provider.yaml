@@ -50,6 +50,22 @@ models:
         outputMicrosPerMillion: 1200000
         maxInputTokens: 204800
         defaultMaxOutputTokens: 131072
+    - id: minimax/MiniMax-M3
+      upstream: MiniMax-M3
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://platform.minimax.io/docs/api-reference/text-openai-api
+              - https://platform.minimax.io/docs/pricing/overview
+            contextWindow: 1000000
+            input: [text, image, video]
+            supportedServiceTiers: [standard, priority]
+            inference:
+              chat: true
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
