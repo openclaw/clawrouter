@@ -18,6 +18,7 @@ export interface WanObservation extends ManagedObservation {
 // Do not register this adapter until those two integration gates are implemented.
 type WanAdapter = Omit<ManagedLifecycleAdapter, "protocol" | "read"> & {
   protocol: "dashscope.video";
+  assertDispatch(request: Request): void;
   read(response: Response, context: ManagedReadContext): Promise<WanObservation>;
 };
 
@@ -40,6 +41,12 @@ export function assertWanStandardCredential(secret: string, baseUrl: string): vo
 export const wanManagedAdapter: WanAdapter = {
   protocol: "dashscope.video", requestFormats: ["dashscope.video_create"], supportsResult: false, supportsCancel: false,
   validateId: validateWanTaskId,
+  assertDispatch(request) {
+    const authorization = request.headers.get("authorization");
+    const bearer = authorization === null ? null : /^Bearer ([^\s,]+)$/i.exec(authorization);
+    if (!bearer) throw new Error("wan_requires_same_region_standard_api_credential");
+    assertWanStandardCredential(bearer[1], new URL(request.url).origin);
+  },
   prepare(body, _headers, pathParams, query) {
     noMediaQuery(query); exactMediaParams(pathParams, []);
     if (!mediaObject(body) || Object.keys(body).some(key => !["model", "input", "parameters"].includes(key))
