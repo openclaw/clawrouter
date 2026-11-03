@@ -27,6 +27,7 @@
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Add bounded MiniMax native speech response validation with complete hex delivery and locally generated playable test audio; common native-media grant authority and fee qualification remain closed pending integration.
 - Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
