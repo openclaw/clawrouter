@@ -26,8 +26,9 @@ function renamed(id) {
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
   const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", "cloudflare-ai-gateway": "universal", cohere: "chat", firecrawl: "scrape", "google-gemini": "generate_content", replicate: "prediction", tavily: "search" };
-  assert.equal(plan.providerCount, 22);
-  assert.equal(plan.targetCount, 22);
+  assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
+  assert.equal(plan.providerCount, catalog.providers.length);
+  assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
