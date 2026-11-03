@@ -167,15 +167,12 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   }
 
   function saveBody(form: UpstreamGrantForm, existing?: UpstreamGrant) {
-    if (!form.scopeId.trim() || !form.tokenRef.trim() || !form.provider.trim()) throw new Error("scope, token reference, and provider are required");
-    const priority = Number(form.priority), weight = Number(form.weight);
-    if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
-    if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
+    const { provider, priority, weight } = routingFields(form);
     const credentialBundle = parseCredentialBundle(form.credentialBundle);
     const primarySecret = form.kind === "api_key" ? form.credential.trim() || Object.keys(credentialBundle).length : form.accessToken.trim();
     if (!existing && !primarySecret) throw new Error("a new upstream grant requires its primary secret");
     return {
-      version: 1, enabled: form.enabled, priority, weight, kind: form.kind, provider: form.provider.trim(), label: form.label.trim() || undefined,
+      version: 1, enabled: form.enabled, priority, weight, kind: form.kind, provider, label: form.label.trim() || undefined,
       tokenType: existing?.tokenType ?? "Bearer", expiresAt: form.expiresAt.trim() || undefined, scopes: existing?.scopes ?? [],
       accountId: form.accountId.trim() || undefined, subscription: existing?.subscription ?? undefined,
       maintenance: { keepWarm: form.kind === "subscription" && form.keepWarm },
@@ -190,12 +187,7 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     if (!op) return;
     const form = currentDraft.current.value;
     try {
-      const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef.trim(), provider = form.provider.trim();
-      if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
-      const priority = Number(form.priority);
-      if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
-      const weight = Number(form.weight);
-      if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
+      const { scopeId, tokenRef, provider, priority, weight } = routingFields(form);
       if (!providers.find((item) => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
       setStatus("connecting upstream grant");
       if (demoMode) { release(op); setStatus("browser OAuth unavailable in local demo"); return; }
@@ -235,4 +227,13 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   function startNew() { const provider = providers[0]?.id ?? ""; resetDraft("", { ...defaultUpstreamGrant, scopeId: policies.find((policy) => policy.policyId === selectedPolicyId)?.policyId ?? policies[0]?.policyId ?? "", provider, tokenRef: provider }); setError(""); }
 
   return { upstream: { items: grants, selected, selectedKey: draft.selection, form: draft.value, setForm, ready, busy, error, save, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew }, captureHydration, hydrate };
+}
+
+function routingFields(form: UpstreamGrantForm) {
+  const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef.trim(), provider = form.provider.trim();
+  if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
+  const priority = Number(form.priority), weight = Number(form.weight);
+  if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
+  if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
+  return { scopeId, tokenRef, provider, priority, weight };
 }
