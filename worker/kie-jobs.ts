@@ -1,20 +1,10 @@
+import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.ts";
+
 export const KIE_JOB_ORIGIN = "https://api.kie.ai";
 export const KIE_CREATE_TASK_PATH = "/api/v1/jobs/createTask";
 export const KIE_MAX_ENVELOPE_BYTES = 1024 * 1024;
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function jsonObject(text: string): Record<string, unknown> {
-  if (text.length > KIE_MAX_ENVELOPE_BYTES || new TextEncoder().encode(text).byteLength > KIE_MAX_ENVELOPE_BYTES) {
-    throw new Error("kie_envelope_too_large");
-  }
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new Error("invalid_kie_envelope"); }
-  if (!record(value)) throw new Error("invalid_kie_envelope");
-  return value;
-}
+const jsonObject = createJobEnvelopeParser(KIE_MAX_ENVELOPE_BYTES, "kie_envelope_too_large", "invalid_kie_envelope");
 
 function taskData(text: string, httpStatus: number): Record<string, unknown> {
   const body = jsonObject(text);

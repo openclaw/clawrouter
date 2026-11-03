@@ -1,20 +1,10 @@
+import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.ts";
+
 // Concrete queue protocol only; scoped jobs and tariff settlement belong to the runtime.
 export const FAL_QUEUE_ORIGIN = "https://queue.fal.run";
 export const FAL_MAX_ENVELOPE_BYTES = 1024 * 1024;
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function envelope(text: string): Record<string, unknown> {
-  if (text.length > FAL_MAX_ENVELOPE_BYTES || new TextEncoder().encode(text).byteLength > FAL_MAX_ENVELOPE_BYTES) {
-    throw new Error("fal_envelope_too_large");
-  }
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new Error("invalid_fal_envelope"); }
-  if (!record(value)) throw new Error("invalid_fal_envelope");
-  return value;
-}
+const envelope = createJobEnvelopeParser(FAL_MAX_ENVELOPE_BYTES, "fal_envelope_too_large", "invalid_fal_envelope");
 
 export function validateFalRequestId(id: unknown): string {
   if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {
