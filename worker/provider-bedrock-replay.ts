@@ -84,7 +84,7 @@ export function prepareBedrockReplay(value: unknown, model: BedrockReplayModel, 
     });
     let choice = options.toolChoice;
     if (options.adaptiveThinking && (choice === "any" || typeof choice === "object")) choice = "auto";
-    const nativeChoice = choice === "auto" ? { auto: {} } : choice === "any" ? { any: {} } : typeof choice === "object" ? { tool: { name: choice.name } } : undefined;
+    const nativeChoice: BedrockObject | undefined = choice === "auto" ? { auto: {} } : choice === "any" ? { any: {} } : typeof choice === "object" ? { tool: { name: choice.name } } : undefined;
     toolConfig = { tools: specs, ...(nativeChoice ? { toolChoice: nativeChoice } : {}) };
   }
   const messages: BedrockObject[] = [];
