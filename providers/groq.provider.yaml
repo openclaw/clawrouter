@@ -38,6 +38,46 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: groq/gpt-oss-20b
+      upstream: openai/gpt-oss-20b
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://console.groq.com/docs/model/openai/gpt-oss-20b
+            - https://console.groq.com/docs/openai
+            - https://console.groq.com/docs/reasoning
+          checkedAt: "2026-11-03"
+          logprobs: unsupported
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://console.groq.com/docs/model/openai/gpt-oss-20b
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 131072
+            maxOutputTokens: 65536
+      pricingRef: groq-gpt-oss-20b-token-upper-bound-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://console.groq.com/docs/model/openai/gpt-oss-20b
+        settlementBasis: published_upper_bound
+        # The model page rounds cache pricing to $0.037; the documented 50%
+        # discount gives $0.0375. Keep the higher value until reconciled.
+        # https://console.groq.com/docs/prompt-caching
+        inputMicrosPerMillion: 75000
+        cachedInputMicrosPerMillion: 37500
+        outputMicrosPerMillion: 300000
+        maxInputTokens: 131072
+        defaultMaxOutputTokens: 65536
+        # Hosted browser/code fees and non-default tiers need request-specific
+        # qualification before these token rates can certify hard budgets.
+        # https://console.groq.com/docs/tool-use/built-in-tools/browser-search
+        unpricedCosts: [request_fee]
     - id: groq/gpt-oss-120b
       upstream: openai/gpt-oss-120b
       capabilities: [llm.chat]
@@ -53,6 +93,8 @@ models:
       pricing:
         effectiveAt: "2026-06-22"
         source: https://console.groq.com/docs/model/openai/gpt-oss-120b
+        # Same hosted-tool and service-tier qualification gap as the 20B card.
+        unpricedCosts: [request_fee]
         inputMicrosPerMillion: 150000
         cachedInputMicrosPerMillion: 75000
         outputMicrosPerMillion: 600000
