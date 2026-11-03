@@ -51,6 +51,21 @@ export class GrantCredentialObject implements DurableObject {
     if (request.method === "POST" && new URL(request.url).pathname === OWNERSHIP_CURRENT) {
       return this.state.storage.get<CredentialRecord>("credential").then(record => json({ exists: !!record, refreshToken: record?.refreshToken ?? null }));
     }
+    if (request.method === "POST" && new URL(request.url).pathname === "/managed-input/dispatch") {
+      // Bounded bytes/multipart preparation must not hold credential ordering.
+      return import("./pixverse-input-dispatch.ts").then(async ({ prepareInputDispatch, dispatchInputUnderOwner }) => {
+        const prepared = await prepareInputDispatch(request);
+        const operation = this.tail.then(async () => {
+          const record = await this.state.storage.get<CredentialRecord>("credential");
+          return dispatchInputUnderOwner(this.env, prepared, record,
+            record && canonicalRecord(record) ? materializedGrant(metadataGrant(record), record) : undefined, request.signal);
+        });
+        this.tail = operation.then(() => undefined, () => undefined);
+        try { const started = await operation; return await started.response; }
+        finally { prepared.lease.release(); }
+      }).catch(error => error instanceof HttpError ? errorResponse(error.code, error.message, error.status)
+        : errorResponse("managed_input_unavailable", "original input dispatch could not be confirmed", 503));
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/responses/control") {
       const operation = this.tail.then(async () => {
         let preparation = new HttpOperation(request.signal, 10_000);
