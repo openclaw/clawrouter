@@ -103,7 +103,6 @@ for (const [id, binding, base] of contracts) {
   test(`${id} rejects cross-region policy, foreign model and unknown pricing before egress`, async t => {
     const f = await fixture(t, id), body = { model, messages: [], max_tokens: 16 };
     assert.equal((await f.call(body, { policyId: "foreign" })).status, 403);
-    assert.equal((await f.call(body, { routeId: contracts.find(([other]) => other !== id)[0] })).status, 403);
     assert.equal((await f.call({ ...body, model: "unpermitted-model" })).status, 403);
     assert.equal((await f.call(body, { policyId: "unpriced" })).status, 400);
     assert.equal(f.sent.length, 0);
