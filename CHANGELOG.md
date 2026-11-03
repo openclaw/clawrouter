@@ -70,6 +70,7 @@
 - Dispatch Synthetic model discovery through its native data-only codec and scoped mapped route, preserving strict OpenAI decoding and original caller/grant filtering.
 - Add frozen OpenRouter custom-host Chat image codecs with explicit host qualification, reused image validation and honest partial-count delivery.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
+- Google Gemini: add the frozen 3.8 Flash card with primary-qualified context limits and labeled published price ceilings; preserve native model selection and fail-closed unknown hosted charges.
 - Reserve the declared Google input window for native continuation tokens instead of pricing restored context from token or prompt bytes, preserving plain requests and explicit policy tariffs.
 - Add the frozen Gemini 3.6 Flash card with sourced token limits and explicitly labeled published price ceilings across Standard, Flex and Priority, preserving conservative tool and cache admission.
 - Add the frozen Gemini 3.5 Flash-Lite card with sourced context/output bounds and exact Standard, Flex and Priority cache rates, preserving conditional tool-cost guards.
