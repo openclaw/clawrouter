@@ -1,0 +1,51 @@
+# Frozen TokenPlan contract and current documented host: docs/tencent-tokenplan.md.
+# Primary endpoint checked 2026-11-03; no pay-as-you-go or legacy-host fallback.
+schema: clawrouter.service-provider.v1
+id: tencent-tokenplan
+displayName: Tencent TokenPlan mainland
+status: experimental
+class: openai_compatible
+service:
+  platform: tencent
+  kind: model_provider
+  upstreamService: tencent-tokenplan
+  configKeys: [TOKENPLAN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://tokenhub.tencentmaas.com/plan/v3
+routing:
+  nativePrefixes: [clawrouter-tencent-tokenplan, tencent-tokenplan]
+  modelPrefixes: [tencent-tokenplan/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: tencent-tokenplan/hy3
+      upstream: hy3
+      capabilities: [llm.chat]
+    - id: tencent-tokenplan/hy4-preview
+      upstream: hy4-preview
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
