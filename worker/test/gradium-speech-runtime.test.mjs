@@ -22,7 +22,7 @@ async function setup(t, options = {}) {
   snapshot.providers = original.filter(provider => provider.id !== "gradium");
   t.after(() => { snapshot.providers = original; });
   const f = await fixture(t, { ...options, providerId: "gradium", configure(provider) {
-    Object.assign(provider, compileProviderSnapshot([source]).providers[0]);
+    Object.assign(provider, compileProviderSnapshot([structuredClone(source)]).providers[0]);
     provider.endpoints[0].timeout_ms = options.timeout ?? 1000;
     if (options.origin) provider.base_urls.default = options.origin;
   } });
@@ -32,9 +32,9 @@ async function setup(t, options = {}) {
     { ...extra, headers: { "x-api-key": "synthetic-caller-upstream-key", ...extra.headers } });
   f.rows = () => [...new Set(f.budgetCalls.map(call => call.name))].flatMap(name => f.budgets.get(name).reservations());
   f.upstream = async request => {
-    assert.equal(bodyBudgetCharged(), capacity, "binary capacity is leased before fetch");
-    assert.ok(f.budgetCalls.some(call => call.path === "/dispatch"), "dispatch acknowledgment precedes fetch");
-    assert.ok(f.rows().every(row => row.reserved_micros === 700));
+    // Capture pre-egress facts here; assert outside fetch so a test assertion
+    // cannot be hidden behind the runtime's sanitized transport error response.
+    f.dispatched = { capacity: bodyBudgetCharged(), paths: f.budgetCalls.map(call => call.path), rows: f.rows() };
     if (options.response) return options.response(request);
     const body = await request.clone().json();
     return new Response(audio[body.output_format], { headers: { "content-type": mime[body.output_format], "x-private-upstream": "synthetic" } });
@@ -66,6 +66,9 @@ for (const format of ["wav", "opus"]) for (const manifest of [false, true]) for 
     assert.equal(request.redirect, "manual"); assert.deepEqual(await request.clone().json(), body);
     assert.equal(request.headers.get("authorization"), null);
     assert.equal(request.headers.get("x-api-key"), pooled ? "synthetic-original-key" : "synthetic-gradium-environment-key");
+    assert.equal(f.dispatched.capacity, capacity, "binary capacity precedes fetch");
+    assert.ok(f.dispatched.paths.includes("/dispatch"), "dispatch acknowledgment precedes fetch");
+    assert.ok(f.dispatched.rows.length > 0 && f.dispatched.rows.every(row => row.reserved_micros === 700));
     const event = await settled(f); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.model, null);
     assert.equal(event.provider, "gradium"); assert.equal(event.capability, "audio.speech");
     assert.equal(f.budgetCalls.filter(call => call.path === "/reserve").length, 2);
