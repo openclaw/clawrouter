@@ -317,7 +317,7 @@ function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): Bac
 function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
   const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion"].includes(key))
-    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs"].includes(managed.protocol)
+    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs", "dashscope.video", "pixverse.video", "runway.tasks", "together.video"].includes(managed.protocol)
     || managed.providerId !== undefined && (typeof managed.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(managed.providerId))
     || managed.protocol !== "replicate.predictions" && managed.providerId === undefined
     || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)

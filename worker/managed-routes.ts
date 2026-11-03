@@ -8,6 +8,7 @@ export function managedRoute(provider: CompiledProvider, create: CompiledEndpoin
 } {
   const lifecycle = create.lifecycle, adapter = lifecycle && managedCreateAdapter(lifecycle.protocol, create.request_format);
   if (!adapter || !lifecycle || typeof lifecycle.retrieve !== "string" || !lifecycle.retrieve || create.modelPassthrough || create.method !== "POST"
+    || adapter.protocol === "dashscope.video" && !adapter.assertDispatch
     || adapter.supportsCancel !== !!lifecycle.cancel || adapter.supportsResult !== !!lifecycle.result) unavailable();
   const controls: Partial<Record<ManagedControlAction, CompiledEndpoint>> = {};
   for (const action of ["retrieve", "result", "cancel"] as const) {
