@@ -86,6 +86,7 @@
 - Add bounded Together video lifecycle codecs and native fixtures for frozen Wan2.7 text/image-to-video and Hailuo02, preserving job identity, first-frame inputs and conservative settlement boundaries.
 - Qualify the six frozen fal Seedance input contracts and lifecycle fixtures with native duration/resolution rules and bounded multimodal references; scoped dotted-route activation remains separately qualified.
 - Add bounded native codecs and synthetic fixtures for the two frozen Google image models, with atomic image delivery, thought-image exclusion and explicit modality/accounting integration boundaries.
+- Qualify the two frozen Google image model declarations and native unary endpoint contract, preserving unknown image costs and requiring runtime model-aware routing before activation.
 - Keep explicit native Google image generation unpriced under hard dollar budgets instead of borrowing text or another provider’s image tariff; preserve separately labeled policy-fixed accounting.
 - Add the native Google image response wrapper with explicit MIME and container checks, bounded complete delivery and thought-image removal; shared dispatch and image-cost qualification remain separate.
 - Qualify the six frozen fal Nano Banana generate/edit routes with model-specific geometry and ordered inline-reference limits, retaining partial outcomes and unknown upstream cost.
