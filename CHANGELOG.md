@@ -26,6 +26,7 @@
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
+- Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
 - Use the standard GitHub Actions runtime budget for CodeQL instead of the rollout-specific 20-minute job cap.
