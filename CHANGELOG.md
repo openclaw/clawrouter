@@ -57,6 +57,7 @@
 - Observe native Ollama JSON/NDJSON through the existing byte-preserving delivery and accounting path, and filter native model discovery by caller policy without inference charges. Native hosts and model loading remain separately configured.
 - Route managed Replicate submit, poll, and cancel through the original caller and credential binding, collect terminal jobs after disconnect, and require explicit policy-fixed pricing. Unknown create results are never replayed; upstream dollar parity remains unqualified.
 - Wire qualified fal, Kie and Vydra managed routes through scoped job ownership, original credentials, bounded result/cancel observations and the existing durable fixed-tariff settlement outbox. Preserve native Kie model input and unknown-create replay guards.
+- Freeze managed observation loss once when a provider can no longer report the job. Stop collection and return an actionable unavailable result while preserving the original fixed-policy settlement and unknown execution outcome; never infer a failure, refund or safe resubmission.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
 - Refresh Workers types to 5.20261101.1 and Lucide icons to 1.66.0 under the two-day dependency cooldown. Worker runtime pins and security overrides are unchanged.

@@ -10,7 +10,7 @@ import { assertProviderAccess } from "./providers.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import type { ManagedCreate, ManagedObservation } from "./managed-lifecycle-types.ts";
+import type { ManagedCreate, ManagedObservation, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { managedPaths, managedRoute } from "./managed-routes.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
@@ -89,21 +89,32 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
 function existingPrediction(request: Request, scope: string, job: BackgroundRecord, provider: CompiledProvider, create: CompiledEndpoint): Response {
   if (!job.managed) throw new HttpError(409, "background_protocol_conflict", "the original job is not managed");
   setBackgroundRecovery(request, `${scope.slice("http-continuations:".length)}.${job.id}`);
+  if (job.managed.observationUnavailable) return managedObservationUnavailable();
   const location = job.managed.upstreamId ? managedPaths(provider, create, job.managed.upstreamId, job.managed.route?.pathParams ?? {}).retrieve : null;
   return json({ job_id: job.id, submission: job.managed.submission, prediction_id: job.managed.upstreamId }, location ? 303 : 202,
     { "cache-control": "no-store", ...(location ? { location } : { "retry-after": "5" }) });
 }
 
 export async function observePrediction(env: Env, scope: string, id: string, prediction: ManagedObservation, statusCode: number): Promise<void> {
-  const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.id, predictionStatus: prediction.terminal ?? "processing", statusCode });
+  const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.id, predictionStatus: prediction.terminal ?? "processing", statusCode, observationUnavailable: prediction.observationUnavailable });
   if (ack?.observed !== true) throw new HttpError(503, "background_unavailable", "prediction observation was not acknowledged");
 }
 
 export function predictionResponse(prediction: ManagedObservation, provider: CompiledProvider, create: CompiledEndpoint,
   pathParams: Record<string, string>, status: number): Response {
+  const headers = { "cache-control": "no-store", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-content-retention": "off" };
+  if (prediction.observationUnavailable) {
+    // A qualified native cancel/delete ACK stays bodyless. It still supplies
+    // no execution or refund evidence; future polls use the frozen loss marker.
+    if (status === 204 && prediction.observationUnavailable === "canceled_or_deleted") return new Response(null, { status, headers });
+    return managedObservationUnavailable();
+  }
   const { adapter } = managedRoute(provider, create);
-  return json(adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams)), status,
-    { "cache-control": "no-store", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-content-retention": "off" });
+  return json(adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams)), status, headers);
+}
+
+export function managedObservationUnavailable(): Response {
+  return errorResponse("prediction_observation_unavailable", "the original job can no longer be observed; its execution outcome is unknown, collection has stopped and automatic resubmission is unsafe", 410, undefined, { "cache-control": "no-store" });
 }
 
 type ControlRead = { prediction: ManagedObservation; status: number };
@@ -123,27 +134,27 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
   // require retrieval. At most two follow-ups, never another mutation or URL.
   const follow = async (first: ControlRead): Promise<ControlRead> => {
     let current = first;
-    for (let count = 0; count < 2 && !current.prediction.terminal && current.prediction.followUp; count++) {
+    for (let count = 0; count < 2 && !current.prediction.terminal && !current.prediction.observationUnavailable && current.prediction.followUp; count++) {
       current = await read(current.prediction.followUp);
     }
     return current;
   };
   if (input.action === "cancel") {
     const current = await follow(await read("retrieve"));
-    if (current.prediction.terminal) return { ...current, evidence: current };
+    if (current.prediction.terminal || current.prediction.observationUnavailable) return { ...current, evidence: current };
   }
   const result = await read(input.action), evidence = await follow(result);
   // Return the native action's body; only qualified terminal evidence settles.
   return { ...result, evidence };
 }
 
-export async function collectManagedPrediction(env: Env, job: BackgroundJob, accept: (id: string, status: string, statusCode: number) => Promise<void>): Promise<void> {
-  if (!job.managed || !job.responseId || !job.route || Date.now() >= job.observeUntil) return;
+export async function collectManagedPrediction(env: Env, job: BackgroundJob, accept: (id: string, status: string, statusCode: number, loss?: ManagedObservationLoss) => Promise<void>): Promise<void> {
+  if (!job.managed || job.managed.observationUnavailable || !job.responseId || !job.route || Date.now() >= job.observeUntil) return;
   const operation = new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
   try {
     const { evidence } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,
       action: "retrieve", query: "", stream: false, protocol: job.managed.protocol, requestedVersion: job.managed.requestedVersion,
       deadline: job.observeUntil, authorization: { kind: "collection" } }, operation);
-    await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status);
+    await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status, evidence.prediction.observationUnavailable);
   } finally { operation.stop("complete"); }
 }

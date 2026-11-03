@@ -2,7 +2,7 @@ import type { BudgetReservationIntent, BudgetReservationPlan } from "./accountin
 import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { UsageIngestReceipt } from "./ledgers.ts";
-import type { ManagedProtocol } from "./managed-lifecycle-types.ts";
+import type { ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
 import type { UsageEvent } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -39,6 +39,7 @@ export interface ManagedAdmission {
   requestedVersion: string;
 }
 interface ManagedState extends ManagedAdmission {
+  observationUnavailable?: ManagedObservationLoss;
   route?: BackgroundAdmission["route"];
   policyGeneration: string;
   submission: "pending" | "submission_unknown" | "bound";
@@ -195,13 +196,20 @@ export class BackgroundStore {
     job.responseId = responseId; job.nextAttemptAt = Math.min(job.nextAttemptAt, Date.now() + 5_000); this.save(job);
   }
 
-  observeManaged(id: string, upstreamId: string, status: string, statusCode: number, attempt?: number): void {
+  observeManaged(id: string, upstreamId: string, status: string, statusCode: number, attempt?: number, observationUnavailable?: ManagedObservationLoss): void {
     const current = this.get(id);
     if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
     if (!current.managed || current.managed.submission !== "bound" || current.responseId !== upstreamId
       || !["starting", "processing", "succeeded", "failed", "canceled", "aborted"].includes(status) || !Number.isInteger(statusCode) || !(statusCode >= 200 && statusCode < 300 || status === "failed" && statusCode === 422)) invalid();
-    if (status === "starting" || status === "processing") return;
-    current.managed.terminal = status as ManagedState["terminal"];
+    if (observationUnavailable !== undefined) {
+      if (!["expired_or_unknown", "deleted", "canceled_or_deleted"].includes(observationUnavailable) || status !== "processing") invalid();
+      current.managed.observationUnavailable = observationUnavailable;
+      current.lastError = "observation_unavailable";
+      // Retain terminal=null: observation loss is not failed/free execution.
+    } else {
+      if (status === "starting" || status === "processing") return;
+      current.managed.terminal = status as ManagedState["terminal"];
+    }
     this.save(current);
     this.freeze(id, { occurredAtMs: Date.now(), statusCode, status: status === "succeeded" ? "success" : "provider_error", billable: true, tokens: null, contentRef: null });
   }
