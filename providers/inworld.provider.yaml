@@ -1,0 +1,42 @@
+# Native contract checked 2026-11-03: https://docs.inworld.ai/api-reference/ttsAPI/texttospeech/synthesize-speech
+# Unpriced native speech; request telemetry is not upstream character/credit billing.
+schema: clawrouter.service-provider.v1
+id: inworld
+displayName: Inworld
+status: experimental
+class: rest_json
+service:
+  platform: inworld
+  kind: tool_provider
+  upstreamService: inworld
+  configKeys: [INWORLD_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Basic ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.inworld.ai
+routing:
+  nativePrefixes: [clawrouter-inworld, inworld]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
+endpoints:
+  speech:
+    path: /tts/v1/voice
+    requestFormat: inworld.speech
+    responseFormat: inworld.speech
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
