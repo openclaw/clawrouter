@@ -1,4 +1,4 @@
-import { HttpError } from './utils';
+import { HttpError, sha256Hex } from './utils';
 import type { FundedInput } from './realtime-accounting';
 import { REALTIME, audio, cap, effectiveSession, fail, fields, identity, object, sessionPolicy, toolChoice, vadPolicy, wireSession, type Json } from './realtime-protocol';
 
@@ -249,10 +249,6 @@ export class RealtimeSession {
     }
     this.addItem(id);
   }
-  private async digest(raw: string): Promise<string> {
-    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
-    return [...new Uint8Array(bytes)].map(x => x.toString(16).padStart(2, '0')).join('');
-  }
   private async server(e: Json, raw: string): Promise<void> {
     if (e.type === 'session.created') {
       // The initial vendor defaults are not effective permission to send media.
@@ -309,7 +305,7 @@ export class RealtimeSession {
       if (!['delta', 'completed', 'failed'].includes(suffix)) fail('upstream_event_unsupported');
       const unit = this.inputUnits.get(id);
       if (suffix === 'delta') { if (!unit || typeof e.delta !== 'string') fail('unknown_transcription'); this.send(this.client, e); return; }
-      const hash = await this.digest(raw), prior = this.inputTerminals.get(id);
+      const hash = await sha256Hex(raw), prior = this.inputTerminals.get(id);
       if (prior) { if (prior !== hash) fail('conflicting_transcription'); return; }
       if (!unit) fail('unknown_transcription');
       this.inputTerminals.set(id, hash); await unit.settle(e, true, id); this.inputUnits.delete(id);
@@ -341,7 +337,7 @@ export class RealtimeSession {
     }
     if (e.type === 'response.done') {
       const response = object(e.response), id = identity(response.id);
-      const hash = await this.digest(raw);
+      const hash = await sha256Hex(raw);
       if (this.terminals.has(id)) { if (this.terminals.get(id) !== hash) fail('conflicting_terminal'); return; }
       const a = this.active; if (!a || a.response !== id) fail('unknown_terminal');
       if (!['completed', 'cancelled', 'failed', 'incomplete'].includes(response.status)) fail('terminal_status');
