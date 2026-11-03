@@ -113,13 +113,19 @@ test("Azure authenticates before reading the upload", { timeout: 10_000 }, async
 for (const change of ["credential", "policy", "grant"]) test(`Azure re-admits ${change} changes after upload despite a warm cache`, { timeout: 10_000 }, async t => {
   const f = await setup(t, { pooled: true });
   overrideHotCacheConfig({ freshMs: 30_000, maxAgeMs: 60_000 }); t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED));
+  let changed = false;
   const body = new ReadableStream({ async pull(c) {
-    if (change === "credential") await f.authority("/credentials/put", { credentialId: "fixture", credential: { ...f.credential, enabled: false } });
+    if (change === "credential") {
+      const mutation = await f.authority("/credentials/mutate", { scope: "admin", actor: { auth: "admin_token", email: "fixture@example.com", role: "admin" }, operation: "revoke", credentialId: "fixture" });
+      assert.equal((await mutation.json()).outcome, "updated");
+    }
     if (change === "policy") await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, enabled: false } });
     if (change === "grant") await putGrantCredentials(f.env, grantKey, { provider: "azure-speech", kind: "api_key", enabled: false, credential: "synthetic-original-key" });
-    c.enqueue(encode(wire.request.body)); c.close();
+    changed = true; c.enqueue(encode(wire.request.body)); c.close();
   } }, { highWaterMark: 0 });
-  const response = await f.request(body); assert.ok(response.status >= 400, await response.text());
+  const result = await error(await f.request(body), change === "grant" ? 503 : 403);
+  assert.equal(changed, true);
+  assert.equal(result.code, change === "credential" ? "proxy_key_revoked" : change === "policy" ? "policy_revoked" : "upstream_grant_pool_unavailable");
   assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
 });
 
