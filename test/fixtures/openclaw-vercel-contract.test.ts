@@ -34,6 +34,7 @@ const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const modelId = "vercel-ai-gateway/anthropic/claude-sonnet-4.6";
 const key = (id: string) => `clawrouter-live-${id}-fixture-secret`;
 const nativeFetch = globalThis.fetch;
+const nativeCatalogGuard = ssrfRuntime.fetchWithSsrFGuard;
 const nativeSetTimeout = globalThis.setTimeout;
 function note(value: Record<string, unknown>) {
   if (value.phase === "timer-created" && value.owner !== "anthropic-sdk" && trace.events.filter(event => event.phase === "timer-created").length >= 12) return;
@@ -61,14 +62,17 @@ beforeEach(() => {
     request.signal.addEventListener("abort", () => note({ phase: "fetch-abort", error: cleanError(request.signal.reason) }), { once: true });
     try {
       expect(new URL(request.url).origin).toBe(origin);
-      const response = await nativeFetch(request); note({ phase: "fetch-response", status: response.status }); return response;
+      const response = await nativeFetch(request); note({ phase: "fetch-response", status: response.status, connection: response.headers.get("connection") }); return response;
     } catch (error) { note({ phase: "fetch-error", error: cleanError(error) }); throw error; }
   });
   // Trust only this isolated loopback catalog. The production parser, discovery,
   // replay and SDK stay real; this fixture does not certify production SSRF policy.
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async ({ url, init }) => {
-    expect(String(url)).toBe(`${origin}/v1/catalog`);
-    return { response: await fetch(url, init), finalUrl: String(url), release: async () => undefined };
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async options => {
+    expect(String(options.url)).toBe(`${origin}/v1/catalog`);
+    const result = await nativeCatalogGuard({ ...options, fetchImpl: nativeFetch,
+      policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin) });
+    note({ phase: "catalog-guard-response", status: result.response.status });
+    return { ...result, release: async () => { await result.release(); note({ phase: "catalog-guard-released" }); } };
   });
 });
 afterEach(() => {
