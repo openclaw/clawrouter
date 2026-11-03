@@ -1,4 +1,4 @@
-import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
+import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
 
 export const runwayApiVersion = "2024-11-06";
@@ -10,24 +10,12 @@ export const runwayModels = {
 const ratios = new Set(["1280:720", "720:1280", "960:960", "832:1104", "1104:832", "1584:672"]);
 const statuses = new Set(["PENDING", "THROTTLED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELLED"]);
 
-interface RunwayObservation extends ManagedObservation {
-  observationUnavailable?: "canceled_or_deleted";
-}
-
-// Pending shared protocol, per-control headers and observation-loss support.
-// An acknowledged DELETE cannot safely be represented as free execution.
-type RunwayAdapter = Omit<ManagedLifecycleAdapter, "protocol" | "control" | "read"> & {
-  protocol: "runway.tasks";
-  control(...args: Parameters<ManagedLifecycleAdapter["control"]>): ReturnType<ManagedLifecycleAdapter["control"]> & { headers: Headers };
-  read(response: Response, context: ManagedReadContext): Promise<RunwayObservation>;
-};
-
 export function validateRunwayTaskId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) throw new Error("invalid_runway_task_id");
   return value.toLowerCase();
 }
 
-export function createRunwayManagedAdapter(mode: keyof typeof runwayModels): RunwayAdapter {
+export function createRunwayManagedAdapter(mode: keyof typeof runwayModels): ManagedLifecycleAdapter {
   return {
     protocol: "runway.tasks", requestFormats: ["runway." + mode + "_video"],
     supportsResult: false, supportsCancel: true, validateId: validateRunwayTaskId,

@@ -1,4 +1,4 @@
-import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
+import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
 
 export const pixVerseOrigins = {
@@ -8,18 +8,6 @@ export const pixVerseOrigins = {
 const qualities = new Set(["360p", "540p", "720p", "1080p"]);
 const ratios = new Set(["16:9", "4:3", "1:1", "3:4", "9:16", "2:3", "3:2", "21:9"]);
 const encoder = new TextEncoder();
-
-interface PixVerseObservation extends ManagedObservation {
-  observationUnavailable?: "deleted";
-}
-
-// Pending shared discriminator, per-control headers and observation-loss support.
-// Do not register until the shared controller consumes these fields.
-type PixVerseAdapter = Omit<ManagedLifecycleAdapter, "protocol" | "control" | "read"> & {
-  protocol: "pixverse.video";
-  control(...args: Parameters<ManagedLifecycleAdapter["control"]>): ReturnType<ManagedLifecycleAdapter["control"]> & { headers: Headers };
-  read(response: Response, context: ManagedReadContext): Promise<PixVerseObservation>;
-};
 
 export function validatePixVerseId(value: unknown): string {
   if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
@@ -36,11 +24,12 @@ export function pixVerseRequestHeaders(json = false): Headers {
 // boundImageId is supplied ONLY after the runtime resolves its durable upload
 // binding under the caller, policy, provider, region and original credential.
 // Never pass a caller-provided img_id as this argument.
-export function createPixVerseManagedAdapter(mode: "text" | "image", boundImageId?: string): PixVerseAdapter {
+export function createPixVerseManagedAdapter(mode: "text" | "image", boundImageId?: string): ManagedLifecycleAdapter {
   const imageId = boundImageId === undefined ? undefined : validatePixVerseId(boundImageId);
   return {
     protocol: "pixverse.video", requestFormats: [mode === "text" ? "pixverse.text_video" : "pixverse.image_video"],
     supportsResult: false, supportsCancel: false, validateId: validatePixVerseId,
+    identityProbe: "1",
     prepare(body, _headers, pathParams, query) {
       noMediaQuery(query); exactMediaParams(pathParams, []);
       if (!mediaObject(body) || !["v6", "c1"].includes(String(body.model))) throw new Error("invalid_pixverse_create");
@@ -71,7 +60,8 @@ export function createPixVerseManagedAdapter(mode: "text" | "image", boundImageI
     control(action, endpoint, id, pathParams) {
       exactMediaParams(pathParams, []);
       if (action !== "retrieve" || endpoint.method !== "GET" || endpoint.path !== "/openapi/v2/video/result/${video_id}") throw new Error("unsupported_pixverse_control");
-      return { path: "/openapi/v2/video/result/" + validatePixVerseId(id), query: new URLSearchParams(), headers: pixVerseRequestHeaders() };
+      return { path: "/openapi/v2/video/result/" + validatePixVerseId(id), query: new URLSearchParams(),
+        headers: pixVerseRequestHeaders(), transientHeaders: ["ai-trace-id"] };
     },
     async read(response, context) {
       const { body, result } = await readPixVerseEnvelope(response);
