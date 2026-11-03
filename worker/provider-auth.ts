@@ -144,9 +144,16 @@ function falKeyScheme(scheme: AuthScheme | GrantTransportAuth): boolean {
     && scheme.format === "Key ${secret}" && "secretKind" in scheme && scheme.secretKind === "api_key";
 }
 
+function canonicalSecretKey(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth, key: string): boolean {
+  return provider.id === "fal" && key === "FAL_KEY" && falKeyScheme(scheme)
+    || provider.id === "runway" && key === "RUNWAYML_API_SECRET" && scheme.type === "bearer"
+      && scheme.header.toLowerCase() === "authorization" && scheme.format === "Bearer ${secret}"
+      && "secretKind" in scheme && scheme.secretKind === "api_key";
+}
+
 export function providerSecretConfigKey(provider: CompiledProvider, key: string): boolean {
   return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key)
-    || (provider.id === "fal" && key === "FAL_KEY" && provider.auth.schemes.some(falKeyScheme));
+    || provider.auth.schemes.some(scheme => canonicalSecretKey(provider, scheme, key));
 }
 
 function providerSecret(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth, grant: UpstreamGrant | null, env: Env): string | null {
@@ -158,12 +165,13 @@ function providerSecret(provider: CompiledProvider, scheme: AuthScheme | GrantTr
     const kind = "secretKind" in scheme ? scheme.secretKind : "";
     const candidates = provider.config_keys.filter((key) => kind === "api_token"
       ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN")
-      : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN") || (provider.id === "fal" && key === "FAL_KEY" && falKeyScheme(scheme)));
+      : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN") || canonicalSecretKey(provider, scheme, key));
     secret = candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
   }
   // Reject before Headers can include the malformed value in an exception.
   // The selected grant never falls back to an environment credential.
-  if (provider.id === "fal" && falKeyScheme(scheme) && secret && /[^\x21-\x7e]/.test(secret)) return null;
+  if ((canonicalSecretKey(provider, scheme, "FAL_KEY") || canonicalSecretKey(provider, scheme, "RUNWAYML_API_SECRET"))
+    && secret && /[^\x21-\x7e]/.test(secret)) return null;
   return secret;
 }
 
