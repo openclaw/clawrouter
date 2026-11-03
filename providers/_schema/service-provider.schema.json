@@ -816,7 +816,7 @@
             "additionalProperties": false,
             "properties": {
               "pricingRef": { "type": "string", "minLength": 1 },
-              "pricing": { "$ref": "#/$defs/tokenPricing" }
+              "pricing": { "oneOf": [{ "$ref": "#/$defs/tokenPricing" }, { "type": "null" }] }
             }
           }
         }

@@ -123,7 +123,7 @@ function compileProvider(manifest, ids) {
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
     ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
-    ...(model.endpointPricing ? { endpointPricing: Object.fromEntries(Object.entries(model.endpointPricing).map(([id, card]) => [id, { pricing_ref: card.pricingRef, pricing: normalizePricing(card.pricing) }])) } : {}),
+    ...(model.endpointPricing ? { endpointPricing: Object.fromEntries(Object.entries(model.endpointPricing).map(([id, card]) => [id, { pricing_ref: card.pricingRef, pricing: card.pricing === null ? null : normalizePricing(card.pricing) }])) } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
   }));
