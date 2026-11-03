@@ -364,9 +364,17 @@ try {
   const wrongNativeMethod = await fetch(`${base}/v1/native/firecrawl/v2/scrape`, { method: "DELETE", headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(wrongNativeMethod.status, 405);
   assert.equal((await wrongNativeMethod.json()).error.code, "method_not_allowed");
-  const directManifestGet = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
-  assert.equal(directManifestGet.status, 503);
-  assert.equal((await directManifestGet.json()).error.code, "provider_not_configured", "GET manifest routes parse path params without a JSON envelope");
+  const unownedPrediction = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(unownedPrediction.status, 409);
+  assert.equal((await unownedPrediction.json()).error.code, "response_owner_unavailable", "unowned managed IDs fail before provider credential lookup");
+  // Keep direct-GET parameter parsing independent of managed job ownership.
+  // This key cannot use OpenAI; a parsed model_id reaches that policy verdict.
+  const directManifestGet = await fetch(`${base}/v1/proxy/openai/models_retrieve?model_id=gpt-6-luna`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(directManifestGet.status, 403);
+  assert.equal((await directManifestGet.json()).error.code, "provider_not_allowed", "GET manifest routes parse path params without a JSON envelope");
+  const missingManifestParam = await fetch(`${base}/v1/proxy/openai/models_retrieve`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(missingManifestParam.status, 400);
+  assert.equal((await missingManifestParam.json()).error.code, "invalid_model_id", "missing GET path params fail parsing before provider policy");
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
   const configuredCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
