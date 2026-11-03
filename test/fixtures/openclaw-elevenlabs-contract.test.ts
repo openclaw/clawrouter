@@ -36,7 +36,8 @@ describe("actual model-less ElevenLabs TTS and Talk through workerd", () => {
       const cfg = config("elevenlabs_tts");
       const result = await synthesizeSpeech({ text: "Synthetic café 😀", cfg, prefsPath: home + "/tts-prefs.json", disableFallback: true });
       expect(result, result.error).toMatchObject({ success: true, provider: "clawrouter", audioBuffer: MP3, outputFormat: "mp3_44100_128", fileExtension: ".mp3" });
-      expect(result.providerModel).toBeUndefined();
+      // Client metadata may retain native model_id; the router offer/usage stays model-less.
+      expect(result.providerModel).toBe("eleven_multilingual_v2");
       cfg.models!.providers!.clawrouter.apiKey = "clawrouter-live-elevenlabs_tts-invalid";
       const denied = await synthesizeSpeech({ text: "Do not synthesize", cfg, prefsPath: home + "/tts-prefs.json", disableFallback: true });
       expect(denied.success).toBe(false);

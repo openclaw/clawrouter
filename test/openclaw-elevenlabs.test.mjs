@@ -39,6 +39,12 @@ for (const transport of ["native", "manifest"]) {
         testPath: "src/gateway/talk/worker-contract.test.ts",
         env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_AUDIO_BASE64: wire.response.base64 },
       });
+      // The actual client has hit its deadline without receiving partial audio.
+      // Local workerd does not reliably surface a pre-header TCP disconnect.
+      // Exercise the real controller's observed cancellation separately, as in
+      // proxy-routing-workerd, without claiming live transport propagation.
+      const cancellation = await (await fetch(new URL("/fixture/cancel", origin))).json();
+      t.diagnostic(`pre-header ingress abort observed: ${cancellation.ingressAborted}; controlled Worker cancellation qualified separately`);
       const upstream = await mf.getWorker("upstream");
       const calls = await (await upstream.fetch("https://fixture.example/state")).json();
       assert.equal(calls.length, cases.length, "denied calls never dispatch; uncertain generation never replays");
@@ -80,7 +86,7 @@ for (const transport of ["native", "manifest"]) {
         assert.doesNotMatch(JSON.stringify(event), /Synthetic|fixture-upstream|must-not-fallback|must-not-forward/);
       }
       const finalCalls = await (await upstream.fetch("https://fixture.example/state")).json();
-      assert.equal(finalCalls.find(call => call.body.text === "Synthetic cancel")?.canceled, true, "caller cancellation reaches the original upstream reader");
+      assert.equal(finalCalls.find(call => call.body.text === "Synthetic cancel")?.canceled, true, "the controlled Worker signal cancels the original upstream reader");
       for (const id of denied) {
         const usage = await readUsage(origin, id);
         assert.equal(usage.budget.spentMicros, 0);
@@ -113,11 +119,16 @@ function routerFixture(transport) {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
     import { snapshot } from "./worker/providers.ts";
     ${transport === "manifest" ? 'for (const endpoint of snapshot.providers.find(provider => provider.id === "elevenlabs").endpoints) endpoint.native_proxy = false;' : ""}
-    const requests = [];
+    const requests = [], caller = new AbortController(); let ingressAborted = false;
     export default { ...handler, fetch(request, env, context) {
       const path = new URL(request.url).pathname;
       if (path === "/fixture/requests") return Response.json(requests);
+      if (path === "/fixture/cancel") { caller.abort(new Error("fixture observed client deadline")); return Response.json({ ingressAborted }); }
       if (path !== "/v1/usage") requests.push({ path, method: request.method, authorization: request.headers.get("authorization"), vendorKey: request.headers.get("xi-api-key"), genericKey: request.headers.get("x-api-key") });
+      if (request.method === "POST" && request.headers.get("authorization") === "Bearer clawrouter-live-elevenlabs_cancel-fixture-secret") {
+        request.signal.addEventListener("abort", () => { ingressAborted = true; }, { once: true });
+        request = new Request(request, { signal: AbortSignal.any([request.signal, caller.signal]) });
+      }
       return handler.fetch(request, { ...env, ELEVENLABS_API_KEY: "fixture-upstream-elevenlabs-key" }, context);
     } };`;
 }
@@ -130,10 +141,15 @@ function upstreamFixture() {
       const call = { url: request.url, method: request.method, redirect: request.redirect, headers: Object.fromEntries(request.headers), body, canceled: false };
       calls.push(call);
       if (body.text === "Synthetic error") return Response.json({ error: "fixture-private-upstream-error" }, { status: 429 });
-      if (body.text === "Synthetic cancel") return new Response(new ReadableStream({
-        start(controller) { controller.enqueue(audio.subarray(0, 8)); },
-        cancel() { call.canceled = true; },
-      }), { headers: { "content-type": "audio/mpeg" } });
+      if (body.text === "Synthetic cancel") {
+        // A pending timer models an unfinished producer. Without pending I/O,
+        // workerd terminates the fixture before the actual caller can cancel it.
+        let pending;
+        return new Response(new ReadableStream({
+          start(controller) { controller.enqueue(audio.subarray(0, 8)); pending = setTimeout(() => controller.error(new Error("fixture producer deadline")), 60_000); },
+          cancel() { clearTimeout(pending); call.canceled = true; },
+        }), { headers: { "content-type": "audio/mpeg" } });
+      }
       const chunks = [audio.subarray(0, 3), audio.subarray(3, 9), audio.subarray(9)];
       return new Response(new ReadableStream({ pull(controller) {
         const chunk = chunks.shift();
