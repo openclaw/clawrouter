@@ -1,6 +1,13 @@
 import type { UpstreamGrant, RefreshConfig } from "./types.ts";
 
-export interface CredentialRecord {
+interface CredentialMetadata extends Pick<UpstreamGrant,
+  "tokenType" | "expiresAt" | "refreshTokenExpiresAt" | "lastManualAuthorizationAt" |
+  "scopes" | "accountId" | "subscription" | "refresh" | "createdAt"
+> {
+  updatedAt: string;
+}
+
+export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant, "credential" | "credentials" | "accessToken" | "refreshToken"> {
   version: 1;
   generation: number;
   lineage?: string;
@@ -9,20 +16,6 @@ export interface CredentialRecord {
   refreshDiagnosis?: UpstreamGrant["refreshDiagnosis"];
   credentialProvenance?: "clawrouter_oauth" | "imported";
   refreshAttempt?: { id: string; generation: number } | null;
-  credential?: string | null;
-  credentials?: Record<string, string>;
-  accessToken?: string | null;
-  refreshToken?: string | null;
-  tokenType?: string;
-  expiresAt?: string | null;
-  refreshTokenExpiresAt?: string | null;
-  lastManualAuthorizationAt?: string | null;
-  scopes?: string[];
-  accountId?: string | null;
-  subscription?: { plan?: string | null; subject?: string | null } | null;
-  refresh?: UpstreamGrant["refresh"];
-  createdAt?: string | null;
-  updatedAt: string;
   grantKey?: string;
   providerId?: string | null;
   kind?: UpstreamGrant["kind"];
@@ -39,7 +32,7 @@ export interface CredentialRecord {
   metadata?: UpstreamGrant;
 }
 
-export interface CredentialProjection {
+export interface CredentialProjection extends CredentialMetadata {
   credentialStore: "durable_object";
   credentialGeneration: number;
   credentialLineage?: string;
@@ -51,16 +44,6 @@ export interface CredentialProjection {
   credentialFields: string[];
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
-  tokenType?: string;
-  expiresAt?: string | null;
-  refreshTokenExpiresAt?: string | null;
-  lastManualAuthorizationAt?: string | null;
-  scopes?: string[];
-  accountId?: string | null;
-  subscription?: { plan?: string | null; subject?: string | null } | null;
-  refresh?: UpstreamGrant["refresh"];
-  createdAt?: string | null;
-  updatedAt: string;
 }
 
 export interface OwnerResponse {
