@@ -138,14 +138,33 @@ export function requiredGrantTemplate(value: string, grant: UpstreamGrant, error
   });
 }
 
+// Canonical product bindings do not make arbitrary *_KEY names credentials.
+function falKeyScheme(scheme: AuthScheme | GrantTransportAuth): boolean {
+  return scheme.type === "bearer" && scheme.header.toLowerCase() === "authorization"
+    && scheme.format === "Key ${secret}" && "secretKind" in scheme && scheme.secretKind === "api_key";
+}
+
+export function providerSecretConfigKey(provider: CompiledProvider, key: string): boolean {
+  return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key)
+    || (provider.id === "fal" && key === "FAL_KEY" && provider.auth.schemes.some(falKeyScheme));
+}
+
 function providerSecret(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth, grant: UpstreamGrant | null, env: Env): string | null {
+  let secret: string | null;
   if (grant) {
-    if ((grant.kind === "oauth" || grant.kind === "subscription") && grant.accessToken) return grant.accessToken;
-    return grant.credential ?? grant.accessToken ?? firstCredential(grant.credentials) ?? null;
+    secret = (grant.kind === "oauth" || grant.kind === "subscription") && grant.accessToken
+      ? grant.accessToken : grant.credential ?? grant.accessToken ?? firstCredential(grant.credentials) ?? null;
+  } else {
+    const kind = "secretKind" in scheme ? scheme.secretKind : "";
+    const candidates = provider.config_keys.filter((key) => kind === "api_token"
+      ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN")
+      : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN") || (provider.id === "fal" && key === "FAL_KEY" && falKeyScheme(scheme)));
+    secret = candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
   }
-  const kind = "secretKind" in scheme ? scheme.secretKind : "";
-  const candidates = provider.config_keys.filter((key) => kind === "api_token" ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN") : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN"));
-  return candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
+  // Reject before Headers can include the malformed value in an exception.
+  // The selected grant never falls back to an environment credential.
+  if (provider.id === "fal" && falKeyScheme(scheme) && secret && /[^\x21-\x7e]/.test(secret)) return null;
+  return secret;
 }
 
 function firstCredential(values: Record<string, string> | undefined): string | null {
