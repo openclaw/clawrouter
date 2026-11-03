@@ -640,6 +640,7 @@
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "pattern": "^/" },
+        "upstreamPath": { "$ref": "#/$defs/literalUpstreamPath" },
         "method": { "type": "string" },
         "nativeProxy": { "type": "boolean" },
         "auth": { "type": "string" },
@@ -863,6 +864,11 @@
         "websocket": { "enum": ["openai.responses", "openai.realtime"] },
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }
+    },
+    "literalUpstreamPath": {
+      "type": "string", "maxLength": 2048,
+      "pattern": "^(/[A-Za-z0-9._~-]+)+$(?![\\s\\S])",
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
     },
     "model": {
       "type": "object",

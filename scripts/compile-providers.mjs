@@ -63,6 +63,7 @@ function compileProvider(manifest, ids) {
     method: endpoint.method ?? "POST",
     methods: unique([endpoint.method ?? "POST", ...capabilities.filter((item) => item.endpoint === id).flatMap((item) => item.methods)]),
     path: endpoint.path,
+    ...(endpoint.upstreamPath ? { upstreamPath: endpoint.upstreamPath } : {}),
     native_proxy: endpoint.nativeProxy ?? true,
     auth: endpoint.auth ?? null,
     headers: endpoint.headers ?? {},
@@ -363,6 +364,7 @@ function validateModelAvailability(model) {
 function validateEndpoints(manifest) {
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    validateUpstreamPath(manifest, id, endpoint);
     if (endpoint.requestPricing?.unit === "image") {
       if (manifest.id !== "xai" || !["xai.images_generations", "xai.images_edits"].includes(endpoint.requestFormat) || endpoint.responseFormat !== "xai.images")
         throw new Error(`endpoint ${id} requestPricing requires the qualified native xAI image contract`);
@@ -448,6 +450,25 @@ function validateEndpoints(manifest) {
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }
+  }
+}
+
+function validateUpstreamPath(manifest, id, endpoint) {
+  if (endpoint.upstreamPath === undefined) return;
+  const fail = () => { throw new Error(`endpoint ${id} upstreamPath requires a literal same-format Chat, Messages or model-list path without conflicting transport overrides`); };
+  const methods = { "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.models": "GET", "anthropic.models": "GET" };
+  const canonical = new RegExp(manifestSchema.$defs.literalUpstreamPath.pattern);
+  if (!canonical.test(endpoint.path) || endpoint.path.length > 2048 || !canonical.test(endpoint.upstreamPath)
+    || [endpoint.path, endpoint.upstreamPath].some(path => path.split("/").some(segment => segment === "." || segment === ".."))
+    || endpoint.pathParams?.length || Object.keys(endpoint.pathParamStyles ?? {}).length
+    || !Object.hasOwn(methods, endpoint.requestFormat) || endpoint.responseFormat !== endpoint.requestFormat
+    || (endpoint.method ?? "POST") !== methods[endpoint.requestFormat]
+    || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== methods[endpoint.requestFormat]))
+    || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.requestPricing || endpoint.toolPricing
+    || endpoint.requestFormat.endsWith(".models") && (endpoint.streaming || endpoint.modelPassthrough)) fail();
+  for (const transport of Object.values(manifest.auth.grantTransports ?? {})) {
+    const path = transport.endpointPaths?.[id];
+    if (path !== undefined && path !== endpoint.upstreamPath) fail();
   }
 }
 
