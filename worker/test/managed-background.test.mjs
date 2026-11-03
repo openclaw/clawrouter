@@ -2,12 +2,12 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { BackgroundStore, backgroundObservationMs, backgroundReplayMs } from "../background-store.ts";
-import { ResponsesScopeStore } from "../responses-scope.ts";
-import { createProxyAccounting } from "../proxy-accounting.ts";
-import { planBudgetReservation } from "../accounting.ts";
-import { managedPredictionKey } from "../managed-prediction-identity.ts";
-import { identityKey } from "../http-continuation.ts";
+const { BackgroundStore, backgroundObservationMs, backgroundReplayMs } = await import("../background-store.ts");
+const { ResponsesScopeStore } = await import("../responses-scope.ts");
+const { createProxyAccounting } = await import("../proxy-accounting.ts");
+const { planBudgetReservation } = await import("../accounting.ts");
+const { managedPredictionKey } = await import("../managed-prediction-identity.ts");
+const { identityKey } = await import("../http-continuation.ts");
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
 const owner = { providerId: "replicate", endpointId: "predictions", grantKey: "oauth/fixture/replicate", lineage: "original-lineage", routeSha256: "a".repeat(64), policyGeneration: "g1" };
