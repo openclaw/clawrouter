@@ -59,7 +59,8 @@ test("Command A+ publishes sourced model facts for both Chat transports without 
     assert.equal(facts.contextWindow, 128000);
     assert.equal(facts.maxOutputTokens, 64000);
     assert.equal(facts.checkedAt, "2026-11-03");
-    assert.ok(facts.sources.includes("https://docs.cohere.com/docs/command-a-plus"));
+    assert.deepEqual(facts.sources, id === "chat" ? ["https://docs.cohere.com/docs/command-a-plus"]
+      : ["https://docs.cohere.com/docs/compatibility-api", "https://docs.cohere.com/docs/command-a-plus"]);
   }
   assert.equal(model.pricing, null);
   assert.equal(snapshot.model_index["cohere/embed-v4.0"].nativeCapabilities, undefined);
