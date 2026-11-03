@@ -650,6 +650,12 @@
         },
         "then": { "$ref": "#/$defs/openRouterTranscriptionEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^(groq|mistral)\\.transcription" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^(groq|mistral)\\.transcription" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/groqMistralTranscriptionEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
@@ -2189,6 +2195,24 @@
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["upstreamPath"] }
+      ] }
+    },
+    "groqMistralTranscriptionEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/audio/transcriptions" }, "pathParams": { "const": [] },
+        "requestFormat": { "enum": ["groq.transcription", "mistral.transcription"] },
+        "responseFormat": { "enum": ["groq.transcription", "mistral.transcription"] },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "openRouterTranscriptionEndpoint": {
