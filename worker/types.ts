@@ -1,4 +1,5 @@
-import type { ClientCatalogModel, ModelPricing } from "../shared/contracts";
+import type { ClientCatalogModel, ModelPricing, GrantRoutingPolicy, GrantAccount, GrantExtraUsage } from "../shared/contracts";
+export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
 
 export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
@@ -144,21 +145,6 @@ export interface AccessPolicy {
   grantRouting: GrantRoutingPolicy;
 }
 
-export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "threshold" | "weighted_random";
-export type GrantStickiness = "none" | "identity" | "session";
-export interface GrantRoutingPolicy {
-  strategy: GrantSelectionStrategy;
-  stickiness: GrantStickiness;
-  failover: boolean;
-  environmentFallback?: boolean;
-  includedQuotaReservePercent?: number;
-  staleState: "allow" | "deny";
-  staleAfterSeconds: number;
-  switchAtUsedPercent: number;
-  hysteresisPercent: number;
-  eligibleGrants: Record<string, string[]>;
-}
-
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
 
 export interface ProxyCredential {
@@ -173,15 +159,6 @@ export interface ProxyCredential {
 }
 
 export interface ProxyCredentialEntry { credentialId: string; credential: ProxyCredential }
-
-export interface ProviderConnection {
-  providerId: string;
-  enabled: boolean;
-  label?: string | null;
-  monthlyBudgetMicros?: number | null;
-  spentMicros?: number | null;
-  remainingMicros?: number | null;
-}
 
 export interface ProviderHealth {
   providerId: string;
@@ -293,9 +270,6 @@ export interface UpstreamGrant {
   revokedAt?: string | null;
 }
 
-export interface GrantAccount { email?: string; displayName?: string; rateLimitTier?: string; subscriptionStatus?: string; extraUsageEnabled?: boolean }
-export interface GrantExtraUsage { enabled?: boolean; usedCredits?: number; monthlyLimit?: number; utilization?: number; currency?: string; spendLimitReached?: boolean }
-export type GrantLane = "subscription" | "api_key" | "environment";
 
 export interface GrantQuotaWindow {
   observedAt?: string;
