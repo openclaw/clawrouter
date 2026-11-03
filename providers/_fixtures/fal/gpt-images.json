@@ -1,0 +1,10 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null, "inlineBytesAreSynthetic": true },
+  "requests": [
+    { "model": "openai/gpt-image-2.5/flare/text-to-image", "body": { "prompt": "A blue paper boat", "num_images": 1, "output_format": "png", "quality": "low", "background": "opaque", "image_size": { "width": 1024, "height": 1024 } } },
+    { "model": "openai/gpt-image-2.5/flare/edit", "body": { "prompt": "Make the paper boat green", "num_images": 1, "output_format": "webp", "quality": "auto", "background": "transparent", "image_size": "auto", "image_urls": ["data:image/png;base64,iVBORw0KGgo="] } },
+    { "model": "openai/gpt-image-2.5/sunburst/text-to-image", "body": { "prompt": "A paper boat in a lake", "num_images": 2, "output_format": "png", "quality": "max", "image_size": { "width": 1536, "height": 1024 } } },
+    { "model": "openai/gpt-image-2.5/sunburst/edit", "body": { "prompt": "Add a distant shoreline", "num_images": 1, "output_format": "png", "quality": "xhigh", "image_urls": ["data:image/png;base64,iVBORw0KGgo="] } }
+  ],
+  "completed": { "images": [{ "url": "https://assets.example/boat.png", "content_type": "image/png", "width": 1024, "height": 1024 }] }
+}

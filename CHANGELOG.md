@@ -75,6 +75,7 @@
 - Add bounded Replicate prediction protocol helpers and executable lifecycle fixtures for scoped async runtime integration, including partial output, cancellation, URL rewriting and explicit unknown-cost boundaries. Route activation and durable settlement remain separate integration work.
 - Add bounded fal queue protocol helpers and portable lifecycle fixtures, distinguishing result readiness from success and queued cancellation from an in-progress cancellation request. Runtime activation and billing integration remain separately qualified.
 - Qualify frozen fal FLUX dev and Krea v2 image transports with bounded inline references, per-model geometry, partial-result evidence and native Key dispatch.
+- Qualify the four frozen fal GPT Image 2.5 generate/edit products, preserving selected quality, ordered inline references and native geometry without fabricated cost bounds.
 - Add executable Perplexity Agent/Search wire fixtures covering native results, typed streaming failures, credential isolation and conservative billing for the provider/client integration.
 
 - Define typed Replicate prediction lifecycle links and validate the native create, retrieve and cancel endpoint contracts before compiling manifests.
