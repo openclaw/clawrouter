@@ -24,6 +24,9 @@ adapter:
   stream: google_sse
   error: google_error
 capabilities:
+  - id: audio.generate
+    endpoint: music_generate
+    methods: [POST]
   - id: llm.generate
     endpoint: generate_content
     methods: [POST]
@@ -40,6 +43,13 @@ capabilities:
     endpoint: image_generate
     methods: [POST]
 endpoints:
+  music_generate:
+    method: POST
+    path: /v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.music_generate
+    responseFormat: google.music
+    timeoutMs: 600000
   generate_content:
     modelPassthrough: {}
     path: /v1beta/models/${model}:generateContent
@@ -524,6 +534,12 @@ models:
     - id: google/gemini-3-pro-image
       upstream: gemini-3-pro-image
       capabilities: [image.generate]
+    - id: google/lyria-3-clip-preview
+      upstream: lyria-3-clip-preview
+      capabilities: [audio.generate]
+    - id: google/lyria-3-pro-preview
+      upstream: lyria-3-pro-preview
+      capabilities: [audio.generate]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

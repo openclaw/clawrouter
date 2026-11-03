@@ -20,6 +20,8 @@ const body = () => ({ contents: [{ role: "user", parts: [{ text: "Synthetic musi
   generationConfig: { responseModalities: ["AUDIO", "TEXT"] } });
 function fixture() {
   const manifest = structuredClone(existing);
+  manifest.capabilities = manifest.capabilities.filter(value => value.endpoint !== "music_generate");
+  manifest.models.entries = manifest.models.entries.filter(value => !ids.includes(value.upstream));
   manifest.capabilities.push({ id: "audio.generate", endpoint: "music_generate", methods: ["POST"] });
   manifest.endpoints.music_generate = { method: "POST", path: "/v1beta/models/${model}:generateContent", pathParams: ["model"],
     requestFormat: "google.music_generate", responseFormat: "google.music", timeoutMs: 600000 };

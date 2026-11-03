@@ -3,7 +3,7 @@
 This finite compiler contract consumes the actual Lyria codec and wrapper from
 [PR665](https://github.com/openclaw/clawrouter/pull/665), source
 `81cd93565e7af811201d7bee06b021c700415d28`, landed as
-`7ad413d8b93cb93d6b7d8c48cf415a400c4fb38e`. It registers no provider or model offer.
+`7ad413d8b93cb93d6b7d8c48cf415a400c4fb38e`.
 The wire and response bounds remain in [the wrapper contract](google-music-contract.md).
 
 ## Exact declaration
@@ -43,16 +43,31 @@ keeps admission and settlement unpriced under upstream-dollar hard budgets.
 Explicit `policy_fixed` remains separately labeled, including authorized zero.
 There is no guessed duration, text-token or image-conditioned music charge.
 
-## Activation dependencies
+## Bundled declaration and activation dependencies
 
-This change contains schema, compiler and composed fixtures only. It changes no
-provider YAML, generated snapshot, shared matcher, dispatch or account state.
-Source1 must qualify selected-model/capability-aware routing, original grants,
-generic/stream AUDIO bypass closure and frozen accounting facts before native
-music activation. The shared GenerateContent path cannot select by YAML order.
+The existing Google YAML declares the two exact music-only rows and native
+endpoint after the runtime in [PR686](https://github.com/openclaw/clawrouter/pull/686),
+landed as `05187ff5e1d45d8e62256216f723afaa7b40d67f`. It consumes the landed
+selected-model matcher, original-grant dispatch, AUDIO bypass closure and frozen
+accounting facts. No shared runtime or generated snapshot is changed by the
+declaration. The shared GenerateContent path cannot select by YAML order.
 A manifest endpoint ID may identify a capability only when the actual offer and
 client qualify it; manifest proof is not native routing proof. Ambiguous native
 offers must remain unavailable until the explicit contract is qualified.
+
+Primary [deprecations](https://ai.google.dev/gemini-api/docs/deprecations),
+checked 2026-11-04, list both frozen Lyria previews with no announced shutdown.
+The current [music guide](https://ai.google.dev/gemini-api/docs/music-generation)
+features Lyria 3.5 and Interactions. That is not an implicit alias or permission
+to rewrite these frozen GenerateContent identities. No newer model, live call,
+token-context fact or tariff is added.
+
+The source-owned runtime fixture correction in
+[PR710](https://github.com/openclaw/clawrouter/pull/710), landed as
+`f83f2f61aaab351322b8e9512e065470a46f9b67`, replaces only the two exact music
+model IDs and capability binding before adding its explicit test values.
+All runtime assertions are preserved. This declaration uses that qualified
+base without copying or modifying the shared runtime fixture.
 
 Source2 owns the actual music consumer, including removal of its automatic
 text-only replay. Source6 owns composed Worker/client proof and serialized
