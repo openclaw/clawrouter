@@ -9,7 +9,7 @@ const { estimateCost } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const { retainedToolBase } = await import("../responses-tool-evidence.ts");
 const provider = compileProviderSnapshot([parse(readFileSync(new URL("../../providers/xai.provider.yaml", import.meta.url), "utf8"))]).providers[0];
-const model = provider.models[0], endpoint = { request_format: "openai.responses" };
+const model = provider.models.find(model => model.upstream === "grok-4.3"), endpoint = { request_format: "openai.responses" };
 const guarded = { ...model.pricing, unpricedCosts: ["request_fee"] };
 const tariff = {
   unit: "request", version: "xai-responses-outcome-2026-11-03", effectiveAt: "2026-11-03",
