@@ -1,5 +1,21 @@
 import { createSseUsageAccumulator, usageInspectionLimit, type UsageInspection, type UsageTokens } from "./token-usage.ts";
 
+// Complete-frame validation only. Callers own assembly, capacity and delivery.
+// Payload borrows the supplied bytes; only colon metadata is exposed as strings.
+export function decodeBedrockEventFrame(frame: Uint8Array): Readonly<{ headers: ReadonlyMap<string, string>; payload: Uint8Array }> {
+  const { length, headerEnd } = eventPrelude(frame);
+  if (frame.length !== length || crc32(frame.subarray(0, length - 4))
+    !== new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(length - 4)) throw new Error("invalid event frame");
+  return { headers: eventHeaders(frame.subarray(12, headerEnd)), payload: frame.subarray(headerEnd, length - 4) };
+}
+
+function eventPrelude(bytes: Uint8Array): { length: number; headerEnd: number } {
+  if (bytes.length < 12) throw new Error("truncated event prelude");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), length = view.getUint32(0), headers = view.getUint32(4);
+  if (crc32(bytes.subarray(0, 8)) !== view.getUint32(8) || length < 16 || headers > length - 16) throw new Error("invalid event prelude");
+  return { length, headerEnd: 12 + headers };
+}
+
 // Observe InvokeModelWithResponseStream, never reframe or drain it. The existing
 // response reader owns delivery. Unknown/oversized payloads remain unmetered.
 export function createBedrockEventStreamInspector() {
@@ -9,13 +25,11 @@ export function createBedrockEventStreamInspector() {
   let novaSeen = false, nova: UsageTokens | null = null;
   function invalid() { stopped = true; failed = true; frame = null; nova = null; }
   function consume(bytes: Uint8Array) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    if (crc32(bytes.subarray(0, bytes.length - 4)) !== view.getUint32(bytes.length - 4)) { invalid(); return; }
     try {
-      const headerEnd = 12 + view.getUint32(4), headers = eventHeaders(bytes.subarray(12, headerEnd));
+      const { headers, payload: envelopeBytes } = decodeBedrockEventFrame(bytes);
       if (headers.get(":message-type") === "exception" || headers.get(":message-type") === "error") { failed = true; return; }
       if (headers.get(":message-type") !== "event" || headers.get(":event-type") !== "chunk") { stopped = true; nova = null; return; }
-      const envelope = object(JSON.parse(decoder.decode(bytes.subarray(headerEnd, bytes.length - 4))));
+      const envelope = object(JSON.parse(decoder.decode(envelopeBytes)));
       if (typeof envelope?.bytes !== "string" || (envelope.bytes.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(envelope.bytes))) { invalid(); return; }
       const payload = Uint8Array.from(atob(envelope.bytes), char => char.charCodeAt(0));
       const value = object(JSON.parse(decoder.decode(payload)));
@@ -37,8 +51,8 @@ export function createBedrockEventStreamInspector() {
           const count = Math.min(12 - offset, bytes.length - index);
           prelude.set(bytes.subarray(index, index + count), offset); offset += count; index += count;
           if (offset < 12) continue;
-          const view = new DataView(prelude.buffer), length = view.getUint32(0), headers = view.getUint32(4);
-          if (crc32(prelude.subarray(0, 8)) !== view.getUint32(8) || length < 16 || headers > length - 16) { invalid(); break; }
+          let length: number;
+          try { length = eventPrelude(prelude).length; } catch { invalid(); break; }
           // This is an inspection cap, not a wire limit. Delivery continues.
           if (length > usageInspectionLimit) { stopped = true; nova = null; break; }
           frame = new Uint8Array(length); frame.set(prelude);

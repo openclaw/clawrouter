@@ -198,6 +198,7 @@
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
+- Share complete Bedrock EventStream frame validation with exact length, CRC and metadata checks while preserving Invoke byte delivery and its inspection-only limit.
 - Add finite native Bedrock embedding codecs and complete synthetic vector fixtures for Titan, Cohere, Nova and version-specific Marengo requests. Shared model routing, native client fixes and tariff qualification remain separate integration work.
 - Qualify finite native Bedrock embedding declarations against the landed family codecs and signed runtime, retaining exact registered identities, text-only inputs and unknown costs.
 - Reject non-null Titan Multimodal error messages before exposing embeddings or usage, including empty and malformed values, while preserving other Bedrock families.
