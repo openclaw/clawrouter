@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 const ids = ["llama-cpp", "lmstudio", "ollama", "omlx", "sglang", "vllm"];
-const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...ids.map(id => `providers/${id}.provider.yaml`)], { encoding: "utf8" }));
+const paths = ids.map(id => `providers/${id}.provider.yaml`).sort();
+const compiled = compileProviderSnapshot(paths.map(path => parse(readFileSync(path, "utf8"))));
 
 const router = `
 import worker, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';

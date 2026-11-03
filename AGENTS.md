@@ -14,6 +14,7 @@ Telegraph style. Keep the data plane provider-neutral and the hot path small.
 
 ## Validation
 
+- Compile provider test fixtures with `compileProviderSnapshot`; reserve compiler subprocesses for CLI contract tests.
 - Run focused Worker and admin TypeScript tests for touched surfaces.
 - Validate all bundled provider manifests after provider changes.
 - Run autoreview before handoff for non-trivial code changes.

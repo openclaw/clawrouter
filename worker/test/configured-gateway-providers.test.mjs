@@ -1,13 +1,14 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { configuredUpstream, providerModel, upstreamPath } from "../providers.ts";
 import { resolveTemplate } from "../provider-templates.ts";
 
-const { providers } = JSON.parse(execFileSync(process.execPath, [
-  "scripts/compile-providers.mjs", "providers/bifrost.provider.yaml", "providers/litellm.provider.yaml",
-], { encoding: "utf8" }));
+const paths = ["providers/bifrost.provider.yaml", "providers/litellm.provider.yaml"].sort();
+const { providers } = compileProviderSnapshot(paths.map(path => parse(readFileSync(path, "utf8"))));
 
 for (const provider of providers) {
   const id = provider.id;

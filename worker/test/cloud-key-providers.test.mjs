@@ -1,7 +1,9 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { configuredUpstream, providerModel, upstreamPath } from "../providers.ts";
 import { resolveTemplate } from "../provider-templates.ts";
 
@@ -10,9 +12,8 @@ const contracts = [
   ["microsoft-foundry", "MICROSOFT_FOUNDRY_API_KEY", "https://fixture.services.ai.azure.com/openai/v1/chat/completions", "deployment"],
   ["kimi", "KIMI_CODING_API_KEY", "https://api.kimi.ai/coding/v1/chat/completions", "k3.1-pro"],
 ];
-const { providers } = JSON.parse(execFileSync(process.execPath, [
-  "scripts/compile-providers.mjs", ...contracts.map(([id]) => `providers/${id}.provider.yaml`),
-], { encoding: "utf8" }));
+const paths = contracts.map(([id]) => `providers/${id}.provider.yaml`).sort();
+const { providers } = compileProviderSnapshot(paths.map(path => parse(readFileSync(path, "utf8"))));
 const configuration = {
   MICROSOFT_FOUNDRY_ENDPOINT: "https://fixture.services.ai.azure.com",
   MICROSOFT_FOUNDRY_DEPLOYMENT: "tenant-chat-deployment",
