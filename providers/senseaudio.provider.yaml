@@ -1,0 +1,48 @@
+# HTTP ASR: https://docs.senseaudio.cn/api-reference/endpoint/asr/transcriptions
+# Activation requires the shared bounded multipart transcription route.
+schema: clawrouter.service-provider.v1
+id: senseaudio
+displayName: SenseAudio
+status: experimental
+class: rest_json
+service:
+  platform: senseaudio
+  kind: tool_provider
+  upstreamService: senseaudio
+  configKeys: [SENSEAUDIO_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.senseaudio.cn
+routing:
+  nativePrefixes: [clawrouter-senseaudio, senseaudio]
+  modelPrefixes: [senseaudio/]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.transcription
+    endpoint: transcriptions
+    methods: [POST]
+endpoints:
+  transcriptions:
+    path: /v1/audio/transcriptions
+    requestFormat: openai.audio_transcriptions
+    responseFormat: senseaudio.transcription
+    timeoutMs: 120000
+models:
+  entries:
+    - id: senseaudio/senseaudio-asr-pro-1.5-260319
+      upstream: senseaudio-asr-pro-1.5-260319
+      capabilities: [audio.transcription]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
