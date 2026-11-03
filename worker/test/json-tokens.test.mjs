@@ -25,6 +25,7 @@ test("synchronous tokenizer rejects a malformed feed before dispatching its toke
   assert.deepEqual(seen, ["startArray", "startNumber", "numberChunk"]);
   assert.throws(() => tokens('{"a":1}', "{}"));
   assert.throws(() => tokens('{"a":'));
+  assert.throws(() => tokens("\uFEFF{}"));
 });
 
 test("synchronous tokenizer merges a feed's adjacent chunks without crossing token boundaries", () => {

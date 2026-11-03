@@ -1,12 +1,12 @@
-import * as streamJson from "stream-json/core/parser.js";
+import { jsonParser as createParser } from "stream-json/core/parser.js";
 import type { ParserOptions, Token } from "stream-json/core/parser.js";
 import { none, type Many } from "stream-chain/core";
 
 // stream-json's tokenizer stage is synchronous; its default `parser()` wraps it
-// in async generator plumbing that cost more than the tokenizing itself. The
-// pinned 3.7.0 exports the bare stage at runtime but not in its typings.
+// in async generator plumbing that cost more than the tokenizing itself. Its
+// public input type omits the `none` sentinel used to flush the bare stage.
 type TokenStage = (input: string | typeof none) => Many<Token> | typeof none;
-const jsonParser = (streamJson as unknown as { jsonParser(options: ParserOptions): TokenStage }).jsonParser;
+const jsonParser = createParser as (options: ParserOptions) => TokenStage;
 
 // Feed text, then `end()` once. Tokens of a feed are dispatched only after the
 // whole feed tokenized, and a malformed feed throws before dispatching any.

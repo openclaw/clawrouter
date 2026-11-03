@@ -39,8 +39,8 @@
     "cf:health-report": "node scripts/cf-health-report.mjs"
   },
   "dependencies": {
-    "stream-chain": "4.2.6",
-    "stream-json": "3.7.0"
+    "stream-chain": "4.4.1",
+    "stream-json": "3.8.0"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
