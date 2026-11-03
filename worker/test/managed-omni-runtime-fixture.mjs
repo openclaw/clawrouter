@@ -38,4 +38,3 @@ export async function setup(t, options = {}) {
   return f;
 }
 export const body = flags => ({ ...wire.requests[0], ...flags });
-
