@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-const { configuredUpstream, copyRequestHeaders, endpointForPath, upstreamPath, providerModel } = await import("../providers.ts");
+const { configuredUpstream, copyRequestHeaders, endpointForPath, upstreamPath, providerModel, unifiedPathForEndpoint } = await import("../providers.ts");
+const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 
 const manifest = parse(readFileSync(new URL("../../providers/cloudflare-ai-gateway.provider.yaml", import.meta.url), "utf8"));
@@ -13,8 +14,12 @@ const env = { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID
 const modelId = "cloudflare-ai-gateway/claude-sonnet-4-6";
 
 test("Cloudflare native Messages uses the configured gateway token without copying caller or unrelated provider credentials", () => {
-  const endpoint = endpointForPath(provider, "/v1/messages");
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === "messages");
   assert.equal(endpoint.id, "messages");
+  assert.equal(unifiedPathForEndpoint(provider, endpoint), null);
+  const offer = createRouteCatalog([provider]).manifestProxy.find(route => route.endpoint === "messages");
+  assert.equal(offer.route, "/v1/proxy/cloudflare-ai-gateway/messages");
+  assert.equal(offer.sampleModel, modelId);
   assert.equal(endpoint.request_format, "anthropic.messages");
   assert.equal(endpoint.response_format, "anthropic.messages");
   assert.equal(endpoint.streaming, "sse");
@@ -33,7 +38,7 @@ test("Cloudflare native Messages uses the configured gateway token without copyi
 });
 
 test("Cloudflare Sonnet preserves the Anthropic payload and has only Messages facts with no inherited price", () => {
-  const endpoint = endpointForPath(provider, "/v1/messages");
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === "messages");
   const body = { model: modelId, max_tokens: 1024, stream: true, thinking: { type: "adaptive" },
     messages: [{ role: "user", content: [{ type: "text", text: "fixture input" }, { type: "image", source: { type: "base64", media_type: "image/png", data: "Zml4dHVyZQ==" } }] }],
     tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }] };
