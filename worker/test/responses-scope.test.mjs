@@ -19,7 +19,7 @@ function fixture(t) {
   let now = Date.parse("2026-09-25T00:00:00Z"), sequence = 0;
   t.mock.method(Date, "now", () => now);
   const budgets = sqlBudgetNamespace(t);
-  const { sql, transactionSync } = sqliteFixture(t);
+  const { db: usageDb, sql, transactionSync } = sqliteFixture(t);
   const usageState = { storage: { sql, transactionSync, getAlarm: async () => 1 } };
   let usage = new UsageLedgerObject(usageState);
   const calls = [], controls = { budget: async (_name, _url, _init, dispatch) => dispatch(), usage: async (_init, dispatch) => dispatch() };
