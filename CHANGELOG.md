@@ -120,6 +120,7 @@
 - Add a bounded DuckDuckGo HTML search codec and synthetic challenge/result fixtures. Anonymous-auth schema, actual HTML runtime integration and service-use qualification remain separate activation gates.
 - Add native Google unary and synchronous batch embedding codecs with atomic bounded vector validation, stable Embedding 2 task handling and explicit input/modality token observations.
 - Qualify exact Google native unary/batch embedding declaration formats and model-bound paths, preserving unknown costs and rejecting async-file or credential overrides before runtime activation.
+- Qualify Baseten native data-only model discovery declarations with a fixed bodyless GET, canonical original-key binding and no inferred prices or serving limits.
 - Bind native Google unary and synchronous batch embeddings to selected models and credentials, validating complete ordered vectors before delivery and retaining conservative charges on uncertain execution.
 - Add frozen Gemini inline audio/video understanding codecs and fixtures, preserving native bytes, bounded complete text delivery and explicit media-accounting boundaries.
 - Add Google file-backed embedding batch codecs and fixtures with scoped file/model prerequisites, conservative async lifecycle/cancellation and bounded keyed JSONL result staging.
