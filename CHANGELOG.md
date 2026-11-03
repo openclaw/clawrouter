@@ -132,6 +132,7 @@
 - Qualify Baseten native data-only model discovery declarations with a fixed bodyless GET, canonical original-key binding and no inferred prices or serving limits.
 - Bind native Google unary and synchronous batch embeddings to selected models and credentials, validating complete ordered vectors before delivery and retaining conservative charges on uncertain execution.
 - Add frozen Gemini inline audio/video understanding codecs and fixtures, preserving native bytes, bounded complete text delivery and explicit media-accounting boundaries.
+- Add a scoped Google inline-media response wrapper with qualified WAV/MP4 bytes, bounded complete text delivery, thought exclusion and conservative media-cost boundaries.
 - Add Google file-backed embedding batch codecs and fixtures with scoped file/model prerequisites, conservative async lifecycle/cancellation and bounded keyed JSONL result staging.
 - Add frozen DeepSeek native Search codecs and fixtures, separating native nonempty-request billing from filtered consumer results and preserving unknown interrupted outcomes.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
