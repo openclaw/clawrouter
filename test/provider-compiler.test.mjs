@@ -12,7 +12,8 @@ const manifests = paths.map(path => parse(readFileSync(path, "utf8")));
 
 test("imported compiler matches CLI stdout and output-file snapshots", t => {
   const expected = compileProviderSnapshot(manifests);
-  const stdout = spawnSync(process.execPath, ["scripts/compile-providers.mjs", ...paths], { encoding: "utf8" });
+  // The CLI sorts paths even when its caller supplies them in reverse.
+  const stdout = spawnSync(process.execPath, ["scripts/compile-providers.mjs", ...paths.toReversed()], { encoding: "utf8" });
   assert.equal(stdout.status, 0, stdout.stderr);
   assert.deepEqual(JSON.parse(stdout.stdout), expected);
   const directory = mkdtempSync(join(tmpdir(), "provider-compiler-"));
