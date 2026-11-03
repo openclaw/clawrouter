@@ -4,7 +4,7 @@ import test from "node:test";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 
 const { default: handler } = await import("../index.ts");
-const model = "google-gemini/gemini-3.5-flash";
+const model = "google/gemini-3.5-flash";
 const tiers = ["default", "flex", "priority"];
 const cases = [
   [{}, "default"], [{ serviceTier: null }, "default"],
