@@ -106,16 +106,31 @@ describe("actual model-less ElevenLabs TTS and Talk through workerd", () => {
   it("cancels an incomplete synthesis at the actual caller deadline without replay", async () => {
     await withTempHome(async home => {
       const started = performance.now();
-      const events: Record<string, unknown>[] = [];
+      const events: { phase: string; elapsedMs: number; catalog: boolean; synthesis: boolean;
+        name?: string; code?: string; causeName?: string; causeCode?: string; headersTimeoutMs?: number }[] = [];
+      // Read only the pinned Undici 8 dispatcher's numeric timeout. No socket,
+      // headers, URLs, credentials or client implementation are replaced.
+      const symbolValue = (value: unknown, name: string): unknown => {
+        if (value === null || typeof value !== "object") return undefined;
+        const symbol = Object.getOwnPropertySymbols(value).find(key => key.description === name);
+        return symbol === undefined ? undefined : Object.getOwnPropertyDescriptor(value, symbol)?.value;
+      };
       const record = (phase: string) => (message: unknown) => {
-        const value = message as { request?: { path?: string }; error?: { name?: string; code?: string; cause?: { name?: string; code?: string } } };
+        const value = message as { request?: { path?: string; headersTimeout?: number }; socket?: unknown;
+          error?: { name?: string; code?: string; cause?: { name?: string; code?: string } } };
+        const path = value.request?.path?.split("?")[0];
+        const parser = symbolValue(value.socket, "parser") as { client?: unknown } | undefined;
+        const timeout = value.request?.headersTimeout ?? symbolValue(parser?.client, "headers timeout");
         events.push({ phase, elapsedMs: Math.round(performance.now() - started),
           catalog: value.request?.path?.includes("/catalog") ?? false,
+          synthesis: path === "/v1/proxy/elevenlabs/speech" || path === "/v1/native/elevenlabs/v1/text-to-speech/syntheticVoice1234567",
+          headersTimeoutMs: typeof timeout === "number" ? timeout : undefined,
           name: value.error?.name, code: value.error?.code,
           causeName: value.error?.cause?.name, causeCode: value.error?.cause?.code });
       };
-      const created = record("request"), failed = record("error");
+      const created = record("request"), sent = record("headers"), failed = record("error");
       channel("undici:request:create").subscribe(created);
+      channel("undici:client:sendHeaders").subscribe(sent);
       channel("undici:request:error").subscribe(failed);
       try {
         const result = await synthesizeSpeech({ text: "Synthetic cancel", cfg: config("elevenlabs_cancel"), prefsPath: home + "/tts-prefs.json", disableFallback: true, timeoutMs: 2000 });
@@ -123,9 +138,25 @@ describe("actual model-less ElevenLabs TTS and Talk through workerd", () => {
         console.info("ElevenLabs caller deadline evidence: " + JSON.stringify(observed));
         expect(result.success).toBe(false);
         expect(result.audioBuffer).toBeUndefined();
-        expect(result.error, JSON.stringify(observed)).toMatch(/timed out|abort/i);
+        const requests = events.filter(event => event.phase === "request" && event.synthesis);
+        const dispatch = events.find(event => event.phase === "headers" && event.synthesis);
+        const failure = events.find(event => event.phase === "error" && event.synthesis);
+        expect(requests, JSON.stringify(observed)).toHaveLength(1);
+        expect(dispatch?.headersTimeoutMs, JSON.stringify(observed)).toBeGreaterThan(0);
+        expect(dispatch!.headersTimeoutMs!).toBeLessThanOrEqual(2000);
+        expect(failure, JSON.stringify(observed)).toBeDefined();
+        const elapsed = failure!.elapsedMs - requests[0].elapsedMs;
+        // Undici 8.12.3 uses a 499 ms coarse headers timer. Either this
+        // structured deadline or the same-budget AbortSignal may win.
+        expect(elapsed).toBeGreaterThanOrEqual(dispatch!.headersTimeoutMs! - 500);
+        expect(elapsed).toBeLessThanOrEqual(dispatch!.headersTimeoutMs! + 500);
+        const aborted = failure!.name === "TimeoutError" && /timed out|abort/i.test(result.error ?? "");
+        const headersExpired = failure!.name === "HeadersTimeoutError" && failure!.code === "UND_ERR_HEADERS_TIMEOUT"
+          && result.error === "TTS conversion failed: clawrouter: fetch failed";
+        expect(aborted || headersExpired, JSON.stringify(observed)).toBe(true);
       } finally {
         channel("undici:request:create").unsubscribe(created);
+        channel("undici:client:sendHeaders").unsubscribe(sent);
         channel("undici:request:error").unsubscribe(failed);
       }
     }, environment);
