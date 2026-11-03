@@ -66,6 +66,7 @@
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
 - Run pinned OpenClaw consumer contracts in parallel with independent frozen installs and lockfile-keyed pnpm download caching.
 - Use the standard GitHub Actions runtime budget for CodeQL instead of the rollout-specific 20-minute job cap.
+- Detect stale committed provider snapshots before the full Worker suite, while retaining the compiled CI artifact and reporting the regeneration command.
 - Skip expensive OpenClaw consumer contracts for unrelated and standalone Worker test changes while preserving the reported check; run the full suite when change detection is uncertain.
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
