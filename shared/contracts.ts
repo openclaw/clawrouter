@@ -76,7 +76,7 @@ export interface ProviderResponse { providers: ProviderRow[] }
 
 export interface RouteCatalog {
   openaiCompatible: Array<{ provider: string; models: Array<{ id: string; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
-  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string; responseFormat?: string; sampleModel?: string | null; models?: Array<{ id: string; capabilities: string[] }>; streaming?: boolean | null }>;
+  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; capabilities: string[] }>; streaming?: boolean | null }>;
 }
 
 export interface AccessPolicy {

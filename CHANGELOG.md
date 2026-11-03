@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
+
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.

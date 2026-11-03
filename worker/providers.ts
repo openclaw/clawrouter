@@ -1,3 +1,5 @@
+import { createRouteCatalog, modelSupportsEndpoint } from "../shared/route-catalog.ts";
+export { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { modelForEndpoint } from "./model-pricing.ts";
@@ -75,10 +77,6 @@ export function modelRoute(model: string, capability?: string): { provider: Comp
   return entry ? { provider, model: entry } : null;
 }
 
-export function modelSupportsEndpoint(provider: CompiledProvider, model: CompiledModel, endpoint: CompiledEndpoint): boolean {
-  return provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
-}
-
 export function providerModel(provider: CompiledProvider, value: string, endpoint?: CompiledEndpoint, native = false): CompiledModel | null {
   const prefix = provider.routing.modelPrefixes.find((candidate) => value.startsWith(candidate));
   const upstream = prefix && !native ? value.slice(prefix.length) : value;
@@ -114,31 +112,7 @@ export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: Com
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
 
-export function routeCatalog() {
-  const openaiCompatible = snapshot.providers.filter((provider) => provider.class === "openai_compatible").map((provider) => ({
-    provider: provider.id,
-    models: provider.models.map((model) => ({
-      id: model.id,
-      capabilities: model.capabilities,
-      endpoints: model.capabilities.map(unifiedPathForCapability).filter(Boolean),
-    })),
-    modelPrefixes: provider.routing.modelPrefixes,
-    endpoints: provider.capabilities.map((capability) => unifiedPathForCapability(capability.id)).filter(Boolean),
-  }));
-  const manifestProxy = snapshot.providers.flatMap((provider) => provider.endpoints.map((endpoint) => ({
-    provider: provider.id,
-    endpoint: endpoint.id,
-    route: `/v1/proxy/${provider.id}/${endpoint.id}`,
-    methods: endpoint.methods,
-    pathParams: endpoint.path_params,
-    requestFormat: endpoint.request_format,
-    responseFormat: endpoint.response_format,
-    sampleModel: provider.models.find((model) => modelSupportsEndpoint(provider, model, endpoint))?.id ?? null,
-    models: provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint)).map((model) => ({ id: model.id, capabilities: model.capabilities })),
-    streaming: endpoint.streaming != null,
-  })));
-  return { openaiCompatible, manifestProxy };
-}
+export function routeCatalog() { return createRouteCatalog(snapshot.providers); }
 
 export async function providerReadiness(env: Env): Promise<Readiness[]> {
   const { grants, health, connections } = await readinessInputs(env);
@@ -484,4 +458,3 @@ function encodePathParam(value: string, style: string): string {
 }
 
 function secretConfigKey(key: string): boolean { return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key); }
-function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.decisions" ? "/v1/decisions" : capability === "llm.responses.compact" ? "/v1/responses/compact" : capability === "llm.count_tokens" ? "/v1/responses/input_tokens" : capability === "llm.moderations" ? "/v1/moderations" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : capability === "audio.transcription" ? "/v1/audio/transcriptions" : capability === "image.generation" ? "/v1/images/generations" : ""; }
