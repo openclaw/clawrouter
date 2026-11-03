@@ -656,6 +656,12 @@
         ] },
         "then": { "$ref": "#/$defs/groqMistralTranscriptionEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^xai\\.stt" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^xai\\.stt" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/xaiTranscriptionEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
@@ -2220,6 +2226,22 @@
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["upstreamPath"] }
+      ] }
+    },
+    "xaiTranscriptionEndpoint": {
+      "type": "object", "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/stt" }, "pathParams": { "const": [] },
+        "requestFormat": { "const": "xai.stt" }, "responseFormat": { "const": "xai.stt" },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "groqMistralTranscriptionEndpoint": {
