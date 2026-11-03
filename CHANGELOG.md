@@ -25,6 +25,7 @@
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
 - Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
