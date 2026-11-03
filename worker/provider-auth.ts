@@ -144,8 +144,28 @@ function falKeyScheme(scheme: AuthScheme | GrantTransportAuth): boolean {
     && scheme.format === "Key ${secret}" && "secretKind" in scheme && scheme.secretKind === "api_key";
 }
 
+const abliterationSecretKeys = ["ABLIT_KEY", "ABLITERATION_API_KEY"];
+function abliterationSecretBinding(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth): boolean {
+  return provider.id === "abliteration" && provider.base_urls.default === "https://api.abliteration.ai/v1"
+    && scheme.type === "bearer" && scheme.header.toLowerCase() === "authorization"
+    && scheme.format === "Bearer ${secret}" && "secretKind" in scheme && scheme.secretKind === "api_key";
+}
+
+// These two server names are alternatives for one qualified product credential.
+// Canonical precedence is independent of config-key order; grants bypass both.
+function abliterationAliases(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth): boolean {
+  return abliterationSecretBinding(provider, scheme) && provider.config_keys.some(key => abliterationSecretKeys.includes(key));
+}
+
+export function providerConfigPresent(provider: CompiledProvider, key: string, env: Env): boolean {
+  const scheme = providerCredentialScheme(provider, null);
+  return abliterationSecretKeys.includes(key) && abliterationAliases(provider, scheme)
+    ? !!providerSecret(provider, scheme, null, env) : !!envValue(env, key);
+}
+
 function canonicalSecretKey(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth, key: string): boolean {
-  return provider.id === "fal" && key === "FAL_KEY" && falKeyScheme(scheme)
+  return key === "ABLIT_KEY" && abliterationSecretBinding(provider, scheme)
+    || provider.id === "fal" && key === "FAL_KEY" && falKeyScheme(scheme)
     || provider.id === "runway" && key === "RUNWAYML_API_SECRET" && scheme.type === "bearer"
       && scheme.header.toLowerCase() === "authorization" && scheme.format === "Bearer ${secret}"
       && "secretKind" in scheme && scheme.secretKind === "api_key";
@@ -163,14 +183,14 @@ function providerSecret(provider: CompiledProvider, scheme: AuthScheme | GrantTr
       ? grant.accessToken : grant.credential ?? grant.accessToken ?? firstCredential(grant.credentials) ?? null;
   } else {
     const kind = "secretKind" in scheme ? scheme.secretKind : "";
-    const candidates = provider.config_keys.filter((key) => kind === "api_token"
+    const candidates = abliterationAliases(provider, scheme) ? abliterationSecretKeys : provider.config_keys.filter((key) => kind === "api_token"
       ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN")
       : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN") || canonicalSecretKey(provider, scheme, key));
     secret = candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
   }
   // Reject before Headers can include the malformed value in an exception.
   // The selected grant never falls back to an environment credential.
-  if ((canonicalSecretKey(provider, scheme, "FAL_KEY") || canonicalSecretKey(provider, scheme, "RUNWAYML_API_SECRET"))
+  if ((canonicalSecretKey(provider, scheme, "FAL_KEY") || canonicalSecretKey(provider, scheme, "RUNWAYML_API_SECRET") || abliterationSecretBinding(provider, scheme))
     && secret && /[^\x21-\x7e]/.test(secret)) return null;
   return secret;
 }
