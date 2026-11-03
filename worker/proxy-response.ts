@@ -30,7 +30,7 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: UsageInspection): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
   if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
@@ -48,7 +48,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
   const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection) : null;
-  let inspect = !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
+  let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   let text = "", bytes = 0, nonempty = false, finished = false;
@@ -61,7 +61,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     if (delivery === "canceled") operation.cancel(reason);
     else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
     delivery = operation.delivery ?? delivery;
-    let inspection: UsageInspection = radius?.result() ?? ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    let inspection: UsageInspection = validated ?? radius?.result() ?? ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
     if (nativeChat && (!ollama && !radius || delivery === "complete" && !inspection.outcome)) inspection.outcome = "provider_error";
     if (delivery === "complete" && inspect) {
       try {
