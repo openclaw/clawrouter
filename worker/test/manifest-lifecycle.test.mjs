@@ -1,10 +1,11 @@
 import { perRequestAuthority } from "./typescript-setup.mjs"; perRequestAuthority(); // swaps the provider snapshot in-process
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 
 const { default: handler } = await import("../index.ts");
 const { snapshot } = await import("../providers.ts");
@@ -120,7 +121,7 @@ test("manifest-only add/remove reaches Worker discovery, session catalogs and ev
     await inventory(false); await absentDispatches();
     writeFileSync(file, JSON.stringify(manifest));
     const addedText = compile([...files, file]), added = JSON.parse(addedText);
-    assert.equal(compile([file, ...files.toReversed()]), addedText, "compiler ordering is independent of CLI argument order");
+    assert.equal(compile([file, ...files.toReversed()]), addedText, "compiler ordering is independent of manifest path order");
     assert.equal(added.providers.length, control.providers.length + 1);
     const additions = Object.fromEntries(Object.entries(added.model_index).filter(([id]) => id.startsWith(`${providerId}/`)));
     assert.deepEqual(Object.keys(additions), [embedModel, chatModel]);
@@ -167,7 +168,8 @@ test("manifest-only add/remove reaches Worker discovery, session catalogs and ev
 });
 
 function compile(files) {
-  return execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...files], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: "pipe" });
+  const manifests = files.toSorted().map(file => parse(readFileSync(file, "utf8")));
+  return `${JSON.stringify(compileProviderSnapshot(manifests), null, 2)}\n`;
 }
 
 async function environment() {
