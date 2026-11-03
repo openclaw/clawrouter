@@ -1,0 +1,50 @@
+# Configured HTTP transport only: docs/copilot-proxy-transport.md.
+# Frozen upstream contract: OpenClaw 31ad71a8, extensions/copilot-proxy.
+schema: clawrouter.service-provider.v1
+id: copilot-proxy
+displayName: Copilot Proxy
+status: experimental
+class: openai_compatible
+service:
+  platform: copilot-proxy
+  kind: gateway_platform
+  upstreamService: copilot-proxy
+  configKeys: [COPILOT_PROXY_API_KEY, COPILOT_PROXY_BASE_URL, COPILOT_PROXY_MODEL]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: ${base_url}
+routing:
+  nativePrefixes: [clawrouter-copilot-proxy, copilot-proxy]
+  modelPrefixes: [copilot-proxy/]
+  baseUrlParam: base_url
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: copilot-proxy/configured
+      upstream: ${model}
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
