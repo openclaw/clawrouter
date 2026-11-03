@@ -408,6 +408,14 @@ function validateManifest(manifest) {
 }
 
 const managedLifecycleContracts = {
+  "runway.tasks": {
+    provider: "runway", create: ["/v1/text_to_video", "/v1/image_to_video", "/v1/video_to_video"], response: "runway.task",
+    requestByPath: { "/v1/text_to_video": "runway.text_video", "/v1/image_to_video": "runway.image_video", "/v1/video_to_video": "runway.video_video" },
+    controls: {
+      retrieve: ["GET", "/v1/tasks/${id}", "runway.task_get", "runway.task"],
+      cancel: ["DELETE", "/v1/tasks/${id}", "runway.task_cancel", "runway.task_cancel"],
+    },
+  },
   "pixverse.video": {
     provider: "pixverse", create: ["/openapi/v2/video/text/generate"], request: "pixverse.text_video", response: "pixverse.video",
     controls: { retrieve: ["GET", "/openapi/v2/video/result/${video_id}", "pixverse.video_get", "pixverse.video"] },
@@ -471,12 +479,20 @@ function validateManagedLifecycles(manifest) {
     };
     if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || Object.keys(endpoint.query ?? {}).length || !parametersMatch(endpoint)
       || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
-      || endpoint.requestFormat !== contract.request || endpoint.responseFormat !== contract.response
+      || endpoint.requestFormat !== (contract.requestByPath?.[endpoint.path] ?? contract.request) || endpoint.responseFormat !== contract.response
       || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
     if (protocol === "dashscope.video") {
       // The bound credential comes from the shared owner, never endpoint overrides.
       if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
         !(["x-dashscope-async", "content-type"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "x-dashscope-async" ? "enable" : "application/json")))) fail();
+    }
+    if (protocol === "runway.tasks") {
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://api.dev.runwayml.com")
+        || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
+          !(["content-type", "x-runway-version"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "content-type" ? "application/json" : "2024-11-06")))) fail();
+      const schemes = manifest.auth.schemes;
+      if (schemes.length !== 1 || schemes[0].type !== "bearer" || schemes[0].header?.toLowerCase() !== "authorization"
+        || schemes[0].format !== "Bearer ${secret}" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
     }
     if (protocol === "pixverse.video") {
       // Image routes remain closed until uploads have durable original-job scope.
@@ -503,16 +519,16 @@ function validateManagedLifecycles(manifest) {
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
-      if (["dashscope.video", "google.omni_video", "pixverse.video"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if (["dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
       controls.add(controlId);
     }
   }
   // New managed wire formats cannot accidentally expose an unbound raw control.
   // Legacy Replicate manifests retain their existing runtime ownership guard.
   const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
-    .flatMap(([, contract]) => [contract.request, ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])]));
+    .flatMap(([, contract]) => [contract.request, ...Object.values(contract.requestByPath ?? {}), ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])].filter(Boolean)));
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    const reservedFormat = ["dashscope.video", "google.omni_video", "pixverse."].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
+    const reservedFormat = ["dashscope.video", "google.omni_video", "pixverse.", "runway."].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
     if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
