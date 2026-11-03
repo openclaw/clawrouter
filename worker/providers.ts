@@ -14,7 +14,7 @@ import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuot
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
-import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -135,11 +135,11 @@ async function readinessInputs(env: Env, suppliedConnections?: ProviderConnectio
 
 export function providerReadinessForState(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth, operation?: Pick<Readiness, "executableEndpoints" | "executable" | "status" | "reasons">): Readiness {
   const configuredOptional = optionalConfigKeys(provider, env);
-  const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
+  const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && providerSecretConfigKey(provider, key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
   const providerGrants = grants.filter((entry) => entry.grant.enabled !== false && entry.grant.provider === provider.id && grantUsable(entry.grant));
   const hasGrant = providerGrants.length > 0;
-  const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(key, providerGrants));
+  const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(provider, key, providerGrants));
   const configPresent = missingConfig.length === 0;
   const executableEndpoints = operation?.executableEndpoints ?? (configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : []);
   const checked = health?.checkedAt ? Date.parse(health.checkedAt) : NaN;
@@ -394,8 +394,8 @@ async function refreshGrant(key: string, grant: UpstreamGrant, provider: Compile
   return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force);
 }
 
-function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {
-  if (secretConfigKey(key)) return grants.length > 0;
+function grantSatisfiesConfig(provider: CompiledProvider, key: string, grants: GrantRecord[]): boolean {
+  if (providerSecretConfigKey(provider, key)) return grants.length > 0;
   const fields: Record<string, string> = { AWS_ACCESS_KEY_ID: "accessKeyId", AWS_SECRET_ACCESS_KEY: "secretAccessKey", AWS_SESSION_TOKEN: "sessionToken" };
   const field = fields[key];
   return !!field && grants.some(({ grant }) => !!grant.credentials?.[field] || grant.credentialFields?.includes(field));
@@ -441,5 +441,3 @@ function encodePathParam(value: string, style: string): string {
   if (value.includes("/") || value === "." || value === "..") throw new HttpError(400, "invalid_path_param", "path parameter must be one segment");
   return encodeURIComponent(value);
 }
-
-function secretConfigKey(key: string): boolean { return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key); }
