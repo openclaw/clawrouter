@@ -1,3 +1,4 @@
+import type { CompiledEndpoint } from "./types";
 import { HttpError } from "./utils.ts";
 
 export type ProxyQuery = URLSearchParams | Record<string, unknown>;
@@ -25,4 +26,13 @@ function manifestQuery(input: Record<string, unknown>): URLSearchParams {
     }
   }
   return query;
+}
+
+// A declared streaming format must match the actual wire protocol. Gemini's
+// default JSON-array stream is not SSE and has no generic usage observer.
+export function applyStreamingQuery(target: URLSearchParams, endpoint: Pick<CompiledEndpoint, "response_format" | "streaming">): void {
+  if (endpoint.response_format !== "google.stream_generate_content" || endpoint.streaming !== "sse") return;
+  const formats = target.getAll("alt");
+  if (formats.length > 1 || formats.some(value => value !== "sse")) throw new HttpError(400, "unsupported_stream_format", "this endpoint requires alt=sse");
+  if (!formats.length) target.set("alt", "sse");
 }

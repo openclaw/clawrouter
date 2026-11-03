@@ -10,6 +10,7 @@
 - Declare Gemini streaming requests with `alt=sse` to match the endpoint's SSE contract. Check compiled provider inventory against source manifests instead of a fixed provider count.
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
+- Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
