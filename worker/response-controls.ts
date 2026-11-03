@@ -70,7 +70,7 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
         requestedVersion: job.managed.requestedVersion, route, authorization: publicControlAuthorization(binding.auth) }, operation);
       if (!binding.background.closed) await observePrediction(env, binding.scope, binding.background.id, result.evidence.prediction, result.evidence.status);
       operation.stop("complete");
-      if (result.evidence.prediction.observationUnavailable) return managedObservationUnavailable();
+      if (result.evidence.prediction.observationUnavailable) return predictionResponse(result.evidence.prediction, provider, create, route.pathParams, result.evidence.status);
       return predictionResponse(result.prediction, provider, create, route.pathParams, result.status);
     }
     response = await operation.wait(dispatchResponseControl(env, {

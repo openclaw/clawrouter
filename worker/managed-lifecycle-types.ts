@@ -1,7 +1,7 @@
 import type { CompiledEndpoint } from "./types.ts";
 
 export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs";
-export type ManagedObservationLoss = "expired_or_unknown" | "deleted";
+export type ManagedObservationLoss = "expired_or_unknown" | "deleted" | "canceled_or_deleted";
 export type ManagedTerminal = "succeeded" | "failed" | "canceled" | "aborted";
 export type ManagedControlAction = "retrieve" | "result" | "cancel";
 export type ManagedAction = "create" | ManagedControlAction;

@@ -179,7 +179,7 @@ test("managed protocols and configured providers keep distinct keys, bindings an
   }
 });
 
-for (const loss of ["expired_or_unknown", "deleted"]) test(`${loss} is one durable uncertainty receipt, never an execution terminal or refund`, async t => {
+for (const loss of ["expired_or_unknown", "deleted", "canceled_or_deleted"]) test(`${loss} is one durable uncertainty receipt, never an execution terminal or refund`, async t => {
   const f = fixture(t), input = f.admission(); f.store.admitManaged(input); dispatch(f, input.id);
   await f.call({ action: "managed_bind", id: input.id, responseId: "prediction_fixture" });
   f.advance(5000); const [claim] = f.store.claim(Date.now());

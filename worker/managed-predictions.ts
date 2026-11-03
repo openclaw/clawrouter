@@ -102,10 +102,15 @@ export async function observePrediction(env: Env, scope: string, id: string, pre
 
 export function predictionResponse(prediction: ManagedObservation, provider: CompiledProvider, create: CompiledEndpoint,
   pathParams: Record<string, string>, status: number): Response {
-  if (prediction.observationUnavailable) return managedObservationUnavailable();
+  const headers = { "cache-control": "no-store", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-content-retention": "off" };
+  if (prediction.observationUnavailable) {
+    // A qualified native cancel/delete ACK stays bodyless. It still supplies
+    // no execution or refund evidence; future polls use the frozen loss marker.
+    if (status === 204 && prediction.observationUnavailable === "canceled_or_deleted") return new Response(null, { status, headers });
+    return managedObservationUnavailable();
+  }
   const { adapter } = managedRoute(provider, create);
-  return json(adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams)), status,
-    { "cache-control": "no-store", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-content-retention": "off" });
+  return json(adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams)), status, headers);
 }
 
 export function managedObservationUnavailable(): Response {

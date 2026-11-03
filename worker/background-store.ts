@@ -202,7 +202,7 @@ export class BackgroundStore {
     if (!current.managed || current.managed.submission !== "bound" || current.responseId !== upstreamId
       || !["starting", "processing", "succeeded", "failed", "canceled", "aborted"].includes(status) || !Number.isInteger(statusCode) || !(statusCode >= 200 && statusCode < 300 || status === "failed" && statusCode === 422)) invalid();
     if (observationUnavailable !== undefined) {
-      if (!["expired_or_unknown", "deleted"].includes(observationUnavailable) || status !== "processing") invalid();
+      if (!["expired_or_unknown", "deleted", "canceled_or_deleted"].includes(observationUnavailable) || status !== "processing") invalid();
       current.managed.observationUnavailable = observationUnavailable;
       current.lastError = "observation_unavailable";
       // Retain terminal=null: observation loss is not failed/free execution.
