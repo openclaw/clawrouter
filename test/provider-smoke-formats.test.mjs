@@ -25,17 +25,30 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings", vydra: "job" };
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings", vydra: "job" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, ["replicate", "gradium", "fal", "kie", "vydra"].includes(id), id);
+    assert.equal(!!target.unresolved, ["replicate", "gradium", "elevenlabs", "fal", "kie", "vydra"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
   assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("ElevenLabs stays unresolved without a qualified voice and never runs a paid speech smoke", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "elevenlabs");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { ELEVENLABS_API_KEY: "fixture-private-elevenlabs-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.equal(plan.providers[0].target.endpoint, "speech");
+  assert.match(plan.providers[0].target.unresolved, /voice_id/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["elevenlabs"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-elevenlabs-key|fixture-proxy-key/);
 });
 
 test("Kie query-only lookup stays unresolved without an owned task and cannot fake live health", async t => {

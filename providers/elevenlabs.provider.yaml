@@ -1,0 +1,43 @@
+# Unary speech: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
+# Native model_id is not a registered router model or qualified dollar tariff.
+schema: clawrouter.service-provider.v1
+id: elevenlabs
+displayName: ElevenLabs
+status: experimental
+class: rest_json
+service:
+  platform: elevenlabs
+  kind: tool_provider
+  upstreamService: elevenlabs
+  configKeys: [ELEVENLABS_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: xi-api-key
+      secretKind: api_key
+baseUrls:
+  default: https://api.elevenlabs.io
+routing:
+  nativePrefixes: [clawrouter-elevenlabs, elevenlabs]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
+endpoints:
+  speech:
+    path: /v1/text-to-speech/${voice_id}
+    pathParams: [voice_id]
+    requestHeaders: [accept]
+    requestFormat: elevenlabs.speech
+    responseFormat: audio.binary
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
