@@ -6,6 +6,7 @@ const { BackgroundStore, backgroundObservationMs, backgroundReplayMs } = await i
 const { ResponsesScopeStore } = await import("../responses-scope.ts");
 const { createProxyAccounting } = await import("../proxy-accounting.ts");
 const { planBudgetReservation } = await import("../accounting.ts");
+const { correlateIngressRequest } = await import("../correlation.ts");
 const { managedPredictionKey } = await import("../managed-prediction-identity.ts");
 const { identityKey } = await import("../http-continuation.ts");
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -27,7 +28,7 @@ function fixture(t) {
   const env = { BUDGET_LEDGER: { idFromName: name => name, get: name => ({ fetch(url, init) { reserveCalls.push(new URL(url).pathname); return budget.get(name).fetch(url, init); } }) } };
   let store = new BackgroundStore(storage.sql, id => storage.sql.exec("UPDATE http_continuations SET background_closed = 1 WHERE background_job_id = ?", id)), scope = new ResponsesScopeStore(storage, env);
   const admission = () => {
-    const facts = createProxyAccounting({ env, context: {}, auth, cost, selection: { provider: { id: "replicate" }, model: null, capability: "image.generate", endpoint: { request_format: "replicate.prediction" }, body: { input: { prompt: "private-input-must-not-persist" } } }, request: new Request("https://router.example/v1/native/replicate/v1/predictions") }).facts;
+    const facts = createProxyAccounting({ env, context: {}, auth, cost, selection: { provider: { id: "replicate" }, model: null, capability: "image.generate", endpoint: { request_format: "replicate.prediction" }, body: { input: { prompt: "private-input-must-not-persist" } } }, request: correlateIngressRequest(new Request("https://router.example/v1/native/replicate/v1/predictions")).request }).facts;
     return { id: `bg_${(++sequence).toString(16).padStart(32, "0")}`, admittedAt: now, owner, facts,
       plan: planBudgetReservation(auth, "image.generate", cost, { providerId: "replicate", monthlyBudgetMicros: 10_000 }, now),
       route: { pathParams: {}, organization: null, project: null }, stream: false,
