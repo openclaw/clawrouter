@@ -20,7 +20,7 @@ async function fixture(t) {
   // Integration owns the generated snapshot. Exercise these exact compiled manifests
   // even before the serial snapshot regeneration lands.
   const original = snapshot.providers;
-  snapshot.providers = [...original.filter(p => !ids.includes(p.id)), ...compiled.providers];
+  snapshot.providers = [...original.filter(p => !ids.includes(p.id)), ...structuredClone(compiled.providers)];
   t.after(() => { snapshot.providers = original; });
   const base = { enabled: true, generation: "v1", providers: ids, models: null, tenantId: "fixture", monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false };
   const policies = { unmetered: base, fixed: { ...base, monthlyBudgetMicros: 1000000, requestCostMicros: 7 }, reserve: { ...base, monthlyBudgetMicros: 1000000 }, denied: { ...base, providers: ["openai"] } };
@@ -48,11 +48,11 @@ async function fixture(t) {
     return hooks.reject ? Response.json({ error: { message: "fixture rejection" } }, { status: 422 }) : new Response(audio, { headers: { "content-type": hooks.wrongMime ? "text/plain" : wire.response.contentType } });
   });
   const body = wire.request.body;
-  const request = (key = "unmetered", manifest = false) => worker.fetch(new Request(manifest
+  const request = (key = "unmetered", manifest = false, query = wire.request.query) => worker.fetch(new Request(manifest
     ? "https://router.example/v1/proxy/elevenlabs/speech"
-    : "https://router.example/v1/native/elevenlabs" + wire.request.path + "?" + new URLSearchParams(wire.request.query), {
+    : "https://router.example/v1/native/elevenlabs" + wire.request.path + "?" + new URLSearchParams(query), {
     method: "POST", headers: { authorization: `Bearer clawrouter-live-${key}-synthetic-${key}`, "content-type": "application/json", "xi-api-key": "synthetic-caller-header" },
-    body: JSON.stringify(manifest ? { body, pathParams: wire.request.pathParams, query: wire.request.query } : body),
+    body: JSON.stringify(manifest ? { body, pathParams: wire.request.pathParams, query } : body),
   }), env, { waitUntil: promise => pending.push(promise) });
   t.after(async () => { await Promise.all(pending); });
   return { request, sent, events, pending, hooks, body };
@@ -61,9 +61,9 @@ async function fixture(t) {
 test("ElevenLabs forwards native JSON voice settings and xi-api-key with byte-exact audio", async t => {
   const f = await fixture(t), response = await f.request();
   assert.equal(response.status, 200, await response.clone().text());
-  assert.equal(response.headers.get("content-type"), "audio/pcm");
+  assert.equal(response.headers.get("content-type"), "audio/mpeg");
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), audio);
-  assert.equal(f.sent[0].url, "https://api.elevenlabs.io/v1/text-to-speech/syntheticVoice1234567?output_format=pcm_16000&optimize_streaming_latency=2");
+  assert.equal(f.sent[0].url, "https://api.elevenlabs.io/v1/text-to-speech/syntheticVoice1234567?output_format=mp3_44100_128&optimize_streaming_latency=2");
   assert.equal(f.sent[0].headers.get("xi-api-key"), "synthetic-api-key");
   assert.equal(f.sent[0].headers.get("authorization"), null);
   assert.deepEqual(f.sent[0].body, f.body);
@@ -86,7 +86,7 @@ test("ElevenLabs rejects forbidden providers and unpriced reserve requests befor
   }
 });
 
-test("ElevenLabs fixed policy charge and rejected synthesis have distinct accounting", async t => {
+test("ElevenLabs dispatched rejection retains its fixed charge without exposing native errors or replaying", async t => {
   const f = await fixture(t), success = await f.request("fixed");
   assert.equal(success.status, 200, await success.clone().text());
   await success.arrayBuffer();
@@ -94,36 +94,63 @@ test("ElevenLabs fixed policy charge and rejected synthesis have distinct accoun
   assert.equal(f.events[0].actual_cost_micros, 7);
   f.hooks.reject = true;
   const failed = await f.request("fixed");
-  assert.equal(failed.status, 422);
-  await failed.text();
+  assert.equal(failed.status, 502);
+  const failure = await failed.json();
+  assert.equal(failure.error.code, "provider_unavailable");
+  assert.doesNotMatch(JSON.stringify(failure), /fixture rejection|synthetic-api-key/);
   await Promise.all(f.pending);
-  assert.equal(f.events.at(-1).actual_cost_micros, 0);
-  assert.equal(f.events.at(-1).status, "client_error");
+  assert.equal(f.sent.length, 2); assert.equal(f.events.length, 2);
+  assert.equal(f.events.at(-1).actual_cost_micros, 7);
+  assert.equal(f.events.at(-1).reserved_cost_micros, 7);
+  assert.equal(f.events.at(-1).cost_basis, "policy_fixed");
+  assert.equal(f.events.at(-1).input_tokens, null); assert.equal(f.events.at(-1).output_tokens, null);
+  assert.equal(f.events.at(-1).status, "provider_error");
 });
 
 test("ElevenLabs wrong-MIME success cannot be recorded as completed speech", async t => {
   const f = await fixture(t);
   f.hooks.wrongMime = true;
   const result = await f.request("fixed");
-  await result.arrayBuffer();
+  assert.equal(result.status, 502);
+  assert.equal((await result.json()).error.code, "provider_unavailable");
   await Promise.all(f.pending);
+  assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
   assert.equal(f.events.at(-1).status, "provider_error");
   assert.equal(f.events.at(-1).input_tokens, null);
+  assert.equal(f.events.at(-1).cost_basis, "policy_fixed");
+  assert.equal(f.events.at(-1).actual_cost_micros, 7);
 });
 
 
-test("ElevenLabs interrupted binary delivery retains the fixed reservation without fabricated token usage", async t => {
+test("ElevenLabs interrupted upstream output is withheld and retains the dispatched fixed reservation", async t => {
   const f = await fixture(t);
   f.hooks.partial = true;
   const result = await f.request("fixed");
-  assert.equal(result.status, 200);
-  await assert.rejects(() => result.arrayBuffer(), /synthetic interrupted audio/);
+  assert.equal(result.status, 502);
+  assert.match(result.headers.get("content-type"), /^application\/json\b/);
+  const failure = await result.json();
+  assert.equal(failure.error.code, "provider_unavailable");
+  assert.doesNotMatch(JSON.stringify(failure), /synthetic interrupted audio|synthetic-api-key/);
   await Promise.all(f.pending);
+  assert.equal(f.sent.length, 1, "interrupted synthesis is never replayed");
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].status, "provider_error");
   assert.equal(f.events[0].input_tokens, null);
+  assert.equal(f.events[0].output_tokens, null);
   assert.equal(f.events[0].cost_basis, "policy_fixed");
+  assert.equal(f.events[0].reserved_cost_micros, 7);
   assert.equal(f.events[0].actual_cost_micros, 7);
+});
+
+test("ElevenLabs unqualified format is known unsent and never consumes the fixed synthesis charge", async t => {
+  const f = await fixture(t);
+  for (const manifest of [false, true]) {
+    const response = await f.request("fixed", manifest, { output_format: "pcm_16000" });
+    assert.equal(response.status, 400); await response.arrayBuffer();
+  }
+  await Promise.all(f.pending);
+  assert.equal(f.sent.length, 0);
+  for (const event of f.events) assert.equal(event.actual_cost_micros ?? 0, 0);
 });
 
 
