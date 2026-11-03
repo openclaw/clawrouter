@@ -14,7 +14,6 @@ auth:
   schemes:
     - type: api_key
       header: x-api-key
-      format: "${secret}"
       secretKind: api_key
 baseUrls:
   default: https://api.gradium.ai
