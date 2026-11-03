@@ -626,6 +626,13 @@
           ]
         },
         "then": { "$ref": "#/$defs/gradiumSpeechEndpoint" }
+      },
+      {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^deepseek\\.search" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^deepseek\\.search" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/deepseekSearchEndpoint" }
       }, {
         "if": {
           "anyOf": [
@@ -2090,6 +2097,23 @@
         { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["upstreamPath"] }
+      ] }
+    },
+    "deepseekSearchEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/tools/search" }, "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "deepseek.search" }, "responseFormat": { "const": "deepseek.search" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "gradiumSpeechEndpoint": {
