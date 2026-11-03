@@ -1,4 +1,5 @@
 import "./typescript-setup.mjs";
+import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
@@ -90,12 +91,7 @@ function sessionRequest(assertion, extraHeaders = {}) {
 }
 
 test("public Access certs fetch attaches a 30s AbortSignal", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let certsInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), certsUrl);
@@ -115,12 +111,7 @@ test("public Access certs fetch aborts a hung certs endpoint", { timeout: 2_000 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const nativeFetch = globalThis.fetch.bind(globalThis);
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  const timeouts = [];
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(40);
-  });
+  const timeouts = captureTimeouts(context, 40);
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), certsUrl);
     return nativeFetch(`http://127.0.0.1:${port}/hung`, { signal: init?.signal });
@@ -158,12 +149,7 @@ test("GitHub identity fetch attaches a 30s AbortSignal and fails open on timeout
   const users = new Map([
     [email, { role: "user", tenantId: "default", enabled: true, groups: [], contentRetentionDisabled: false }],
   ]);
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let identityInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     if (String(input) === certsUrl) return Response.json({ keys: [jwk] });

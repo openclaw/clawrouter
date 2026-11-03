@@ -1,4 +1,5 @@
 import "../../test/helpers/typescript-resolver.mjs";
+import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -89,12 +90,7 @@ test("Playground preserves structured failure bodies and HTTP status", async (co
 });
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   const seen = [];
   context.mock.method(globalThis, "fetch", async (_input, init) => {
     seen.push(init);
@@ -119,12 +115,7 @@ test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and 
 });
 
 test("playground request uses the 600s endpoint budget instead of the bounded dashboard timeout", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let init;
   context.mock.method(globalThis, "fetch", async (_input, options) => {
     init = options;
@@ -138,12 +129,7 @@ test("playground request uses the 600s endpoint budget instead of the bounded da
 });
 
 test("local console login attaches the dashboard AbortSignal", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let loginInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), "https://console.example/v1/session/login");
@@ -161,12 +147,7 @@ test("local console login attaches the dashboard AbortSignal", async (context) =
 });
 
 test("playground request honors an explicit endpoint timeout", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   context.mock.method(globalThis, "fetch", async () => new Response("ok", { status: 200, headers: { "content-type": "text/plain" } }));
 
   await playgroundRequest("https://console.example/", "/v1/proxy/openai/chat", {}, 180_000);
