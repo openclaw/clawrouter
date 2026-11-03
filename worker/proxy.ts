@@ -25,7 +25,7 @@ import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
 import {
-  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
+  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeModelEndpoint, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
@@ -340,7 +340,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   const provider = providerById(decodePathSegment(match[1]));
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
-  const endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
+  let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
   if (!endpoint || !endpoint.native_proxy) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
@@ -375,6 +375,12 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     // The scoped owner selects its original create route; endpoint order never
     // chooses between text/image jobs sharing the same native control path.
     return proxyResponseControl(request, env, control.action, routes[0].id, control.protocol ? {} : query, "proxy_key", provider.id, routes, preauthenticated ?? undefined, undefined, control.protocol);
+  }
+  try { endpoint = nativeModelEndpoint(provider, matching, match[2], method) ?? endpoint; }
+  catch (error) {
+    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (auth instanceof Response) return auth;
+    throw error;
   }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
