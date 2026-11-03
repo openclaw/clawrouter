@@ -145,7 +145,7 @@ function rejectionOnlyEvidence(evidence: SseUsageEvidence): boolean {
   return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
 }
 
-export function createSseUsageInspector(revokeRejection?: () => void) {
+export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void) {
   const accumulator = createSseUsageAccumulator(revokeRejection);
   function evidence(frame: string | null): SseUsageEvidence | null {
     if (frame === null) return { kind: "unavailable" };
@@ -161,9 +161,18 @@ export function createSseUsageInspector(revokeRejection?: () => void) {
     try { return { kind: "data", value: JSON.parse(data) }; }
     catch { return { kind: "invalid" }; }
   }
-  const frames = createSseFrames(frame => { const next = evidence(frame); if (next) accumulator.accept(next); });
+  const frames = createSseFrames(frame => {
+    const next = evidence(frame);
+    if (next) accumulator.accept(next);
+    if (next?.kind === "data") acceptJson?.(next.value);
+    else if (next?.kind === "error" || next?.kind === "invalid" || next?.kind === "unavailable") acceptJson?.(undefined, true);
+  });
   return {
     push: frames.push,
+    end() {
+      if (!acceptJson) return;
+      if (frames.overflowed() || frames.pending()?.split("\n").some(line => line.trim() && !line.startsWith(":"))) acceptJson?.(undefined, true);
+    },
     result(ended = true): UsageInspection {
       if (revokeRejection) accumulator.unfinished(evidence(frames.pending()));
       return accumulator.result(ended, frames.overflowed());

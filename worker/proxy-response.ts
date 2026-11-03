@@ -16,6 +16,7 @@ import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; nonbillable?: true; hostedSearch?: HostedSearchUsage; requestTariffOutcome?: import("./request-tariff.ts").RequestTariffOutcome; requestCostReceipt?: import("./pricing.ts").RequestCostReceipt }
 export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
+  acceptJson?(value: unknown, failed?: boolean): void;
   tools?: ResponsesInspectionTools;
   qualify?(): Promise<void>;
   observe?(fact: ResponsesObservation): Promise<void>;
@@ -48,11 +49,12 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
   const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
   const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
-  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection) : null;
+  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   let text = "", bytes = 0, nonempty = false, finished = false;
+  let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
@@ -64,7 +66,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     delivery = operation.delivery ?? delivery;
     let inspection: UsageInspection = validated ?? radius?.result() ?? ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
     if (nativeChat && (!ollama && !radius || delivery === "complete" && !inspection.outcome)) inspection.outcome = "provider_error";
-    if (delivery === "complete" && inspect) {
+    if (delivery === "complete" && completedJson) inspection = completedJson;
+    else if (delivery === "complete" && inspect) {
       try {
         text += decoder.decode();
         const value: unknown = JSON.parse(text);
@@ -99,6 +102,16 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         const next = await reader.read();
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
+          sse?.end();
+          if (inspect && bodyInspection?.acceptJson) {
+            try {
+              text += decoder.decode();
+              const value: unknown = JSON.parse(text);
+              completedJson = { tokens: extractUsageTokens(value), outcome: responseOutcome(value) };
+              bodyInspection.acceptJson(value);
+            } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
+            text = ""; inspect = false;
+          }
           if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
           if (responses) await (bodyInspection?.observe ? operation.wait(responses.end(), "publication") : responses.end()); if (finished) return;
           if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication"); if (finished) return;
