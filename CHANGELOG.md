@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
+- Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
@@ -12,11 +14,13 @@
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
 
 - Qualify Google Omni Interactions lifecycle and authenticated file endpoint links in the provider compiler, rejecting unbound controls and credential overrides before shared runtime activation.
+- Add source-owned Omni lifecycle/file wrappers for original-job descriptors, retained control flags, ACTIVE-only download and trusted output rewriting; live route activation remains separately qualified.
 - Managed media: retain original per-job control permissions without exposing unsupported poll/cancel routes; pin non-secret flags through credential and route revalidation.
 
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
+- Use the standard GitHub Actions runtime budget for CodeQL instead of the rollout-specific 20-minute job cap.
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
@@ -164,6 +168,7 @@
 
 - Exercise the actual pinned OpenClaw search plugin through workerd and SQLite in secretless CI, checking scoped discovery, provider credentials, caller cancellation and policy-fixed accounting.
 - Verify catalog-selected OpenAI-format TTS and Talk through the actual OpenClaw consumer, Worker and SQLite accounting in isolated CI.
+- Exercise the actual OpenClaw memory factory against native Cohere embedding offers, including scoped billing, budget admission and incomplete-response handling.
 
 - Verify actual OpenClaw memory embedding batch ordering, credential refresh and usage through workerd for concrete OpenAI-format models. Native embedding formats and deployment placeholders remain separately qualified.
 
