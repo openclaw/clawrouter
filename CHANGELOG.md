@@ -167,6 +167,7 @@
 
 - Add experimental hosted Chat Completions routes for NVIDIA NIM, Cerebras, DeepInfra and Baseten Model APIs, preserving provider-specific paths and credentials without inferring pricing or local runtime parity.
 - Add experimental Arcee Platform, Chutes API-key, Featherless and Venice Chat Completions routes with independent credentials, unpriced model passthrough and explicit product boundaries.
+- Add separate Singapore, China and Europe Xiaomi Token Plan Chat declarations with dedicated credentials, frozen 2.6 models and pre-egress rejection of expired 2.5 identities.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
