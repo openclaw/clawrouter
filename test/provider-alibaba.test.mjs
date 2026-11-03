@@ -15,7 +15,7 @@ test("Alibaba compiles the finite Wan surface with canonical server credentials 
   assert.deepEqual(provider.routing.nativePrefixes, ["clawrouter-alibaba", "alibaba"]);
   assert.equal(provider.base_urls.default, "https://dashscope-intl.aliyuncs.com");
   assert.deepEqual(provider.models.map(model => model.upstream), [
-    "wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v", "wan2.6-r2v-flash", "wan2.7-r2v",
+    "wan2.6-t2v",
   ]);
   assert.ok(provider.models.every(model => model.id === "alibaba/" + model.upstream && model.pricing === null));
   const create = provider.endpoints.find(endpoint => endpoint.id === "video");

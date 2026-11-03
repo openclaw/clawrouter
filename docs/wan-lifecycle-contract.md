@@ -5,6 +5,10 @@ Frozen consumer: OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 and `src/video-generation/dashscope-compatible.ts`. This slice covers only
 `wan2.6-t2v`, `wan2.6-i2v`, `wan2.6-r2v`, `wan2.6-r2v-flash`, and
 `wan2.7-r2v`. The fixture is synthetic; no live generation or deployment occurred.
+Only `wan2.6-t2v` is declared for new execution. Image/reference wire contracts
+remain frozen evidence; every such create is denied by the registered adapter
+until original caller/model/regional-credential input assets are actually bound.
+Inline image bytes do not bypass that admission boundary.
 
 ## Wire and limits
 
@@ -81,8 +85,8 @@ closed without qualified pricing and admission bounds.
 
 - Runtime dependency: the shared protocol, observation-loss transition and
   dispatch qualification in PR493. No global job index or parallel job framework.
-- Manifest owner: `providers/alibaba.provider.yaml` declares only the five frozen
-  model IDs, canonical server credential and native create/retrieve pair.
+- Manifest owner: `providers/alibaba.provider.yaml` declares only the unpriced
+  `wan2.6-t2v` row, canonical server credential and native create/retrieve pair.
   `lifecycle: { protocol: dashscope.video, retrieve: task }` has no cancel or
   result action. The compiler must bind `dashscope.video_create` to this exact
   native POST and `dashscope.video_get` to GET `/api/v1/tasks/${task_id}`.
@@ -94,6 +98,14 @@ closed without qualified pricing and admission bounds.
   output, missing deliverable, expired task, credential isolation, and restart.
 - Integration owner: prove actual Worker and frozen client transport, final
   snapshot, idempotency/uncertain-create handling, and one terminal settlement.
+
+PR492 schema and PR493 dispatch/observation support are landed. The declaration
+is composed with their current managed ABI; no shared runtime/type edit is part
+of this source update. Source 6 owns snapshot and actual Worker/client proof.
+The image/reference activation gap is real input-asset ownership, not missing
+schema declarations. Source 1 owns that future admission contract; source 5 owns
+the subsequent exact model rows. Closing new asset creates does not change the
+existing original-job GET or observation-loss behavior.
 
 The dependency-free adapter tests validate deterministic wire/state behavior.
 They do not certify activated routing, live model access, or upstream billing.

@@ -52,18 +52,6 @@ models:
     - id: alibaba/wan2.6-t2v
       upstream: wan2.6-t2v
       capabilities: [media.predict]
-    - id: alibaba/wan2.6-i2v
-      upstream: wan2.6-i2v
-      capabilities: [media.predict]
-    - id: alibaba/wan2.6-r2v
-      upstream: wan2.6-r2v
-      capabilities: [media.predict]
-    - id: alibaba/wan2.6-r2v-flash
-      upstream: wan2.6-r2v-flash
-      capabilities: [media.predict]
-    - id: alibaba/wan2.7-r2v
-      upstream: wan2.7-r2v
-      capabilities: [media.predict]
 billing:
   meter: clawrouter.requests
   dimensions: [provider, model, endpoint, key, service, subject]

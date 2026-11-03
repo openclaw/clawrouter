@@ -16,6 +16,8 @@ test("Wan registry binds only the scoped create format and supplies a synchronou
   }
 });
 
+
+
 test("Registered Wan rejects incompatible selected credentials on create and each original-job control", () => {
   for (const [method, path] of [["POST", "/api/v1/services/aigc/video-generation/video-synthesis"], ["GET", "/api/v1/tasks/synthetic-task"]]) {
     const request = (origin, secret) => new Request(origin + path, { method,

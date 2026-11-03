@@ -45,10 +45,10 @@ test("Wan prepares only frozen model inputs and owns non-secret async headers", 
   assert.throws(() => prepare({ ...body, input: { ...body.input, img_url: "https://image.example/a.png" } }));
 });
 
-test("Wan preserves model-specific reference and size/resolution contracts", () => {
-  prepare({ model: "wan2.6-i2v", input: { prompt: "synthetic", img_url: "data:image/png;base64,AAAA" }, parameters: { resolution: "720P", duration: 15 } });
-  for (const model of ["wan2.6-r2v", "wan2.6-r2v-flash"]) prepare({ model, input: { prompt: "synthetic", reference_urls: ["https://media.example/input.mp4"] }, parameters: { size: "1280*720", duration: 10 } });
-  prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_image", url: "https://media.example/input.png" }] }, parameters: { resolution: "1080P", ratio: "16:9", duration: 10 } });
+test("Wan preserves native input validation but denies all image/reference creates without asset binding", () => {
+  assert.throws(() => prepare({ model: "wan2.6-i2v", input: { prompt: "synthetic", img_url: "data:image/png;base64,AAAA" }, parameters: { resolution: "720P", duration: 15 } }), /wan_input_asset_binding_required/);
+  for (const model of ["wan2.6-r2v", "wan2.6-r2v-flash"]) assert.throws(() => prepare({ model, input: { prompt: "synthetic", reference_urls: ["https://media.example/input.mp4"] }, parameters: { size: "1280*720", duration: 10 } }), /wan_input_asset_binding_required/);
+  assert.throws(() => prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_image", url: "https://media.example/input.png" }] }, parameters: { resolution: "1080P", ratio: "16:9", duration: 10 } }), /wan_input_asset_binding_required/);
   assert.throws(() => prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_video", url: "data:video/mp4;base64,AAAA" }] } }));
   assert.throws(() => prepare({ model: "wan2.6-i2v", input: { prompt: "synthetic", img_url: "https://user:secret@media.example/image.png" } }));
   assert.throws(() => prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_image", url: "https://media.example/input.png" }] }, parameters: { audio: false } }));

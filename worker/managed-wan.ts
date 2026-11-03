@@ -71,6 +71,9 @@ export const wanManagedAdapter: ManagedLifecycleAdapter = {
     if (parameters.resolution !== undefined && !["720P", "1080P"].includes(String(parameters.resolution))) throw new Error("invalid_wan_resolution");
     if (parameters.ratio !== undefined && !ratios.has(String(parameters.ratio))) throw new Error("invalid_wan_ratio");
     for (const name of ["audio", "watermark"]) if (parameters[name] !== undefined && typeof parameters[name] !== "boolean") throw new Error("invalid_wan_boolean");
+    // Wire-valid URLs or inline bytes do not establish input-asset ownership.
+    // Keep new asset creates closed without changing existing job controls.
+    if (image || reference) throw new Error("wan_input_asset_binding_required");
     return { body, headers: new Headers({ "content-type": "application/json", "x-dashscope-async": "enable" }), requestedVersion: body.model, pathParams: {} };
   },
   identify(action, pathParams, query) {

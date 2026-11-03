@@ -6,7 +6,10 @@
   "server": {
     "canonicalKey": "MODELSTUDIO_API_KEY",
     "defaultOrigin": "https://dashscope-intl.aliyuncs.com",
-    "aliasesRequireExplicitServerQualification": ["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+    "aliasesRequireExplicitServerQualification": [
+      "DASHSCOPE_API_KEY",
+      "QWEN_API_KEY"
+    ],
     "automaticClientSecretFallback": false,
     "separateProvider": "qwen"
   },
@@ -32,5 +35,18 @@
     "actualProviderCostMicrousd": null,
     "settlementBasis": "policy_fixed",
     "refundInferred": false
+  },
+  "activation": {
+    "declaredModels": [
+      "wan2.6-t2v"
+    ],
+    "closedUntilInputAssetBinding": [
+      "wan2.6-i2v",
+      "wan2.6-r2v",
+      "wan2.6-r2v-flash",
+      "wan2.7-r2v"
+    ],
+    "inlineInputBypassesBinding": false,
+    "existingScopedRetrievalUnchanged": true
   }
 }
