@@ -14,11 +14,12 @@ const formats: Record<string, string[]> = {
 };
 
 export interface TranscriptionUpload { file: File; fields: Record<string, string> }
+export type TranscriptionProfile = "openai" | "senseaudio";
 
 // No clone/tee and no unbounded request.formData(). Bound the raw reader first;
 // parse strict common multipart framing directly so path-bearing filenames are
 // rejected before a runtime form parser could normalize them to a basename.
-export async function readTranscriptionUpload(request: Request): Promise<TranscriptionUpload> {
+export async function readTranscriptionUpload(request: Request, profile: TranscriptionProfile = "openai"): Promise<TranscriptionUpload> {
   if (request.headers.has("content-encoding")) invalid("content encoding is unsupported");
   const type = request.headers.get("content-type") ?? "";
   const match = /^multipart\/form-data;\s*boundary=(?:"([0-9A-Za-z'()+_,.\/:=? -]{1,70})"|([0-9A-Za-z'()+_,.\/:=?-]{1,70}))$/i.exec(type);
@@ -26,11 +27,13 @@ export async function readTranscriptionUpload(request: Request): Promise<Transcr
   if (!boundary || boundary.endsWith(" ")) invalid("multipart/form-data with one safe boundary is required");
   const length = request.headers.get("content-length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)))) invalid("invalid content length");
-  if (length !== null && Number(length) > transcriptionLimits.raw) tooLarge();
+  const maximum = profile === "senseaudio" ? 10_032_768 : transcriptionLimits.raw;
+  if (length !== null && Number(length) > maximum) tooLarge();
   const operation = new HttpOperation(request.signal, transcriptionLimits.readMs);
   try {
-    const raw = await readBounded(request.body, transcriptionLimits.raw, operation, 413);
-    return parseMultipart(raw, boundary);
+    const raw = await readBounded(request.body, maximum, operation, 413);
+    if (profile === "senseaudio" && length !== null && Number(length) !== raw.byteLength) invalid("multipart content length does not match body");
+    return parseMultipart(raw, boundary, profile);
   } catch (error) {
     if (operation.status === "timeout") throw new HttpError(408, "transcription_read_timeout", "multipart upload deadline exceeded");
     if (operation.status === "client_error") throw new HttpError(400, "transcription_canceled", "multipart upload was canceled");
@@ -63,7 +66,7 @@ export async function readBounded(body: ReadableStream<Uint8Array> | null, maxim
   }
 }
 
-function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string): TranscriptionUpload {
+function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string, profile: TranscriptionProfile): TranscriptionUpload {
   const marker = encoder.encode('--' + boundary), separator = encoder.encode('\r\n--' + boundary), headersEnd = encoder.encode('\r\n\r\n');
   const fields: Record<string, string> = Object.create(null);
   let file: File | undefined, cursor = 0, count = 0;
@@ -96,17 +99,18 @@ function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string): Transcr
     const bytes = raw.subarray(cursor, next);
     if (name === "file") {
       if (file || filename === undefined) invalid("exactly one File is required");
-      if (!bytes.length || bytes.length > transcriptionLimits.file) tooLarge();
+      if (!bytes.length || bytes.length > (profile === "senseaudio" ? 10_000_000 : transcriptionLimits.file)) tooLarge();
       if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(filename) || filename.includes('..')) invalid("unsafe audio filename");
       const extension = filename.split('.').at(-1)?.toLowerCase() ?? "";
       const mime = headers.get("content-type")?.toLowerCase() ?? "";
       // Official Node SDK streams default to octet-stream; the supported safe
       // filename still identifies the format, and original MIME remains intact.
-      if (!formats[extension] || mime !== "application/octet-stream" && !formats[extension].includes(mime)) invalid("unsupported audio filename/MIME pair");
+      const allowed = profile === "senseaudio" && extension === "aac" ? ["audio/aac"] : formats[extension];
+      if (!allowed || mime !== "application/octet-stream" && !allowed.includes(mime)) invalid("unsupported audio filename/MIME pair");
       file = new File([bytes], filename, { type: mime });
     } else {
       if (filename !== undefined || headers.has("content-type") || Object.hasOwn(fields, name)) invalid("duplicate or wrong-type multipart field");
-      const maximum = name === "prompt" ? transcriptionLimits.prompt : name === "model" ? 128 : name === "language" ? 2 : name === "response_format" ? 4 : name === "stream" ? 5 : 0;
+      const maximum = name === "prompt" ? transcriptionLimits.prompt : name === "model" ? 128 : name === "language" ? profile === "senseaudio" ? 3 : 2 : name === "response_format" ? 4 : name === "stream" ? 5 : 0;
       if (!maximum) throw new HttpError(400, "transcription_option_unsupported", "unsupported transcription option");
       if (bytes.length > maximum) invalid("multipart field exceeds its byte limit");
       try { fields[name] = decoder.decode(bytes); } catch { invalid("multipart field must be UTF-8"); }
@@ -114,7 +118,7 @@ function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string): Transcr
     cursor = next + separator.length;
   }
   if (!file || !fields.model) invalid("exactly one nonempty file and model are required");
-  if (fields.language !== undefined && !/^[a-z]{2}$/.test(fields.language)) invalid("language must be an ISO-639-1 code");
+  if (fields.language !== undefined && !(profile === "senseaudio" ? /^[a-z]{2,3}$/ : /^[a-z]{2}$/).test(fields.language)) invalid("language is outside the selected transcription contract");
   if (fields.response_format !== undefined && fields.response_format !== "json" || fields.stream !== undefined && fields.stream !== "false") throw new HttpError(400, "transcription_option_unsupported", "only JSON nonstream transcription is supported");
   return { file, fields };
 }
