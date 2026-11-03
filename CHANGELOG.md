@@ -8,6 +8,7 @@
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
+- Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
 
