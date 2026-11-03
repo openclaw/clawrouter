@@ -267,6 +267,7 @@ function validateManifest(manifest) {
   validateGradiumSpeech(manifest);
   validateDeepgramPrerecorded(manifest);
   validateGoogleEmbeddings(manifest);
+  validateGoogleImages(manifest);
   validateXaiImages(manifest);
   validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
   validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
@@ -775,6 +776,36 @@ function validateXaiImages(manifest) {
   // These units belong to the endpoint tariff, never a fabricated token card.
   if (!models.length || models.some(model => !["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"].includes(model.upstream)
     || model.capabilities.length !== 1 || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length)) fail();
+}
+
+function validateGoogleImages(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("google.image"))
+    || manifest.id === "google-gemini" && manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "image.generate"));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("Google images require the finite native unary format, canonical API-key origin and unpriced image-only models"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "google.image_generate" || endpoint.responseFormat !== "google.image"
+    || endpoint.path !== "/v1beta/models/${model}:generateContent" || endpoint.method !== "POST"
+    || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+    || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => name !== "model" || style !== "segment")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "image.generate"
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("image.generate"));
+  // Image counters and bounded bytes cannot qualify a text-token price card.
+  if (!models.length || models.some(model => !["gemini-3.1-flash-image", "gemini-3-pro-image"].includes(model.upstream)
+    || model.id !== `google/${model.upstream}` || model.capabilities.length !== 1 || model.availability?.status === "upstream_alias"
+    || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
 }
 
 function validateGoogleEmbeddings(manifest) {
