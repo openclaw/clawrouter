@@ -89,21 +89,26 @@ export default { async fetch(request,env) {
       assert.equal(response.status,200,await response.clone().text());
     }
     assert.equal(await count(),6);
-    phase = "grant selection and request validation";
+    phase = "pooled API-key grant selection";
     const pooled=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-pool-"+secret},body:makeForm()});
     assert.equal(pooled.status,200,await pooled.clone().text());assert.equal((await pooled.json()).credentialSource,"pool");assert.equal(pooled.headers.get("x-clawrouter-grant-lane"),"api_key");
+    phase = "subscription grant rejection";
     const incompatible=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-subscription-"+secret},body:makeForm()});
     assert.equal(incompatible.status,503);assert.equal((await incompatible.json()).error.code,"upstream_grant_pool_unavailable");
     assert.equal(await count(),7,"scoped subscription cannot borrow environment auth");
     for(const option of ["stream","chunking_strategy","known_speaker_names[]","timestamp_granularities[]"]) {
+      phase = `unsupported transcription option: ${option}`;
       const body=makeForm();body.set(option,"true");
       assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body})).status,400);
     }
+    phase = "duplicate transcription file rejection";
     const duplicate=makeForm();duplicate.append("file",new File(["duplicate"],"second.wav",{type:"audio/wav"}));
     assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body:duplicate})).status,400);
+    phase = "unauthenticated transcription rejection";
     assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",body:makeForm()})).status,401);
     // A separate isolated policy: hard reserve must not turn a one-context
     // model card into an arbitrary-file ceiling. No mutable live/KV authority.
+    phase = "unqualified hard-budget pricing rejection";
     const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:hardHeaders,body:makeForm()});
     assert.equal(blocked.status,400);assert.equal((await blocked.json()).error.code,"pricing_required");
     assert.equal(await count(),7,"invalid/hard-unqualified requests never reached real upstream Worker");
