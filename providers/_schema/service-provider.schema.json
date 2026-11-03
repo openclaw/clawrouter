@@ -674,6 +674,12 @@
         },
         "then": { "$ref": "#/$defs/googleMusicEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^google\\.speech" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^google\\.speech" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/googleSpeechEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
@@ -2044,6 +2050,31 @@
         "requestFormat": { "const": "google.music_generate" }, "responseFormat": { "const": "google.music" },
         "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
       },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleSpeechEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "oneOf": [
+        { "properties": {
+          "path": { "const": "/v1beta/models/${model}:generateContent" }, "pathParams": { "const": ["model"] },
+          "requestFormat": { "const": "google.speech_generate_content" }, "responseFormat": { "const": "google.speech_generate_content" }
+        } },
+        { "required": ["nativeProxy"], "properties": {
+          "path": { "const": "/v1beta/interactions" }, "pathParams": { "const": [] }, "nativeProxy": { "const": false },
+          "requestFormat": { "const": "google.speech_interactions" }, "responseFormat": { "const": "google.speech_interactions" }
+        } }
+      ],
       "not": { "anyOf": [
         { "required": ["auth"] }, { "required": ["upstreamPath"] },
         { "required": ["streaming"] }, { "required": ["websocket"] },
