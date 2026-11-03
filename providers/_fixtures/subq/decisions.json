@@ -1,0 +1,20 @@
+{
+  "request": {
+    "model": "subq-snap-1.1",
+    "state": "A support ticket asks how to change the display theme.",
+    "questions": {
+      "urgent": { "type": "noul", "instructions": "Does this require urgent help?" },
+      "queue": { "type": "choice", "instructions": "Choose a queue.", "criteria": { "help": "How-to questions", "incident": "Service outage" } },
+      "effort": { "type": "score", "instructions": "Estimate effort.", "criteria": ["Small", "Large"] }
+    }
+  },
+  "response": {
+    "model": "subq-snap-1.1",
+    "answers": {
+      "urgent": { "type": "noul", "noul": 0.05 },
+      "queue": { "type": "choice", "choice": "help", "probabilities": { "help": 0.95, "incident": 0.05 }, "confidence": 0.95 },
+      "effort": { "type": "score", "score": 0.1, "legend": { "0": "Small", "1": "Large" }, "probabilities": { "0": 0.9, "1": 0.1 }, "confidence": 0.9 }
+    },
+    "usage": { "input_tokens": 500, "output_tokens": 0 }
+  }
+}

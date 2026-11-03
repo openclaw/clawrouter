@@ -4,6 +4,7 @@
 
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
+- Add native SubQ Snap 1.1 typed decision routing with input-only pricing and conservative full-context admission. Preserve native noul/choice/score results without advertising OpenAI protocol compatibility.
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 
