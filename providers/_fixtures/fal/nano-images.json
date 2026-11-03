@@ -1,0 +1,13 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null, "inlineBytesAreSynthetic": true },
+  "requests": [
+    { "model": "fal-ai/nano-banana", "body": { "prompt": "A blue paper boat", "num_images": 1, "output_format": "png", "aspect_ratio": "1:1" } },
+    { "model": "fal-ai/nano-banana/edit", "body": { "prompt": "Make the boat green", "num_images": 1, "output_format": "jpeg", "image_urls": ["data:image/png;base64,iVBORw0KGgo="] } },
+    { "model": "fal-ai/nano-banana-2", "body": { "prompt": "A long shoreline with two boats", "num_images": 2, "output_format": "png", "aspect_ratio": "8:1", "resolution": "2K" } },
+    { "model": "fal-ai/nano-banana-2/edit", "body": { "prompt": "Add a distant shoreline", "num_images": 1, "output_format": "png", "resolution": "4K", "image_urls": ["data:image/png;base64,iVBORw0KGgo="] } },
+    { "model": "google/nano-banana-2-lite", "body": { "prompt": "A narrow blue paper sail", "num_images": 1, "output_format": "png", "aspect_ratio": "1:8" } },
+    { "model": "google/nano-banana-2-lite/edit", "body": { "prompt": "Change the sail to green", "num_images": 1, "output_format": "jpeg", "image_urls": ["data:image/png;base64,iVBORw0KGgo="] } }
+  ],
+  "completed": { "images": [{ "url": "https://assets.example/boat.png", "content_type": "image/png", "width": 1024, "height": 1024 }], "description": "A blue paper boat" },
+  "flaggedPartial": { "images": [{ "url": "https://assets.example/shoreline.png", "content_type": "image/png" }], "has_nsfw_concepts": [true] }
+}
