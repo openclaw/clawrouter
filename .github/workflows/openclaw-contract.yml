@@ -7,8 +7,9 @@ on:
       - 'worker/**'
       - 'shared/**'
       - 'providers/**'
-      - 'test/openclaw-search.test.mjs'
-      - 'test/fixtures/openclaw-search-contract.test.ts'
+      - 'test/openclaw-*.test.mjs'
+      - 'test/fixtures/openclaw-*-contract.test.ts'
+      - 'test/helpers/openclaw-consumer.mjs'
       - 'test/helpers/workerd.mjs'
       - 'pnpm-lock.yaml'
 
@@ -53,5 +54,27 @@ jobs:
         working-directory: .openclaw-contract
       - name: Actual plugin through workerd and SQLite
         run: node --test test/openclaw-search.test.mjs
+        env:
+          CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
+      - name: Freeze the installed client's dependency inputs
+        working-directory: .openclaw-contract
+        run: git ls-files --stage -- '*package.json' pnpm-lock.yaml pnpm-workspace.yaml '.npmrc' '**/.npmrc' '.pnpmfile.*' 'patches/**' '**/patches/**' > "$RUNNER_TEMP/openclaw-dependency-inputs"
+      - name: Check out the actual public memory consumer in the same ephemeral checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 9d2be9d82c2a6973ae1b025eac4a636964397c28
+          path: .openclaw-contract
+          persist-credentials: false
+          fetch-depth: 1
+          clean: false
+      - name: Qualify reuse of this checkout's own frozen install
+        working-directory: .openclaw-contract
+        run: |
+          git ls-files --stage -- '*package.json' pnpm-lock.yaml pnpm-workspace.yaml '.npmrc' '**/.npmrc' '.pnpmfile.*' 'patches/**' '**/patches/**' | cmp "$RUNNER_TEMP/openclaw-dependency-inputs" -
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'
+          pnpm --version
+      - name: Actual memory transport through workerd and SQLite
+        run: node --test test/openclaw-embeddings.test.mjs
         env:
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract

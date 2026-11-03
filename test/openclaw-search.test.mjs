@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
+import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "1c72f546f839d2790168cd15a9f9d18afaf014ff";
@@ -17,16 +15,11 @@ const cases = snapshot.providers.flatMap(provider => provider.endpoints
   .map(endpoint => ({ provider, endpoint })));
 
 test("actual OpenClaw search registration through Worker admission, upstream and SQLite settlement", { skip: !source, timeout: 300_000 }, async t => {
-  assert.equal(process.env.CI, "true", "the public client receives its own native install in ephemeral CI only");
-  assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(), sourceHead);
   assert.ok(cases.length > 0);
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-openclaw-search-"));
-  const clientTest = join(resolve(source), "extensions/clawrouter/worker-contract.test.ts");
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  let mf, copied = false;
+  let mf;
   try {
-    await copyFile(new URL("./fixtures/openclaw-search-contract.test.ts", import.meta.url), clientTest, constants.COPYFILE_EXCL);
-    copied = true;
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const { provider } of cases) {
@@ -39,13 +32,10 @@ test("actual OpenClaw search registration through Worker admission, upstream and
       await kv.put(`connections/${provider.id}`, JSON.stringify({ providerId: provider.id, enabled: true }));
     }
     const origin = String(await mf.ready);
-    const started = performance.now();
-    const result = await promisify(execFile)("pnpm", ["test", "extensions/clawrouter/worker-contract.test.ts", "--maxWorkers=1"], {
-      // The native runner compiles its own SDK worker graph on a cold CI host.
-      cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_PROVIDERS: cases.map(({ provider }) => provider.id).join(",") },
+    await runOpenClawConsumer(t, {
+      source, sourceHead, fixture: new URL("./fixtures/openclaw-search-contract.test.ts", import.meta.url),
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_PROVIDERS: cases.map(({ provider }) => provider.id).join(",") },
     });
-    t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
     assert.equal(calls.length, cases.length, "only successful searches may reach an upstream");
@@ -79,7 +69,6 @@ test("actual OpenClaw search registration through Worker admission, upstream and
     }
   } finally {
     await mf?.dispose();
-    if (copied) await rm(clientTest);
     await rm(temporary, { recursive: true, force: true });
   }
 });
