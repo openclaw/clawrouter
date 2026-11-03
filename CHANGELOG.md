@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
+
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
 
