@@ -1,0 +1,48 @@
+# Hosted Chat API only; product boundaries: docs/hosted-inference-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.baseten.co/inference/model-apis/overview
+schema: clawrouter.service-provider.v1
+id: baseten
+displayName: Baseten Model APIs
+status: experimental
+class: openai_compatible
+service:
+  platform: baseten
+  kind: model_provider
+  upstreamService: baseten
+  configKeys: [BASETEN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://inference.baseten.co/v1
+routing:
+  nativePrefixes: [clawrouter-baseten, baseten]
+  modelPrefixes: [baseten/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: baseten/zai-org/GLM-5.3
+      upstream: zai-org/GLM-5.3
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
