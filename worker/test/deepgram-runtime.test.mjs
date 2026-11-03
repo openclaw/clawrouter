@@ -71,6 +71,43 @@ test("raw upload authenticates before any reader or invalid MIME/length check", 
   assert.equal(response.status, 401); assert.equal(reads, 0); assert.equal(f.events.length, 0); await body.cancel();
 });
 
+for (const path of [native, manifest]) {
+  test("Nova-3 rejects legacy keywords before dispatch: " + path, async t => {
+    const f = fixture(t), upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("unsupported keywords escaped"); });
+    for (const query of ["keywords=synthetic", "model=nova-3&keyterm=valid&keywords=invalid"]) {
+      const response = await f.call(audio, { path, query: new URLSearchParams(query) });
+      await response.text(); assert.equal(response.status, 400);
+    }
+    await Promise.all(f.pending); assert.equal(upstream.mock.callCount(), 0); assert.equal(f.events.length, 0);
+    for (const name of owners) assert.equal(f.ledger.get(name).reservations().length, 0);
+  });
+
+  for (const bound of ["entries", "serialized"]) test("Nova-3 bounds the final query including default model: " + path + " " + bound, async t => {
+    const f = fixture(t);
+    const pairs = bound === "entries" ? Array.from({ length: 127 }, (_, i) => ["keyterm", "term" + i])
+      : Array.from({ length: 9 }, () => ["keyterm", "x".repeat(1800)]);
+    if (bound === "serialized") pairs[8][1] += "x".repeat(16_384 - new URLSearchParams([...pairs, ["model", "nova-3"]]).toString().length);
+    const query = new URLSearchParams(pairs), expected = [...pairs, ["model", "nova-3"]];
+    const upstream = t.mock.method(globalThis, "fetch", async (input, init) => {
+      const outgoing = new URL(input).searchParams;
+      assert.deepEqual([...outgoing], expected); assert.deepEqual(init.body, audio);
+      assert.equal(bound === "entries" ? outgoing.size : outgoing.toString().length, bound === "entries" ? 128 : 16_384);
+      assert.equal(init.headers.get("authorization"), "Token synthetic-original-key");
+      return Response.json(wire.response);
+    });
+    const response = await f.call(audio, { path, query });
+    assert.deepEqual(await response.json(), wire.response); assert.equal(response.status, 200);
+    assert.equal(query.has("model"), false);
+    if (bound === "entries") query.append("keyterm", "overflow");
+    else { pairs[8][1] += "x"; }
+    const denied = await f.call(audio, { path, query: bound === "entries" ? query : new URLSearchParams(pairs) });
+    await denied.text(); assert.equal(denied.status, 400);
+    await Promise.all(f.pending); assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].actual_cost_micros, 200); assert.equal(f.events[0].cost_basis, "policy_fixed"); assert.equal(f.events[0].total_tokens, null);
+    for (const name of owners) { const rows = f.ledger.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); }
+  });
+}
+
 test("raw input rejects callbacks, URL substitution, injected credentials, unknown models and malformed lengths before egress", async t => {
   const f = fixture(t), upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("invalid upload escaped"); });
   for (const query of ["callback=https://callback.example", "url=https://audio.example", "token=synthetic", "model=flux-general-en", "model=nova-3&model=nova-3", "channels=0"]) {
