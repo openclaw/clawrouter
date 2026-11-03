@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exercise the actual OpenClaw Cohere compatibility client through Worker catalog, admission, fragmented streams and SQLite settlement, keeping policy charges separate from native token usage.
+
 - Qualify frozen Vydra Models image/speech/video wire contracts and the scoped video wrapper, preserving partial/terminal state, original model identity and unknown ledger-to-dollar costs.
 - Qualify the three frozen fal unary music contracts with native Key dispatch, per-model inputs, bounded audio results and conservative unknown upstream costs.
 - Reject non-string native fal music MIME fields instead of coercing arrays into qualified audio descriptors.
