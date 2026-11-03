@@ -780,6 +780,9 @@
           ]
         },
         "then": { "$ref": "#/$defs/veniceModelsEndpoint" }
+      }, {
+        "if": { "required": ["inputProfile"] },
+        "then": { "$ref": "#/$defs/pixVerseImageInputEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -801,6 +804,7 @@
         },
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
+        "inputProfile": { "const": "clawrouter.pixverse-image-input.v1" },
         "streaming": { "type": "string" },
         "lifecycle": {
           "oneOf": [
@@ -2238,6 +2242,25 @@
         { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "pixVerseImageInputEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "inputProfile", "lifecycle"],
+      "properties": {
+        "inputProfile": { "const": "clawrouter.pixverse-image-input.v1" },
+        "path": { "const": "/openapi/v2/video/img/generate" }, "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "pixverse.image_video" }, "responseFormat": { "const": "pixverse.video" },
+        "pathParams": { "const": [] }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "headers": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "lifecycle": { "required": ["protocol", "retrieve"], "properties": { "protocol": { "const": "pixverse.video" } } }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["modelPassthrough"] },
+        { "required": ["outputTokenLimit"] }, { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "deepseekSearchEndpoint": {

@@ -27,7 +27,7 @@ export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   capabilities: Array<{ id: string; endpoint: string }>;
   routing: { modelPrefixes?: string[] };
   models: Array<{ id: string; upstream?: string; availability?: ModelAvailability; capabilities: string[] }>;
-  endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
+  endpoints: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
 }
 
 interface ModelIdentity { id: string; upstream?: string; availability?: ModelAvailability }
