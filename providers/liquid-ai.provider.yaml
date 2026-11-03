@@ -30,14 +30,30 @@ capabilities:
 endpoints:
   decisions:
     path: /systemone
-    requestFormat: systemone.decisions
-    responseFormat: systemone.decisions
+    requestFormat: liquid.systemone
+    responseFormat: liquid.systemone
     timeoutMs: 120000
 models:
   entries:
     - id: liquid-ai/d1.1
       upstream: d1.1
       capabilities: [llm.decisions]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          decisions:
+            sources: [https://docs.liquid.ai/lfm/models/d1]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: liquid-ai-systemone
+                questions:
+                  boolean: { probabilities: boolean, abstention: false }
+                  choice: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 255 }
+                  score: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 10 }
+                confidence: provider-specific
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

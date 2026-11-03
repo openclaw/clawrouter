@@ -33,19 +33,39 @@ capabilities:
 endpoints:
   decisions:
     path: /decide
-    requestFormat: sage.decide
-    responseFormat: sage.decide
+    requestFormat: levanto.sage
+    responseFormat: levanto.sage
     timeoutMs: 120000
   decisions_batch:
     path: /decide/batch
-    requestFormat: sage.decide_batch
-    responseFormat: sage.decide_batch
+    requestFormat: levanto.sage_batch
+    responseFormat: levanto.sage_batch
     timeoutMs: 120000
 models:
   entries:
     - id: levanto/levanto-sage-2
       upstream: levanto-sage-2
       capabilities: [llm.decisions, llm.decisions.batch]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          decisions:
+            sources: [https://docs.levanto.ai/quickstart]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: levanto-sage
+                questions:
+                  boolean: { probabilities: boolean, abstention: true }
+                  choice: { probabilities: categorical, abstention: true, minOptions: 2, maxOptions: 120 }
+                  score: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 26 }
+                  sort: { probabilities: none, abstention: false, minOptions: 2, maxOptions: 120 }
+                  tags: { probabilities: independent, abstention: true, minOptions: 1, maxOptions: 120 }
+                reasoning: { modes: [auto, off, on], metadata: true }
+                limits: { maxQuestions: 1 }
+                confidence: provider-specific
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

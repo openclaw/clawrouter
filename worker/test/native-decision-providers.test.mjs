@@ -7,9 +7,9 @@ import { prepareSageRequest, decodeSageResponse } from "../provider-sage.ts";
 import { prepareSystemOneRequest, decodeSystemOneResponse } from "../provider-systemone.ts";
 
 const contracts = [
-  ["levanto", "SAGE_API_KEY", "https://sage.levanto.ai/decide", "levanto-sage-2", "sage.decide"],
-  ["liquid-ai", "LIQUID_API_KEY", "https://api.liquid.ai/decisions/v1/systemone", "d1.1", "systemone.decisions"],
-  ["typesafe", "TYPESAFE_API_KEY", "https://api.typesafe.ai/v1/systemone", "jev-latest", "systemone.decisions"],
+  ["levanto", "SAGE_API_KEY", "https://sage.levanto.ai/decide", "levanto-sage-2", "levanto.sage"],
+  ["liquid-ai", "LIQUID_API_KEY", "https://api.liquid.ai/decisions/v1/systemone", "d1.1", "liquid.systemone"],
+  ["typesafe", "TYPESAFE_API_KEY", "https://api.typesafe.ai/v1/systemone", "jev-latest", "typesafe.systemone"],
 ];
 const { providers } = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...contracts.map(([id]) => `providers/${id}.provider.yaml`)], { encoding: "utf8" }));
 
@@ -26,6 +26,12 @@ for (const [id, key, url, modelId, format] of contracts) {
     assert.equal(auth.headers.get("authorization"), "Bearer synthetic-selected");
     assert.equal(endpoint.request_format, format);
     assert.notEqual(endpoint.request_format, "openai.decisions");
+    const facts = selected.nativeCapabilities.endpoints.decisions;
+    assert.equal(facts.inference.decision.protocol, id === "levanto" ? "levanto-sage" : id === "liquid-ai" ? "liquid-ai-systemone" : "typesafe-systemone");
+    assert.deepEqual(facts.input, ["text", "json"]);
+    assert.equal(facts.inference.chat, false);
+    assert.equal(facts.contextWindow, undefined);
+    assert.equal(facts.inference.decision.questions.choice.probabilities, id === "typesafe" ? "provider-defined" : "categorical");
     if (id === "levanto") {
       const body = prepareSageRequest({ content: "synthetic evidence", question: { id: "gate", kind: "yesno", instructions: "evaluate" } });
       assert.equal(body.model, undefined);
@@ -44,7 +50,7 @@ for (const [id, key, url, modelId, format] of contracts) {
 
 test("Sage batch has a distinct native route and observes aggregate usage once", () => {
   const provider = providers.find(provider => provider.id === "levanto"), endpoint = provider.endpoints.find(endpoint => endpoint.id === "decisions_batch");
-  assert.equal(endpoint.request_format, "sage.decide_batch");
+  assert.equal(endpoint.request_format, "levanto.sage_batch");
   const auth = configuredUpstream(provider, null, { SAGE_API_KEY: "synthetic-selected" });
   assert.equal(auth.baseUrl + upstreamPath(provider, endpoint, {}, {}, auth), "https://sage.levanto.ai/decide/batch");
   const body = prepareSageRequest({ requests: [{ content: "synthetic evidence", questions: [{ id: "gate", kind: "yesno", instructions: "evaluate" }] }] }, true);
