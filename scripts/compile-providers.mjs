@@ -5,6 +5,13 @@ import { Validator } from "@cfworker/json-schema";
 import { parse } from "yaml";
 
 const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
+const decisionContracts = new Map([
+  ["openai-decisions", { provider: "openai", format: "openai.decisions" }],
+  ["levanto-sage", { provider: "levanto", format: "levanto.sage" }],
+  ["liquid-ai-systemone", { provider: "liquid-ai", format: "liquid.systemone" }],
+  ["typesafe-systemone", { provider: "typesafe", format: "typesafe.systemone" }],
+  ["subq-decisions", { provider: "subq", format: "subq.decisions" }],
+]);
 const manifestSchema = JSON.parse(readFileSync(new URL("../providers/_schema/service-provider.schema.json", import.meta.url), "utf8"));
 const manifestValidator = new Validator(manifestSchema, "2020-12");
 
@@ -289,8 +296,21 @@ function validateManifest(manifest) {
       if (facts.inference?.chat === true && !supported.some(capability => ["llm.chat", "llm.responses", "llm.messages", "llm.generate"].includes(capability.id))) fail("chat requires a conversational capability");
       if (facts.inference?.chat && facts.maxOutputTokens === 0) fail("chat cannot declare zero output tokens");
       const decision = facts.inference?.decision;
-      if (decision && (endpoint.requestFormat !== "openai.decisions" || !supported.some(capability => capability.id === "llm.decisions"))) fail("decision requires the declared Decisions endpoint");
-      if (decision?.questions.choice && decision.questions.choice.minOptions > decision.questions.choice.maxOptions) fail("choice minOptions exceeds maxOptions");
+      if (decision) {
+        const contract = decisionContracts.get(decision.protocol);
+        if (!contract || manifest.id !== contract.provider || endpoint.requestFormat !== contract.format || endpoint.responseFormat !== contract.format
+          || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.nativeProxy === false
+          || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
+          || !supported.some(capability => capability.id === "llm.decisions")
+          || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) fail("decision requires the declared Decisions endpoint and qualified protocol/provider pair");
+        for (const [kind, question] of Object.entries(decision.questions)) {
+          if (question.minOptions > question.maxOptions) fail(`${kind} minOptions exceeds maxOptions`);
+          if (question.maxImageOptions > question.maxOptions) fail(`${kind} maxImageOptions exceeds maxOptions`);
+        }
+        if (decision.reasoning?.default && !decision.reasoning.modes.includes(decision.reasoning.default)) fail("decision default reasoning must belong to declared modes");
+        if (decision.limits?.maxStateAndQuestionTokens > decision.limits?.maxRequestTokens) fail("decision state/question limit exceeds request limit");
+        if (decision.limits?.image && !facts.input?.includes("image")) fail("decision image limits require image input");
+      }
       if (facts.hostedTools && (manifest.id !== "openai" || id !== "responses" || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || !supported.some(capability => capability.id === "llm.responses"))) fail("hosted tools require the OpenAI Responses endpoint");
       if (facts.supportedServiceTiers) {
         if (!["openai.responses", "openai.chat_completions"].includes(endpoint.requestFormat)) fail("service tiers require a supported tier wire format");

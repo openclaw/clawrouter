@@ -811,6 +811,537 @@
       }
     },
     "nativeDecisionCapabilities": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nativeOpenAiDecisionCapabilities"
+        },
+        {
+          "$ref": "#/$defs/nativeHostedDecisionCapabilities"
+        }
+      ]
+    },
+    "nativeHostedDecisionCapabilities": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "questions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "enum": [
+            "levanto-sage",
+            "liquid-ai-systemone",
+            "typesafe-systemone",
+            "subq-decisions"
+          ]
+        },
+        "questions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "$ref": "#/$defs/nativeBooleanQuestion"
+            },
+            "choice": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            },
+            "score": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            },
+            "sort": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            },
+            "tags": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            }
+          }
+        },
+        "reasoning": {
+          "type": "object",
+          "required": [
+            "modes"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "modes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "auto",
+                  "off",
+                  "on"
+                ]
+              }
+            },
+            "default": {
+              "enum": [
+                "auto",
+                "off",
+                "on"
+              ]
+            },
+            "metadata": {
+              "type": "boolean"
+            }
+          }
+        },
+        "confidence": {
+          "const": "provider-specific"
+        },
+        "limits": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "maxQuestions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxRequestTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxStateAndQuestionTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "image": {
+              "$ref": "#/$defs/nativeHostedDecisionImage"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "levanto-sage"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": true
+                      }
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 120
+                      },
+                      "abstention": {
+                        "const": true
+                      }
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 26
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "none"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 120
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "tags": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "independent"
+                      },
+                      "minOptions": {
+                        "minimum": 1
+                      },
+                      "maxOptions": {
+                        "maximum": 120
+                      },
+                      "abstention": {
+                        "const": true
+                      },
+                      "maxImageOptions": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "liquid-ai-systemone"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": false,
+                  "tags": false
+                }
+              },
+              "reasoning": {
+                "properties": {
+                  "modes": {
+                    "items": {
+                      "const": "auto"
+                    }
+                  },
+                  "default": {
+                    "const": "auto"
+                  },
+                  "metadata": false
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "typesafe-systemone"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "provider-defined"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 255
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "provider-defined"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 10
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": false,
+                  "tags": false
+                }
+              },
+              "reasoning": {
+                "properties": {
+                  "modes": {
+                    "items": {
+                      "const": "auto"
+                    }
+                  },
+                  "default": {
+                    "const": "auto"
+                  },
+                  "metadata": false
+                }
+              },
+              "limits": {
+                "properties": {
+                  "image": {
+                    "properties": {
+                      "mimeTypes": {
+                        "items": {
+                          "enum": [
+                            "image/png",
+                            "image/jpeg"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "subq-decisions"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 255
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "maxOptions": {
+                        "maximum": 10
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": false,
+                  "tags": false
+                }
+              },
+              "reasoning": {
+                "properties": {
+                  "modes": {
+                    "items": {
+                      "const": "auto"
+                    }
+                  },
+                  "default": {
+                    "const": "auto"
+                  },
+                  "metadata": false
+                }
+              },
+              "limits": {
+                "properties": {
+                  "maxQuestions": {
+                    "maximum": 128
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nativeDecisionOptionQuestion": {
+      "type": "object",
+      "required": [
+        "probabilities",
+        "abstention",
+        "minOptions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "probabilities": {
+          "enum": [
+            "categorical",
+            "provider-defined",
+            "independent",
+            "none"
+          ]
+        },
+        "abstention": {
+          "type": "boolean"
+        },
+        "minOptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxImageOptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
+      }
+    },
+    "nativeHostedDecisionImage": {
+      "type": "object",
+      "required": [
+        "maxBytes",
+        "mimeTypes",
+        "remoteUrls"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "mimeTypes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ]
+          }
+        },
+        "remoteUrls": {
+          "const": false
+        },
+        "maxImages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "maxTotalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        }
+      }
+    },
+    "nativeOpenAiDecisionCapabilities": {
       "type": "object",
       "required": [
         "protocol",

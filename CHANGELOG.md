@@ -18,6 +18,7 @@
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
+- Qualify typed Sage, Liquid/TypeSafe SystemOne and SubQ decision metadata against closed provider/wire contracts without inventing context, prices or client compatibility.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
