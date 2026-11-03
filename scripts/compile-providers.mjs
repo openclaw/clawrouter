@@ -273,6 +273,7 @@ function validateManifest(manifest) {
   validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
   validateNativeModels(manifest, "chutes", "https://llm.chutes.ai/v1");
   validateNativeModels(manifest, "featherless", "https://api.featherless.ai/v1");
+  validateNativeModels(manifest, "venice", "https://api.venice.ai/api/v1");
   validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);

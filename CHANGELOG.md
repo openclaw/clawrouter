@@ -136,10 +136,12 @@
 - Qualify Baseten native data-only model discovery declarations with a fixed bodyless GET, canonical original-key binding and no inferred prices or serving limits.
 - Bind native Google unary and synchronous batch embeddings to selected models and credentials, validating complete ordered vectors before delivery and retaining conservative charges on uncertain execution.
 - Add frozen Gemini inline audio/video understanding codecs and fixtures, preserving native bytes, bounded complete text delivery and explicit media-accounting boundaries.
+- Add a scoped Google inline-media response wrapper with qualified WAV/MP4 bytes, bounded complete text delivery, thought exclusion and conservative media-cost boundaries.
 - Add Google file-backed embedding batch codecs and fixtures with scoped file/model prerequisites, conservative async lifecycle/cancellation and bounded keyed JSONL result staging.
 - Add frozen DeepSeek native Search codecs and fixtures, separating native nonempty-request billing from filtered consumer results and preserving unknown interrupted outcomes.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
+- Add a complete Google grounded-search response wrapper with scoped native selection, stable attribution indices, thought exclusion and bounded delivery without inferring tool costs.
 
 - Add experimental native Voyage text embeddings with explicit Voyage 4 model rows, preserved native vector options, a bounded native smoke request and a focused input-only usage helper for runtime integration; hard-budget token pricing remains unqualified.
 - Dispatch complete successful Voyage embedding receipts to the native usage extractor, preserving observed input counts without inferring splits for generic, failed or partial responses.
@@ -243,8 +245,10 @@
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
 
 - Add frozen Google unary speech codecs for generateContent and stateless Interactions, with speaker binding, complete PCM/WAV validation and an explicit preview-model qualification cutoff.
+- Add a bounded Google unary speech response wrapper with exact frozen-model transport binding, explicit PCM/WAV MIME, atomic audio delivery and conservative unknown-cost accounting.
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
 - Add the native Lyria response wrapper with explicit audio MIME, complete MP3/WAV framing, bounded delivery and thought exclusion; shared music routing and cost admission remain separately qualified.
+- Keep explicit native Lyria music unpriced at admission and settlement, rejecting borrowed token/image tariffs under hard-dollar budgets while preserving separately labeled policy charges.
 - Add bounded frozen MiniMax music stream codecs and fixtures with terminal audio validation, required cover references and explicit existing-user/free-discontinuation qualifications.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
@@ -259,6 +263,8 @@
 - Wire native Baseten SystemOne decisions through bounded complete-response admission and original-credential dispatch, preserving observed answer usage and conservative settlement without OpenAI wire aliases.
 - Add bounded Baseten native model discovery codecs with original-credential binding, data-only lists, decision-model exclusion and unknown-price preservation.
 - Add experimental Arcee Platform, Chutes API-key, Featherless and Venice Chat Completions routes with independent credentials, unpriced model passthrough and explicit product boundaries.
+- Add bounded public Venice text catalog decoding with exact original-grant filtering, independent native metadata and conservative deprecation/currency observations.
+- Qualify Venice public text-catalog declarations with credential-free upstream requests, private original-grant filtering and separate unknown USD/DIEM observations before activation.
 - Add bounded Featherless native catalog pages with original-key requests, exact grant filtering and explicit pagination, preserving unknown plan eligibility and prices.
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
