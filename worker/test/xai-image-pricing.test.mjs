@@ -5,7 +5,9 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { prepareXaiImage, readXaiImage } from "../xai-images.ts";
-const { imageRequestReserve, imageRequestCost, estimateModelCost } = await import("../pricing.ts");
+const { imageRequestReserve, imageRequestCost } = await import("../pricing.ts");
+const { estimateCost } = await import("../proxy-accounting.ts");
+const { validateBudgetReservation } = await import("../accounting.ts");
 const original = parse(readFileSync(new URL("../../providers/xai.provider.yaml", import.meta.url), "utf8"));
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/xai/images.json", import.meta.url), "utf8"));
 const tariff = {
@@ -54,7 +56,14 @@ test("compiled native image contracts preserve codec paths, selected aliases, se
       costMicros: mode === "generate" ? 40_000 : 50_000, basis: "provider_reported", pricingVersion: tariff.version,
     });
     const model = snapshot.model_index[`xai/${request.model}`];
-    assert.equal(model.pricing, null); assert.equal(estimateModelCost(model.pricing, request.body, endpoint).pricingAvailable, false, "generic token admission cannot activate this tariff");
+    assert.equal(model.pricing, null);
+    const estimate = estimateCost(model, request.body, null, "image.generate", endpoint);
+    assert.throws(() => validateBudgetReservation("image.generate", estimate, 1_000_000), error => error.code === "pricing_required", "generic admission cannot activate an unsupported tariff");
+    for (const fixed of [0, 50_000]) {
+      const explicit = estimateCost(model, request.body, fixed, "image.generate", endpoint);
+      assert.equal(explicit.basis, "policy_fixed"); assert.equal(explicit.reserveMicros, fixed);
+      assert.equal(validateBudgetReservation("image.generate", explicit, 1_000_000), true);
+    }
   }
   const baseline = compile(original);
   for (const endpoint of baseline.providers[0].endpoints.filter(row => !contracts.some(([id]) => row.id === id))) assert.deepEqual(provider.endpoints.find(value => value.id === endpoint.id), endpoint);
