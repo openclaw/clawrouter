@@ -2,6 +2,7 @@ import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.t
 import { kieKlingModels, prepareKieKlingWire } from "./kie-kling.ts";
 import { kieGrokModels, prepareKieGrokWire } from "./kie-grok.ts";
 import { kieWanModels, prepareKieWanWire } from "./kie-wan.ts";
+import { kieHailuoModels, prepareKieHailuoWire } from "./kie-hailuo.ts";
 
 export const KIE_JOB_ORIGIN = "https://api.kie.ai";
 export const KIE_CREATE_TASK_PATH = "/api/v1/jobs/createTask";
@@ -45,6 +46,11 @@ export function prepareKieTask(body: unknown): { body: Record<string, unknown>; 
   if (body.model === kieWanModels[1]) throw new Error("kie_image_binding_required");
   if (body.model === kieWanModels[0]) {
     const prepared = prepareKieWanWire(body);
+    return { body: prepared.body, model: prepared.model };
+  }
+  if ((kieHailuoModels as readonly string[]).includes(body.model)) {
+    const prepared = prepareKieHailuoWire(body);
+    if (prepared.mode === "image") throw new Error("kie_image_binding_required");
     return { body: prepared.body, model: prepared.model };
   }
   return { body, model: body.model };
