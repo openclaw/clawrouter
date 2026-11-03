@@ -613,6 +613,14 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^baseten\\.systemone" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^baseten\\.systemone" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/basetenSystemOneEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "pattern": "^gradium\\." } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "pattern": "^gradium\\." } }, "required": ["responseFormat"] }
           ]
@@ -1075,6 +1083,7 @@
     },
     "nativeDecisionCapabilities": {
       "oneOf": [
+        { "$ref": "#/$defs/nativeBasetenDecisionCapabilities" },
         {
           "$ref": "#/$defs/nativeOpenAiDecisionCapabilities"
         },
@@ -1082,6 +1091,46 @@
           "$ref": "#/$defs/nativeHostedDecisionCapabilities"
         }
       ]
+    },
+    "nativeBasetenDecisionCapabilities": {
+      "type": "object",
+      "required": ["protocol", "questions", "limits", "outputTokensPerQuestion"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "baseten-systemone" },
+        "questions": {
+          "type": "object", "required": ["boolean", "choice", "score"], "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "allOf": [{ "$ref": "#/$defs/nativeBooleanQuestion" }, { "properties": { "abstention": { "const": false } } }]
+            },
+            "choice": {
+              "allOf": [{ "$ref": "#/$defs/nativeDecisionOptionQuestion" }, {
+                "required": ["maxOptions"],
+                "properties": { "probabilities": { "const": "provider-defined" }, "abstention": { "const": false },
+                  "minOptions": { "const": 2 }, "maxOptions": { "const": 255 }, "maxImageOptions": false }
+              }]
+            },
+            "score": {
+              "allOf": [{ "$ref": "#/$defs/nativeDecisionOptionQuestion" }, {
+                "required": ["maxOptions"],
+                "properties": { "probabilities": { "const": "provider-defined" }, "abstention": { "const": false },
+                  "minOptions": { "const": 2 }, "maxOptions": { "const": 10 }, "maxImageOptions": false }
+              }]
+            }
+          }
+        },
+        "reasoning": {
+          "type": "object", "required": ["modes"], "additionalProperties": false,
+          "properties": { "modes": { "const": ["auto"] }, "default": { "const": "auto" }, "metadata": { "const": false } }
+        },
+        "confidence": { "const": "provider-specific" },
+        "outputTokensPerQuestion": { "const": 1 },
+        "limits": {
+          "type": "object", "required": ["maxTotalOptions", "maxStateAndQuestionTokens"], "additionalProperties": false,
+          "properties": { "maxTotalOptions": { "const": 512 }, "maxStateAndQuestionTokens": { "const": 16384 } }
+        }
+      }
     },
     "nativeHostedDecisionCapabilities": {
       "type": "object",
@@ -1793,6 +1842,20 @@
           { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
         ]
       }
+    },
+    "basetenSystemOneEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/systemone" }, "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "requestFormat": { "const": "baseten.systemone" }, "responseFormat": { "const": "baseten.systemone" },
+        "query": { "maxProperties": 0 }, "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["upstreamPath"] }
+      ] }
     },
     "gradiumSpeechEndpoint": {
       "type": "object",
