@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-regional-providers.md.
+# Frozen native contract and legacy evidence: docs/longcat-native-catalog.md.
 # Endpoint/model source checked 2026-11-03: https://longcat.chat/platform/docs
 schema: clawrouter.service-provider.v1
 id: longcat
@@ -19,18 +19,25 @@ auth:
 baseUrls:
   default: https://api.longcat.chat/openai/v1
 routing:
-  nativePrefixes: [clawrouter-longcat, longcat]
-  modelPrefixes: [longcat/]
+  nativePrefixes: [clawrouter-longcat, longcat, meituan-longcat]
+  modelPrefixes: [longcat/, meituan-longcat/]
 adapter:
   request: openai
   response: openai
   stream: openai_sse
   error: openai_error
 capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -43,6 +50,22 @@ models:
     - id: longcat/LongCat-2.5
       upstream: LongCat-2.5
       capabilities: [llm.chat]
+    - id: longcat/LongCat-2.0
+      upstream: LongCat-2.0
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://longcat.chat/platform/docs/change-log]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://longcat.chat/platform/docs/api/chat.html]
+            checkedAt: "2026-11-03"
+            input: [text]
+            maxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
