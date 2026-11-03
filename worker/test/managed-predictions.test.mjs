@@ -47,13 +47,13 @@ async function fixture(t, { fixed = 700, pooled = false } = {}) {
   await authority("/credentials/initialize-all", [{ credentialId: "fixture", credential }]);
   await authority("/connections/initialize-all", [{ providerId: "replicate", enabled: true, monthlyBudgetMicros: 10_000 }]);
   if (pooled) await putGrantCredentials(env, grantKey, { provider: "replicate", kind: "api_key", enabled: true, credential: "synthetic-original-key" });
-  // The source/compiler lane owns the shipped declaration. Exercise the real
-  // Worker against that exact contract even before its snapshot PR lands.
+  // Activation must work from the shipped snapshot; injecting lifecycle fields
+  // here would hide a missing or stale compiled declaration.
   const provider = providerById("replicate"), original = structuredClone(provider);
   t.after(() => { Object.keys(provider).forEach(key => delete provider[key]); Object.assign(provider, original); });
-  const create = provider.endpoints.find(endpoint => endpoint.id === "predictions"), get = provider.endpoints.find(endpoint => endpoint.id === "prediction");
-  create.lifecycle = { protocol: "replicate.predictions", retrieve: "prediction", cancel: "prediction_cancel" };
-  if (!provider.endpoints.some(endpoint => endpoint.id === "prediction_cancel")) provider.endpoints.push({ ...structuredClone(get), id: "prediction_cancel", method: "POST", methods: ["POST"], path: "/v1/predictions/${prediction_id}/cancel", request_format: "replicate.prediction_cancel" });
+  assert.deepEqual(provider.endpoints.find(endpoint => endpoint.id === "predictions").lifecycle,
+    { protocol: "replicate.predictions", retrieve: "prediction", cancel: "prediction_cancel" });
+  assert.equal(provider.endpoints.find(endpoint => endpoint.id === "prediction_cancel")?.request_format, "replicate.prediction_cancel");
   const f = { env, policy, credential, authority, budgets, budgetCalls, sent, provider,
     upstream: request => Response.json(request.method === "POST" && !request.url.endsWith("/cancel") ? contract.responses.created : contract.responses.partial),
     call(route = path, body = contract.request.body, extra = {}) {
@@ -81,13 +81,22 @@ const get = (f, route = control, extra = {}) => f.call(route, null, { ...extra, 
 
 test("native submit binds before exposing ID, canonical concurrent retries reuse one reservation and caller URLs", async t => {
   const f = await fixture(t), reached = Promise.withResolvers(), release = Promise.withResolvers();
+  const catalogResponse = await get(f, "/v1/catalog");
+  assert.equal(catalogResponse.status, 200);
+  const catalog = await catalogResponse.json();
+  assert.equal(catalog.scope.credentialId, "fixture");
+  const offered = catalog.providers.find(provider => provider.id === "replicate");
+  const create = offered.offers.find(offer => offer.endpoint === "predictions" && offer.routeKind === "native" && offer.transport === "http" && offer.eligible && offer.modelId === null);
+  assert.ok(create, "versioned job submission must offer a model-less native operation");
+  assert.equal(create.route, path);
+  assert.equal(f.sent.length, 0, "catalog discovery never submits a prediction");
   f.env.ACCESS_CONTROL.beforeFetch = async (_scope, request) => {
     if (new URL(request.url).pathname !== "/responses-background") return;
     const input = await request.clone().json();
     if (input.action === "managed_bind") { reached.resolve(); await release.promise; }
   };
   let delivered = false;
-  const first = f.call(path, contract.request.body, { headers: { "Idempotency-Key": "same-key", Prefer: "wait", "Cancel-After": "2h" } }).then(response => { delivered = true; return response; });
+  const first = f.call(create.route, contract.request.body, { headers: { "Idempotency-Key": "same-key", Prefer: "wait", "Cancel-After": "2h" } }).then(response => { delivered = true; return response; });
   await reached.promise; assert.equal(delivered, false);
   const pending = await f.call(path, { input: contract.request.body.input, version: contract.request.body.version }, { headers: { "Idempotency-Key": "same-key", "Cancel-After": "600s" } });
   assert.equal(pending.status, 202); assert.equal((await pending.json()).submission, "submission_unknown");
