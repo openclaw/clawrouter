@@ -108,11 +108,15 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
       const denied = await call("foreign", selectedModel, {});
       assert.equal(denied.status, 403);
       assert.equal((await denied.json()).error.code, "provider_not_allowed");
-      // Exercise unknown tariffs without erasing real snapshot pricing. Some
-      // endpoints explicitly price all opaque models (for example local compute).
-      if (!endpoint.modelPassthrough?.pricing) {
-        const opaque = dispatch === "manifest" ? `${provider.routing.modelPrefixes[0]}fixture-unpriced` : "fixture-unpriced";
-        const unpriced = await call("unpriced", opaque, {});
+      // Use an eligible unpriced card when opaque IDs are forbidden. A closed,
+      // fully priced catalog cannot supply an unknown-price request.
+      const unpricedOffer = offered.offers.find(row => row.endpoint === endpoint.id && row.routeKind === "native" && row.eligible
+        && provider.models.some(card => card.id === row.modelId && card.pricing === null));
+      if (!endpoint.modelPassthrough?.pricing && (endpoint.modelPassthrough || unpricedOffer)) {
+        const unknownModel = endpoint.modelPassthrough
+          ? (dispatch === "manifest" ? `${provider.routing.modelPrefixes[0]}fixture-unpriced` : "fixture-unpriced")
+          : (dispatch === "manifest" ? unpricedOffer.modelId : offered.models.find(row => row.id === unpricedOffer.modelId).upstream);
+        const unpriced = await call("unpriced", unknownModel, {});
         assert.equal(unpriced.status, 400);
         assert.equal((await unpriced.json()).error.code, "pricing_required");
       }
