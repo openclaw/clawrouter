@@ -1,0 +1,11 @@
+{
+  "request": { "model": "google/gemini-3.1-flash-image-preview", "prompt": "Draw a simple blue square.", "n": 1, "aspect_ratio": "1:1", "resolution": "1K" },
+  "editRequest": { "model": "google/gemini-3-pro-image-preview", "prompt": "Add a blue border.", "n": 1, "input_references": [{ "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9kAAAAASUVORK5CYII=" } }] },
+  "openaiRequest": { "model": "openai/gpt-5.4-image-2", "prompt": "Draw a simple blue square.", "n": 1 },
+  "response": {
+    "created": 1793664000,
+    "data": [{ "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY9kAAAAASUVORK5CYII=", "media_type": "image/png" }],
+    "usage": { "prompt_tokens": 25, "completion_tokens": 100, "total_tokens": 125, "cost": 0.04 }
+  },
+  "note": "Sanitized deterministic one-pixel image and synthetic usage; no live generation or tariff qualification."
+}
