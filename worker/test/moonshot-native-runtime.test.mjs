@@ -137,7 +137,8 @@ for (const [id, binding, base] of contracts) {
     assert.equal(f.sent[0].url, `${base}/models`); assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-region");
     assert.equal(f.sent[0].method, "GET"); assert.equal(f.sent[0].body, null);
     await f.drain(); assert.ok(f.events.filter(e => e.type === "clawrouter.usage.v1").every(e => e.actual_cost_micros === 0));
-    assert.equal(f.env.BUDGET_LEDGER.get("fixture:paid").reservations().length, 0);
+    const reservations = f.env.BUDGET_LEDGER.get("fixture:paid").reservations();
+    assert.equal(reservations.length, 1); assert.equal(reservations[0].reserved_micros, 0); assert.equal(reservations[0].settled, 1);
     f.reply = () => Response.json({ data: [row] });
     assert.equal((await f.call(null, { discovery: true, manifest })).status, 502);
     const count = f.sent.length;
