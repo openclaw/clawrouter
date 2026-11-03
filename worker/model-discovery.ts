@@ -1,3 +1,4 @@
+import { modelExecutable } from "../shared/model-availability.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
@@ -11,13 +12,16 @@ export function discoveryModelId(provider: CompiledProvider, upstream: string): 
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
 }
 export function discoveryAllows(policy: AccessPolicy, provider: CompiledProvider, upstream: string): boolean {
-  return policy.models == null || policy.models.includes(discoveryModelId(provider, upstream));
+  return modelExecutable(provider, { id: discoveryModelId(provider, upstream), upstream })
+    && (policy.models == null || policy.models.includes(discoveryModelId(provider, upstream)));
 }
 export function prepareModelDiscovery(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, pathParams: Record<string, string>): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
   if (Object.keys(body).length) throw new HttpError(400, "invalid_model_discovery", "model discovery does not accept a request body");
   if (Object.keys(pathParams).some(name => !endpoint.path_params.includes(name))) throw new HttpError(400, "invalid_model_discovery", "unknown discovery path parameter");
   const id = pathParams.model_id;
   if (endpoint.path_params.includes("model_id") && (typeof id !== "string" || !id.length || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id))) throw new HttpError(400, "invalid_model_id", "a bounded nonempty model_id is required");
+  if (id && !modelExecutable(provider, { id: discoveryModelId(provider, id), upstream: id }))
+    throw new HttpError(400, "model_unavailable", "the selected model identity is stopped");
   // Metadata pricing must never inherit the selected model's inference tariff.
   const model: CompiledModel | null = id ? { id: discoveryModelId(provider, id), upstream: id, capabilities: [], pricing: null, pricing_ref: null } : null;
   return { model, body: {}, pathParams };
@@ -106,7 +110,7 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
     }
     if (!Array.isArray(metadata.data) || !metadata.data.every(valid)) throw malformed();
     if (endpoint.request_format === "anthropic.models" && typeof metadata.has_more !== "boolean" || endpoint.request_format === "openai.models" && metadata.object !== "list") throw malformed();
-    if (!restricted) return metadataResponse(metadata, response);
+    if (!restricted && !provider.models.some(model => model.availability?.status === "stopped")) return metadataResponse(metadata, response);
     const data = metadata.data.filter(model => discoveryAllows(policy, provider, model.id));
     if (endpoint.request_format === "openai.models") return metadataResponse({ object: "list", data }, response);
     if (data.length || !metadata.has_more) return metadataResponse({ data, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null, has_more: metadata.has_more }, response);

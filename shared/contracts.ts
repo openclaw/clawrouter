@@ -1,3 +1,5 @@
+import type { ModelAvailability } from "./model-availability";
+export type { ModelAvailability } from "./model-availability";
 import type { NativeModelCapabilities } from "./native-capabilities";
 import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-request-parameters";
 
@@ -18,7 +20,7 @@ export interface ImageTokenPricing {
     outputTokenBound: { basePixels: number; divisor: number; qualityFactors: Record<string, number> } };
 }
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
-export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
+export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
   endpoint: string;
   modelId: string | null;
@@ -76,8 +78,8 @@ export interface ProviderRow {
 export interface ProviderResponse { providers: ProviderRow[] }
 
 export interface RouteCatalog {
-  openaiCompatible: Array<{ provider: string; models: Array<{ id: string; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
-  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; capabilities: string[] }>; streaming?: boolean | null }>;
+  openaiCompatible: Array<{ provider: string; models: Array<{ id: string; availability?: ModelAvailability; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
+  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; availability?: ModelAvailability; capabilities: string[] }>; streaming?: boolean | null }>;
 }
 
 export interface AccessPolicy {

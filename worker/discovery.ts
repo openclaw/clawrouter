@@ -1,3 +1,4 @@
+import { modelExecutable } from "../shared/model-availability.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
@@ -30,9 +31,10 @@ import { coloGet, coloPut } from "./colo-cache.ts";
 function staticProviderProjection(provider: CompiledProvider) {
   const models = new Map(provider.models.map(model => {
     const display_name = `${provider.display_name} · ${model.id}`;
+    const availability = model.availability ? { availability: structuredClone(model.availability) } : {};
     return [model.id, {
-      openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name }),
-      anthropic: Object.freeze({ id: model.id, type: "model", display_name, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
+      openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name, ...availability }),
+      anthropic: Object.freeze({ id: model.id, type: "model", display_name, ...availability, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
     }];
   }));
   const routes = new Map(provider.endpoints.filter(endpoint => endpoint.native_proxy).map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}) })]));
@@ -404,6 +406,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     const contextHasModel = (context: typeof effective[number], model: CompiledModel | null) => context.modelIds.has(model?.id ?? null)
       || !!model && context.passthrough && !provider.models.some(candidate => candidate.id === model.id);
     const eligibility = (context: typeof effective[number], model: CompiledModel | null, capability: string, inventory = false) => {
+      if (model && !modelExecutable(provider, model)) return { status: "exact-blocked" as const, reasonCode: "model_unavailable" };
       if (!contextHasModel(context, model)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (context.auth.policy.models != null && context.endpoint.request_format === "cloudflare_ai_gateway.universal") return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (model && !policyAllowsModel(context.auth.policy, provider.id, model.id)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
@@ -416,7 +419,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       }
       return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
     };
-    const models = provider.models.filter(model => pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
+    const models = provider.models.filter(model => modelExecutable(provider, model) && pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => inventoryContexts.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability, true).status !== "exact-blocked"));
       if (!capabilities.length) return [];
       const visibleEndpoints = new Set(inventoryContexts.filter(context => modelSupportsEndpoint(provider, model, context.endpoint)

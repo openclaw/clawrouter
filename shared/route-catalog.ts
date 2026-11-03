@@ -1,21 +1,23 @@
+import { modelExecutable, type ModelAvailability } from "./model-availability.ts";
 import type { ProviderRow, RouteCatalog } from "./contracts.ts";
 
 export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   capabilities: Array<{ id: string; endpoint: string }>;
   routing: { modelPrefixes?: string[] };
-  models: Array<{ id: string; capabilities: string[] }>;
+  models: Array<{ id: string; upstream?: string; availability?: ModelAvailability; capabilities: string[] }>;
   endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
 }
 
-export function modelSupportsEndpoint(provider: Pick<CatalogProvider, "capabilities">, model: { capabilities: string[] }, endpoint: { id: string }): boolean {
-  return provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
+export function modelSupportsEndpoint(provider: Pick<CatalogProvider, "capabilities" | "models">, model: CatalogProvider["models"][number], endpoint: { id: string }): boolean {
+  return modelExecutable(provider, model) && provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
 }
 
 export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
   const openaiCompatible = providers.filter((provider) => provider.class === "openai_compatible").map((provider) => ({
     provider: provider.id,
-    models: provider.models.map((model) => ({
+    models: provider.models.filter(model => modelExecutable(provider, model)).map((model) => ({
       id: model.id,
+      ...(model.availability ? { availability: model.availability } : {}),
       capabilities: model.capabilities,
       endpoints: model.capabilities.map(unifiedPathForCapability).filter(Boolean),
     })),
@@ -31,7 +33,7 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     requestFormat: endpoint.request_format,
     responseFormat: endpoint.response_format,
     sampleModel: provider.models.find((model) => modelSupportsEndpoint(provider, model, endpoint))?.id ?? null,
-    models: provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint)).map((model) => ({ id: model.id, capabilities: model.capabilities })),
+    models: provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint)).map((model) => ({ id: model.id, ...(model.availability ? { availability: model.availability } : {}), capabilities: model.capabilities })),
     streaming: endpoint.streaming != null,
   })));
   return { openaiCompatible, manifestProxy };

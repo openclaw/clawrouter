@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.
+
 - Exercise the actual OpenClaw Cohere compatibility client through Worker catalog, admission, fragmented streams and SQLite settlement, keeping policy charges separate from native token usage.
 
 - Qualify frozen Vydra Models image/speech/video wire contracts and the scoped video wrapper, preserving partial/terminal state, original model identity and unknown ledger-to-dollar costs.
