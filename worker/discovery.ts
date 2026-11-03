@@ -1,3 +1,4 @@
+import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
@@ -294,7 +295,14 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
   }
   const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
   if (auth instanceof Response) return auth;
-  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision()]);
+  const mediaProvider = snapshot.providers.find(provider => provider.id === "minimax"
+    && provider.endpoints.some(endpoint => endpoint.request_format === "minimax.speech")
+    && (!auth.policy.providers.length || auth.policy.providers.includes(provider.id)));
+  const mediaEnvironment = mediaProvider ? await qualifyMiniMaxEnvironmentBinding(mediaProvider, env) : null;
+  // A rotated server key cannot reuse an eligible discovery body from either
+  // isolate or colo caches. No credential bytes enter the cache identity.
+  const mediaRevision = mediaProvider ? [mediaEnvironment ? await sha256Hex(mediaEnvironment.binding) : null] : [];
+  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision(), ...mediaRevision]);
   const config = hotCacheConfig(env), shared = `${variant}\n${key}`;
   if (!entitlementCache.peek(key, config)) {
     const adopted = await coloGet<unknown>("discovery", shared, config);
@@ -368,7 +376,11 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
             if (selection.candidates.hasConfiguredGrant) {
               if (!configuredGrants.length) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
               temporarilyUnavailable = true;
-            } else assertOperationConfiguration(requirement, null, env);
+            } else {
+              assertOperationConfiguration(requirement, null, env);
+              if (endpoint.request_format === "minimax.speech" && !await qualifyMiniMaxEnvironmentBinding(provider, env))
+                throw new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires matching original credential authorization");
+            }
           }
           if (isStandaloneSearch(endpoint)) {
             assertSearchTariff(auth);

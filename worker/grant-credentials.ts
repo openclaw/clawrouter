@@ -1,5 +1,6 @@
 import { authorizationTimestamp, refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
 import { credentialProjection, materializedGrant, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
+import { mutateNativeMediaBinding } from "./native-media-credential.ts";
 export type { CredentialProjection } from "./grant-credential-record.ts";
 import { claimRefreshOwnership, reserveRefreshOwnership, OWNERSHIP_CLAIM, OWNERSHIP_CURRENT } from "./refresh-ownership.ts";
 import { normalizedScopes, validTimestamp, envValue, boundedSecret, optionalSecret, boundedRefreshJson, boundedResponseJson, MAX_REFRESH_RESPONSE_BYTES, permanentRefreshFailure, safeOAuthError, refreshRetryAt } from "./grant-refresh-diagnosis.ts";
@@ -143,6 +144,8 @@ export class GrantCredentialObject implements DurableObject {
           ? updatedCredentialRecord(current, input.grant)
           : credentialRecord(input.grant, generation);
         record = ownerMetadata(record, input.grant, input.key);
+        mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
         const freshAuthority = !current || record.refreshToken !== current.refreshToken;
         record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
@@ -803,12 +806,12 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function inspectGrantCredentials(env: Env, key: string): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/inspect", {})).grant;
+export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/inspect", {}, signal)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth"): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -841,7 +844,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  return projection ? { ...safe, ...projection } : safe;
+  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null };
 }
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {
@@ -923,9 +926,9 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
-  const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) });
+  const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) {
     let payload: { error?: { code?: string; message?: string; detail?: { projection?: CredentialProjection } } } = {};

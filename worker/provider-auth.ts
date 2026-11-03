@@ -1,3 +1,4 @@
+import { miniMaxEnvironmentBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
@@ -12,6 +13,7 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
 export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.endpoint.request_format === "minimax.speech" && grant && !miniMaxMediaProjection(grant)) return false;
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
   if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
   if (requirement.endpoint.request_format === "openai.standalone_search" && grant && grant.kind !== "api_key") return false;
@@ -40,6 +42,8 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
       assertOperationConfiguration({ provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === id)!, mode: "http" }, grant, env);
     }
   }
+  if (endpoint.request_format === "minimax.speech" && !grant && !miniMaxEnvironmentBinding(provider, env))
+    throw new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires explicit original credential authorization");
   assertProviderCredential(provider, grant, env);
   const transport = transportForGrant(provider, grant);
   try {

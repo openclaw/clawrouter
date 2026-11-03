@@ -202,6 +202,7 @@ export interface GrantRefreshDiagnosis {
 }
 
 export interface UpstreamGrant {
+  nativeMediaBinding?: import("./native-media-binding").NativeMediaBinding | null;
   key: string;
   scope: "policies" | "tenants";
   scopeId: string;

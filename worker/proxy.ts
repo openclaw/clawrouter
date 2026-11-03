@@ -1,3 +1,4 @@
+import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
@@ -131,7 +132,7 @@ interface PreparedUpstream {
   failedGrantKey?: string;
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
-  revalidateAccount?: () => Promise<void>;
+  revalidateAccount?: (signal: AbortSignal) => Promise<void>;
 }
 
 interface ReservedProxyBudget {
@@ -550,7 +551,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
   if (prepared.revalidateAccount) {
-    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateAccount()); }
+    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateAccount(signal)); }
     catch (error) {
       const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
       const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
@@ -759,7 +760,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || isStandaloneSearch(selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -823,6 +824,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
+    const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
+      ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
@@ -839,7 +842,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
