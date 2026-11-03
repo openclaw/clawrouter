@@ -26,3 +26,42 @@ test("demo exposes modern unified routes and endpoint-specific model options", (
   assert.ok(speech.models.some(model => model.id === speech.sampleModel));
   assert.ok(!speech.models.some(model => model.capabilities.includes("llm.embeddings")));
 });
+
+function decisionProvider(format) {
+  return { id: "decision-fixture", class: "openai_compatible", routing: {},
+    capabilities: [{ id: "llm.chat", endpoint: "chat" }, { id: "llm.decisions", endpoint: "decisions" }],
+    models: [{ id: "chat", capabilities: ["llm.chat"] }, { id: "decision", capabilities: ["llm.decisions"] },
+      { id: "mixed", capabilities: ["llm.chat", "llm.decisions"] }],
+    endpoints: [{ id: "chat", methods: ["POST"], path_params: [], request_format: "openai.chat_completions", response_format: "openai.chat_completions" },
+      { id: "decisions", methods: ["POST"], path_params: [], request_format: format, response_format: format }] };
+}
+
+test("native decision cards remain in their manifest route without false OpenAI decision offers", () => {
+  const routes = createRouteCatalog([decisionProvider("baseten.systemone")]);
+  assert.deepEqual(routes.openaiCompatible[0].endpoints, ["/v1/chat/completions"]);
+  assert.deepEqual(routes.openaiCompatible[0].models.map(model => [model.id, model.capabilities, model.endpoints]),
+    [["chat", ["llm.chat"], ["/v1/chat/completions"]], ["mixed", ["llm.chat"], ["/v1/chat/completions"]]]);
+  const native = routes.manifestProxy.find(route => route.endpoint === "decisions");
+  assert.equal(native.requestFormat, "baseten.systemone"); assert.equal(native.responseFormat, "baseten.systemone");
+  assert.deepEqual(native.models.map(model => model.id), ["decision", "mixed"]);
+});
+
+test("actual OpenAI decision formats preserve legacy decision discovery", () => {
+  const routes = createRouteCatalog([decisionProvider("openai.decisions")]);
+  assert.ok(routes.openaiCompatible[0].endpoints.includes("/v1/decisions"));
+  assert.deepEqual(routes.openaiCompatible[0].models.find(model => model.id === "decision").endpoints, ["/v1/decisions"]);
+});
+
+for (const mismatch of ["request", "response", "method", "binding"]) test(`legacy decision discovery rejects mismatched ${mismatch} qualification`, () => {
+  const provider = decisionProvider("openai.decisions"), endpoint = provider.endpoints[1];
+  if (mismatch === "request") endpoint.request_format = "baseten.systemone";
+  if (mismatch === "response") endpoint.response_format = "baseten.systemone";
+  if (mismatch === "method") endpoint.methods = ["GET"];
+  if (mismatch === "binding") {
+    provider.endpoints.push({ ...endpoint, id: "native", request_format: "baseten.systemone", response_format: "baseten.systemone" });
+    provider.capabilities.unshift({ id: "llm.decisions", endpoint: "native" });
+  }
+  const routes = createRouteCatalog([provider]);
+  assert.ok(!routes.openaiCompatible[0].endpoints.includes("/v1/decisions"));
+  assert.ok(!routes.openaiCompatible[0].models.some(model => model.id === "decision"));
+});

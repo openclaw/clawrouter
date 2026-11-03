@@ -27,14 +27,19 @@ export function modelSupportsEndpoint(provider: Pick<CatalogProvider, "capabilit
 export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
   const openaiCompatible = providers.filter((provider) => provider.class === "openai_compatible").map((provider) => ({
     provider: provider.id,
-    models: provider.models.filter(model => modelExecutable(provider, model)).map((model) => ({
-      id: model.id,
-      ...(model.availability ? { availability: model.availability } : {}),
-      capabilities: model.capabilities,
-      endpoints: model.capabilities.map(unifiedPathForCapability).filter(Boolean),
-    })),
+    models: provider.models.filter(model => modelExecutable(provider, model)).flatMap((model) => {
+      const capabilities = model.capabilities.filter(capability => legacyUnifiedCapability(provider, capability));
+      if (model.capabilities.includes("llm.decisions") && !capabilities.length) return [];
+      return [{
+        id: model.id,
+        ...(model.availability ? { availability: model.availability } : {}),
+        capabilities,
+        endpoints: capabilities.map(unifiedPathForCapability).filter(Boolean),
+      }];
+    }),
     modelPrefixes: provider.routing.modelPrefixes,
-    endpoints: provider.capabilities.map((capability) => unifiedPathForCapability(capability.id)).filter(Boolean),
+    endpoints: provider.capabilities.filter(capability => legacyUnifiedCapability(provider, capability.id))
+      .map((capability) => unifiedPathForCapability(capability.id)).filter(Boolean),
   }));
   const manifestProxy = providers.flatMap((provider) => provider.endpoints.map((endpoint) => ({
     provider: provider.id,
@@ -49,6 +54,16 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     streaming: endpoint.streaming != null,
   })));
   return { openaiCompatible, manifestProxy };
+}
+
+// Decision capability alone does not establish an OpenAI wire contract. Match
+// the same first capability binding used by unified request selection.
+function legacyUnifiedCapability(provider: CatalogProvider, capability: string): boolean {
+  if (capability !== "llm.decisions") return true;
+  const id = provider.capabilities.find(value => value.id === capability)?.endpoint;
+  const endpoint = provider.endpoints.find(value => value.id === id);
+  return endpoint?.request_format === "openai.decisions" && endpoint.response_format === "openai.decisions"
+    && endpoint.methods.includes("POST");
 }
 
 const unifiedProtocols = [
