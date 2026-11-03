@@ -161,7 +161,7 @@ export function createSseUsageInspector(revokeRejection?: () => void) {
     try { return { kind: "data", value: JSON.parse(data) }; }
     catch { return { kind: "invalid" }; }
   }
-  const frames = sseFrames(frame => { const next = evidence(frame); if (next) accumulator.accept(next); });
+  const frames = createSseFrames(frame => { const next = evidence(frame); if (next) accumulator.accept(next); });
   return {
     push: frames.push,
     result(ended = true): UsageInspection {
@@ -270,9 +270,10 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   };
 }
 
-function sseFrames(consume: (frame: string | null) => void) {
+export function createSseFrames(consume: (frame: string | null) => void, fatalUtf8 = false) {
   let buffer = new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: fatalUtf8 });
+  const decode = () => { try { return decoder.decode(buffer.subarray(0, length)); } catch { return null; } };
   function append(bytes: Uint8Array) {
     if (overflow) return;
     if (length + bytes.length > usageInspectionLimit) { overflow = true; length = 0; return; }
@@ -284,7 +285,7 @@ function sseFrames(consume: (frame: string | null) => void) {
   }
   return {
     overflowed: () => overflow,
-    pending: () => overflow ? null : decoder.decode(buffer.subarray(0, length)),
+    pending: () => overflow ? null : decode(),
     push(bytes: Uint8Array) {
       let start = 0;
       for (let index = 0; index < bytes.length; index++) {
@@ -292,7 +293,7 @@ function sseFrames(consume: (frame: string | null) => void) {
         if (skipLf) { skipLf = false; if (byte === 10) { start = index + 1; continue; } }
         if (byte !== 10 && byte !== 13) continue;
         append(bytes.subarray(start, index)); lineLength += index - start;
-        if (lineLength === 0) { consume(overflow ? null : decoder.decode(buffer.subarray(0, length))); length = 0; overflow = false; }
+        if (lineLength === 0) { consume(overflow ? null : decode()); length = 0; overflow = false; }
         else append(new Uint8Array([10]));
         lineLength = 0; skipLf = byte === 13; start = index + 1;
       }

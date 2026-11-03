@@ -1,3 +1,4 @@
+import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
 import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
 import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
@@ -20,6 +21,12 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.endpoint.request_format === "radius.messages") {
+    const body = requestObject(selection.body);
+    try { selection.body = { ...prepareRadiusRequest(body, typeof body.model === "string" ? body.model : "") }; }
+    catch { throw new HttpError(400, "invalid_radius_request", "native messages require a selected model, Pi context and valid options"); }
+    return;
+  }
   if (selection.endpoint.request_format === "ollama.chat") {
     const body = requestObject(selection.body);
     try { prepareOllamaChatRequest(body, typeof body.model === "string" ? body.model : ""); }
