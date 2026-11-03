@@ -30,6 +30,12 @@ capabilities:
   - id: llm.stream
     endpoint: stream_generate_content
     methods: [POST]
+  - id: llm.embeddings
+    endpoint: embed_content
+    methods: [POST]
+  - id: llm.embeddings
+    endpoint: batch_embed_contents
+    methods: [POST]
 endpoints:
   generate_content:
     modelPassthrough: {}
@@ -47,6 +53,18 @@ endpoints:
     responseFormat: google.stream_generate_content
     streaming: sse
     timeoutMs: 600000
+  embed_content:
+    path: /v1beta/models/${model}:embedContent
+    pathParams: [model]
+    requestFormat: google.embed_content
+    responseFormat: google.embed_content
+    timeoutMs: 60000
+  batch_embed_contents:
+    path: /v1beta/models/${model}:batchEmbedContents
+    pathParams: [model]
+    requestFormat: google.batch_embed_contents
+    responseFormat: google.batch_embed_contents
+    timeoutMs: 60000
 models:
   entries:
     - id: google/gemini-3.5-flash
@@ -75,6 +93,33 @@ models:
             inputMicrosPerMillion: 2700000
             cachedInputMicrosPerMillion: 270000
             outputMicrosPerMillion: 16200000
+    - id: google/gemini-embedding-001
+      upstream: gemini-embedding-001
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_content: &embedding001Facts
+            checkedAt: "2026-11-03"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/embeddings
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            contextWindow: 2048
+            input: [text]
+          batch_embed_contents: *embedding001Facts
+    - id: google/gemini-embedding-2
+      upstream: gemini-embedding-2
+      capabilities: [llm.embeddings]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          embed_content: &embedding2Facts
+            checkedAt: "2026-11-03"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/embeddings
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            contextWindow: 8192
+          batch_embed_contents: *embedding2Facts
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
