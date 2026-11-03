@@ -1,0 +1,23 @@
+{
+  "synthetic": true,
+  "request": {
+    "headers": {
+      "model": "s2.1-pro"
+    },
+    "body": {
+      "text": "Synthetic caf\u00e9 fixture",
+      "reference_id": "synthetic-voice",
+      "format": "wav",
+      "sample_rate": 8000
+    }
+  },
+  "response": {
+    "contentType": "audio/wav",
+    "base64": "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "billing": {
+    "unit": "utf8_input_byte",
+    "actualProviderCostMicrousd": null,
+    "hardBudgetRequires": "explicit fixed policy price until native byte tariff admission is implemented"
+  }
+}
