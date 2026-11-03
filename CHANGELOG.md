@@ -6,6 +6,7 @@
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
+- Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
 - Refresh Workers types to 5.20261101.1 and Lucide icons to 1.66.0 under the two-day dependency cooldown. Worker runtime pins and security overrides are unchanged.
