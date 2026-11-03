@@ -33,6 +33,12 @@ endpoints:
     requestFormat: deepgram.prerecorded
     responseFormat: deepgram.prerecorded
     timeoutMs: 120000
+models:
+  entries:
+    # Native query/default identity only. No qualified upstream-dollar price card.
+    - id: deepgram/nova-3
+      upstream: nova-3
+      capabilities: [audio.transcription]
 billing:
   meter: clawrouter.requests
   dimensions: [provider, endpoint, key, service, subject]

@@ -7,7 +7,7 @@
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
 
 - Add bounded Kie Market job helpers and executable wire/result fixtures that reject HTTP-200 API errors, preserve partial-job state and keep credit usage distinct from dollar settlement. Runtime activation remains separately qualified.
-- Add Deepgram prerecorded binary protocol and result adapters with ordered multichannel transcripts, bounded native options and conservative duration accounting.
+- Add Deepgram prerecorded binary protocol and result adapters with ordered multichannel transcripts, bounded native options, explicitly unpriced Nova-3 model identity and conservative duration accounting.
 - Add concrete managed lifecycle adapters for Replicate, fal, Kie and Vydra, with bounded native reads, scoped control-path construction and explicit result/cancel support for the shared durable controller.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.

@@ -26,6 +26,16 @@ The 25 MB cap is a router memory envelope, not a vendor maximum or monetary boun
 The synthetic request bytes and response durations are independent wire examples.
 Neither fixture represents paid inference.
 
+The manifest declares `deepgram/nova-3` with upstream `nova-3` and
+`audio.transcription` eligibility so native query/default selection resolves
+under model policy. Its price card and pricing reference are deliberately absent;
+model identity does not qualify upstream-dollar admission.
+
+The activation work is explicitly stacked: source
+[PR462](https://github.com/openclaw/clawrouter/pull/462) owns this adapter/YAML;
+[PR482](https://github.com/openclaw/clawrouter/pull/482) owns shared runtime/tests
+on that source branch. Snapshot integration remains serialized with its owner.
+
 11.1 must add this binary format to the existing authenticated upload controller:
 authenticate before reading, bound raw bytes/deadline, resolve the native query
 model under policy, re-admit after upload, select the provider credential, reserve,
