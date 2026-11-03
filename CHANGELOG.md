@@ -123,6 +123,8 @@
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
 
+- Add frozen Google unary speech codecs for generateContent and stateless Interactions, with speaker binding, complete PCM/WAV validation and an explicit preview-model qualification cutoff.
+
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
 ## 0.5.0 - 2026-10-22
