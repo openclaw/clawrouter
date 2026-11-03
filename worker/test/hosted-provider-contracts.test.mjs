@@ -32,6 +32,11 @@ const contracts = [
   ["meta", "MODEL_API_KEY", "https://api.meta.ai/v1/chat/completions", "muse-spark-1.3", "muse-spark-1.3"],
   ["synthetic", "SYNTHETIC_API_KEY", "https://api.synthetic.new/openai/v1/chat/completions", "syn:large:text", "syn:large:text"],
   ["particle", "PARTICLE_API_KEY", "https://api.particle.ai/v1/chat/completions", "particle-1", "particle-ai/particle-1"],
+  ["kilocode", "KILOCODE_API_KEY", "https://ai-gateway.kilo.ai/api/v1/chat/completions", "anthropic/claude-sonnet-4.6"],
+  ["requesty", "REQUESTY_API_KEY", "https://router.requesty.ai/v1/chat/completions", "openai/gpt-6-luna"],
+  ["vercel-ai-gateway", "AI_GATEWAY_API_KEY", "https://ai-gateway.vercel.sh/v1/chat/completions", "anthropic/claude-sonnet-4.6"],
+  ["opencode", "OPENCODE_API_KEY", "https://opencode.ai/inference/openai/v1/chat/completions", "glm-5.3"],
+  ["opencode-go", "OPENCODE_GO_API_KEY", "https://opencode.ai/inference/go/openai/v1/chat/completions", "glm-5.3"],
 ];
 const aliases = { gmi: ["gmi-cloud", "gmicloud"], novita: ["novita-ai", "novitaai"] };
 const { providers } = compileProviderSnapshot(contracts.map(([id]) =>
@@ -49,6 +54,8 @@ for (const [id, binding, url, upstream, catalogId = upstream] of contracts) {
       XIAOMI_TOKEN_PLAN_API_KEY: "fixture-plan", OPENAI_API_KEY: "fixture-other",
       ARK_API_KEY: "fixture-unknown-region", TOKENPLAN_API_KEY: "fixture-token-plan",
       STEPFUN_PLAN_API_KEY: "fixture-step-plan", ABLIT_KEY: "fixture-unbound-name",
+      ANTHROPIC_API_KEY: "fixture-lab-key", VERCEL_OIDC_TOKEN: "fixture-oidc",
+      OPENCODE_ZEN_API_KEY: "fixture-unbound-alias",
     });
     assert.throws(() => configuredUpstream(provider, null, foreign), error => error.code === "provider_not_configured");
     const auth = configuredUpstream(provider, null, { ...foreign, [binding]: "fixture-standard" });

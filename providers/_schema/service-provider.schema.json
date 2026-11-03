@@ -684,6 +684,24 @@
           "oneOf": [
             {
               "type": "object",
+              "required": ["protocol", "retrieve", "files"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "openrouter.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "files": {
+                  "type": "object",
+                  "required": ["mode", "download"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "download_only" },
+                    "download": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
               "required": ["protocol", "retrieve"],
               "additionalProperties": false,
               "properties": {
@@ -732,6 +750,7 @@
                   "required": ["metadata", "download"],
                   "additionalProperties": false,
                   "properties": {
+                    "mode": { "const": "metadata" },
                     "metadata": { "type": "string", "minLength": 1, "maxLength": 64 },
                     "download": { "type": "string", "minLength": 1, "maxLength": 64 }
                   }
