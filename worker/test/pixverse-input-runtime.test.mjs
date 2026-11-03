@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test as nodeTest } from "node:test";
+const test = (name, run) => nodeTest(name, { timeout: 10_000 }, run);
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-import { snapshot, upstreamAuth } from "../providers.ts";
-import { authenticateProxyKey } from "../proxy-auth.ts";
-import { allocatePixVerseInput, dispatchPixVerseInput, getPixVerseInput } from "../pixverse-inputs.ts";
-import { inputRouteDigest, encodeInputDispatch } from "../pixverse-input-dispatch.ts";
-import { publicControlAuthorization } from "../response-control-authorization.ts";
-import { backgroundCall } from "../http-background.ts";
-import { GrantCredentialObject, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
-import { bodyBudgetCharged } from "../body-budget.ts";
+const { snapshot, upstreamAuth } = await import("../providers.ts");
+const { authenticateProxyKey } = await import("../proxy-auth.ts");
+const { allocatePixVerseInput, dispatchPixVerseInput, getPixVerseInput } = await import("../pixverse-inputs.ts");
+const { inputRouteDigest, encodeInputDispatch } = await import("../pixverse-input-dispatch.ts");
+const { publicControlAuthorization } = await import("../response-control-authorization.ts");
+const { backgroundCall } = await import("../http-background.ts");
+const { GrantCredentialObject, putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
+const { bodyBudgetCharged } = await import("../body-budget.ts");
 const plan = { model: "v6", prompt: "A lighthouse", duration: 5, quality: "720p" };
 // Decoder-valid 1x1 PNG, used unchanged; no remote input reference.
 const bytes = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1cAAAAASUVORK5CYII=", "base64"));
@@ -225,4 +226,15 @@ for (const change of ["header", "query", "path", "oversize"]) test(`${change} ca
   if (change === "path") f.selection.endpoint.path = "/openapi/v2/elsewhere";
   if (change === "oversize") f.file.bytes = new Uint8Array(8 * 1024 * 1024 + 1);
   await rejects(f.allocate()); assert.equal(f.sent.length, 0);
+});
+
+test("another verified caller on the same policy cannot use the original job handle", async t => {
+  const f = await setup(t), binding = await f.allocate();
+  await f.authority("/credentials/mutate", { scope: "admin", actor: { auth: "admin_token", email: "fixture@example.com", role: "admin" }, operation: "create", credentialId: "other", credential: { ...f.credential } });
+  const headers = new Headers({ authorization: "Bearer clawrouter-live-other-fixture-secret" });
+  const other = await authenticateProxyKey(headers, f.env, [{ id: "pixverse", tokenRef: "pixverse" }]);
+  assert.ok(!(other instanceof Response));
+  await rejects(getPixVerseInput(f.env, other, binding));
+  await rejects(dispatchPixVerseInput(f.request, f.env, other, binding, plan, "upload", bytes));
+  assert.equal(f.sent.length, 0);
 });
