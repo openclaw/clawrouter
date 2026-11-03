@@ -83,6 +83,8 @@
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
 
+- Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price.
+
 ## 0.5.0 - 2026-10-22
 
 - Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.

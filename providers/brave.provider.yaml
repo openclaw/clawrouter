@@ -1,0 +1,42 @@
+# Native contract checked 2026-11-03: https://api-dashboard.search.brave.com/api-reference/web/search/get
+# Request telemetry only; upstream search/contents fees are not qualified prices.
+schema: clawrouter.service-provider.v1
+id: brave
+displayName: Brave Search
+status: experimental
+class: rest_json
+service:
+  platform: brave
+  kind: tool_provider
+  upstreamService: brave
+  configKeys: [BRAVE_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: X-Subscription-Token
+      secretKind: api_key
+baseUrls:
+  default: https://api.search.brave.com
+routing:
+  nativePrefixes: [clawrouter-brave, brave]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: web.search
+    endpoint: search
+    methods: [GET]
+endpoints:
+  search:
+    path: /res/v1/web/search
+    method: GET
+    requestFormat: brave.search
+    responseFormat: brave.search
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
