@@ -7,13 +7,13 @@ import { identityKey } from "./http-continuation.ts";
 import { managedJobKey } from "./managed-prediction-identity.ts";
 import { responseIdentity } from "./response-identities.ts";
 import { BudgetSettlementError, ingestUsage, settleLedger } from "./ledgers.ts";
-import type { ManagedObservationLoss } from "./managed-lifecycle-types.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
 import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
 import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
 
-type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup"; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
+type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
 
 // Continuation cleanup, collection and financial recovery share the object's
 // only alarm and serialized mutation tail. Network waits never hold that tail.
@@ -61,9 +61,13 @@ export class ResponsesScopeStore {
       return json({ admitted: true, created: result.created, job: await this.serial(() => this.jobs.get(result.job.id), false) });
     }
     if (input.action === "managed_bind" && typeof input.responseId === "string") return this.bindManaged(input.id, input.responseId);
+    if (input.action === "managed_files" && typeof input.responseId === "string" && input.files !== undefined) {
+      return this.mutate(() => json({ files: this.jobs.bindManagedFiles(input.id, input.responseId!, input.files!) }));
+    }
     if (input.action === "managed_observe" && typeof input.responseId === "string" && typeof input.predictionStatus === "string") {
       return this.mutate(() => {
         this.jobs.observeManaged(input.id, input.responseId!, input.predictionStatus!, input.statusCode!, undefined, input.observationUnavailable);
+        if (input.files !== undefined) this.jobs.bindManagedFiles(input.id, input.responseId!, input.files);
         return json({ observed: true });
       });
     }
@@ -174,7 +178,10 @@ export class ResponsesScopeStore {
       if (!claimed.event) {
         if (claimed.managed) {
           const { collectManagedPrediction } = await import("./managed-predictions.ts");
-          await collectManagedPrediction(this.env, claimed, (id, status, statusCode, loss) => this.mutate(() => this.jobs.observeManaged(claimed.id, id, status, statusCode, claimed.attempts, loss)));
+          await collectManagedPrediction(this.env, claimed, (id, status, statusCode, loss, files) => this.mutate(() => {
+            this.jobs.observeManaged(claimed.id, id, status, statusCode, claimed.attempts, loss);
+            if (files !== undefined) this.jobs.bindManagedFiles(claimed.id, id, files);
+          }));
         } else await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
       }
       const current = await this.mutate(() => this.jobs.get(claimed.id));

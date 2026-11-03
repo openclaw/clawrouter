@@ -29,6 +29,8 @@ export interface ManagedObservation {
   terminal: ManagedTerminal | null;
   // Visibility ended without execution outcome or refund evidence.
   observationUnavailable?: ManagedObservationLoss;
+  // Runtime-qualified output descriptors only; never copy caller/native fields.
+  files?: readonly ManagedFileDescriptor[];
   // Native payload is transient; never put it in durable ownership or receipts.
   body: Record<string, unknown>;
   // Queue completion or cancellation ACK can need one more authenticated read.
@@ -81,4 +83,26 @@ export interface ManagedControl {
   headers?: Headers;
   // Fresh UUID diagnostics do not change the original route identity.
   transientHeaders?: readonly string[];
+}
+
+
+export interface ManagedFileDescriptor { id: string; mimeType: string }
+export type ManagedFileAction = "metadata" | "download";
+export interface ManagedFileState {
+  id: string;
+  status: "processing" | "active" | "failed";
+  body: Record<string, unknown>;
+}
+export interface ManagedFilePaths { id: string; metadata: string; download: string }
+// Source-owned wrappers expose this through managedFileAdapter(protocol).
+// These methods parse/prepare only; the scoped runtime owns all authority/I/O.
+export interface ManagedFileAdapter {
+  protocol: ManagedProtocol;
+  describe(observation: ManagedObservation, selectedBaseUrl: string): readonly ManagedFileDescriptor[];
+  identify(action: ManagedFileAction, pathParams: Record<string, string>, query: URLSearchParams): string;
+  control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
+    file: ManagedFileDescriptor, selectedBaseUrl: string, state?: ManagedFileState): ManagedControl;
+  readState(response: Response, file: ManagedFileDescriptor): Promise<ManagedFileState>;
+  readFile(response: Response, file: ManagedFileDescriptor, maxBytes: number): Promise<Uint8Array>;
+  rewrite(body: Record<string, unknown>, paths: readonly ManagedFilePaths[]): Record<string, unknown>;
 }

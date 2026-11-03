@@ -2,7 +2,7 @@ import type { BudgetReservationIntent, BudgetReservationPlan } from "./accountin
 import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { UsageIngestReceipt } from "./ledgers.ts";
-import type { ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
 import type { UsageEvent } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -40,6 +40,7 @@ export interface ManagedAdmission {
 }
 interface ManagedState extends ManagedAdmission {
   observationUnavailable?: ManagedObservationLoss;
+  files?: ManagedFileDescriptor[];
   route?: BackgroundAdmission["route"];
   policyGeneration: string;
   submission: "pending" | "submission_unknown" | "bound";
@@ -214,6 +215,33 @@ export class BackgroundStore {
     this.freeze(id, { occurredAtMs: Date.now(), statusCode, status: status === "succeeded" ? "success" : "provider_error", billable: true, tokens: null, contentRef: null });
   }
 
+  // Called only by the scoped owner after a qualified original-job observation.
+  // Inline observations do not erase an earlier URI. File processing never
+  // changes generation outcome, reservation, settlement or the frozen receipt.
+  bindManagedFiles(id: string, upstreamId: string, files: readonly ManagedFileDescriptor[]): ManagedFileDescriptor[] {
+    const job = this.get(id), managed = job?.managed;
+    if (!job || !managed || managed.submission !== "bound" || managed.upstreamId !== upstreamId
+      || managed.terminal !== "succeeded" || managed.observationUnavailable || Date.now() >= job.replayUntil) {
+      throw new HttpError(409, "managed_files_unavailable", "files require the original succeeded managed job before its retention deadline");
+    }
+    const merged = new Map<string, ManagedFileDescriptor>();
+    for (const entries of [managed.files ?? [], files]) {
+      if (!Array.isArray(entries) || entries.length > 64) invalidFiles();
+      for (const file of entries) {
+        if (!file || typeof file !== "object" || Array.isArray(file) || Object.keys(file).some(key => key !== "id" && key !== "mimeType")
+          || typeof file.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(file.id)
+          || typeof file.mimeType !== "string" || !/^(?:video|audio|image)\/[a-z0-9.+-]{1,64}$/.test(file.mimeType)) invalidFiles();
+        const previous = merged.get(file.id);
+        if (previous && previous.mimeType !== file.mimeType) throw new HttpError(409, "managed_file_conflict", "a bound output file cannot change its media type");
+        merged.set(file.id, { id: file.id, mimeType: file.mimeType });
+        if (merged.size > 64) invalidFiles();
+      }
+    }
+    const result = [...merged.values()];
+    if (JSON.stringify(managed.files ?? []) !== JSON.stringify(result)) { managed.files = result; this.save(job); }
+    return result;
+  }
+
   beginDispatch(id: string, contentRef: string | null): BackgroundJob {
     const job = this.admitting(id);
     if (job.dispatchClaimed) throw new HttpError(409, "background_dispatch_claimed", "background dispatch was already claimed; never repeat generation");
@@ -342,3 +370,5 @@ function encode(record: BackgroundRecord): string {
 function capacity(): never { throw new HttpError(503, "background_capacity", "background recovery scope has no admission capacity"); }
 function invalid(): never { throw new HttpError(400, "background_request_invalid", "invalid background recovery transition"); }
 function missing(): never { throw new HttpError(404, "background_unavailable", "background recovery record is unavailable; this does not confirm settlement"); }
+
+function invalidFiles(): never { throw new HttpError(400, "managed_files_invalid", "managed files require at most 64 bounded native identifiers and media types"); }
