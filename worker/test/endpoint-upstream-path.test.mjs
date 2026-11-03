@@ -33,7 +33,7 @@ async function fixture(t, { pooled = true, models = ["mapped/allowed"] } = {}) {
   });
   provider.adapter.injectHeaders = {}; provider.adapter.injectQuery = {}; provider.adapter.passthroughHeaders = [];
   snapshot.providers.push(provider); t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(provider), 1));
-  const values = new Map(), pending = [], sent = [], events = [];
+  const values = new Map(), pending = [], sent = [], events = [], responses = [];
   const env = { PATH_FIXTURE_API_KEY: "synthetic-environment-key", POLICY_KV: {
     async get(key) { return Array.isArray(key) ? new Map(key.map(k => [k, values.get(k) ?? null])) : values.get(key) ?? null; },
     async put(key, value) { values.set(key, JSON.parse(value)); },
@@ -41,7 +41,8 @@ async function fixture(t, { pooled = true, models = ["mapped/allowed"] } = {}) {
   env.ACCESS_CONTROL = continuationAuthority(t, env);
   attachGrantCredentialNamespace(env, { useExistingAuthority: true, kvValues: values });
   const policy = { enabled: true, generation: "fixture", providers: ["mapped"], models, tenantId: "fixture",
-    monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false };
+    monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false,
+    ...(pooled ? { grantRouting: { eligibleGrants: { mapped: ["mapped"] }, environmentFallback: false } } : {}) };
   await authorityCall(env, "/policies/initialize-all", [{ policyId: "fixture", policy }]);
   await authorityCall(env, "/credentials/initialize-all", [{ credentialId: "fixture", credential: {
     enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture", policyGeneration: "fixture" } }]);
@@ -59,15 +60,20 @@ async function fixture(t, { pooled = true, models = ["mapped/allowed"] } = {}) {
       : { choices: [{ message: { role: "assistant", content: "synthetic result" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   });
   const f = { provider, env, grantKey, sent, events,
-    call(id, { manifest = false, query = "", path, extra = {} } = {}) {
+    async call(id, { manifest = false, query = "", path, extra = {} } = {}) {
       const endpoint = provider.endpoints.find(e => e.id === id), body = { model: manifest ? "mapped/allowed" : "allowed", messages: [{ role: "user", content: "synthetic input" }], max_tokens: 16, ...extra };
       const route = path ?? (manifest ? `/v1/proxy/mapped/${id}` : `/v1/native/mapped${endpoint.path}`);
-      return worker.fetch(new Request(`https://router.example${route}${query}`, { method: endpoint.method,
+      const response = await worker.fetch(new Request(`https://router.example${route}${query}`, { method: endpoint.method,
         headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json" },
         ...(endpoint.method === "POST" ? { body: JSON.stringify(manifest ? { body } : body) } : {}) }), env, { waitUntil: p => pending.push(p) });
+      responses.push(response); return response;
     }, async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
   };
-  t.after(f.drain, { timeout: 10000 }); return f;
+  t.after(async () => {
+    // Failed assertions must not leave delivery-owned settlement waiting for EOF.
+    for (const response of responses) if (!response.bodyUsed) await response.body?.cancel();
+    await f.drain();
+  }, { timeout: 10000 }); return f;
 }
 
 for (const pooled of [false, true]) test(`mapped native and manifest routes keep their ${pooled ? "original grant" : "environment credential"}, wire and policy accounting`, { timeout: 10000 }, async t => {
@@ -108,8 +114,12 @@ test("mapped inference retains caller model denial", { timeout: 10000 }, async t
 });
 
 test("mapped dispatch cannot revive a revoked original grant with the environment key", { timeout: 10000 }, async t => {
-  const f = await fixture(t); await revokeGrantCredentials(f.env, f.grantKey);
-  const response = await f.call("messages"); assert.ok(response.status >= 400); await response.text(); assert.equal(f.sent.length, 0);
+  const f = await fixture(t), before = await f.call("messages"), initial = await before.text();
+  assert.equal(before.status, 200, initial); await f.drain();
+  assert.equal(f.sent[0].request.headers.get("authorization"), "Bearer synthetic-original-key");
+  await revokeGrantCredentials(f.env, f.grantKey);
+  const response = await f.call("messages"), body = await response.text();
+  assert.equal(response.status, 503, body); assert.equal(f.sent.length, 1);
 });
 
 test("invalid configured mappings fail before egress without echoing their value", { timeout: 10000 }, async t => {
