@@ -34,11 +34,18 @@ for (const transport of ["native", "manifest"]) {
       }
       await kv.put("connections/elevenlabs", JSON.stringify({ providerId: "elevenlabs", enabled: true }));
       const origin = String(await mf.ready);
-      await runOpenClawConsumer(t, {
-        source, sourceHead, fixture: new URL("./fixtures/openclaw-elevenlabs-contract.test.ts", import.meta.url),
-        testPath: "src/gateway/talk/worker-contract.test.ts",
-        env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_AUDIO_BASE64: wire.response.base64 },
-      });
+      try {
+        await runOpenClawConsumer(t, {
+          source, sourceHead, fixture: new URL("./fixtures/openclaw-elevenlabs-contract.test.ts", import.meta.url),
+          testPath: "src/gateway/talk/worker-contract.test.ts",
+          env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_AUDIO_BASE64: wire.response.base64 },
+        });
+      } catch (error) {
+        const upstream = await mf.getWorker("upstream");
+        const calls = await (await upstream.fetch("https://fixture.example/state")).json();
+        t.diagnostic(JSON.stringify({ transport, upstreamCalls: calls.length, cancellationCalls: calls.filter(call => call.body.text === "Synthetic cancel").length }));
+        throw error;
+      }
       // The actual client has hit its deadline without receiving partial audio.
       // Local workerd does not reliably surface a pre-header TCP disconnect.
       // Exercise the real controller's observed cancellation separately, as in

@@ -104,10 +104,11 @@ describe("actual model-less ElevenLabs TTS and Talk through workerd", () => {
 
   it("cancels an incomplete synthesis at the actual caller deadline without replay", async () => {
     await withTempHome(async home => {
+      const started = performance.now();
       const result = await synthesizeSpeech({ text: "Synthetic cancel", cfg: config("elevenlabs_cancel"), prefsPath: home + "/tts-prefs.json", disableFallback: true, timeoutMs: 2000 });
       expect(result.success).toBe(false);
       expect(result.audioBuffer).toBeUndefined();
-      expect(result.error).toMatch(/timed out|abort/i);
+      expect(result.error, JSON.stringify({ elapsedMs: Math.round(performance.now() - started), error: result.error })).toMatch(/timed out|abort/i);
     }, environment);
   });
 });
