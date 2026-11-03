@@ -268,8 +268,9 @@ function validateManifest(manifest) {
   validateDeepgramPrerecorded(manifest);
   validateGoogleEmbeddings(manifest);
   validateXaiImages(manifest);
-  validateNativeKeyedModels(manifest, "baseten", "https://inference.baseten.co/v1");
-  validateNativeKeyedModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
+  validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
+  validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
+  validateNativeModels(manifest, "chutes", "https://llm.chutes.ai/v1");
   validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
@@ -478,7 +479,7 @@ function validateUpstreamPath(manifest, id, endpoint) {
   }
 }
 
-function validateNativeKeyedModels(manifest, providerId, baseUrl) {
+function validateNativeModels(manifest, providerId, baseUrl) {
   const format = `${providerId}.models`;
   const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
     [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
