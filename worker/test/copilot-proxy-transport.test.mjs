@@ -5,10 +5,10 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
-import { snapshot, configuredUpstream } from "../providers.ts";
-import { authorityCall } from "../authority.ts";
-import { sha256Hex } from "../utils.ts";
-import worker from "../index.ts";
+const { snapshot, configuredUpstream } = await import("../providers.ts");
+const { authorityCall } = await import("../authority.ts");
+const { sha256Hex } = await import("../utils.ts");
+const { default: worker } = await import("../index.ts");
 
 const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", "providers/copilot-proxy.provider.yaml"], { encoding: "utf8" }));
 const provider = compiled.providers[0];
