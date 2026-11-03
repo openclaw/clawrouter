@@ -1757,6 +1757,26 @@
       }
     },
     "requestPricing": {
+      "oneOf": [
+        { "$ref": "#/$defs/successfulRequestPricing" },
+        { "$ref": "#/$defs/outcomeRequestPricing" }
+      ]
+    },
+    "outcomeRequestPricing": {
+      "type": "object",
+      "required": ["unit", "version", "effectiveAt", "source", "outcome", "maximumAdditionalMicros", "receipt"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "request" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "effectiveAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "source": { "const": "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee" },
+        "outcome": { "const": "xai.responses_violation" },
+        "maximumAdditionalMicros": { "const": 50000 },
+        "receipt": { "const": "xai.usage.cost_in_usd_ticks" }
+      }
+    },
+    "successfulRequestPricing": {
       "type": "object",
       "required": [
         "unit",

@@ -49,6 +49,49 @@ export function hostedSearchCost(price: HostedSearchPrice | undefined, count: nu
   return price?.microsPerCall == null ? null : saturatingMultiply(price.microsPerCall, count);
 }
 
+// Source-qualified request component. Shared admission must freeze it alongside
+// the inference bound; declaring it alone does not clear requestPricingGap.
+export interface OutcomeRequestPricing {
+  unit: "request";
+  version: string;
+  effectiveAt: string;
+  source: "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee";
+  outcome: "xai.responses_violation";
+  maximumAdditionalMicros: 50000;
+  receipt: "xai.usage.cost_in_usd_ticks";
+}
+
+export interface RequestCostReceipt {
+  costMicros: number;
+  basis: "provider_reported";
+  pricingVersion: string;
+}
+
+export function requestOutcomeReserve(pricing: OutcomeRequestPricing, inferenceMicros: number | null): number | null {
+  if (!qualifiedOutcome(pricing) || inferenceMicros == null || !Number.isSafeInteger(inferenceMicros) || inferenceMicros < 0
+    || inferenceMicros > Number.MAX_SAFE_INTEGER - pricing.maximumAdditionalMicros) return null;
+  return inferenceMicros + pricing.maximumAdditionalMicros;
+}
+
+// Only a complete, original upstream Response can supply a total-charge receipt.
+// An HTTP error, refusal text or even an exact $0.05 receipt does not identify
+// a violation. Missing evidence remains unknown, never a zero-cost failure.
+export function requestOutcomeCost(pricing: OutcomeRequestPricing, response: unknown, complete: boolean): RequestCostReceipt | null {
+  if (!qualifiedOutcome(pricing) || !complete || !isObject(response) || response.object !== "response"
+    || typeof response.id !== "string" || !response.id.length || response.id.length > 256
+    || !["completed", "incomplete"].includes(response.status as string) || !isObject(response.usage)) return null;
+  const ticks = response.usage.cost_in_usd_ticks;
+  if (typeof ticks !== "number" || !Number.isSafeInteger(ticks) || ticks < 0) return null;
+  // 10^10 ticks/USD = 10^4 ticks/micro. Integer remainder avoids precision
+  // loss near MAX_SAFE_INTEGER; never add the fee again to this whole bill.
+  return { costMicros: Math.floor(ticks / 10000) + (ticks % 10000 === 0 ? 0 : 1), basis: "provider_reported", pricingVersion: pricing.version };
+}
+
+function qualifiedOutcome(pricing: OutcomeRequestPricing): boolean {
+  return pricing.unit === "request" && pricing.outcome === "xai.responses_violation"
+    && pricing.maximumAdditionalMicros === 50000 && pricing.receipt === "xai.usage.cost_in_usd_ticks";
+}
+
 export interface CostEstimate {
   reserveMicros: number;
   inputTokens: number | null;
