@@ -686,6 +686,12 @@
         ] },
         "then": { "$ref": "#/$defs/googleGroundedSearchEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^google\\.(audio|video)_understanding" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^google\\.(audio|video)_understanding" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/googleUnderstandingEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
@@ -2097,6 +2103,25 @@
         "path": { "const": "/v1beta/models/${model}:generateContent" },
         "pathParams": { "const": ["model"] },
         "requestFormat": { "const": "google.grounded_search" }, "responseFormat": { "const": "google.grounded_search" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleUnderstandingEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "nativeProxy"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": false },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "enum": ["google.audio_understanding", "google.video_understanding"] },
+        "responseFormat": { "const": "google.generate_content" },
         "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
       },
       "not": { "anyOf": [

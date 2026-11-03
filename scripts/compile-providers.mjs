@@ -273,6 +273,7 @@ function validateManifest(manifest) {
   validateGoogleUnaryMedia(manifest, "music", "audio.generate", ["lyria-3-clip-preview", "lyria-3-pro-preview"]);
   validateGoogleSpeech(manifest);
   validateGoogleGroundedSearch(manifest);
+  validateGoogleUnderstanding(manifest);
   validateXaiImages(manifest);
   validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
   validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
@@ -880,6 +881,38 @@ function validateGoogleGroundedSearch(manifest) {
   if (models.length !== 1 || models.some(model => model.upstream !== "gemini-3.6-flash" || model.id !== `google/${model.upstream}`
     || model.availability?.status === "upstream_alias" || model.endpointPricing?.[id]?.pricing !== null
     || model.requestParameters?.[id] !== undefined)) fail();
+}
+
+function validateGoogleUnderstanding(manifest) {
+  const formats = new Map([["google.audio_understanding", "audio.transcription"], ["google.video_understanding", "video.understanding"]]);
+  const reserved = value => [...formats.keys()].some(format => value.startsWith(format));
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(reserved)
+    || manifest.id === "google-gemini" && manifest.capabilities.some(capability => capability.endpoint === id && [...formats.values()].includes(capability.id)));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("Google inline understanding requires finite manifest-only formats, the frozen model, canonical API-key origin and unknown endpoint prices"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length > 2 || new Set(endpoints.map(([, endpoint]) => endpoint.requestFormat)).size !== endpoints.length
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  for (const [id, endpoint] of endpoints) {
+    if (!formats.has(endpoint.requestFormat) || endpoint.responseFormat !== "google.generate_content"
+      || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+      || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => name !== "model" || style !== "segment")) fail();
+    const capabilityId = formats.get(endpoint.requestFormat), capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+    if (capabilities.length !== 1 || capabilities[0].id !== capabilityId
+      || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
+    const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes(capabilityId));
+    // Input-media limits and native usage are not a whole-request price bound.
+    // Keep the shared model's ordinary text card separate from each native route.
+    if (models.length !== 1 || models.some(model => model.upstream !== "gemini-3-flash-preview" || model.id !== `google/${model.upstream}`
+      || model.availability?.status === "upstream_alias" || model.endpointPricing?.[id]?.pricing !== null
+      || model.requestParameters?.[id] !== undefined)) fail();
+  }
 }
 
 function validateGoogleEmbeddings(manifest) {
