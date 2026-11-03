@@ -27,11 +27,12 @@ export interface MicrosoftEdgeSpeechInput {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const limits = MICROSOFT_EDGE_SPEECH;
+const xmlEntities: Record<string, string> = { "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" };
 type State = "prepared" | "configured" | "awaiting" | "complete" | "failed" | "delivered";
 
 function invalid(code: string): never { throw new Error(code); }
 function xml(value: string): string {
-  return value.replace(/[<>&"']/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" })[c]!);
+  return value.replace(/[<>&"']/g, c => xmlEntities[c]);
 }
 function validXml(value: string): boolean {
   return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)
