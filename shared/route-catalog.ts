@@ -52,7 +52,7 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     provider: provider.id,
     models: provider.models.filter(model => modelExecutable(provider, model)).flatMap((model) => {
       const capabilities = model.capabilities.filter(capability => legacyUnifiedCapability(provider, capability));
-      if (!capabilities.length && model.capabilities.some(capability => capability === "llm.decisions" || capability === "audio.transcription")) return [];
+      if (!capabilities.length && model.capabilities.some(capability => capability === "llm.decisions" || capability === "audio.transcription" || capability === "audio.speech")) return [];
       return [{
         id: model.id,
         ...(model.availability ? { availability: model.availability } : {}),
@@ -79,15 +79,17 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
   return { openaiCompatible, manifestProxy };
 }
 
-// Decision and transcription capabilities alone do not establish an OpenAI wire contract. Match
+// Decision and audio capabilities alone do not establish an OpenAI wire contract. Match
 // the same first capability binding used by unified request selection.
 function legacyUnifiedCapability(provider: CatalogProvider, capability: string): boolean {
   const format = capability === "llm.decisions" ? "openai.decisions"
-    : capability === "audio.transcription" ? "openai.audio_transcriptions" : null;
+    : capability === "audio.transcription" ? "openai.audio_transcriptions"
+    : capability === "audio.speech" ? "openai.audio_speech" : null;
   if (!format) return true;
   const id = provider.capabilities.find(value => value.id === capability)?.endpoint;
   const endpoint = provider.endpoints.find(value => value.id === id);
-  return endpoint?.request_format === format && endpoint.response_format === format
+  const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
+  return endpoint?.request_format === format && endpoint.response_format === responseFormat
     && endpoint.methods.includes("POST");
 }
 
