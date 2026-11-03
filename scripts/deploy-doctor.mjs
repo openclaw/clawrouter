@@ -1,3 +1,4 @@
+import { cloudflareClient, cloudflareError } from "./cloudflare-diagnostics.mjs";
 import { spawnSync } from "node:child_process";
 
 import {
@@ -64,6 +65,7 @@ const repo = process.env.CLAWROUTER_GITHUB_REPO ?? "openclaw/clawrouter";
 const githubCli = selectGitHubCli();
 const errors = [];
 const warnings = [];
+const cloudflareRequest = cloudflareClient(warnings);
 
 const snapshot = compileProviderSnapshot();
 const plan = buildProviderSmokePlan(snapshot);
@@ -273,29 +275,6 @@ async function checkCloudflareKvIdentity(token, accountId, namespaceId) {
   }
   console.log(`cloudflare kv target: ${response.body.result.title}`);
   return true;
-}
-
-async function cloudflareRequest(token, path, init = {}) {
-  let response;
-  let body;
-  try {
-    response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    body = await response.json().catch(() => ({}));
-  } catch (error) {
-    warnings.push(`could not reach Cloudflare API: ${error.message}`);
-    return { ok: false, status: 0, body: {} };
-  }
-  return { ok: response.ok, status: response.status, body };
-}
-
-function cloudflareError(response) {
-  return response.body.errors?.[0]?.message ?? `HTTP ${response.status}`;
 }
 
 function checkGitHubRepository(repo) {
