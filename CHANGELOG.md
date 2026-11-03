@@ -320,6 +320,7 @@
 - Add bounded Arcee native catalog codecs with original direct-credential filtering, distinct OpenRouter identities and independent unknown pricing.
 - Qualify the finite Arcee native catalog declaration with canonical original-key GET validation, exact policy identities and independent unknown price observations.
 - Qualify the three frozen direct Arcee Trinity Chat cards with native tool/reasoning replay, original-grant transport tests and unknown pricing.
+- Include the three direct Arcee Chat cards in the generated catalog and verify catalog-selected native/manifest transport, fragmented streams and conservative accounting across the bundled Chat matrix.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Retain conservative generation charges for qualified Novita upstream HTTP 499 responses without treating local aborts, unsent requests, catalog reads or unrelated HTTP errors as that billing outcome.
 - Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
