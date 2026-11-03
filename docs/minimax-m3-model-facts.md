@@ -15,8 +15,10 @@ Primary evidence checked 2026-11-04:
   distinct M3 standard/priority and long-input rates. `priority` is a supported
   service tier, with separate charges; it is not a free performance flag.
 
-The native facts preserve context, input modalities and supported tiers with
-their provenance. Missing output limits and whole-request reservation bounds
+The native facts preserve context and input modalities with their provenance.
+The compiler requires qualified price cards before advertising supported tiers,
+so the vendor tier evidence above is documentation only; explicit request values
+remain unchanged. Missing output limits and whole-request reservation bounds
 stay unknown. No published unit rate is converted into a usable price card
 without those bounds. Both caller and provider upstream-dollar hard budgets
 remain denied; explicit `policy_fixed` accounting stays separately labeled.

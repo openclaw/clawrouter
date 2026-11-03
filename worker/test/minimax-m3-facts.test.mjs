@@ -20,7 +20,7 @@ test("MiniMax M3 preserves exact identity and decimal context facts without manu
   const facts = model.nativeCapabilities.endpoints.chat_completions;
   assert.equal(facts.contextWindow, 1_000_000); assert.equal(facts.maxOutputTokens, undefined);
   assert.equal(facts.contextTokens, undefined); assert.deepEqual(facts.input, ["text", "image", "video"]);
-  assert.deepEqual(facts.supportedServiceTiers, ["standard", "priority"]); assert.deepEqual(facts.inference, { chat: true });
+  assert.equal(facts.supportedServiceTiers, undefined); assert.deepEqual(facts.inference, { chat: true });
   assert.deepEqual(compiled.model_index[model.id].nativeCapabilities, model.nativeCapabilities);
   assert.equal(model.availability, undefined); assert.equal(model.endpointPricing, undefined);
 });
