@@ -51,7 +51,8 @@ Source3 owns mapping observed model facts and qualified tariffs into the common
 catalog; source2 owns native client consumption and source6 actual integration
 proof. No shared runtime, compiler/types, manifest or snapshot is changed here.
 
-Seventeen deterministic fixtures cover request isolation, projection, missing
-facts, row/envelope bounds, fragmented UTF-8, HTTP/JSON/size failures and abort.
+Eighteen deterministic fixtures cover request isolation, projection, missing
+facts, row/envelope bounds, fragmented UTF-8, HTTP/JSON/size failures, abort and
+native Node module loading without the test resolver.
 They prove the codec and reader contract. They do not claim active Worker
 refresh, live entitlement, deployment or whole-family parity.
