@@ -17,6 +17,9 @@
     "cancelSupported": false,
     "resultSupported": false,
     "credentialGuardBeforeEveryEgress": "assertWanStandardCredential",
+    "dispatchHook": "assertDispatch",
+    "dispatchHookSynchronousPure": true,
+    "selectedAuthScheme": "Bearer",
     "controlsUseOriginalRegionalGrant": true,
     "uncertainCreateReplay": false,
     "nativeFixtures": "../wan/lifecycle.json"

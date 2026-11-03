@@ -1,4 +1,4 @@
-import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
+import type { ManagedLifecycleAdapter, ManagedObservation } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
 
 export const wanModels = ["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v", "wan2.6-r2v-flash", "wan2.7-r2v"] as const;
@@ -12,15 +12,6 @@ export interface WanObservation extends ManagedObservation {
   // claiming upstream failure, success or refund. Never poll this state again.
   observationUnavailable?: "expired_or_unknown";
 }
-
-// The protocol discriminator and explicit observation-loss signal are pending
-// shared type/controller qualification. All methods use the existing contract.
-// Do not register this adapter until those two integration gates are implemented.
-type WanAdapter = Omit<ManagedLifecycleAdapter, "protocol" | "read"> & {
-  protocol: "dashscope.video";
-  assertDispatch(request: Request): void;
-  read(response: Response, context: ManagedReadContext): Promise<WanObservation>;
-};
 
 export function validateWanTaskId(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new Error("invalid_wan_task_id");
@@ -38,7 +29,7 @@ export function assertWanStandardCredential(secret: string, baseUrl: string): vo
   if (!secret.trim() || secret.trim().startsWith("sk-sp-") || !origin || url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash || !["", "/"].includes(url.pathname)) throw new Error("wan_requires_same_region_standard_api_credential");
 }
 
-export const wanManagedAdapter: WanAdapter = {
+export const wanManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "dashscope.video", requestFormats: ["dashscope.video_create"], supportsResult: false, supportsCancel: false,
   validateId: validateWanTaskId,
   assertDispatch(request) {

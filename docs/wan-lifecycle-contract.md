@@ -10,8 +10,8 @@ and `src/video-generation/dashscope-compatible.ts`. This slice covers only
 
 `worker/managed-wan.ts` exports `wanManagedAdapter`,
 `validateWanTaskId`, and `assertWanStandardCredential`.
-The adapter follows the existing managed lifecycle method contract; protocol
-`dashscope.video` and its observation-loss signal still need shared registration.
+The adapter implements `ManagedLifecycleAdapter`; the registry binds only
+`dashscope.video` with create format `dashscope.video_create`.
 
 - Submit: JSON POST `/api/v1/services/aigc/video-generation/video-synthesis`,
   `X-DashScope-Async: enable`, and the original provider Bearer credential.
@@ -38,9 +38,12 @@ qualified server configuration; they are not automatic fallbacks and must never
 be read from client upstream-secret headers.
 
 Standard regional API keys and model regions must match the configured origin.
-Coding/Token Plan credentials and origins are rejected. Runtime must invoke
-`assertWanStandardCredential(selectedSecret, selectedOrigin)` before **every**
-create/control egress, including retries of safe reads. Controls retain the
+Coding/Token Plan credentials and origins are rejected. The pure, synchronous
+`assertDispatch(request)` hook requires native Bearer authentication and invokes
+`assertWanStandardCredential(selectedSecret, selectedOrigin)`. The shared
+controller calls it before **every** create/control egress, including retries of
+safe reads. It neither reads the body nor mutates the request; failures produce
+sanitized errors without selecting another credential. Controls retain the
 original regional grant and credential lineage; they cannot select a new region
 or credential pool. Shape checks cannot prove region entitlement.
 
@@ -55,8 +58,8 @@ the consumer must separately reject a missing deliverable.
 `observationUnavailable: "expired_or_unknown"`, no follow-up, and no fabricated
 execution outcome. The shared controller must freeze observation loss once,
 stop polling, retain conservative policy-fixed settlement, and return an
-actionable unavailable result. Its present contract does not consume that flag:
-do not register this adapter until that transition is implemented and tested.
+actionable unavailable result. This uses the existing shared observation-loss
+transition, independently from native terminal execution.
 Task IDs and output URLs have a documented 24-hour lifetime.
 
 Use the existing caller/policy/provider/credential job binding, reservation,
@@ -76,18 +79,17 @@ closed without qualified pricing and admission bounds.
 
 ## Integration and verification
 
-- Runtime owner: add the protocol discriminator and one durable observation-loss
-  transition, then register the adapter using the existing controller. No global
-  job index or parallel job framework.
+- Runtime dependency: the shared protocol, observation-loss transition and
+  dispatch qualification in PR493. No global job index or parallel job framework.
 - Manifest owner: `providers/alibaba.provider.yaml` declares only the five frozen
   model IDs, canonical server credential and native create/retrieve pair.
   `lifecycle: { protocol: dashscope.video, retrieve: task }` has no cancel or
   result action. The compiler must bind `dashscope.video_create` to this exact
   native POST and `dashscope.video_get` to GET `/api/v1/tasks/${task_id}`.
   No standalone raw task control capability is advertised.
-- Schema/compiler owner: add that bounded protocol contract. The present schema
-  does not accept it; all-manifest validation must pass on the integrated head.
-  Do not remove lifecycle metadata to work around this activation dependency.
+- Schema/compiler dependency: PR492's bounded protocol contract. All-manifest
+  validation and the generated snapshot must pass on the integrated head.
+  Do not remove lifecycle metadata to work around this dependency.
 - Client owner: consume `providers/_fixtures/wan/lifecycle.json`; test partial
   output, missing deliverable, expired task, credential isolation, and restart.
 - Integration owner: prove actual Worker and frozen client transport, final
