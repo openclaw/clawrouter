@@ -80,6 +80,121 @@ models:
         outputMicrosPerMillion: 0
         maxInputTokens: 8192
         defaultMaxOutputTokens: 0
+    - id: mistral/codestral-latest
+      upstream: codestral-latest
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.mistral.ai/models/codestral-25-08
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 128000
+      pricingRef: mistral-codestral-latest-standard-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://docs.mistral.ai/inference/pricing
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 30000
+        outputMicrosPerMillion: 900000
+        serviceTiers:
+          - id: default
+            aliases: [standard_only, standard]
+            inputMicrosPerMillion: 300000
+            cachedInputMicrosPerMillion: 30000
+            outputMicrosPerMillion: 900000
+          # Auto may select Priority; reserve the published 1.75x bound.
+          # https://docs.mistral.ai/inference/priority-tier
+          - id: priority
+            inputMicrosPerMillion: 525000
+            cachedInputMicrosPerMillion: 52500
+            outputMicrosPerMillion: 1575000
+        # Reserve the full context when the caller omits an output limit.
+        # This ceiling is not a claim about the provider's default output.
+        maxInputTokens: 131072
+        defaultMaxOutputTokens: 131072
+    - id: mistral/devstral-medium-latest
+      upstream: devstral-medium-latest
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.mistral.ai/models/devstral-2-25-12
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 262144
+      # Deprecated identity retained for frozen client compatibility. No current
+      # qualified tariff: do not inherit a replacement model's prices.
+    - id: mistral/mistral-large-latest
+      upstream: mistral-large-latest
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.mistral.ai/models/mistral-large-3-25-12
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+      # Deprecated identity retained for frozen client compatibility. No current
+      # qualified tariff: do not inherit a replacement model's prices.
+    - id: mistral/mistral-medium-2508
+      upstream: mistral-medium-2508
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.mistral.ai/models/mistral-medium-3-1-25-08
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 128000
+      # Deprecated identity retained for frozen client compatibility. No current
+      # qualified tariff: do not inherit a replacement model's prices.
+    - id: mistral/mistral-small-latest
+      upstream: mistral-small-latest
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.mistral.ai/models/mistral-small-4-0-26-03
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+      pricingRef: mistral-mistral-small-latest-standard-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://docs.mistral.ai/inference/pricing
+        inputMicrosPerMillion: 150000
+        cachedInputMicrosPerMillion: 15000
+        outputMicrosPerMillion: 600000
+        serviceTiers:
+          - id: default
+            aliases: [standard_only, standard]
+            inputMicrosPerMillion: 150000
+            cachedInputMicrosPerMillion: 15000
+            outputMicrosPerMillion: 600000
+          # Auto may select Priority; reserve the published 1.75x bound.
+          # https://docs.mistral.ai/inference/priority-tier
+          - id: priority
+            inputMicrosPerMillion: 262500
+            cachedInputMicrosPerMillion: 26250
+            outputMicrosPerMillion: 1050000
+        # Reserve the full context when the caller omits an output limit.
+        # This ceiling is not a claim about the provider's default output.
+        maxInputTokens: 262144
+        defaultMaxOutputTokens: 262144
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
