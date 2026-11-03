@@ -90,6 +90,7 @@
 - Keep explicit native Google image generation unpriced under hard dollar budgets instead of borrowing text or another provider’s image tariff; preserve separately labeled policy-fixed accounting.
 - Keep Google image output out of generic GenerateContent/SSE text routes and token tariffs, preserving selected-model and ProtoJSON modality evidence while the bounded native image response route is qualified.
 - Add the native Google image response wrapper with explicit MIME and container checks, bounded complete delivery and thought-image removal; shared dispatch and image-cost qualification remain separate.
+- Resolve overlapping native model paths from their registered endpoint capability, rejecting ambiguous operations while preserving original credentials, policy checks and scoped managed controls.
 - Qualify the six frozen fal Nano Banana generate/edit routes with model-specific geometry and ordered inline-reference limits, retaining partial outcomes and unknown upstream cost.
 - Add native MiniMax image-01 generation/reference codecs and fixtures with explicit partial/safety-filtered delivery, bounded image bytes and conservative regional product/accounting boundaries.
 - Add frozen Google Veo 3.1 operation and authenticated-file codecs with bounded native fixtures, exact job identities and selected-origin credential handoffs. Shared route activation and live availability remain separately qualified.
