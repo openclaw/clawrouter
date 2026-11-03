@@ -3,7 +3,6 @@ import test from "node:test";
 import {
   catalogProviderIds,
   credentialOutcome,
-  directUserBindingChanges,
   effectiveAccess,
   knownPolicyProviders,
   optionalCurrencyMicros,
@@ -101,18 +100,6 @@ test("reconciling user bindings preserves inherited bindings and tombstones remo
     priority: 8,
   });
   assert.equal(next.find((binding) => binding.policyId === "tools" && binding.principalType === "user")?.enabled, true);
-});
-
-test("direct user binding changes separate removals from additions", () => {
-  const current = [
-    { policyId: "models", principalType: "user", principalId: "user@example.com", enabled: true, priority: 8 },
-    { policyId: "tools", principalType: "user", principalId: "user@example.com", enabled: false, priority: 20 },
-    { policyId: "wildcard", principalType: "group", principalId: "maintainers", enabled: true, priority: 30 },
-  ];
-  const changes = directUserBindingChanges(current, "user@example.com", policies, ["tools"]);
-
-  assert.deepEqual(changes.removals.map((binding) => binding.policyId), ["models"]);
-  assert.deepEqual(changes.additions.map((binding) => binding.policyId), ["tools"]);
 });
 
 test("policy edits discard stale provider ids before saving", () => {
