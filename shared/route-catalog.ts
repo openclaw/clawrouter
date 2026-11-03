@@ -1,5 +1,6 @@
 import type { ModelAvailability } from "./model-availability";
 import type { ProviderRow, RouteCatalog } from "./contracts.ts";
+import { nativeModelEligible } from "./native-model-eligibility.ts";
 
 export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   capabilities: Array<{ id: string; endpoint: string }>;
@@ -20,8 +21,9 @@ export function modelExecutable(provider: { models: readonly ModelIdentity[] }, 
     && (row.id === model.id || !!row.upstream && row.upstream === model.upstream));
 }
 
-export function modelSupportsEndpoint(provider: Pick<CatalogProvider, "capabilities" | "models">, model: CatalogProvider["models"][number], endpoint: { id: string }): boolean {
-  return modelExecutable(provider, model) && provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
+export function modelSupportsEndpoint(provider: Pick<CatalogProvider, "capabilities" | "models">, model: CatalogProvider["models"][number], endpoint: { id: string; request_format?: string | null }): boolean {
+  return modelExecutable(provider, model) && nativeModelEligible(endpoint.request_format, model.upstream)
+    && provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
 }
 
 export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {

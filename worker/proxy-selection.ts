@@ -1,4 +1,5 @@
 import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
 import { validateSpeechRequest } from "./speech-request.ts";
@@ -142,6 +143,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
 
   const model = bodyModel ?? pathModel;
+  if (!nativeModelEligible(endpoint.request_format, model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model is not qualified for this native protocol");
   const upstreamModel = bodyUpstream ?? pathUpstream;
   const pathParams = { ...inputPathParams };
   for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {

@@ -241,6 +241,7 @@
 - Add isolated Singapore and Beijing Qwen Token Plan Chat routes with dedicated credentials and seven frozen unpriced model identities.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
 
+- Bind Google speech discovery and dispatch to qualified model transports and the preview cutoff, including cached catalog eligibility.
 - Add frozen Google unary speech codecs for generateContent and stateless Interactions, with speaker binding, complete PCM/WAV validation and an explicit preview-model qualification cutoff.
 - Add a bounded Google unary speech response wrapper with exact frozen-model transport binding, explicit PCM/WAV MIME, atomic audio delivery and conservative unknown-cost accounting.
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
