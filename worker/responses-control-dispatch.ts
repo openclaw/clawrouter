@@ -37,7 +37,8 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
     const create = provider.endpoints.find(endpoint => endpoint.lifecycle === lifecycle);
     if (!create || !env) unavailable();
     const { managedRoute } = await import("./managed-routes.ts");
-    const { adapter, controls } = managedRoute(provider, create);
+    const { adapter, controls, retained } = managedRoute(provider, create, pathParams);
+    if (retained) parts.push(["managed-job-params", retained]);
     parts.push(lifecycle.protocol, ...(["retrieve", "result", "cancel"] as const).flatMap(action => {
       const endpoint = controls[action];
       if (!endpoint) return [];
@@ -63,7 +64,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
   const managed = input.protocol !== undefined;
-  const contract = managed && provider && create ? (await import("./managed-routes.ts")).managedRoute(provider, create) : null;
+  const contract = managed && provider && create ? (await import("./managed-routes.ts")).managedRoute(provider, create, input.route.pathParams) : null;
   const lifecycle = managed ? create?.lifecycle : create?.responsesLifecycle;
   const id = managed ? { value: contract?.adapter.validateId(input.responseId) } : responseIdentity("response", input.responseId);
   if (!provider || !create || !lifecycle || managed && create.lifecycle?.protocol !== input.protocol || !id || !(managed ? ["retrieve", "result", "cancel"] : ["retrieve", "cancel"]).includes(input.action)) unavailable();
@@ -72,7 +73,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   if (managed && input.query !== "") unavailable();
   const query = managed ? new URLSearchParams() : responsesControlQuery(input.action, new URLSearchParams(input.query));
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
-  if (Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
+  if (!contract?.retained && Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
   assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed }, grant, env);
   const connection = await resolveConnection(env, provider.id);
   if (connection?.enabled === false) throw new HttpError(503, "provider_disabled", "response provider is disabled");

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Qualify Google Omni Interactions lifecycle and authenticated file endpoint links in the provider compiler, rejecting unbound controls and credential overrides before shared runtime activation.
+- Managed media: retain original per-job control permissions without exposing unsupported poll/cancel routes; pin non-secret flags through credential and route revalidation.
 
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 
