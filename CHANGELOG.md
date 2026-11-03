@@ -135,7 +135,7 @@
 - Refresh pinned setup-node to 7.1.0 and upload-artifact to 7.0.2, including Node installation validation and updated cache/artifact clients.
 - Add bounded Replicate prediction protocol helpers and executable lifecycle fixtures for scoped async runtime integration, including partial output, cancellation, URL rewriting and explicit unknown-cost boundaries. Route activation and durable settlement remain separate integration work.
 - Add bounded fal queue protocol helpers and portable lifecycle fixtures, distinguishing result readiness from success and queued cancellation from an in-progress cancellation request. Runtime activation and billing integration remain separately qualified.
-- Declare the native fal queue provider with original-job status/result/cancel links, server-side Key authentication and explicitly unqualified upstream prices.
+- Declare the native fal queue provider with original-job status/result/cancel links and server-side Key authentication; prevent the unqualified Grok-quality generation route from bypassing its create denial through the queue. Upstream prices remain unqualified.
 - Qualify frozen fal FLUX dev and Krea v2 image transports with bounded inline references, per-model geometry, partial-result evidence and native Key dispatch.
 - Qualify the four frozen fal GPT Image 2.5 generate/edit products, preserving selected quality, ordered inline references and native geometry without fabricated cost bounds.
 - Add executable Perplexity Agent/Search wire fixtures covering native results, typed streaming failures, credential isolation and conservative billing for the provider/client integration.

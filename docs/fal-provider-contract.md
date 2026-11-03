@@ -32,12 +32,28 @@ OpenClaw source is `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 queue itself is a generic service; this slice declares that service rather than
 publishing a vendor model inventory. It does not claim all frozen fal media modes.
 
-The schema and wrapper currently reject submit IDs deeper than three segments.
-Frozen HeyGen, Seedance fast and Kling/Wan paths need a bounded deeper-path contract
-from schema/runtime owners before declaration. Multiple create templates sharing
-native owner/app controls also need original-create-route resolution, not a first
-matching endpoint. Do not encode slashes inside `variant` or widen it to an arbitrary
-relative path. The present declaration has one create template.
+The landed schema and registered wrapper qualify bounded four-segment paths for
+HeyGen, Wan and the six exact Seedance 2.0 products. This declaration still has
+only the three-segment create template; it does not enable their deeper routes.
+Future declaration additions must retain the original create parameters and
+owner/app controls, including Seedance's exact dotted root. Do not encode slashes
+inside `variant` or widen it to an arbitrary relative path.
+
+The existing MiniMax default is prompt-only. Its registered validator rejects
+images, duration, resolution, ratio and audio fields; the frozen consumer's
+broader defaults cannot silently pass through. The retired
+`fal-ai/kling-video/v2.1/master/text-to-video` stays outside the declared template.
+`xai/grok-imagine-image/quality` is unqualified, not a proven retirement or alias:
+the wrapper now explicitly denies its new queue creates as well as the separate
+synchronous codec's denial. Original scoped controls remain available. Direct
+xAI's alias and price do not qualify this fal product.
+
+The [prompt-video](fal-prompt-video-contract.md),
+[Wan/Kling](fal-hosted-wan-contract.md), [Seedance](fal-seedance-contract.md) and
+[Grok image](fal-grok-images-contract.md) contracts retain model-specific limits.
+Wan/Seedance codecs accept only qualified bounded inline inputs; remote URLs,
+uploads and arbitrary model assets gain no ownership from this declaration.
+The generic queue service is not evidence of model-specific input or price parity.
 
 Frozen image/music clients use synchronous `fal.run` responses. They need their own
 qualified native formats and consumer bridge; silently converting those requests
@@ -59,3 +75,9 @@ actual Worker/client acceptance. Source 2 owns the native consumer. No live paid
 call, deployment, provisioned secret or production integration is claimed by this
 declaration. Source 1 retains durable caller/policy/credential binding, no replay
 after uncertain creation, restart/expiry and one terminal settlement/outbox.
+
+Canonical FAL_KEY runtime support and the scoped path contracts are landed.
+Source 6 still owns script/key-mask and generated-snapshot integration; source 2
+must preserve the native restrictions in its consumer. New synchronous image or
+music formats still need source 1 runtime and source 3 schema qualification before
+source 5 may declare them. No paid POST substitutes for a safe unresolved smoke.
