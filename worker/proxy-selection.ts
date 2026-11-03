@@ -33,7 +33,7 @@ export interface ProxySelection {
 
 export function validateSelectedInput(selection: ProxySelection): void {
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection) ?? prepareNativeBasetenSystemOne(selection);
-  if (googleImageRequest(selection.model?.upstream ?? selection.pathParams.model, selection.body, selection.endpoint.request_format)
+  if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
     throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
   if (selection.nativeResponse) return;
