@@ -89,6 +89,10 @@ test("outcome admission uses the source combined estimate and leaves independent
   for (const body of [{ ...input, tools: [{ type: "web_search" }] }, { ...input, prompt: { id: "saved" } }, { ...input, previous_response_id: "resp_parent" }]) {
     assert.ok(estimateCost(model, body, null, "llm.responses", endpoint).pricingGap);
   }
+  for (const tools of [[{ type: "x_search" }], [{ type: "new_server_tool" }], [{ type: "function" }], { type: "function", name: "synthetic" }]) {
+    assert.ok(estimateCost(model, { ...input, tools }, null, "llm.responses", endpoint).pricingGap);
+    assert.ok(estimateCost(model, { ...input, input: [{ type: "additional_tools", tools }] }, null, "llm.responses", endpoint).pricingGap);
+  }
   const plain = { ...input, tools: [{ type: "function", name: "web_search", parameters: { properties: { violation: { type: "string" } } } }] };
   assert.equal(estimateCost(model, plain, null, "llm.responses", endpoint).pricingGap, undefined);
   assert.equal(estimateCost(model, input, 7, "llm.responses", endpoint).basis, "policy_fixed");
@@ -147,7 +151,7 @@ test("post-dispatch errors, missing receipts and model mismatches retain the ori
 test("fee bounds, tools, tiers, background and actual origin overrides deny before egress", async t => {
   for (const [label, options, body] of [
     ["fee-budget", { limit: 49999 }, input], ["tool", {}, { ...input, tools: [{ type: "web_search" }] }],
-    ["tier", {}, { ...input, service_tier: "unknown" }], ["background", {}, { ...input, background: true }],
+    ["x-search", {}, { ...input, tools: [{ type: "x_search" }] }], ["tier", {}, { ...input, service_tier: "unknown" }], ["background", {}, { ...input, background: true }],
     ["region", { change(provider) { provider.base_urls.default = "https://us-east-1.api.x.ai"; } }, input],
   ]) await t.test(label, async t => {
     const f = await fixture(t, options);

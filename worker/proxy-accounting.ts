@@ -11,7 +11,7 @@ import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, ProxyRequestBody, UsageEvent } from "./types";
 import { randomId } from "./utils";
-import type { ToolKnowledge } from "./responses-tool-evidence.ts";
+import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
 export interface CompoundRequestContext {
@@ -208,7 +208,10 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   // Only this complete outcome path discharges request_fee. Run the same
   // classifier again so independent tool/media/ancestry gaps remain enforced.
   const outcomePricing = requestTariff?.kind === "outcome_request" ? requestTariff.pricing : undefined;
-  const pricingGap = requestPricingGap(outcomePricing && pricing?.unit == null && pricing ? { ...pricing, unpricedCosts: undefined } : pricing, body, endpoint.request_format, parentTools);
+  const inventoryKnown = !outcomePricing || retainedToolBase(body, parentTools ?? "token_only") === "token_only"
+    && (body.tools === undefined || retainedToolBase({ input: [{ type: "additional_tools", tools: body.tools }] }, "token_only") === "token_only");
+  const pricingGap = requestPricingGap(outcomePricing && pricing?.unit == null && pricing ? { ...pricing, unpricedCosts: undefined } : pricing, body, endpoint.request_format, parentTools)
+    ?? (inventoryKnown ? null : "retained_tool_unknown");
   if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null, ...(requestTariff ? { requestTariff } : {}) };
   if (!pricing) return requestTariff ? { reserveMicros: 0, basis: "unpriced_request", pricingGap: "model_request_fee", inputTokens: null, outputTokens: null, requestTariff }
     : { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
