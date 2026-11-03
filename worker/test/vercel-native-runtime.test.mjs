@@ -28,7 +28,7 @@ async function fixture(t, models = null) {
   const row = structuredClone(provider); snapshot.providers.push(row);
   t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(row), 1));
   const values = new Map(), pending = [], events = [], sent = [];
-  const env = { AI_GATEWAY_API_KEY: "synthetic-gateway-key", ANTHROPIC_API_KEY: "synthetic-foreign-key", VERCEL_OIDC_TOKEN: "synthetic-oidc",
+  const env = { AI_GATEWAY_API_KEY: "synthetic-environment-fallback", ANTHROPIC_API_KEY: "synthetic-foreign-key", VERCEL_OIDC_TOKEN: "synthetic-oidc",
     POLICY_KV: { async get(k) { return Array.isArray(k) ? new Map(k.map(k => [k, values.get(k) ?? null])) : values.get(k) ?? null; },
       async put(k, v) { values.set(k, JSON.parse(v)); }, async list() { return { keys: [], list_complete: true }; } },
     BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
@@ -41,7 +41,7 @@ async function fixture(t, models = null) {
   await authorityCall(env, "/credentials/initialize-all", await Promise.all(["paid", "unpriced", "foreign"].map(async id => ({ credentialId: id,
     credential: { enabled: true, secretSha256: await sha256Hex(`fixture-${id}`), policyId: id, policyGeneration: "fixture" } }))));
   await authorityCall(env, "/connections/initialize-all", [{ providerId: id, enabled: true }]);
-  await putGrantCredentials(env, `oauth/fixture/${id}`, { provider: id, kind: "api_key", enabled: true, credential: "synthetic-gateway-key" });
+  await putGrantCredentials(env, `oauth/paid/${id}`, { provider: id, kind: "api_key", enabled: true, credential: "synthetic-gateway-key" });
   const f = { env, events, sent, reply: () => Response.json(result),
     call(path, body, key = "paid") { return worker.fetch(new Request(`https://router.example${path}`, {
       method: body == null ? "GET" : "POST", headers: { authorization: `Bearer clawrouter-live-${key}-fixture-${key}`,
