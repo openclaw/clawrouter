@@ -212,6 +212,18 @@ jobs:
           path: ${{ runner.temp }}/provider-snapshot.json
           if-no-files-found: error
           retention-days: 3
+      - name: Check committed provider snapshot
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { isDeepStrictEqual } from "node:util";
+          const compiled = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/provider-snapshot.json`, "utf8"));
+          const committed = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
+          if (!isDeepStrictEqual(compiled, committed)) {
+            console.error("::error file=worker/generated/provider-snapshot.json::Provider snapshot is stale. Run pnpm provider:compile -- --output worker/generated/provider-snapshot.json and commit the result. The compiled snapshot is available in this run's provider-snapshot artifact.");
+            process.exitCode = 1;
+          }
+          NODE
       - run: pnpm worker:check
       - run: pnpm worker:e2e
       - run: pnpm provider:smoke-plan
