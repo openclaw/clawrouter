@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { streamSimple } from "../llm/stream.js";
 import type { Model } from "../llm/types.js";
 import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
@@ -69,7 +70,7 @@ beforeEach(() => {
   // replay and SDK stay real; this fixture does not certify production SSRF policy.
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async options => {
     expect(String(options.url)).toBe(`${origin}/v1/catalog`);
-    const result = await nativeCatalogGuard({ ...options, fetchImpl: nativeFetch,
+    const result = await nativeCatalogGuard({ ...options, fetchImpl: fetchWithRuntimeDispatcher,
       policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin) });
     note({ phase: "catalog-guard-response", status: result.response.status });
     return { ...result, release: async () => { await result.release(); note({ phase: "catalog-guard-released" }); } };
