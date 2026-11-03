@@ -1,4 +1,4 @@
-import { modelExecutable, type ModelAvailability } from "./model-availability.ts";
+import type { ModelAvailability } from "./model-availability";
 import type { ProviderRow, RouteCatalog } from "./contracts.ts";
 
 export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
@@ -6,6 +6,18 @@ export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   routing: { modelPrefixes?: string[] };
   models: Array<{ id: string; upstream?: string; availability?: ModelAvailability; capabilities: string[] }>;
   endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
+}
+
+interface ModelIdentity { id: string; upstream?: string; availability?: ModelAvailability }
+
+// Dispositions apply to this product's selected identity, not other providers
+// or the alias target. Missing metadata does not assert live availability.
+export function modelExecutable(provider: { models: readonly ModelIdentity[] }, model: ModelIdentity): boolean {
+  const availability = model.availability;
+  if (availability && (availability.version !== "clawrouter.model-availability.v1"
+    || !["deprecated", "upstream_alias"].includes(availability.status))) return false;
+  return !provider.models.some(row => row.availability?.status === "stopped"
+    && (row.id === model.id || !!row.upstream && row.upstream === model.upstream));
 }
 
 export function modelSupportsEndpoint(provider: Pick<CatalogProvider, "capabilities" | "models">, model: CatalogProvider["models"][number], endpoint: { id: string }): boolean {

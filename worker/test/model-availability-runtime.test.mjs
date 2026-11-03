@@ -10,8 +10,7 @@ const { snapshot } = await import("../providers.ts");
 const { authorityCall } = await import("../authority.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { createRouteCatalog, modelSupportsEndpoint } = await import("../../shared/route-catalog.ts");
-const { modelExecutable } = await import("../../shared/model-availability.ts");
+const { createRouteCatalog, modelSupportsEndpoint, modelExecutable } = await import("../../shared/route-catalog.ts");
 const id = "availability-runtime", full = name => `${id}/${name}`;
 const proof = { version: "clawrouter.model-availability.v1", effectiveAt: "2026-10-09", checkedAt: "2026-11-03", sources: ["https://provider.example/notice"] };
 function providerFixture() {

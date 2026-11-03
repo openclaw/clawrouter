@@ -1,4 +1,4 @@
-import { modelExecutable } from "../shared/model-availability.ts";
+import { modelExecutable } from "../shared/route-catalog.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";

@@ -1,4 +1,4 @@
-import { modelExecutable } from "../shared/model-availability.ts";
+import { modelExecutable } from "../shared/route-catalog.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
