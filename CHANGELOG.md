@@ -45,6 +45,7 @@
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Add frozen OpenRouter JSON transcription codecs and fixtures with exact inline audio, silent-transcript handling and independent native duration/token/cost observations.
+- Record Together’s frozen Llama 3.3 70B Turbo serverless retirement, keeping its identity out of live offers and rejecting passthrough calls before egress.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
 
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.

@@ -50,6 +50,17 @@ models:
         outputMicrosPerMillion: 4400000
         maxInputTokens: 1048575
         defaultMaxOutputTokens: 131072
+    - id: together/meta-llama/Llama-3.3-70B-Instruct-Turbo
+      upstream: meta-llama/Llama-3.3-70B-Instruct-Turbo
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: stopped
+        effectiveAt: "2026-10-22"
+        checkedAt: "2026-11-03"
+        sources:
+          - https://docs.together.ai/docs/deprecations
+          - https://www.together.ai/models/llama-3-3-70b
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
