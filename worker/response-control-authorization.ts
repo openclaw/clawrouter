@@ -1,3 +1,4 @@
+import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { accessIdentityVerification, type AccessVerification } from "./access.ts";
 import { authorityCall } from "./authority.ts";
@@ -29,7 +30,7 @@ export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseCo
     policyId: auth.policyId, policyGeneration: auth.policy.generation, tenantId: auth.policy.tenantId ?? "default", proof } };
 }
 
-export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal): Promise<void> {
+export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string): Promise<void> {
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
   const binding = authorization.binding, proof = binding.proof;
@@ -48,6 +49,7 @@ export async function authorizeResponseControl(env: Env, authorization: Response
   if (!policy || policy.policyId !== binding.policyId || !policy.policy.enabled || policy.policy.generation !== binding.policyGeneration
     || (policy.policy.tenantId ?? "default") !== binding.tenantId
     || policy.policy.providers.length && !policy.policy.providers.includes(owner.providerId)) denied();
+  if (retentionProtocol) requireManagedCreateAdmission(policy.policy, env, owner, retentionProtocol);
   if (proof.kind === "proxy_key") {
     const credential = snapshot.credential;
     if (!credential || credential.policyId !== binding.policyId || (credential.principalId ?? null) !== binding.principalId

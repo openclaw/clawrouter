@@ -1,3 +1,4 @@
+import { readUpstreamRetentionPolicy } from "../shared/upstream-retention.ts";
 import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { grantRoutingPolicy } from "./grant-routing.ts";
 import type { AccessPolicyEntry } from "./types";
@@ -6,6 +7,7 @@ export function normalizePolicyRecord(
   value: Record<string, unknown>,
   retainRequestContentDefault: boolean,
 ): AccessPolicyEntry["policy"] {
+  const upstreamRetention = readUpstreamRetentionPolicy(value.upstreamRetention);
   return {
     enabled: value.enabled !== false,
     generation: typeof value.generation === "string" ? value.generation : "legacy",
@@ -23,6 +25,7 @@ export function normalizePolicyRecord(
     requestCostsMicros: normalizeRequestCosts(value.requestCostsMicros),
     budgetScope: value.budgetScope === "principal" ? "principal" : "policy",
     ...(value.budgetMode === "soft" || value.budgetMode === "reserve" ? { budgetMode: value.budgetMode } : {}),
+    ...(upstreamRetention ? { upstreamRetention } : {}),
     retainRequestContent:
       typeof value.retainRequestContent === "boolean"
         ? value.retainRequestContent

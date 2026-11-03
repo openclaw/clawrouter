@@ -64,6 +64,10 @@ export interface ManagedLifecycleAdapter {
   // No refresh, mutation, I/O, logging, or alternate account selection.
   assertDispatch?(request: Request): void;
   prepare(body: unknown, headers: Headers, pathParams: Record<string, string>, query: URLSearchParams): ManagedCreate;
+  // Opt-in admission after original credential selection. The initial slice
+  // permits body-only creates with no adapter headers or route-param changes.
+  prepareAdmitted?(body: unknown, headers: Headers, pathParams: Record<string, string>, query: URLSearchParams,
+    admission: import("./upstream-retention-admission.ts").ManagedCreateAdmission): ManagedCreate;
   // Parse only the protocol's declared ID fields; reject extra control query.
   identify(action: ManagedControlAction, pathParams: Record<string, string>, query: URLSearchParams): string;
   // Validate the declared method/path against this protocol, then return only a
