@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add scoped OpenRouter video/content wrappers with download-only original-job files and bounded MP4 delivery, keeping new creates closed until trusted retention admission is qualified.
+
 
 - Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Add a bounded Microsoft Edge speech request/frame codec with request-ID binding, complete-audio delivery and explicit interruption handling, without activating a route or assuming upstream cost.
