@@ -119,6 +119,56 @@ models:
             inputMicrosPerMillion: 75000
             cachedInputMicrosPerMillion: 37500
             outputMicrosPerMillion: 300000
+    - id: groq/gpt-oss-safeguard-20b
+      upstream: openai/gpt-oss-safeguard-20b
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b
+            - https://console.groq.com/docs/openai
+            - https://console.groq.com/docs/reasoning
+          checkedAt: "2026-11-03"
+          logprobs: unsupported
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 131072
+            maxOutputTokens: 65536
+      pricingRef: groq-gpt-oss-safeguard-20b-token-upper-bound-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b
+        settlementBasis: published_upper_bound
+        # The model page rounds cache pricing to $0.037; the documented 50%
+        # discount gives $0.0375. Keep the higher value until reconciled.
+        # https://console.groq.com/docs/prompt-caching
+        inputMicrosPerMillion: 75000
+        cachedInputMicrosPerMillion: 37500
+        outputMicrosPerMillion: 300000
+        maxInputTokens: 131072
+        defaultMaxOutputTokens: 65536
+        # Auto can select enterprise capacity, whose contract is not token-priced.
+        # https://console.groq.com/docs/service-tiers
+        autoServiceTier: unpriced
+        serviceTiers:
+          - id: default
+            aliases: [on_demand]
+            inputMicrosPerMillion: 75000
+            cachedInputMicrosPerMillion: 37500
+            outputMicrosPerMillion: 300000
+          - id: flex
+            # https://console.groq.com/docs/flex-processing
+            inputMicrosPerMillion: 75000
+            cachedInputMicrosPerMillion: 37500
+            outputMicrosPerMillion: 300000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
