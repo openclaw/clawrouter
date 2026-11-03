@@ -1,3 +1,5 @@
+import { validateCompactRequest } from "./responses-compact.ts";
+import { validateSpeechRequest } from "./speech-request.ts";
 import { prepareNativeImage } from "./native-images.ts";
 import type { NativeResponse } from "./native-response.ts";
 import { nativeEmbeddingMode, prepareNativeEmbedding } from "./native-embeddings.ts";
@@ -52,12 +54,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     return;
   }
   if (selection.endpoint.request_format === "openai.responses_compact") {
-    const body = requestObject(selection.body), pricing = selection.model?.pricing;
-    if (!selection.model || !pricing || pricing.unit != null || !Number.isSafeInteger(pricing.defaultMaxOutputTokens) || pricing.defaultMaxOutputTokens <= 0) throw new HttpError(400, "compact_model_unqualified", "a registered token-priced compaction model with an authoritative output bound is required");
-    if (body.stream !== undefined && body.stream !== false) throw new HttpError(400, "unsupported_compact_stream", "Responses compaction is unary; streaming is unsupported");
-    if (body.background !== undefined && body.background !== false) throw new HttpError(400, "unsupported_compact_background", "Responses compaction does not support background jobs");
-    if (body.previous_response_id != null && (typeof body.previous_response_id !== "string" || !body.previous_response_id.length || body.previous_response_id.length > 256)) throw new HttpError(400, "invalid_compact_parent", "previous_response_id must be a bounded nonempty response identifier");
-    if (body.input != null && typeof body.input !== "string" && !Array.isArray(body.input) || body.input == null && body.previous_response_id == null) throw new HttpError(400, "invalid_compact_input", "compaction requires input or an owned previous_response_id");
+    validateCompactRequest(requestObject(selection.body), selection.model);
     return;
   }
   if (selection.endpoint.request_format === "openai.images_generations") {
@@ -67,13 +64,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     return;
   }
   if (selection.endpoint.request_format !== "openai.audio_speech") return;
-  const body = requestObject(selection.body);
-  if (!selection.model) throw new HttpError(400, "model_required", "a registered speech model is required");
-  // The legacy speech API accepts at most 4096 characters and binary audio;
-  // SSE belongs to newer speech models, outside this endpoint's qualified contract.
-  if (typeof body.input !== "string" || !body.input.length || [...body.input].length > 4096) throw new HttpError(400, "invalid_speech_input", "speech input must contain 1 to 4096 Unicode code points");
-  if (Object.hasOwn(body, "instructions")) throw new HttpError(400, "unsupported_speech_instructions", "this speech model does not support instructions");
-  if (body.stream_format !== undefined && body.stream_format !== "audio") throw new HttpError(400, "unsupported_speech_stream", "this speech model supports binary audio only");
+  validateSpeechRequest(requestObject(selection.body), selection.model);
 }
 
 interface ProxySelectionFailure {
