@@ -29,7 +29,9 @@ function selection(model = models[0]) {
       } },
     } })) },
   }]).providers[0];
-  return prepareManifestRequest(provider, provider.endpoints[0], { ...structuredClone(input), model: `baseten/${model}` }, {}, {});
+  const endpoint = provider.endpoints[0];
+  const prepared = prepareManifestRequest(provider, endpoint, { ...structuredClone(input), model: `baseten/${model}` }, {}, {});
+  return { provider, endpoint, ...prepared, capability: "llm.decisions", method: "POST" };
 }
 const invalidRoute = e => e.status === 400 && e.code === "invalid_native_baseten_systemone_route";
 const invalidResponse = e => e.status === 502 && e.code === "invalid_baseten_systemone_response";
