@@ -1,3 +1,4 @@
+import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
 import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { GoogleContinuation, googleContinuationRequested, googleContinuationRoute } from "./google-continuation.ts";
@@ -798,7 +799,16 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
-    if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
+    const signingRegion = !streamBody ? await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant) : undefined;
+    if (selection.provider.id === "aws-bedrock" && selection.capability === "llm.embeddings") {
+      const signingScheme = selection.provider.auth.schemes.find(scheme => scheme.type === "sig_v4");
+      if (transport !== "http" || signingScheme?.type !== "sig_v4" || signingScheme.service !== "bedrock"
+        || !signingRegion || url.origin !== `https://bedrock-runtime.${signingRegion}.amazonaws.com`
+        || hasProxyQuery(queryInput) || new URL(request.url).search)
+        throw new HttpError(400, "invalid_native_bedrock_embedding_destination", "Bedrock embeddings require the original signed regional destination without query options");
+      selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
+      assertNativeResponseDestination(selection.nativeResponse, url);
+    }
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");

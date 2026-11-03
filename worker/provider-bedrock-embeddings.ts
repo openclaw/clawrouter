@@ -13,6 +13,11 @@ const specs: Record<string, Spec> = {
   "twelvelabs.marengo-embed-3-0-v1:0": { family: "marengo-3", dimensions: [512], defaultDimensions: 512 },
 };
 export const bedrockEmbeddingModels = Object.keys(specs);
+// Recognition is not registration, regional availability or grant admission.
+export function isBedrockEmbeddingModel(model: string): boolean {
+  try { resolveSpec(model); return true; }
+  catch { return false; }
+}
 export interface BedrockEmbeddingRequest {
   modelId: string; family: Family; dimensions: number; count: number;
   body: Record<string, unknown>; path: string; headers: Headers;
