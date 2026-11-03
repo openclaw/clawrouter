@@ -1,6 +1,6 @@
 import type { CompiledEndpoint } from "./types.ts";
 
-export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video";
+export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video";
 export type ManagedObservationLoss = "expired_or_unknown" | "deleted" | "canceled_or_deleted";
 export type ManagedTerminal = "succeeded" | "failed" | "canceled" | "aborted";
 export type ManagedControlAction = "retrieve" | "result" | "cancel";
@@ -95,16 +95,23 @@ export interface ManagedFileState {
   status: "processing" | "active" | "failed";
   body: Record<string, unknown>;
 }
-export interface ManagedFilePaths { id: string; metadata: string; download: string }
+export type ManagedFileLinks = { mode?: "metadata"; metadata: string; download: string }
+  | { mode: "download_only"; metadata?: never; download: string };
+export interface ManagedFilePaths { id: string; metadata?: string; download: string }
 // Source-owned wrappers expose this through managedFileAdapter(protocol).
 // These methods parse/prepare only; the scoped runtime owns all authority/I/O.
-export interface ManagedFileAdapter {
+interface ManagedFileAdapterBase {
   protocol: ManagedProtocol;
   describe(observation: ManagedObservation, selectedBaseUrl: string): readonly ManagedFileDescriptor[];
   identify(action: ManagedFileAction, pathParams: Record<string, string>, query: URLSearchParams): string;
   control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
     file: ManagedFileDescriptor, selectedBaseUrl: string, state?: ManagedFileState): ManagedControl;
-  readState(response: Response, file: ManagedFileDescriptor): Promise<ManagedFileState>;
   readFile(response: Response, file: ManagedFileDescriptor, maxBytes: number): Promise<Uint8Array>;
   rewrite(body: Record<string, unknown>, paths: readonly ManagedFilePaths[]): Record<string, unknown>;
 }
+export type ManagedFileAdapter = ManagedFileAdapterBase & (
+  { mode?: "metadata"; readState(response: Response, file: ManagedFileDescriptor): Promise<ManagedFileState> }
+  // Availability comes from the original succeeded job and bound descriptor.
+  // This mode neither manufactures metadata nor follows a response-supplied URL.
+  | { mode: "download_only"; readState?: never }
+);

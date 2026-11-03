@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
 
 - Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.
