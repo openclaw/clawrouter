@@ -56,6 +56,9 @@ jobs:
           - consumer: cohere
             ref: b566e9a6b22a863bf0f1f869f106a2a91b062f16
             test: test/openclaw-cohere.test.mjs
+          - consumer: gradium
+            ref: d2e88f6ff4b34b2141ee67b30a4c2783adf0f38c
+            test: test/openclaw-gradium.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
