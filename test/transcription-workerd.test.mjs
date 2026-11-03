@@ -105,7 +105,10 @@ export default { async fetch(request,env) {
     const duplicate=makeForm();duplicate.append("file",new File(["duplicate"],"second.wav",{type:"audio/wav"}));
     assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body:duplicate})).status,400);
     phase = "unauthenticated transcription rejection";
-    assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",body:makeForm()})).status,401);
+    // The early 401 does not consume the upload. Encode this tiny fixture first
+    // so its multipart writer cannot race workerd's unread-body connection reset.
+    const unauthenticated = new Request(new URL("/v1/audio/transcriptions",origin), {method:"POST",body:makeForm()});
+    assert.equal((await fetch(unauthenticated.url,{method:"POST",headers:unauthenticated.headers,body:await unauthenticated.arrayBuffer()})).status,401);
     // A separate isolated policy: hard reserve must not turn a one-context
     // model card into an arbitrary-file ceiling. No mutable live/KV authority.
     phase = "unqualified hard-budget pricing rejection";

@@ -4,6 +4,7 @@ on:
     paths:
       - '.github/workflows/transcription-transport-probe.yml'
       - 'test/diagnostics/transcription-transport.mjs'
+      - 'test/transcription-workerd.test.mjs'
 permissions:
   contents: read
 env:
