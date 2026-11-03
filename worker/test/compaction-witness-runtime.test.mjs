@@ -75,11 +75,15 @@ const releaseRouter = `
     return new Response("unknown fixture", { status: 404 });
   } };
 `;
-// The pinned release commit is extracted from the local object store; shallow
-// checkouts (CI) lack it and skip with that reason rather than emulating it.
+// Extract the pinned release tree. CI fetches this exact commit before testing;
+// local shallow checkouts may skip without silently substituting an emulation.
 async function releaseTree(t) {
   try { execFileSync("git", ["cat-file", "-e", `${release.commit}^{commit}`], { stdio: "ignore" }); }
-  catch { t.skip(`${release.tag} commit ${release.commit} is not in this checkout; fetch the tag to run`); return null; }
+  catch {
+    const message = `${release.tag} commit ${release.commit} is not in this checkout; fetch the pinned release baseline to run`;
+    if (process.env.CI) assert.fail(message);
+    t.skip(message); return null;
+  }
   const root = await mkdtemp(join(tmpdir(), `clawrouter-${release.tag}-`));
   t.after(() => rm(root, { recursive: true, force: true }));
   execFileSync("git", ["archive", "--output", join(root, "release.tar"), release.commit]);
