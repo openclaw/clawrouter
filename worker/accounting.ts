@@ -35,6 +35,7 @@ export interface EstimatedCost {
   inputTokens: number | null;
   outputTokens: number | null;
   pricingGap?: PricingGap;
+  requestTariff?: import("./request-tariff.ts").RequestTariff;
 }
 
 // Shared with read-only availability. Passing this guard never replaces the

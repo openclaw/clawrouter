@@ -1,3 +1,4 @@
+import type { RequestTariffEndpoint } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { validateBudgetReservation } from "./accounting";
@@ -15,12 +16,15 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
   if (model) model = modelForEndpoint(model, endpoint.id);
   // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
   const realtime = endpoint.request_format === "openai.realtime";
   if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
+  // Catalog probes have no request model; use this exact candidate's native
+  // identity while retaining request-dependent affordability for tariffs.
+  if (endpoint.requestPricing && "outcome" in endpoint.requestPricing && model && !Array.isArray(body) && body.model === undefined) body = { ...body, model: model.upstream };
   const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint);
   const soft = softBudgetPolicy(auth.policy);
   try {
@@ -34,8 +38,8 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (auth.policy.budgetScope === "principal" && !auth.principalId && !auth.credentialId)
     return { status: "exact-blocked", reasonCode: "principal_required" };
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
-  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || isModelDiscovery(endpoint) ? cost.reserveMicros : bounds?.zero ? 0 : null;
-  const minimum = exact ?? bounds?.minimumMicros ?? 0;
+  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || isModelDiscovery(endpoint) ? cost.reserveMicros : !endpoint.requestPricing && bounds?.zero ? 0 : null;
+  const minimum = exact ?? (endpoint.requestPricing ? 0 : bounds?.minimumMicros ?? 0);
   if (exact === 0 && (!soft || isModelDiscovery(endpoint))) return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };
   for (const [limit, remaining, reasonCode] of [

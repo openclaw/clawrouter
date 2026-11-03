@@ -1,3 +1,4 @@
+import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
 import { createNativeEventObserver } from "./native-events.ts";
 import { createRadiusEventInspector } from "./provider-radius.ts";
 import { createOllamaChatInspector, ollamaChatFormat } from "./provider-ollama.ts";
@@ -11,7 +12,7 @@ import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails }
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
-export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; nonbillable?: true; hostedSearch?: HostedSearchUsage }
+export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; nonbillable?: true; hostedSearch?: HostedSearchUsage; requestTariffOutcome?: import("./request-tariff.ts").RequestTariffOutcome; requestCostReceipt?: import("./pricing.ts").RequestCostReceipt }
 export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
   tools?: ResponsesInspectionTools;
@@ -29,7 +30,7 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
   if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
@@ -40,7 +41,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const images = responseFormat === "openai.images_generations";
   const compact = responseFormat === "openai.responses_compact";
   const revokeRejection = response.ok && operation.receivedRejection ? () => operation.revokeRejection() : undefined;
-  const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe, undefined, revokeRejection) : null;
+  const receipt = tariff?.kind === "outcome_request" ? createResponseReceiptInspection(tariff) : undefined;
+  const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe, undefined, revokeRejection, receipt) : null;
   const bedrock = responseFormat === "aws_bedrock.eventstream" && mime === "application/vnd.amazon.eventstream" ? createBedrockEventStreamInspector() : null;
   const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
   const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
@@ -74,8 +76,9 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     const binaryComplete = speech && response.ok && delivery === "complete" && audio && nonempty;
     if (speech && !binaryComplete) inspection.outcome = "provider_error";
     const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
+    const requestCostReceipt = receipt?.result(delivery === "complete");
     resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
-      ...(hostedSearch ? { hostedSearch } : {}) });
+      ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
     if (delivery !== "complete") void reader.cancel(reason).catch(() => undefined);

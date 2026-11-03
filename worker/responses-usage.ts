@@ -1,3 +1,4 @@
+import type { ResponseReceiptInspection } from "./request-tariff.ts";
 import type { Token } from "stream-json/core/parser.js";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { createSseUsageAccumulator, extractUsageTokens, responseOutcome, responsesObservation, type ResponsesObservation, type SseUsageEvidence, type UsageInspection } from "./token-usage.ts";
@@ -13,11 +14,11 @@ const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 
 // Observe the declared Responses format without assembling output. Identity
 // publication and complete output/tool-history evidence have different owners.
-export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesInspectionTools, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens, revokeRejection?: () => void) {
+export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesInspectionTools, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens, revokeRejection?: () => void, receipt?: ResponseReceiptInspection) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const accumulator = createSseUsageAccumulator(revokeRejection);
   const hosted = createHostedSearchUsage();
-  let document = metadataParser(!!observe, !!tools?.witness), json = empty(), stopped = false;
+  let document = metadataParser(!!observe || !!receipt, !!tools?.witness, !!receipt), json = empty(), stopped = false;
   let prefix = "", mode: "prefix" | "data" | "event" | "ignored" = "prefix";
   let lineNonempty = false, optionalSpace = false, skipLf = false;
   let hasData = false, hasContent = false, eventError = false, undecodedData = false;
@@ -59,6 +60,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
       if (eventError) {
         const evidence = hasContent ? document.end() : null;
         if (stopped) return null;
+        receipt?.invalid();
         accumulator.accept({ kind: "error", ...(evidence?.kind === "data" ? { value: evidence.value } : {}) });
         tools?.invalid(); tools?.witness?.invalid(); hosted.invalid();
       }
@@ -66,16 +68,18 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
         const evidence = done.matches() ? { kind: "done" } as const : document.end();
         if (stopped) return null;
         accumulator.accept(evidence);
+        if (evidence.kind === "done") receipt?.done();
         if (evidence.kind === "data") {
+          receipt?.accept(evidence.value, true);
           if (responseOutcome(evidence.value) === "provider_error") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
           tools?.accept(document.tools(), true); tools?.witness?.accept(document.witnesses(), true);
           hosted.accept(document.tools(), true);
           fact = observe ? responsesObservation(evidence.value) : null;
         }
-        else if (evidence.kind !== "done") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+        else if (evidence.kind !== "done") { receipt?.invalid(); tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
       }
       document.stop();
-      document = metadataParser(!!observe, !!tools?.witness); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
+      document = metadataParser(!!observe || !!receipt, !!tools?.witness, !!receipt); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
     } else if (mode === "prefix" && prefix === "data") beginData();
     else if (mode === "event" || mode === "prefix" && prefix === "event") eventError = mode === "event" && eventName.matches();
     prefix = ""; mode = "prefix"; lineNonempty = false; optionalSpace = false;
@@ -97,6 +101,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
     }
   }
   function invalidUtf8() {
+    receipt?.invalid();
     tools?.invalid(); tools?.witness?.invalid(); hosted.invalid();
     document.stop();
     if (sse) accumulator.accept({ kind: "invalid" });
@@ -130,17 +135,19 @@ export function createResponsesUsageInspector(sse: boolean, tools?: ResponsesIns
       const tail = finishDecoder();
       if (stopped) return;
       await text(tail);
-      if (stopped || sse) return; // An undelimited SSE event is never dispatched.
+      if (stopped) return;
+      if (sse) { if (hasData || hasContent) receipt?.invalid(); return; } // Undelimited events cannot attest a receipt.
       const evidence = document.end();
       if (stopped) return;
       if (evidence.kind === "data") {
+        receipt?.accept(evidence.value, false);
         if (responseOutcome(evidence.value) === "provider_error") { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
         tools?.accept(document.tools(), false); tools?.witness?.accept(document.witnesses(), false);
         hosted.accept(document.tools(), false);
         const fact = responsesObservation(evidence.value);
         if (fact) await observe?.(fact);
       }
-      else { tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
+      else { receipt?.invalid(); tools?.invalid(); tools?.witness?.invalid(); hosted.invalid(); }
       json = evidence.kind === "data" ? { tokens: usageExtractor(evidence.value), outcome: responseOutcome(evidence.value) }
         : { tokens: null, outcome: evidence.kind === "invalid" ? "provider_error" : null };
     },
@@ -179,8 +186,8 @@ function literal(expected: string, trim = false) {
 class InspectionLimit extends Error {}
 type MetadataEvidence = Extract<SseUsageEvidence, { kind: "data" }> | { kind: "invalid" | "unavailable" };
 
-function metadataParser(inspectIdentity: boolean, encrypted: boolean) {
-  const projection = metadataProjection(inspectIdentity);
+function metadataParser(inspectIdentity: boolean, encrypted: boolean, receipt: boolean) {
+  const projection = metadataProjection(inspectIdentity, receipt);
   // Hosted usage also owns this projection when no continuation is requested.
   const tools = createToolEvidenceProjection();
   const witnesses = encrypted ? createToolEvidenceProjection(true) : null;
@@ -220,7 +227,7 @@ const textKeys = new Set(["type", "object", "status", "service_tier"]);
 const valueStarts = new Set(["startObject", "startArray", "startString", "startNumber", "nullValue", "trueValue", "falseValue"]);
 const leafFields = new Set(["text", "identity", "number", "error", "output"]);
 
-function metadataProjection(inspectIdentity: boolean) {
+function metadataProjection(inspectIdentity: boolean, receipt: boolean) {
   const frames: Frame[] = [];
   let complete = false;
   let value: unknown, capture: "key" | "text" | "identity" | "number" | "error" | null = null, scalar = "";
@@ -231,7 +238,7 @@ function metadataProjection(inspectIdentity: boolean) {
     if (!key || !frame.context) return null;
     if (frame.context === "root" || frame.context === "response") {
       if (textKeys.has(key)) return "text";
-      if (inspectIdentity && key === "id") return "identity";
+      if (inspectIdentity && (key === "id" || receipt && key === "model")) return "identity";
       if (key === "output") return "output";
       if (frame.context === "root" && key === "error") return "error";
       if (frame.context === "root" && key === "response") return "response";
@@ -240,7 +247,7 @@ function metadataProjection(inspectIdentity: boolean) {
     if (frame.context === "usage") {
       if (key === "input_tokens_details" || key === "prompt_tokens_details" || key === "output_tokens_details") return "details";
       if (key === "cache_creation") return "creation";
-      return counters.has(key) ? "number" : null;
+      return counters.has(key) || receipt && key === "cost_in_usd_ticks" ? "number" : null;
     }
     return (frame.context === "details" ? detailCounters : creationCounters).has(key) ? "number" : null;
   }
