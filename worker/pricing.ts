@@ -5,6 +5,7 @@ import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPrici
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import type { ToolPricing } from "./types";
+import type { XaiImageRequest } from "./xai-images.ts";
 
 export interface HostedSearchPrice { version: string; microsPerCall: number | null }
 // Freeze the declared request tariff, not a guess from the response or model name.
@@ -67,6 +68,66 @@ export interface RequestCostReceipt {
   pricingVersion: string;
 }
 
+export interface ImageRequestPricing {
+  unit: "image"; protocol: "xai.images"; version: string; effectiveAt: string;
+  source: "https://docs.x.ai/developers/pricing";
+  receipt: "xai.usage.cost_in_usd_ticks";
+  alias: { selectedModel: "grok-imagine-image-quality"; servingModel: "grok-imagine-image-2.0"; quality: "low";
+    effectiveAt: "2026-11-02"; source: "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2" };
+  rates: {
+    "grok-imagine-image": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"1k" | "2k", number> };
+    "grok-imagine-image-2.0": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"low" | "medium", Record<"1k" | "2k", number>> };
+  };
+}
+// Freeze this projection only after prepareXaiImage validates the native body.
+// It carries no prompt, image reference, credential or raw output bytes.
+export type ImageRequestSelection = Pick<XaiImageRequest, "model" | "servingModel" | "mode" | "count" | "inputImages" | "resolution" | "quality" | "qualityBasis">;
+
+export function imageRequestReserve(pricing: ImageRequestPricing, request: ImageRequestSelection): number | null {
+  if (!qualifiedImageSelection(pricing, request)) return null;
+  const card = pricing.rates[request.servingModel as keyof ImageRequestPricing["rates"]];
+  if (!isObject(card) || !isObject(card.outputMicrosPerImage)) return null;
+  const input = nonNegativeInteger(card.inputMicrosPerImage);
+  const outputs = card.outputMicrosPerImage as Record<string, unknown>;
+  const quality = request.qualityBasis === "service_default" ? ["low", "medium"] : [request.quality];
+  const selected = request.qualityBasis === "legacy" ? [outputs[request.resolution]]
+    : quality.map(key => key && isObject(outputs[key]) ? outputs[key][request.resolution] : undefined);
+  const rates = selected.map(nonNegativeInteger);
+  if (input == null || input === 0 || rates.some(rate => rate == null || rate === 0)) return null;
+  // Bound every edit reference per requested output, without claiming that
+  // this conservative multiplicity is the observed bill. Auto may choose
+  // either qualified quality; the explicit upstream alias is always low.
+  const reserve = (input * request.inputImages + Math.max(...rates as number[])) * request.count;
+  return Number.isSafeInteger(reserve) ? reserve : null;
+}
+
+export function imageRequestCost(pricing: ImageRequestPricing, request: ImageRequestSelection, response: unknown, complete: boolean): RequestCostReceipt | null {
+  if (imageRequestReserve(pricing, request) == null || !complete || !isObject(response)
+    || response.model !== request.servingModel || response.error != null
+    || response.status !== undefined && response.status !== "done" || !isObject(response.usage)) return null;
+  // Cost is independent of successful image delivery. The shared runtime must
+  // attest bounded original HTTP/JSON EOF and separately validate image bytes.
+  // Never infer a refund from moderation, partial delivery or a missing receipt.
+  return tickedCostReceipt(response.usage.cost_in_usd_ticks, pricing.version);
+}
+
+function qualifiedImageSelection(pricing: ImageRequestPricing, request: ImageRequestSelection): boolean {
+  if (pricing.unit !== "image" || pricing.protocol !== "xai.images" || pricing.source !== "https://docs.x.ai/developers/pricing"
+    || typeof pricing.version !== "string" || !pricing.version.length
+    || pricing.receipt !== "xai.usage.cost_in_usd_ticks" || !isObject(pricing.rates) || !isObject(pricing.alias)
+    || pricing.alias.selectedModel !== "grok-imagine-image-quality" || pricing.alias.servingModel !== "grok-imagine-image-2.0"
+    || pricing.alias.quality !== "low" || pricing.alias.effectiveAt !== "2026-11-02"
+    || pricing.alias.source !== "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2"
+    || !Number.isSafeInteger(request.count) || request.count < 1 || request.count > 4
+    || !Number.isSafeInteger(request.inputImages) || request.inputImages < 0 || request.inputImages > 3
+    || !["1k", "2k"].includes(request.resolution)
+    || (request.mode === "generate" ? request.inputImages !== 0 : request.mode !== "edit" || request.inputImages === 0)) return false;
+  if (request.model === pricing.alias.selectedModel) return request.servingModel === pricing.alias.servingModel && request.quality === "low" && request.qualityBasis === "retired_alias";
+  if (request.model === "grok-imagine-image") return request.servingModel === request.model && request.quality === null && request.qualityBasis === "legacy";
+  return request.model === "grok-imagine-image-2.0" && request.servingModel === request.model
+    && ["low", "medium"].includes(request.quality as string) && ["explicit", "service_default"].includes(request.qualityBasis);
+}
+
 export function requestOutcomeReserve(pricing: OutcomeRequestPricing, inferenceMicros: number | null): number | null {
   if (!qualifiedOutcome(pricing) || inferenceMicros == null || !Number.isSafeInteger(inferenceMicros) || inferenceMicros < 0
     || inferenceMicros > Number.MAX_SAFE_INTEGER - pricing.maximumAdditionalMicros) return null;
@@ -80,11 +141,14 @@ export function requestOutcomeCost(pricing: OutcomeRequestPricing, response: unk
   if (!qualifiedOutcome(pricing) || !complete || !isObject(response) || response.object !== "response"
     || typeof response.id !== "string" || !response.id.length || response.id.length > 256
     || !["completed", "incomplete"].includes(response.status as string) || !isObject(response.usage)) return null;
-  const ticks = response.usage.cost_in_usd_ticks;
+  return tickedCostReceipt(response.usage.cost_in_usd_ticks, pricing.version);
+}
+
+function tickedCostReceipt(ticks: unknown, pricingVersion: string): RequestCostReceipt | null {
   if (typeof ticks !== "number" || !Number.isSafeInteger(ticks) || ticks < 0) return null;
   // 10^10 ticks/USD = 10^4 ticks/micro. Integer remainder avoids precision
   // loss near MAX_SAFE_INTEGER; never add the fee again to this whole bill.
-  return { costMicros: Math.floor(ticks / 10000) + (ticks % 10000 === 0 ? 0 : 1), basis: "provider_reported", pricingVersion: pricing.version };
+  return { costMicros: Math.floor(ticks / 10000) + (ticks % 10000 === 0 ? 0 : 1), basis: "provider_reported", pricingVersion };
 }
 
 function qualifiedOutcome(pricing: OutcomeRequestPricing): boolean {
