@@ -57,10 +57,27 @@ for (const [id, binding, url, upstream, catalogId = upstream] of contracts) {
       ANTHROPIC_API_KEY: "fixture-lab-key", VERCEL_OIDC_TOKEN: "fixture-oidc",
       OPENCODE_ZEN_API_KEY: "fixture-unbound-alias",
     });
+    if (id === "abliteration") delete foreign.ABLIT_KEY;
     assert.throws(() => configuredUpstream(provider, null, foreign), error => error.code === "provider_not_configured");
     const auth = configuredUpstream(provider, null, { ...foreign, [binding]: "fixture-standard" });
     assert.equal(auth.headers.get("authorization"), "Bearer fixture-standard");
     assert.equal(auth.baseUrl + upstreamPath(provider, endpoint, {}, {}, auth), url);
+    if (id === "abliteration") {
+      const canonical = { ...foreign, ABLIT_KEY: "fixture-canonical" };
+      const both = { ...canonical, ABLITERATION_API_KEY: "fixture-legacy" };
+      for (const env of [canonical, both]) {
+        assert.equal(configuredUpstream(provider, null, env).headers.get("authorization"), "Bearer fixture-canonical");
+      }
+      const malformed = { ...both, ABLIT_KEY: "fixture-private\r\ninvalid" };
+      assert.throws(() => configuredUpstream(provider, null, malformed), error => {
+        assert.equal(error.code, "provider_not_configured");
+        assert.doesNotMatch(String(error), /fixture-private/);
+        return true;
+      });
+      const grant = { provider: id, kind: "api_key", enabled: true, credential: "fixture-selected" };
+      assert.equal(configuredUpstream(provider, grant, malformed).headers.get("authorization"), "Bearer fixture-selected");
+      assert.throws(() => configuredUpstream(provider, { ...grant, credential: "" }, both), error => error.code === "provider_not_configured");
+    }
     assert.deepEqual(provider.auth.grantTransports, {});
     assert.deepEqual(provider.routing.nativePrefixes, [`clawrouter-${id}`, id, ...(aliases[id] ?? [])]);
     for (const alias of aliases[id] ?? []) {

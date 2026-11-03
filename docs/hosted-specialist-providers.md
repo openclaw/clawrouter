@@ -20,9 +20,13 @@ provider-scoped; another provider's key is never a fallback.
 
 ## Product boundaries
 
-- Abliteration's quickstart calls its environment variable `ABLIT_KEY`. Configure
-  that credential explicitly as `ABLITERATION_API_KEY` for this router manifest.
-  The manifest does not read a second binding or select a subscription plan.
+- Abliteration accepts canonical `ABLIT_KEY` or legacy `ABLITERATION_API_KEY` as
+  alternative server bindings for the same credential. Either satisfies
+  readiness; when both are present, the canonical value wins. A malformed
+  canonical value fails closed rather than falling back to the legacy value.
+  The original selected grant remains authoritative over both server bindings;
+  a missing or invalid selected grant credential never borrows either value.
+  These aliases do not select a subscription plan or authorize another provider.
   Large v2 is a distinct model from the deprecated Large model. Responses,
   Messages, provider policies and server search are separate contracts.
 - Meta uses the Model API key, not a third-party Llama hosting key. Its Chat
