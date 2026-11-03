@@ -42,3 +42,25 @@ No login, account change, live call or secret provisioning is performed.
 Run `node --test worker/test/provider-radius.test.mjs`. Shared runtime integration
 must add fragmented SSE, cancellation, scoped catalog selection, unknown-price
 zero-egress rejection and exact-once caller/account settlement proof.
+
+## Bundled provider declaration
+
+`radius` declares native `messages` and `config` endpoints. `RADIUS_API_KEY` is
+its organization API key; `RADIUS_MODEL` selects the configured model alias.
+Native model passthrough remains unpriced. No OpenRouter key, direct Copilot
+identity, static model capability or radius-reported dollar cost is substituted.
+
+This manifest stays behind integration gates until the common runtime dispatches
+`radius.messages` through the native request/event inspector and treats
+`radius.config` as scoped metadata. The config response must pass
+`filterRadiusCatalog` with the selected trusted origin before model selection;
+a response-provided base cannot redirect the credential. The selected model,
+credential and native base stay bound for inference. OAuth remains a separate
+credential lifecycle, not an alias for the API-key grant.
+
+`worker/test/radius-provider.test.mjs` compiles the source manifest and composes
+its exact URL/auth/model contract with the native codecs. The integration owner
+must regenerate the snapshot and exercise actual Worker SSE framing,
+cancellation, caller attribution, SQL settlement and zero-egress budget denial;
+the client owner must exercise the actual frozen Pi consumer. These compose tests
+are not end-to-end proof. No deployment, login or host provisioning is included.
