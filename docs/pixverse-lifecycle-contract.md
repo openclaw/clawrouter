@@ -56,6 +56,14 @@ creation share the same native GET path. Before both can activate, control
 resolution must use the original caller/job/create-route binding, not the first
 matching endpoint. The current declaration has only one create route.
 
+The typed text/retrieve schema and PR493 managed header/credential contract are
+landed. This source update composes the text registry with the current ABI and
+preserves all existing provider registrations. There is no new generic runtime
+gap identified for this text-only declaration; source 6 still owns its committed
+snapshot and real Worker/client acceptance. Image/upload needs source 1's actual
+durable asset ownership before source 5 may register or declare it. Neither an
+`img_id`, a remote URL nor an upload codec fixture supplies that authority.
+
 The JSON response limit is 1 MiB, valid UTF-8 through EOF, with HTTP success
 and numeric `ErrCode=0`. IDs must be positive safe decimal integers; unsafe
 JSON numeric precision is rejected instead of silently rounding another ID.
@@ -85,11 +93,10 @@ refund. Unknown whole-request upstream cost remains denied under dollar hard
 budgets. Explicit `policy_fixed` remains a different charging basis.
 
 Synthetic lifecycle, upload, and result fixtures:
-`providers/_fixtures/pixverse/lifecycle.json`. Eight dependency-free tests
-cover deterministic behavior. Activation additionally requires the shared
-protocol/header/asset/observation-loss contract, provider manifest and snapshot,
-real Worker tests and actual frozen-client consumption. No deployment or live
-model call has occurred.
+`providers/_fixtures/pixverse/lifecycle.json`. Focused codec and registry tests
+cover deterministic behavior. Text activation still requires the provider
+snapshot, real Worker tests and actual frozen-client consumption; asset modes
+remain closed separately. No deployment or live model call has occurred.
 
 Primary evidence checked 2026-11-03:
 
