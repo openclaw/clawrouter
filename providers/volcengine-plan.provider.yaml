@@ -1,0 +1,53 @@
+# Frozen plan inventory, aliases and retirement dispositions: docs/ark-coding-plans.md.
+# Primary endpoint checked 2026-11-03; no standard API or cross-region key fallback.
+schema: clawrouter.service-provider.v1
+id: volcengine-plan
+displayName: Volcengine Coding Plan (Beijing)
+status: experimental
+class: openai_compatible
+service:
+  platform: volcengine
+  kind: model_provider
+  upstreamService: volcengine-plan
+  configKeys: [VOLCENGINE_PLAN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://ark.cn-beijing.volces.com/api/coding/v3
+routing:
+  nativePrefixes: [clawrouter-volcengine-plan, volcengine-plan]
+  modelPrefixes: [volcengine-plan/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: volcengine-plan/ark-code-latest
+      upstream: ark-code-latest
+      capabilities: [llm.chat]
+    - id: volcengine-plan/deepseek-v4-pro
+      upstream: deepseek-v4-pro
+      capabilities: [llm.chat]
+    - id: volcengine-plan/deepseek-v4-flash
+      upstream: deepseek-v4-flash
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
