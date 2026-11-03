@@ -3,8 +3,6 @@
 ## Unreleased
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
-- Resolve shared native control paths through the original scoped create-route binding, preserving existing jobs regardless of declaration order.
-- Bind bounded output-file descriptors to succeeded managed jobs before publication, preserving initial URI identity across inline retrieval and keeping file delivery separate from exactly-once generation settlement.
 
 - Qualify Google Omni Interactions lifecycle and authenticated file endpoint links in the provider compiler, rejecting unbound controls and credential overrides before shared runtime activation.
 - Managed media: retain original per-job control permissions without exposing unsupported poll/cancel routes; pin non-secret flags through credential and route revalidation.
@@ -74,6 +72,8 @@
 - Wire qualified fal, Kie and Vydra managed routes through scoped job ownership, original credentials, bounded result/cancel observations and the existing durable fixed-tariff settlement outbox. Preserve native Kie model input and unknown-create replay guards.
 - Freeze managed observation loss once when a provider can no longer report the job. Stop collection and return an actionable unavailable result while preserving the original fixed-policy settlement and unknown execution outcome; never infer a failure, refund or safe resubmission.
 - Qualify managed provider credentials and origins before create/control dispatch, preserve source-owned non-secret headers per attempt, and pin stable control metadata independently from fresh trace IDs. Keep upload ownership and new provider activation separately qualified.
+- Resolve shared native control paths through the original scoped create-route binding, preserving existing jobs regardless of declaration order.
+- Bind bounded output-file descriptors to succeeded managed jobs before publication, preserving initial URI identity across inline retrieval and keeping file delivery separate from exactly-once generation settlement.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
 - Refresh Workers types to 5.20261101.1 and Lucide icons to 1.66.0 under the two-day dependency cooldown. Worker runtime pins and security overrides are unchanged.
