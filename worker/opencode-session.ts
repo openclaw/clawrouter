@@ -7,7 +7,8 @@ import { HttpError, sha256Hex } from "./utils.ts";
 
 const standalone = new WeakMap<Request, string>();
 const formats = new Set(["openai.chat_completions", "openai.responses", "anthropic.messages"]);
-const headerName = "x-opencode-session";
+export const openCodeSessionHeaders = ["x-opencode-session", "x-clawrouter-session-id", "x-claude-code-session-id", "session-id"] as const;
+const headerName = openCodeSessionHeaders[0];
 
 // This is an attribution handle, never authority to select or revive a grant.
 // Inputs are the authenticated caller and already materialized original route.
@@ -33,7 +34,7 @@ export async function openCodeSessionHeader(
     // Same materialized-credential fingerprint pattern as response ownership.
     // Ignore static session overrides: they cannot choose the derived identity.
     credential = ["environment", await sha256Hex(JSON.stringify([
-      [...upstream.headers].filter(([name]) => name.toLowerCase() !== headerName), [...upstream.query],
+      [...upstream.headers].filter(([name]) => !openCodeSessionHeaders.some(value => value === name.toLowerCase())), [...upstream.query],
     ]))];
   }
   const conversation = correlationMetadata(request).sessionId;

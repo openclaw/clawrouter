@@ -70,6 +70,10 @@ async function setup(t, { providerId = "opencode", ...options } = {}) {
     // Two synthetic models prove stable identity across supported transports.
     provider.models = ["fixture-one", "fixture-two"].map(upstream => ({ ...structuredClone(provider.models[0]), id: `${providerId}/${upstream}`, upstream, capabilities: ["llm.chat", "llm.messages"], pricing: null, pricing_ref: null }));
   } });
+  if (options.pooled) {
+    f.policy.grantRouting = { eligibleGrants: { [providerId]: ["replicate"] }, environmentFallback: false };
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  }
   f.env[source.config_keys[0]] = "synthetic-environment-key";
   f.request = ({ conversation = session, manifest = false, messages = false, model = "fixture-one", headers = {} } = {}) => {
     const endpoint = f.provider.endpoints[messages ? 1 : 0];
@@ -105,9 +109,10 @@ for (const providerId of ["opencode", "opencode-go"]) for (const pooled of [fals
 }
 test("OpenCode caller/static native session overrides cannot forge or change the derived conversation", { timeout: 10_000 }, async t => {
   const f = await setup(t), first = await f.success();
-  f.provider.adapter.passthroughHeaders.push("x-opencode-session"); f.provider.adapter.injectHeaders["X-OpenCode-Session"] = "synthetic-static";
+  f.provider.adapter.passthroughHeaders.push("x-opencode-session", "x-clawrouter-session-id", "x-claude-code-session-id", "session-id"); f.provider.adapter.injectHeaders["X-OpenCode-Session"] = "synthetic-static";
   f.provider.endpoints[0].headers["X-OpenCode-Session"] = "synthetic-endpoint";
-  assert.equal(await f.success({ headers: { "X-OpenCode-Session": "synthetic-caller" } }), first);
+  assert.equal(await f.success({ headers: { "X-OpenCode-Session": "synthetic-caller", "x-claude-code-session-id": "raw-alias", "session-id": "raw-legacy" } }), first);
+  for (const name of ["x-clawrouter-session-id", "x-claude-code-session-id", "session-id"]) assert.equal(f.sent.at(-1).headers.get(name), null);
   f.provider.adapter.injectHeaders["X-OpenCode-Session"] = "changed-static";
   assert.equal(await f.success({ headers: { "x-opencode-session": "changed-caller" } }), first);
   assert.notEqual(await f.success({ conversation: null, headers: { "x-opencode-session": "synthetic-caller", "x-request-id": "reused" } }), await f.success({ conversation: null, headers: { "x-opencode-session": "synthetic-caller", "x-request-id": "reused" } }));

@@ -1,4 +1,4 @@
-import { openCodeSessionHeader } from "./opencode-session.ts";
+import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
 import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
@@ -809,7 +809,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     }
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
-      headers.delete("x-opencode-session");
+      for (const name of openCodeSessionHeaders) headers.delete(name);
       const session = transport === "http" ? await openCodeSessionHeader(request, auth, selection, upstream, url) : null;
       if (session) headers.set(session.name, session.value);
     }

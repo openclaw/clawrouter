@@ -46,7 +46,8 @@ authority and creates no persistent session store. Existing admission,
 revocation, grant priority and failover behavior remain unchanged.
 
 Common dispatch deletes caller, endpoint and static-provider native session
-header overrides before adding the derived value. Non-generation operations
+header overrides and raw router session-attribution aliases before adding the
+derived value. Non-generation operations
 receive no derived session header. Worker fixtures cover real native/manifest
 dispatch, multiple models and API paths, disabled caching, original grant and
 environment credentials, reconnection, caller isolation, malformed IDs,
