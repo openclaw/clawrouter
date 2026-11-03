@@ -1,3 +1,4 @@
+import { assertRequestTariffDestination } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
@@ -423,6 +424,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (isStandaloneSearch(selection.endpoint)) search = await SearchSession.resolve(env, auth, selection.body as Record<string, unknown>, selection.endpoint.id);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, search?.pinned ?? continuation?.pinned, "http", true);
+    assertRequestTariffDestination(selection.endpoint, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
     if (search) {
@@ -553,7 +555,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await operation.wait(pending, "upstream", discard);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -599,7 +601,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    response = await normalizePreStreamError(response, streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
     // Retire only the timer; caller cancellation remains connected through EOF.
     operation.retireDeadline();
@@ -612,7 +614,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (soft?.denial) {
       operation.stop("upstream", soft.denial);
       void response?.body?.cancel().catch(() => undefined);
-      accounting.fail(402, "denied", undefined, content);
+      accounting.fail(402, "denied", cost.requestTariff ? reservation : undefined, content, !!cost.requestTariff && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
     operation.stop("upstream", error);
@@ -622,7 +624,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (background) {
       if (!dispatched || response?.ok === false) context.waitUntil(background.unsent(response?.status ?? 502, operation.status ?? "provider_error", content));
       // Unknown dispatched delivery remains collectible; it is not a terminal.
-    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && (!!cost.requestTariff || response?.ok !== false));
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
@@ -644,7 +646,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format);
+  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff);
   if (admission) admission.completion = observed.result;
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));

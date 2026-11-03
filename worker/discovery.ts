@@ -35,7 +35,7 @@ function staticProviderProjection(provider: CompiledProvider) {
       anthropic: Object.freeze({ id: model.id, type: "model", display_name, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
     }];
   }));
-  const routes = new Map(provider.endpoints.filter(endpoint => endpoint.native_proxy).map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming })]));
+  const routes = new Map(provider.endpoints.filter(endpoint => endpoint.native_proxy).map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}) })]));
   return { models, routes, connectionTypes: Object.freeze(connectionTypes(provider)) as unknown as string[] };
 }
 const compiledProjections = new WeakMap(snapshot.providers.map(provider => [provider, staticProviderProjection(provider)]));
@@ -439,7 +439,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
         const supportedTiers = model?.nativeCapabilities?.endpoints[endpoint.id]?.supportedServiceTiers;
         const permittedServiceTiers = supportedTiers?.filter(tier => availability.status !== "exact-blocked" && allowedServiceTiers(auth.policy, model!.id, auth.serviceTiers).includes(tier));
-        const common = { endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
+        const common = { ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
         const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];

@@ -33,6 +33,7 @@ export interface CatalogOffer {
   // Declared support intersected with this selected identity’s tier allowlist.
   // Not a tier-specific affordability promise or authorization for dispatch.
   permittedServiceTiers?: string[];
+  requestPricing?: import("./request-pricing").RequestPricing;
   // Fresh-request completeness under this key; advisory, not a grant or a
   // reservation. Dispatch revalidates the actual request and current authority.
   hostedToolAdmission?: { version: "clawrouter.hosted-tool-admission.v1"; web_search: "admitted" | "pricing_required" };
@@ -47,7 +48,7 @@ export interface ClientCatalogProvider {
   policies: string[];
   readiness: ProviderReadiness;
   connectionTypes: string[];
-  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime" }>;
+  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
   models: ClientCatalogModel[];
   offers: CatalogOffer[];
 }

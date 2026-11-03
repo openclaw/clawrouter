@@ -17,3 +17,24 @@ export function normalizeRequestCosts(value: unknown): Record<string, number> | 
   }
   return Object.fromEntries(entries);
 }
+
+/** Published operation prices; policy-fixed tariffs remain a separate basis. */
+export interface SuccessfulRequestPricing {
+  unit: "request";
+  version: string;
+  effectiveAt: string;
+  source: string;
+  successfulResponseMicros: number;
+  parameterRates?: { parameter: string; rates: Record<string, number> };
+}
+
+export interface OutcomeRequestPricing {
+  unit: "request";
+  version: string;
+  effectiveAt: string;
+  source: "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee";
+  outcome: "xai.responses_violation";
+  maximumAdditionalMicros: 50000;
+  receipt: "xai.usage.cost_in_usd_ticks";
+}
+export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing;
