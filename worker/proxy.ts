@@ -7,16 +7,15 @@ import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
-import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
+import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
-import { applyProxyQuery, applyStreamingQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
+import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
 import { identitySelectionDenied } from "./native-request-headers.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
@@ -48,10 +47,10 @@ import { backgroundResponse, requireEmptyResponseControlBody, responsesControls,
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
-  assertProviderAccess, capabilityForPath, copyRequestHeaders, modelRoute, providerById,
+  assertProviderAccess, capabilityForPath, modelRoute, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
-import { applyTransportHeaders, assertOperationConfiguration, grantSupports, transformTransportBody } from "./provider-auth.ts";
+import { assertOperationConfiguration, grantSupports } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
@@ -779,29 +778,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       assertOperationConfiguration(lifecycle, upstream.grant, env);
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
-    const headers = new Headers(upstream.headers);
-    copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
-    applyTransportHeaders(headers, upstream.transport, upstream.grant);
-    const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
-    const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
-    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-    for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
-    // Continuations and controls reconstruct the configured route, not the
-    // incidental query of one create call. Credential/config changes still pin.
-    const configuredOwnerUrl = new URL(url);
-    applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
-    applyStreamingQuery(url.searchParams, selection.endpoint);
-    const body = transformTransportBody(upstream.transport, selection.body);
-    // The 32 MB media envelope must not coexist with whole-document transport
-    // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media
-    // splice it in as raw chunks; other Claude bodies above 8 MiB use the
-    // chunked serializer. WebSocket creates send their own frame instead.
-    const signed = selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4");
-    const bodyless = ["GET", "HEAD"].includes(selection.method) || transport === "websocket";
-    const media = bodyless || signed ? null : mediaJsonBody(body);
-    const bytes = media ? media.bytes : !bodyless && !signed && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(body) : 0;
-    const streamBody = media !== null || bytes > maxJsonBodyBytes;
-    const requestBody = bodyless ? undefined : media ? media.stream().pipeThrough(new FixedLengthStream(bytes)) : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
+    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle) {
