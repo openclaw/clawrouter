@@ -121,5 +121,6 @@ test("Vercel dynamic catalog is policy-filtered without promoting upstream prici
     return Response.json({ object: "list", data: [visible, { id: "other/hidden", object: "model" }] }); };
   const r = await f.call(`/v1/native/${id}/models`); assert.equal(r.status, 200, await r.clone().text());
   assert.deepEqual(await r.json(), { object: "list", data: [visible] }); await f.drain();
-  assert.equal(f.env.BUDGET_LEDGER.get("fixture:paid").reservations().length, 0); assert.equal(provider.models[0].pricing, null);
+  for (const reservation of f.env.BUDGET_LEDGER.get("fixture:paid").reservations()) assert.equal(reservation.reserved_micros, 0);
+  const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(event.actual_cost_micros, 0); assert.equal(provider.models[0].pricing, null);
 });
