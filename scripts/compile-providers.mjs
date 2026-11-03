@@ -268,7 +268,8 @@ function validateManifest(manifest) {
   validateDeepgramPrerecorded(manifest);
   validateGoogleEmbeddings(manifest);
   validateXaiImages(manifest);
-  validateBasetenModels(manifest);
+  validateNativeKeyedModels(manifest, "baseten", "https://inference.baseten.co/v1");
+  validateNativeKeyedModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
   validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
@@ -477,22 +478,23 @@ function validateUpstreamPath(manifest, id, endpoint) {
   }
 }
 
-function validateBasetenModels(manifest) {
+function validateNativeKeyedModels(manifest, providerId, baseUrl) {
+  const format = `${providerId}.models`;
   const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
-    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("baseten.models"))
-    || manifest.id === "baseten" && (endpoint.path === "/models" || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
+    || manifest.id === providerId && (endpoint.path === "/models" || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error("baseten.models requires its native GET /models route, canonical inference origin and original Bearer API-key binding"); };
+  const fail = () => { throw new Error(`${format} requires its native GET /models route, canonical inference origin and original Bearer API-key binding`); };
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
-  if (manifest.id !== "baseten" || endpoints.length !== 1
-    || Object.values(manifest.baseUrls).some(base => base !== "https://inference.baseten.co/v1")
+  if (manifest.id !== providerId || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== baseUrl)
     || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
     || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
     || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
     || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
     || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
   const [id, endpoint] = endpoints[0];
-  if (endpoint.requestFormat !== "baseten.models" || endpoint.responseFormat !== "baseten.models"
+  if (endpoint.requestFormat !== format || endpoint.responseFormat !== format
     || endpoint.method !== "GET" || endpoint.path !== "/models" || endpoint.upstreamPath !== undefined
     || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
     || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "accept" || value !== "application/json")) fail();
