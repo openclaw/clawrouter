@@ -39,6 +39,8 @@ jobs:
         with:
           node-version: 24.22.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
       - run: pnpm install --frozen-lockfile
       - name: Fetch pinned official native engines
         env:
@@ -113,6 +115,8 @@ jobs:
         with:
           node-version: 24.22.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build
@@ -153,6 +157,8 @@ jobs:
           node-version: 24.22.1
           architecture: arm64
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
       - name: Verify macOS runtime
         run: |
           node -e 'if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Expected Darwin ARM64"); console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch }))'
@@ -186,6 +192,8 @@ jobs:
         with:
           node-version: 24.22.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
       - run: pnpm install --frozen-lockfile
       - name: Compile provider snapshot
         run: |
