@@ -164,6 +164,7 @@
 
 - Exercise the actual pinned OpenClaw search plugin through workerd and SQLite in secretless CI, checking scoped discovery, provider credentials, caller cancellation and policy-fixed accounting.
 - Verify catalog-selected OpenAI-format TTS and Talk through the actual OpenClaw consumer, Worker and SQLite accounting in isolated CI.
+- Exercise the actual OpenClaw memory factory against native Cohere embedding offers, including scoped billing, budget admission and incomplete-response handling.
 
 - Verify actual OpenClaw memory embedding batch ordering, credential refresh and usage through workerd for concrete OpenAI-format models. Native embedding formats and deployment placeholders remain separately qualified.
 

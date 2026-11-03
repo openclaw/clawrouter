@@ -26,7 +26,7 @@ env:
 jobs:
   search-consumer:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -95,5 +95,26 @@ jobs:
           pnpm --version
       - name: Actual TTS and Talk through workerd and SQLite
         run: node --test test/openclaw-speech.test.mjs
+        env:
+          CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
+      # New SDK exports change a frozen package input. Checkout cleans only this
+      # ephemeral client's old install before its own new native installation.
+      - name: Check out the actual public native memory consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 5964e1f3065337b92a733e42cc248bf5e27a5415
+          path: .openclaw-contract
+          persist-credentials: false
+          fetch-depth: 1
+          clean: true
+      - name: Install this native memory candidate's own frozen dependencies
+        working-directory: .openclaw-contract
+        run: |
+          pnpm install --frozen-lockfile
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'
+          pnpm --version
+      - name: Actual native memory factory through workerd and SQLite
+        run: node --test test/openclaw-native-embeddings.test.mjs
         env:
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
