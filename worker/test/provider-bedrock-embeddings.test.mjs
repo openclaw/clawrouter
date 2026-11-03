@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { prepareBedrockEmbedding, observeBedrockEmbedding, bedrockEmbeddingModels } from "../provider-bedrock-embeddings.ts";
+import { prepareBedrockEmbedding, observeBedrockEmbedding, bedrockEmbeddingModels, isBedrockEmbeddingModel } from "../provider-bedrock-embeddings.ts";
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/amazon-bedrock/embeddings.json", import.meta.url), "utf8"));
 const example = model => wire.cases.find(item => item.model === model);
 const titan = example("amazon.titan-embed-text-v2:0"), cohere = example("cohere.embed-v4:0");
+
+test("Bedrock model recognition retains the codec's finite families, profile grammar and rejection semantics", () => {
+  assert.equal(bedrockEmbeddingModels.length, 10);
+  for (const model of bedrockEmbeddingModels) assert.equal(isBedrockEmbeddingModel(model), true, model);
+  for (const item of wire.cases) {
+    assert.equal(isBedrockEmbeddingModel(item.model), true, item.model);
+    assert.equal(prepareBedrockEmbedding(item.model, item.body).modelId, item.model);
+  }
+  for (const prefix of ["us", "eu", "ap", "apac", "au", "jp", "global"]) {
+    const model = prefix + ".amazon.titan-embed-text-v2:0:2:8k";
+    assert.equal(isBedrockEmbeddingModel(model), true, model);
+    assert.equal(prepareBedrockEmbedding(model, titan.body).modelId, model);
+  }
+  for (const model of ["", "constructor", "amazon.titan-embed-text-v9", "cohere.embed-v4:0:foreign",
+    "us.us.amazon.titan-embed-text-v2:0", "amazon.titan-embed-text-v2:0:8K", "amazon.titan-embed-text-v2:0:1e3",
+    "bedrock/amazon.titan-embed-text-v1", "../amazon.titan-embed-text-v1", "https://api.example/model",
+    "arn:aws:bedrock:us-east-1:000000000000:inference-profile/synthetic", "x".repeat(201), null, undefined, 7, {}, []]) {
+    assert.equal(isBedrockEmbeddingModel(model), false, String(model));
+    assert.throws(() => prepareBedrockEmbedding(model, titan.body), /unsupported_bedrock_embedding_model/);
+  }
+});
 
 test("Bedrock embedding fixtures cover every frozen model with exact native shape and vector dimensions", () => {
   assert.equal(bedrockEmbeddingModels.length, 10);

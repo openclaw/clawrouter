@@ -1,0 +1,132 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
+const { snapshot } = await import("../providers.ts");
+const { putGrantCredentials } = await import("../grant-credentials.ts");
+const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
+const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/amazon-bedrock/embeddings.json", import.meta.url)));
+const titan = wire.cases[0], region = "us-east-1", origin = `https://bedrock-runtime.${region}.amazonaws.com`;
+
+async function setup(t, options = {}) {
+  const original = snapshot.providers, source = structuredClone(original.find(provider => provider.id === "aws-bedrock")); assert.ok(source);
+  snapshot.providers = original.filter(provider => provider.id !== source.id); t.after(() => { snapshot.providers = original; });
+  const f = await fixture(t, { ...options, providerId: source.id, configure(provider) {
+    Object.assign(provider, source);
+    // Candidate declaration for common dispatch proof. Production schema/cards
+    // remain with their source owner; retain existing Invoke routes unchanged.
+    const endpoint = { ...structuredClone(provider.endpoints.find(endpoint => endpoint.id === "invoke_model")), id: "embed", modelPassthrough: undefined,
+      streaming: null, request_headers: [] };
+    provider.endpoints.push(endpoint); if (options.reverse) provider.endpoints.reverse(); provider.capabilities.push({ id: "llm.embeddings", endpoint: "embed", methods: ["POST"] });
+    const item = options.item ?? titan;
+    provider.models.push({ ...structuredClone(provider.models[0]), id: `bedrock/${item.model}`, upstream: item.model,
+      capabilities: ["llm.embeddings"], pricing: null, inference: undefined, nativeCapabilities: undefined });
+  } });
+  Object.assign(f.env, { AWS_ACCESS_KEY_ID: "synthetic-env-access", AWS_SECRET_ACCESS_KEY: "synthetic-env-secret",
+    AWS_SESSION_TOKEN: "synthetic-env-session", AWS_REGION: region });
+  if (options.pooled) await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true,
+    credentials: { accessKeyId: "synthetic-grant-access", secretAccessKey: "synthetic-grant-secret", sessionToken: "synthetic-grant-session" } });
+  f.item = options.item ?? titan;
+  f.rows = () => [...new Set(f.budgetCalls.map(call => call.name))].flatMap(name => f.budgets.get(name).reservations());
+  f.upstream = request => { f.dispatch = { rows: f.rows(), capacity: bodyBudgetCharged() };
+    return options.response ? options.response(request) : Response.json(f.item.response, { headers: { "x-private-upstream": "synthetic" } }); };
+  f.request = ({ manifest = false, model = f.item.model, body = f.item.body, query = "", endpoint = "embed", ...extra } = {}) => f.call(
+    (manifest ? `/v1/proxy/aws-bedrock/${endpoint}` : `/v1/native/aws-bedrock/model/${encodeURIComponent(model)}/invoke`) + query,
+    manifest ? { body, pathParams: { model } } : body, { ...extra, headers: { "x-amz-security-token": "synthetic-caller-session", "x-api-key": "synthetic-caller", ...extra.headers } });
+  t.after(f.drain); return f;
+}
+async function event(f) { await f.drain(); const rows = await f.events(); assert.equal(rows.length, 1); assert.equal(bodyBudgetCharged(), 0); return rows[0]; }
+async function denied(f, request = {}) {
+  const response = await f.request(request), text = await response.text(); assert.ok(response.status >= 400, text);
+  assert.doesNotMatch(text, /synthetic-(?:env|grant|caller)/); assert.equal(f.sent.length, 0); await f.drain();
+  assert.ok((await f.events()).every(row => row.actual_cost_micros === 0)); assert.equal(bodyBudgetCharged(), 0); return response;
+}
+
+for (const [index, item] of wire.cases.entries()) test(`Bedrock real signed native memory dispatch preserves ${item.model} and complete vectors`, { timeout: 10_000 }, async t => {
+  const pooled = index % 2 === 0, manifest = index % 3 === 0, f = await setup(t, { pooled, item, reverse: pooled });
+  const response = await f.request({ manifest }); assert.equal(response.status, 200, response.ok ? undefined : await response.text());
+  assert.deepEqual(await response.json(), item.response); assert.equal(response.headers.get("x-private-upstream"), null);
+  assert.equal(f.sent.length, 1); const sent = f.sent[0], text = await sent.clone().text();
+  assert.equal(sent.url, `${origin}/model/${encodeURIComponent(item.model)}/invoke`); assert.equal(sent.method, "POST"); assert.equal(sent.redirect, "manual");
+  assert.deepEqual(JSON.parse(text), item.body); assert.equal(sent.headers.get("x-amz-content-sha256"), createHash("sha256").update(text).digest("hex"));
+  assert.match(sent.headers.get("authorization"), new RegExp(`^AWS4-HMAC-SHA256 Credential=synthetic-${pooled ? "grant" : "env"}-access/\\d{8}/${region}/bedrock/aws4_request,`));
+  assert.equal(sent.headers.get("x-amz-security-token"), `synthetic-${pooled ? "grant" : "env"}-session`); assert.equal(sent.headers.get("x-api-key"), null);
+  assert.equal(f.dispatch.capacity, 64 * 1024 * 1024); assert.equal(f.dispatch.rows.length, 2);
+  assert.ok(f.dispatch.rows.every(row => row.dispatch_started === 1 && row.settled === 0));
+  const settled = await event(f); assert.equal(settled.input_tokens, item.inputTokens); assert.equal(settled.output_tokens, null); assert.equal(settled.total_tokens, null);
+  assert.equal(settled.actual_cost_micros, 700); assert.equal(settled.cost_basis, "policy_fixed"); assert.equal(settled.model, `bedrock/${item.model}`);
+  assert.ok(f.rows().every(row => row.settled === 1)); assert.doesNotMatch(JSON.stringify(settled), /synthetic-(?:env|grant|caller)/);
+});
+
+for (const scenario of ["unpriced", "missing-credential", "missing-region", "foreign-origin", "region-mismatch", "wrong-signing-service", "query", "caller-region", "body-model", "stream", "oversized", "unknown-model"]) {
+  test(`Bedrock embedding ${scenario} is denied before egress and never borrows another credential or wire`, { timeout: 10_000 }, async t => {
+    const f = await setup(t, { fixed: scenario === "unpriced" ? null : 700 }); const request = {};
+    if (scenario === "missing-credential") delete f.env.AWS_SECRET_ACCESS_KEY;
+    if (scenario === "missing-region") delete f.env.AWS_REGION;
+    if (scenario === "foreign-origin") f.provider.base_urls.default = "https://unqualified.example";
+    if (scenario === "region-mismatch") f.provider.base_urls.default = "https://bedrock-runtime.eu-west-1.amazonaws.com";
+    if (scenario === "wrong-signing-service") f.provider.auth.schemes[0].service = "s3";
+    if (scenario === "query") request.query = "?trace=ENABLED";
+    if (scenario === "caller-region") request.query = "?region=eu-west-1";
+    if (scenario === "body-model") request.body = { ...titan.body, model: titan.model };
+    if (scenario === "stream") request.body = { ...titan.body, stream: true };
+    if (scenario === "oversized") request.body = { inputText: "x".repeat(2 * 1024 * 1024) };
+    if (scenario === "unknown-model") { request.manifest = true; request.model = "amazon.titan-embed-text-v9"; }
+    const response = await denied(f, request); if (scenario === "unpriced") assert.equal(response.status, 400);
+  });
+}
+
+test("Bedrock original grant signing never falls back to nonselected environment key material", { timeout: 10_000 }, async t => {
+  const f = await setup(t, { pooled: true }); delete f.env.AWS_ACCESS_KEY_ID; delete f.env.AWS_SECRET_ACCESS_KEY;
+  const response = await f.request(); assert.equal(response.status, 200, response.ok ? undefined : await response.text()); await response.json();
+  assert.match(f.sent[0].headers.get("authorization"), /Credential=synthetic-grant-access\//); await event(f);
+  await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true, credentials: { accessKeyId: "synthetic-grant-access" } });
+  f.env.AWS_ACCESS_KEY_ID = "synthetic-env-access"; f.env.AWS_SECRET_ACCESS_KEY = "synthetic-env-secret";
+  const refused = await f.request(); assert.ok(refused.status >= 400); await refused.text(); assert.equal(f.sent.length, 1);
+});
+
+for (const scenario of ["redirect", "rejection", "invalid-vector", "partial-json", "compressed"]) test(`Bedrock ${scenario} after dispatch retains conservative cost with no partial vectors or replay`, { timeout: 10_000 }, async t => {
+  const f = await setup(t, { response: () => scenario === "redirect" ? new Response(null, { status: 307, headers: { location: "https://unqualified.example" } })
+    : scenario === "rejection" ? Response.json({ message: "Synthetic upstream rejection" }, { status: 422 })
+    : scenario === "partial-json" ? new Response('{"embedding":[1', { headers: { "content-type": "application/json" } })
+    : Response.json(scenario === "invalid-vector" ? { ...titan.response, embedding: [1] } : titan.response,
+      { headers: scenario === "compressed" ? { "content-encoding": "gzip" } : {} }) });
+  const response = await f.request(); assert.equal(response.status, 502); assert.equal((await response.json()).error.code, "provider_unavailable");
+  assert.equal(f.sent.length, 1); const settled = await event(f); assert.equal(settled.actual_cost_micros, 700); assert.equal(settled.total_tokens, null);
+});
+
+test("Bedrock capacity exhaustion is known-unsent and releases the original reservations", { timeout: 10_000 }, async t => {
+  const f = await setup(t), blocker = new BodyLease(); assert.equal(blocker.grow(20 * 1024 * 1024), true);
+  let response; try { response = await f.request(); } finally { blocker.release(); }
+  assert.equal(response.status, 503); await response.text(); assert.equal(f.sent.length, 0); const settled = await event(f); assert.equal(settled.actual_cost_micros, 0);
+});
+
+test("Bedrock embedding delivery waits for complete EOF and caller abort retains dispatched uncertainty", { timeout: 10_000 }, async t => {
+  const reached = Promise.withResolvers(), abort = new AbortController(); let canceled = false;
+  const f = await setup(t, { response: () => new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode(JSON.stringify(titan.response))); reached.resolve();
+  }, cancel() { canceled = true; } }), { headers: { "content-type": "application/json" } }) });
+  let delivered = false; const pending = f.request({ signal: abort.signal }).then(response => { delivered = true; return response; });
+  await reached.promise; await new Promise(resolve => setTimeout(resolve, 0)); assert.equal(delivered, false); abort.abort();
+  const response = await pending; assert.equal(response.status, 502); await response.text();
+  const settled = await event(f); assert.equal(settled.actual_cost_micros, 700); assert.equal(settled.input_tokens, null); assert.equal(canceled, true); assert.equal(f.sent.length, 1);
+});
+
+test("Bedrock missing dispatch acknowledgment never sends the signed paid request", { timeout: 10_000 }, async t => {
+  const f = await setup(t), ledger = f.env.BUDGET_LEDGER; let fallback = 0;
+  f.env.BUDGET_LEDGER = { idFromName: name => name, get: name => ({ async fetch(url, init) {
+    if (new URL(url).pathname === "/dispatch") { fallback++; return Response.json({ error: "synthetic lost ACK" }, { status: 503 }); }
+    const response = await ledger.get(name).fetch(url, init);
+    if (new URL(url).pathname !== "/reserve") return response;
+    const receipt = await response.json(); delete receipt.dispatched; return Response.json(receipt, { status: response.status });
+  } }) };
+  const response = await f.request(); assert.equal(response.status, 503); assert.equal((await response.json()).error.code, "accounting_unavailable");
+  const settled = await event(f); assert.equal(settled.actual_cost_micros, 0); assert.equal(f.sent.length, 0); assert.equal(fallback, 2);
+});
+
+for (const model of [titan.model, "us.amazon.titan-embed-text-v2:0:2:8k"]) test(`Bedrock unregistered ${model} cannot bypass the qualified embedding route through generic Invoke`, { timeout: 10_000 }, async t => {
+  const f = await setup(t); f.provider.models = f.provider.models.filter(model => !model.capabilities.includes("llm.embeddings"));
+  f.provider.endpoints = f.provider.endpoints.filter(endpoint => endpoint.id !== "embed");
+  await denied(f, { model }); assert.equal(f.budgetCalls.some(call => call.path === "/reserve"), false);
+});

@@ -637,6 +637,14 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^openrouter\\.audio_transcription" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^openrouter\\.audio_transcription" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/openRouterTranscriptionEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["responseFormat"] }
           ]
@@ -690,6 +698,14 @@
           ]
         },
         "then": { "$ref": "#/$defs/arceeModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^novita\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^novita\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/novitaModelsEndpoint" }
       }, {
         "if": {
           "anyOf": [
@@ -998,6 +1014,24 @@
         "method": { "const": "GET" }, "path": { "const": "/models" },
         "requestFormat": { "const": "arcee.models" },
         "responseFormat": { "const": "arcee.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "novitaModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "novita.models" },
+        "responseFormat": { "const": "novita.models" },
         "nativeProxy": { "const": true },
         "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
       },
@@ -2076,6 +2110,27 @@
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["upstreamPath"] }
+      ] }
+    },
+    "openRouterTranscriptionEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/audio/transcriptions" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "openrouter.audio_transcription" },
+        "responseFormat": { "const": "openrouter.audio_transcription" },
+        "query": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "deepgramPrerecordedEndpoint": {

@@ -1,4 +1,6 @@
+import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { GoogleContinuation, googleContinuationRequested, googleContinuationRoute } from "./google-continuation.ts";
 import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
@@ -63,10 +65,11 @@ import {
 type AuthMode = "proxy_key" | "access";
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
-const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits"]);
+const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits", "openrouter.audio_transcription"]);
 const mediaPaths = new Set(["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/chat/completions"]);
 const mediaEnvelope = (endpoint: { request_format: string }) => mediaFormats.has(endpoint.request_format);
-const bodyLimit = (endpoint: { request_format: string }) => mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
+const bodyLimit = (endpoint: { request_format: string }) => endpoint.request_format === "openrouter.audio_transcription"
+  ? 24 * 1024 * 1024 : mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
 // Unified paths admit the media envelope before the model resolves a format.
 const expandedTooLarge = () => errorResponse("request_too_large", `JSON request body exceeds the ${maxJsonBodyBytes} byte limit for this route`, 413);
 
@@ -417,6 +420,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return identityDenial;
   }
   if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
+  if (selection.endpoint.request_format === "openrouter.audio_transcription"
+    && (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(request.headers.get("content-type")?.trim() ?? "")
+      || ![null, "identity"].includes(request.headers.get("content-encoding"))))
+    throw new HttpError(400, "invalid_native_transcription_content_type", "native transcription requires uncompressed UTF-8 JSON");
   validateSelectedInput(selection);
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
@@ -561,6 +568,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
     nativeLease = selection.nativeResponse?.acquire();
+    if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
     const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
@@ -796,7 +804,16 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
-    if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
+    const signingRegion = !streamBody ? await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant) : undefined;
+    if (selection.provider.id === "aws-bedrock" && selection.capability === "llm.embeddings") {
+      const signingScheme = selection.provider.auth.schemes.find(scheme => scheme.type === "sig_v4");
+      if (transport !== "http" || signingScheme?.type !== "sig_v4" || signingScheme.service !== "bedrock"
+        || !signingRegion || url.origin !== `https://bedrock-runtime.${signingRegion}.amazonaws.com`
+        || hasProxyQuery(queryInput) || new URL(request.url).search)
+        throw new HttpError(400, "invalid_native_bedrock_embedding_destination", "Bedrock embeddings require the original signed regional destination without query options");
+      selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
+      assertNativeResponseDestination(selection.nativeResponse, url);
+    }
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");

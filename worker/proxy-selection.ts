@@ -1,14 +1,18 @@
+import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
 import { validateSpeechRequest } from "./speech-request.ts";
 import { prepareNativeImage } from "./native-images.ts";
+import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transcription.ts";
+import { prepareNativeGoogleMusic } from "./native-google-music.ts";
 import { prepareNativeGradiumSpeech } from "./native-gradium-speech.ts";
 import { prepareNativeGoogleImage } from "./native-google-images.ts";
 import type { NativeResponse } from "./native-response.ts";
 import type { NativeQueryBinding } from "./native-query.ts";
-import { nativeEmbeddingMode, prepareNativeEmbedding } from "./native-embeddings.ts";
+import { nativeEmbeddingInput, prepareNativeEmbedding } from "./native-embeddings.ts";
 import { selectRequestTariff } from "./request-tariff.ts";
 import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
@@ -35,7 +39,14 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
-  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection) ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection) ?? prepareNativeGoogleImage(selection);
+  if (selection.provider.id === "aws-bedrock" && (selection.model?.capabilities.includes("llm.embeddings")
+    || isBedrockEmbeddingModel(selection.model?.upstream ?? selection.pathParams?.model ?? ""))
+    && selection.capability !== "llm.embeddings")
+    throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
+  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
+    ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
+    ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection)
+    ?? prepareNativeOpenRouterTranscription(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
     throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
@@ -129,7 +140,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   }
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
   if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
-  const embedding = nativeEmbeddingMode(endpoint.request_format);
+  const embedding = nativeEmbeddingInput(provider, endpoint);
   // Native models/foo is a wire assertion, not a second router selector.
   const modelId = !embedding && typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
@@ -147,6 +158,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
 
   const model = bodyModel ?? pathModel;
+  if (!nativeModelEligible(endpoint.request_format, model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model is not qualified for this native protocol");
   const upstreamModel = bodyUpstream ?? pathUpstream;
   const pathParams = { ...inputPathParams };
   for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {

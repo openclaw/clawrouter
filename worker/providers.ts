@@ -273,7 +273,7 @@ export function transformRequestBody(provider: CompiledProvider, path: string, m
   return transformed;
 }
 
-export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<void> {
+export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<string | undefined> {
   const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
   if (!scheme || scheme.type !== "sig_v4") return;
   const credentials = grant?.credentials;
@@ -306,6 +306,7 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
   const signature = hex(await hmac(signingKey, stringToSign));
   headers.set("authorization", `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
   headers.delete("host");
+  return region;
 }
 
 export async function listGrantRecords(env: Env): Promise<GrantRecord[]> {
