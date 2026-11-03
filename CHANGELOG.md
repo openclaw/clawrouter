@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
+- Add Cloudflare AI Gateway native Anthropic Messages for the frozen Sonnet 4.6 identity using gateway authentication and stored BYOK/Unified Billing. Preserve Universal requests and leave account-dependent charges unpriced.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 
