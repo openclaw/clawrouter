@@ -1,4 +1,5 @@
 import { mediaObject } from "./managed-media-json.ts";
+import { readNativeJson } from "./native-json.ts";
 
 const maxEnvelope = 1024 * 1024, maxAnswer = 20000;
 const encoder = new TextEncoder();
@@ -66,7 +67,7 @@ export interface XaiSearchObservation {
     xSearchCalls: number | null; xPostsFetched: number | null; xUsersFetched: number | null };
   upstreamCostMicros: null;
 }
-export function observeXaiSearch(value: unknown, request: XaiSearchRequest, complete: boolean): XaiSearchObservation {
+export function observeXaiSearch(value: unknown, request: Pick<XaiSearchRequest, "model" | "servingModels">, complete: boolean): XaiSearchObservation {
   if (!complete) fail("incomplete_transport");
   const body = object(value);
   if (encoder.encode(JSON.stringify(body)).length > maxEnvelope || typeof body.model !== "string"
@@ -114,28 +115,8 @@ export function observeXaiSearch(value: unknown, request: XaiSearchRequest, comp
 }
 
 // Pass the original admission deadline/caller signal; no paid POST retry here.
-export async function readXaiSearch(response: Response, request: XaiSearchRequest, signal: AbortSignal): Promise<XaiSearchObservation> {
-  const length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxEnvelope)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true });
-  let size = 0, text = "";
-  try {
-    signal.throwIfAborted();
-    for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
-      size += chunk.value.byteLength; if (size > maxEnvelope) fail("size");
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
-    if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
-    return observeXaiSearch(JSON.parse(text), request, true);
-  } catch { void reader.cancel().catch(() => undefined); throw new Error("invalid_xai_search_response"); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+export async function readXaiSearch(response: Response, request: Pick<XaiSearchRequest, "model" | "servingModels">, signal: AbortSignal): Promise<XaiSearchObservation> {
+  return readNativeJson(response, signal, maxEnvelope, body => observeXaiSearch(body, request, true), fail);
 }
 function count(value: unknown): number | null {
   if (value === undefined || value === null) return null;

@@ -2,16 +2,6 @@ name: OpenClaw consumer contract
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/openclaw-contract.yml'
-      - 'worker/**'
-      - 'shared/**'
-      - 'providers/**'
-      - 'test/openclaw-*.test.mjs'
-      - 'test/fixtures/openclaw-*-contract.test.ts'
-      - 'test/helpers/openclaw-consumer.mjs'
-      - 'test/helpers/workerd.mjs'
-      - 'pnpm-lock.yaml'
 
 permissions:
   contents: read
@@ -24,7 +14,25 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
+  consumer-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.select.outputs.required }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - id: select
+        run: node scripts/openclaw-contract-changes.mjs
+
   consumer:
+    needs: consumer-changes
+    if: ${{ !cancelled() && (needs.consumer-changes.result != 'success' || needs.consumer-changes.outputs.required != 'false') }}
     name: consumer (${{ matrix.consumer }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -85,13 +93,21 @@ jobs:
           CONTRACT_TEST: ${{ matrix.test }}
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
 
+
   search-consumer:
-    needs: consumer
+    needs: [consumer-changes, consumer]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Require every pinned consumer
-        run: test "$CONSUMER_RESULT" = success
+      - name: Require every selected consumer
+        run: |
+          if [ "$SELECTION_RESULT" = success ] && [ "$CONSUMERS_REQUIRED" = false ]; then
+            test "$CONSUMER_RESULT" = skipped
+          else
+            test "$CONSUMER_RESULT" = success
+          fi
         env:
+          SELECTION_RESULT: ${{ needs.consumer-changes.result }}
+          CONSUMERS_REQUIRED: ${{ needs.consumer-changes.outputs.required }}
           CONSUMER_RESULT: ${{ needs.consumer.result }}
