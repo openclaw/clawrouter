@@ -33,7 +33,8 @@ export async function googleContinuationFixture(t, { stream = false, manifest = 
     assert.equal(await response.text(), f.wire()); await f.drain(); return response;
   };
   f.continuations = () => [...f.env.ACCESS_CONTROL.objects].filter(([name]) => name.startsWith("http-continuations:"))
-    .flatMap(([scope, state]) => state.db.prepare("SELECT binding_key, owner_json FROM http_continuations").all().map(row => ({ scope, ...row })));
+    .flatMap(([scope, state]) => state.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'http_continuations'").get()
+      ? state.db.prepare("SELECT binding_key, owner_json FROM http_continuations").all().map(row => ({ scope, ...row })) : []);
   f.reservations = () => [...new Set(f.budgetCalls.map(call => call.name))].flatMap(name => f.budgets.get(name).reservations());
   t.after(f.drain); return f;
 }
