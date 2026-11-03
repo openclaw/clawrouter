@@ -70,6 +70,7 @@
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
 - Declare experimental PixVerse text-video routes with scoped retrieval, original regional credentials and unpriced frozen models; image/upload and cancellation stay unavailable.
+- Exercise both frozen PixVerse text models through compiled native/manifest Worker lifecycle tests and the actual configured native video client, preserving fresh trace headers, original keys and conservative settlement.
 
 - Qualify OpenRouter video download-only endpoint links with original-job content controls, preserving metadata-first file declarations and conservative unknown costs.
 - Add three frozen Gemini Flash/Lite identities with published multimodal input-cost bounds, served-tier cache rates and unchanged hosted-tool cost guards.
