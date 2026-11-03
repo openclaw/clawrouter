@@ -408,6 +408,10 @@ function validateManifest(manifest) {
 }
 
 const managedLifecycleContracts = {
+  "dashscope.video": {
+    provider: "alibaba", create: ["/api/v1/services/aigc/video-generation/video-synthesis"], request: "dashscope.video_create", response: "dashscope.video",
+    controls: { retrieve: ["GET", "/api/v1/tasks/${task_id}", "dashscope.video_get", "dashscope.video"] },
+  },
   "replicate.predictions": {
     provider: "replicate", create: ["/v1/predictions"], request: "replicate.prediction_create", response: "replicate.prediction",
     controls: {
@@ -454,6 +458,11 @@ function validateManagedLifecycles(manifest) {
       || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
       || endpoint.requestFormat !== contract.request || endpoint.responseFormat !== contract.response
       || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
+    if (protocol === "dashscope.video") {
+      // The bound credential comes from the shared owner, never endpoint overrides.
+      if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
+        !(["x-dashscope-async", "content-type"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "x-dashscope-async" ? "enable" : "application/json")))) fail();
+    }
     creates.add(id);
     for (const [action, [method, path, request, response]] of Object.entries(contract.controls)) {
       const controlId = endpoint.lifecycle[action];
@@ -462,6 +471,7 @@ function validateManagedLifecycles(manifest) {
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
+      if (protocol === "dashscope.video" && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
       controls.add(controlId);
     }
   }
@@ -470,7 +480,8 @@ function validateManagedLifecycles(manifest) {
   const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
     .flatMap(([, contract]) => [contract.request, ...Object.values(contract.controls).map(control => control[2])]));
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    if (formats.has(endpoint.requestFormat) && !creates.has(id) && !controls.has(id))
+    const wanFormat = endpoint.requestFormat.startsWith("dashscope.video") || endpoint.responseFormat.startsWith("dashscope.video");
+    if ((formats.has(endpoint.requestFormat) || wanFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
 }

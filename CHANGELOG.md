@@ -45,6 +45,7 @@
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.
+- Qualify the Alibaba Wan create/retrieve lifecycle contract and reject unbound controls, invented cancellation and credential-header overrides before activation.
 - Allow an explicit unpriced endpoint override so a newly qualified wire contract cannot inherit a model tariff from another endpoint.
 - Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
