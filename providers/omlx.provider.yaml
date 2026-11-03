@@ -1,0 +1,51 @@
+# Configured server transport: docs/local-engine-transports.md.
+# Endpoint/model source checked 2026-11-03: https://github.com/jundot/omlx
+schema: clawrouter.service-provider.v1
+id: omlx
+displayName: oMLX
+status: experimental
+class: openai_compatible
+service:
+  platform: omlx
+  kind: model_provider
+  upstreamService: omlx
+  configKeys: [OMLX_API_KEY, OMLX_BASE_URL, OMLX_MODEL]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: ${base_url}
+routing:
+  nativePrefixes: [clawrouter-omlx, omlx]
+  modelPrefixes: [omlx/]
+  baseUrlParam: base_url
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  models_list: { method: GET, path: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: omlx/configured
+      upstream: ${model}
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
