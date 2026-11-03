@@ -1,4 +1,6 @@
+import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import type { UpstreamGrant, RefreshConfig } from "./types.ts";
+import { readNativeMediaBinding, type NativeMediaBinding } from "../shared/native-media-binding.ts";
 
 interface CredentialMetadata extends Pick<UpstreamGrant,
   "tokenType" | "expiresAt" | "refreshTokenExpiresAt" | "lastManualAuthorizationAt" |
@@ -8,6 +10,7 @@ interface CredentialMetadata extends Pick<UpstreamGrant,
 }
 
 export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant, "credential" | "credentials" | "accessToken" | "refreshToken"> {
+  nativeMediaBinding?: NativeMediaBinding | null;
   version: 1;
   generation: number;
   lineage?: string;
@@ -33,6 +36,7 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
 }
 
 export interface CredentialProjection extends CredentialMetadata {
+  nativeMediaBinding: NativeMediaBinding | null;
   credentialStore: "durable_object";
   credentialGeneration: number;
   credentialLineage?: string;
@@ -61,6 +65,9 @@ export interface MaterializeRequest {
 }
 
 export interface PutRequest {
+  // Only the privileged admin mutation supplies this owner intent. Grant
+  // metadata, legacy imports, OAuth completion and pool submissions do not.
+  nativeMediaIntent?: NativeMediaBinding | null;
   key: string;
   grant: UpstreamGrant;
   preserveUnspecifiedSecrets: boolean;
@@ -72,6 +79,7 @@ export interface PutRequest {
 
 export function credentialProjection(record: CredentialRecord): CredentialProjection {
   return {
+    nativeMediaBinding: record.providerId === "minimax" && miniMaxApiKeySecret(record) ? readNativeMediaBinding(record.nativeMediaBinding) : null,
     credentialStore: "durable_object",
     credentialGeneration: record.generation,
     credentialLineage: record.lineage,
@@ -105,6 +113,7 @@ export function hasFreshPrimaryCredentials(previous: CredentialRecord, replaceme
 export function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
   return {
     ...metadata,
+    nativeMediaBinding: record.providerId === "minimax" && miniMaxApiKeySecret(record) ? readNativeMediaBinding(record.nativeMediaBinding) : null,
     credential: record.credential,
     credentials: record.credentials,
     accessToken: record.accessToken,

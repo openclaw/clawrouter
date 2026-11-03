@@ -1,3 +1,5 @@
+import { prepareNativeMiniMaxSpeech } from "./native-minimax-speech.ts";
+import { miniMaxSpeechModels } from "./minimax-speech.ts";
 import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
@@ -41,6 +43,9 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.provider.id === "minimax" && miniMaxSpeechModels.some(model => model === (selection.model?.upstream ?? (!Array.isArray(selection.body) ? selection.body.model : undefined)))
+    && selection.endpoint.request_format !== "minimax.speech")
+    throw new HttpError(400, "native_audio_route_required", "MiniMax speech models require their qualified native media route");
   if (selection.provider.id === "aws-bedrock" && (selection.model?.capabilities.includes("llm.embeddings")
     || isBedrockEmbeddingModel(selection.model?.upstream ?? selection.pathParams?.model ?? ""))
     && selection.capability !== "llm.embeddings")
@@ -48,7 +53,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
-    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection);
+    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
     throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
