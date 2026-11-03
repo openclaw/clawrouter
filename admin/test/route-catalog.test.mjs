@@ -1,10 +1,7 @@
+import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRouteCatalog } from "../../shared/route-catalog.ts";
-import { registerHooks } from "node:module";
-registerHooks({ resolve(specifier, context, nextResolve) {
-  return nextResolve(specifier === "../../shared/route-catalog" ? `${specifier}.ts` : specifier, context);
-} });
 const { demoCatalog } = await import("../src/demo-catalog.ts");
 
 test("catalog routes restrict models and samples to each endpoint's capabilities", () => {
