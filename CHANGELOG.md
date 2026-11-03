@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
+
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
