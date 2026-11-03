@@ -14,6 +14,17 @@
       "base64": "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA"
     }
   },
+  "aacFile": {
+    "name": "synthetic.aac",
+    "type": "audio/aac",
+    "base64": "//FgQAF//AEYIAf/8WBAAX/8ARggB//xYEABf/wBGCAH"
+  },
+  "mediaEvidence": {
+    "wav": "Offline PCM16LE, 8000 Hz mono; complete RIFF/data lengths and decoding verified",
+    "aac": "Offline AAC-LC ADTS, 16000 Hz mono; three complete frames and decoding verified",
+    "responseIsIndependentSyntheticExample": true,
+    "durationIsInvoiceEvidence": false
+  },
   "response": { "text": "合成测试文本", "duration": 1.25, "audio_info": { "duration": 1250, "format": "wav" } },
   "billing": {
     "currency": "CNY",

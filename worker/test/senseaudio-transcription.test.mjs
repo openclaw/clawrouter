@@ -27,6 +27,32 @@ test("SenseAudio enforces its smaller direct-upload limit independently of the g
   }
 });
 
+test("SenseAudio preserves playable AAC as an AAC file instead of relabelling it as M4A", async () => {
+  const sample = wire.aacFile, data = Buffer.from(sample.base64, "base64");
+  let at = 0, frames = 0;
+  while (at < data.length) {
+    assert.equal(data[at], 0xff); assert.equal(data[at + 1] & 0xf6, 0xf0);
+    assert.equal((data[at + 2] >> 2) & 15, 8, "16 kHz ADTS sampling frequency index");
+    const size = ((data[at + 3] & 3) << 11) | (data[at + 4] << 3) | (data[at + 5] >> 5);
+    assert.ok(size > 7 && at + size <= data.length); at += size; frames++;
+  }
+  assert.equal(frames, 3); assert.equal(at, data.length);
+  const file = new File([data], sample.name, { type: sample.type }), form = prepareSenseAudioUpload(upload({ language: "eng" }, file));
+  assert.equal(form.get("file").name, "synthetic.aac"); assert.equal(form.get("file").type, "audio/aac");
+  assert.deepEqual(Buffer.from(await form.get("file").arrayBuffer()), data);
+  assert.equal(form.get("language"), "eng"); assert.equal(form.get("model"), senseAudioModel);
+  assert.throws(() => prepareSenseAudioUpload(upload({}, new File([data], "synthetic.m4a", { type: "audio/aac" }))));
+});
+
+test("SenseAudio WAV fixture is a complete PCM container and native duration is separate evidence", () => {
+  assert.equal(bytes.toString("ascii", 0, 4), "RIFF"); assert.equal(bytes.readUInt32LE(4) + 8, bytes.length);
+  assert.equal(bytes.toString("ascii", 8, 16), "WAVEfmt "); assert.equal(bytes.readUInt16LE(20), 1);
+  assert.equal(bytes.readUInt16LE(22), 1); assert.equal(bytes.readUInt32LE(24), 8000); assert.equal(bytes.readUInt16LE(34), 16);
+  assert.equal(bytes.toString("ascii", 36, 40), "data"); assert.equal(bytes.readUInt32LE(40), bytes.length - 44);
+  assert.equal(wire.mediaEvidence.responseIsIndependentSyntheticExample, true);
+  assert.equal(wire.mediaEvidence.durationIsInvoiceEvidence, false);
+});
+
 test("SenseAudio rejects unsupported identity, fields, framing results and response modes", () => {
   for (const fields of [{ model: "openai/whisper-1" }, { file_id: "synthetic-file" }, { stream: "true" }, { response_format: "text" }, { language: "zh-CN" }, { prompt: "é".repeat(8193) }]) {
     assert.throws(() => prepareSenseAudioUpload(upload(fields)));

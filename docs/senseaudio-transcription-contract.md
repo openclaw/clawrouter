@@ -49,3 +49,38 @@ stay outside proxy requests. Fixtures are synthetic transport data, not live ASR
 The single qualified model has no dollar tariff. Unknown-price hard budgets must
 fail before dispatch; explicit policy_fixed remains a policy charge. The fixture's
 CNY rate and duration evidence do not certify a live upstream dollar cost.
+
+## Source readiness and exact remaining boundary
+
+The existing `prepareSenseAudioUpload({ file, fields }): FormData` ABI fits the
+published multipart reader's `TranscriptionUpload` shape without a new wrapper
+framework. It preserves the file bytes/name/MIME, canonicalizes only the router
+model prefix, bounds files to 10,000,000 bytes and prompt UTF-8 to 16,384 bytes,
+and allows only the frozen model, optional language/prompt and unary JSON fields.
+The finite filename/MIME slice is WAV, MP3, OGG, FLAC, AAC, M4A and MP4; the
+validator checks framing results and labels, not every supported media codec.
+
+`providers/_fixtures/senseaudio/transcription.json` now includes `aacFile`, an
+offline decoder-qualified AAC-LC ADTS sample at 16 kHz mono. Its `.aac` name and
+`audio/aac` MIME must survive multipart construction unchanged; renaming it to
+`.m4a` is not qualification. The existing WAV is also decoder-qualified PCM16LE
+at 8 kHz mono with complete RIFF/data lengths. These short synthetic samples
+are separate from the response's duration observation and prove no tariff.
+Seven focused tests include AAC frame/name/byte preservation and WAV framing.
+
+At published raw-runtime source `3ac58451fdccf3950ead584be49e2e835df1a726`
+([PR482](https://github.com/openclaw/clawrouter/pull/482)), multipart dispatch
+still selects OpenAI, and its parser has no AAC extension entry. That source's
+Deepgram binary branch is not a SenseAudio multipart implementation. Source1
+must qualify provider/model selection, selected-provider AAC and three-letter
+language parsing, invoke this preparer and complete-result observer, and retain
+auth-before-read, fresh post-upload admission, original credentials and both
+budget settlements. No central source is changed here.
+
+The actual native client candidate is
+[PR192167](https://github.com/openclaw/openclaw/pull/192167), source
+`f6fbd3fae951258f999bb555dc369ec594916886`, covering OpenAI/SenseAudio only.
+Its publication is not actual Worker acceptance. Source6 owns future atomic
+provider/runtime/snapshot integration and composed proof. Source1's missing
+dispatch integration remains the activation blocker; no new input ABI or paid
+POST is required to finish this source qualification.
