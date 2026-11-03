@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -33,4 +33,18 @@ test("CLI still rejects missing manifests and invalid inputs without output", ()
   assert.notEqual(duplicate.status, 0);
   assert.match(duplicate.stderr, /duplicate provider id/);
   assert.equal(duplicate.stdout, "");
+});
+
+test("CLI rejects invalid native metadata without emitting a partial snapshot", t => {
+  const manifest = structuredClone(manifests.find(provider => provider.id === "openai"));
+  manifest.models.entries.find(model => model.id === "openai/gpt-6.1-sol").nativeCapabilities.version = "clawrouter.native-capabilities.v2";
+  const directory = mkdtempSync(join(tmpdir(), "provider-compiler-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const input = join(directory, "provider.yaml"), output = join(directory, "snapshot.json");
+  writeFileSync(input, JSON.stringify(manifest));
+  const result = spawnSync(process.execPath, ["scripts/compile-providers.mjs", input, "--output", output], { encoding: "utf8" });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /invalid manifest/);
+  assert.equal(result.stdout, "");
+  assert.equal(existsSync(output), false);
 });
