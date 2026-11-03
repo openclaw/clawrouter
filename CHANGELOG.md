@@ -246,6 +246,7 @@
 - Add a bounded Google unary speech response wrapper with exact frozen-model transport binding, explicit PCM/WAV MIME, atomic audio delivery and conservative unknown-cost accounting.
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
 - Add the native Lyria response wrapper with explicit audio MIME, complete MP3/WAV framing, bounded delivery and thought exclusion; shared music routing and cost admission remain separately qualified.
+- Keep explicit native Lyria music unpriced at admission and settlement, rejecting borrowed token/image tariffs under hard-dollar budgets while preserving separately labeled policy charges.
 - Add bounded frozen MiniMax music stream codecs and fixtures with terminal audio validation, required cover references and explicit existing-user/free-discontinuation qualifications.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
