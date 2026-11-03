@@ -20,8 +20,34 @@ test("finite frozen music requests retain explicit region, MP3 settings and avai
       assert.equal(request.headers.has("authorization"), false);
     }
   }
-  for (const body of [{ ...wire.request, model: "music-3.0" }, { ...wire.request, stream: false },
+  for (const body of [{ ...wire.request, model: "music-3.0" }, { ...wire.request, stream: null },
     { ...wire.request, output_format: "url" }, { ...wire.request, audio_setting: { ...wire.request.audio_setting, format: "wav" } }]) assert.throws(() => prepare(body));
+});
+
+test("MiniMax unary preparation qualifies only global regular frozen models without changing native input", () => {
+  for (const model of ["music-2.6", "music-2.6-free"]) {
+    const body = { ...wire.request, model, stream: false }, before = structuredClone(body);
+    const request = prepareMiniMaxMusic("global", body);
+    assert.equal(request.body, body); assert.deepEqual(body, before);
+    assert.equal(request.origin, "https://api.minimax.io"); assert.equal(request.headers.get("accept"), "application/json");
+    assert.throws(() => prepareMiniMaxMusic("cn", body));
+    for (const field of ["audio_url", "audio_base64"]) for (const value of [undefined, null, "", "synthetic"])
+      assert.throws(() => prepare({ ...body, [field]: value }));
+  }
+  for (const model of ["music-cover", "music-cover-free"]) assert.throws(() => prepare({ ...wire.cover, model, stream: false }));
+  for (const stream of [undefined, null, 0, "false"]) assert.throws(() => prepare({ ...wire.request, stream }));
+  assert.equal(prepare(wire.request).headers.get("accept"), "text/event-stream, application/json");
+});
+
+test("MiniMax unary observation requires one complete terminal JSON envelope and preserves native unknown cost", async () => {
+  const request = prepare({ ...wire.request, stream: false }), terminal = wire.frames[2];
+  const result = await readMiniMaxMusic(Response.json(terminal), request, signal());
+  assert.deepEqual(result.frames, [terminal]); assert.deepEqual([...result.audio], [0, 255, 128]);
+  assert.equal(result.mimeType, "audio/mpeg"); assert.equal(result.durationMillis, 25); assert.equal(result.upstreamCostMicros, null);
+  assert.throws(() => observeMiniMaxMusic(wire.frames, request, true), /unary_frames/);
+  assert.throws(() => observeMiniMaxMusic([terminal], request, false));
+  await assert.rejects(readMiniMaxMusic(Response.json(wire.frames[0]), request, signal()));
+  await assert.rejects(readMiniMaxMusic(new Response(sse([terminal]), { headers: { "content-type": "text/event-stream" } }), request, signal()));
 });
 
 test("instrumental/lyrics options and missing cover audio fail before egress", () => {
