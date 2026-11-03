@@ -1,0 +1,11 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://api.kie.ai", "authorizationScheme": "Bearer", "upstreamCostMicros": null },
+  "text": { "model": "kling-2.6/text-to-video", "input": { "prompt": "A blue paper boat floating downstream", "duration": "5", "sound": false, "aspect_ratio": "16:9" } },
+  "image": { "model": "kling-2.6/image-to-video", "input": { "prompt": "Animate the paper boat", "duration": "10", "sound": true, "image_urls": ["https://assets.example/original-input.png"] } },
+  "imageActivation": { "enabled": false, "requires": "durable original-caller and credential asset binding", "uploadOrigin": "https://kieai.redpandaai.co", "uploadPath": "/api/file-base64-upload" },
+  "taskId": "synthetic_kie_kling_job",
+  "submission": { "code": 200, "data": { "taskId": "synthetic_kie_kling_job" } },
+  "partial": { "code": 200, "data": { "taskId": "synthetic_kie_kling_job", "state": "generating", "resultJson": "{\"resultUrls\":[\"https://assets.example/partial.mp4\"]}" } },
+  "completed": { "code": 200, "data": { "taskId": "synthetic_kie_kling_job", "state": "success", "creditsConsumed": 1, "resultJson": "{\"resultUrls\":[\"https://assets.example/boat.mp4\"]}" } },
+  "failed": { "code": 200, "data": { "taskId": "synthetic_kie_kling_job", "state": "fail", "failCode": "synthetic", "failMsg": "Synthetic provider failure" } }
+}
