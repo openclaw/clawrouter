@@ -16,7 +16,9 @@ async function setup(t, options = {}) {
   manifest.capabilities = manifest.capabilities.filter(item => item.id !== "search.web" || item.endpoint !== "search");
   manifest.capabilities.push({ id: "search.web", endpoint: "search", methods: ["POST"] });
   manifest.endpoints.search = { method: "POST", path: "/v1/tools/search", requestFormat: "deepseek.search", responseFormat: "deepseek.search" };
-  const original = snapshot.providers; snapshot.providers = original.filter(provider => provider.id !== "deepseek");
+  // Compiled projections are immutable and keyed by provider object identity.
+  const original = snapshot.providers; snapshot.providers = original.filter(provider => provider.id !== "deepseek")
+    .map(provider => provider.id === "replicate" ? structuredClone(provider) : provider);
   t.after(() => { snapshot.providers = original; });
   const f = await fixture(t, { ...options, providerId: "deepseek", configure(provider) {
     Object.assign(provider, compileProviderSnapshot([manifest]).providers[0]);
@@ -141,8 +143,11 @@ for (const kind of ["redirect", "rejection", "partial", "over-count", "filtered"
 for (const cause of ["caller", "deadline"]) test("DeepSeek " + cause + " cancels bounded response and retains dispatched cost", async t => {
   const f = await setup(t, { timeout: cause === "deadline" ? 20 : 1000 }), caller = new AbortController(); let canceled = 0;
   f.upstream = () => new Response(new ReadableStream({ pull() { if (cause === "caller") caller.abort(); }, cancel() { canceled++; } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
-  const response = await f.request(wire.request.body, { signal: caller.signal }); await response.text(); assert.equal(response.status, cause === "caller" ? 499 : 504);
-  await f.drain(); assert.equal(canceled, 1); assert.equal(f.sent.length, 1); assert.equal(bodyBudgetCharged(), 0); assert.equal((await f.events())[0].actual_cost_micros, 700);
+  const response = await f.request(wire.request.body, { signal: caller.signal }); const body = await response.json(); assert.equal(response.status, 502); assert.equal(body.error.code, "provider_unavailable");
+  await f.drain(); assert.equal(canceled, 1); assert.equal(f.sent.length, 1); assert.equal(bodyBudgetCharged(), 0);
+  const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 700);
+  assert.equal(events[0].status, cause === "caller" ? "client_error" : "timeout");
+  assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 700));
 });
 
 test("DeepSeek capacity denial stays known-unsent", async t => {
@@ -152,8 +157,13 @@ test("DeepSeek capacity denial stays known-unsent", async t => {
 });
 
 test("DeepSeek dispatch acknowledgment denial stays known-unsent", async t => {
-  const f = await setup(t), get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
-  f.env.BUDGET_LEDGER.get = name => { const stub = get(name); return { fetch: (url, init) => new URL(url).pathname === "/dispatch" ? Response.json({ dispatched: false }) : stub.fetch(url, init) }; };
+  const f = await setup(t), get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER); let denied = 0;
+  f.env.BUDGET_LEDGER.get = name => { const stub = get(name); return { async fetch(url, init) {
+    if (new URL(url).pathname === "/dispatch") { denied++; return Response.json({ dispatched: false }); }
+    const response = await stub.fetch(url, init);
+    if (new URL(url).pathname !== "/reserve") return response;
+    const receipt = await response.json(); delete receipt.dispatched; return Response.json(receipt, { status: response.status });
+  } }; };
   const response = await f.request(); await response.text(); assert.equal(response.status, 503); await f.drain();
-  assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 0));
+  assert.equal(f.sent.length, 0); assert.equal(denied, 2); assert.equal(bodyBudgetCharged(), 0); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 0));
 });
