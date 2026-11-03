@@ -1,0 +1,100 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "package": "node-edge-tts@1.2.11",
+  "requestId": "0123456789abcdef0123456789abcdef",
+  "otherRequestId": "fedcba9876543210fedcba9876543210",
+  "request": {
+    "text": "Synthetic café < & > fixture",
+    "voice": "en-US-MichelleNeural",
+    "lang": "en-US",
+    "outputFormat": "audio-24khz-48kbitrate-mono-mp3",
+    "rate": "+10%",
+    "pitch": "-5Hz",
+    "volume": "default"
+  },
+  "frames": [
+    {
+      "path": "turn.start",
+      "body": {}
+    },
+    {
+      "path": "response",
+      "body": {
+        "context": {
+          "serviceTag": "synthetic-service"
+        }
+      }
+    },
+    {
+      "path": "audio",
+      "contentType": "audio/mpeg",
+      "bytes": [
+        255,
+        243,
+        100,
+        192,
+        0,
+        1
+      ]
+    },
+    {
+      "path": "audio.metadata",
+      "body": {
+        "Metadata": []
+      }
+    },
+    {
+      "path": "audio",
+      "contentType": "audio/mpeg",
+      "bytes": [
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    {
+      "path": "audio",
+      "bytes": []
+    },
+    {
+      "path": "turn.end",
+      "body": {}
+    }
+  ],
+  "expectedBytes": [
+    255,
+    243,
+    100,
+    192,
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "failureCases": [
+    "timeout",
+    "abort",
+    "close",
+    "error",
+    "late",
+    "interleaved",
+    "missing-id",
+    "malformed-header",
+    "wrong-mime",
+    "empty-terminal",
+    "overflow"
+  ],
+  "qualification": "Synthetic framing and byte identity only; payload is not a playable audio sample or a live handshake receipt",
+  "billing": {
+    "upstreamCostMicros": null,
+    "policyFixedIsUpstreamCost": false
+  },
+  "wireExample": {
+    "audioBase64": "AFNYLVJlcXVlc3RJZDowMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg0KQ29udGVudC1UeXBlOmF1ZGlvL21wZWcNClBhdGg6YXVkaW8NCv/zZMAAAQ==",
+    "terminalText": "X-RequestId:0123456789abcdef0123456789abcdef\r\nPath:turn.end\r\n\r\n"
+  }
+}
