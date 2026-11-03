@@ -46,6 +46,7 @@
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.
 - Allow an explicit unpriced endpoint override so a newly qualified wire contract cannot inherit a model tariff from another endpoint.
+- Add frozen Gemini 3.6/3.8 Flash cards with explicitly labelled published rate ceilings that remain conservative after the announced introductory discount ends.
 - Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
