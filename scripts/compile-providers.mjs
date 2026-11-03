@@ -513,6 +513,11 @@ function validateGrantTransports(manifest) {
 }
 
 const managedLifecycleContracts = {
+  "xai.video": {
+    provider: "xai", create: ["/v1/videos/generations", "/v1/videos/edits", "/v1/videos/extensions"], response: "xai.video",
+    requestByPath: { "/v1/videos/generations": "xai.video_generate", "/v1/videos/edits": "xai.video_edit", "/v1/videos/extensions": "xai.video_extend" },
+    controls: { retrieve: ["GET", "/v1/videos/${request_id}", "xai.video_get", "xai.video"] },
+  },
   "together.video": {
     provider: "together", create: ["/v2/videos"], request: "together.video_create", response: "together.video",
     controls: { retrieve: ["GET", "/v2/videos/${video_id}", "together.video_get", "together.video"] },
@@ -603,6 +608,22 @@ function validateManagedLifecycles(manifest) {
         || manifest.adapter?.requestTransforms?.renameFields?.length || endpoint.auth || endpoint.requestHeaders?.length
         || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
     }
+    if (protocol === "xai.video") {
+      const scheme = manifest.auth.schemes[0];
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://api.x.ai")
+        || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+        || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+        || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(manifest.adapter?.injectHeaders ?? {}).length
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length || endpoint.auth || endpoint.requestHeaders?.length
+        || endpoint.requestPricing || endpoint.toolPricing || endpoint.outputTokenLimit
+        || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+      // Native duration and advisory idempotency are not a qualified tariff or
+      // retry guarantee. These cards cannot borrow the provider's Chat prices.
+      if ((manifest.models?.entries ?? []).some(model => model.capabilities?.includes("media.predict")
+        && (!["grok-imagine-video", "grok-imagine-video-1.5"].includes(model.upstream) || model.capabilities.length !== 1
+          || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length))) fail();
+    }
     if (protocol === "dashscope.video") {
       // The bound credential comes from the shared owner, never endpoint overrides.
       if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
@@ -648,13 +669,14 @@ function validateManagedLifecycles(manifest) {
     for (const [action, [method, path, request, response, query = {}]] of Object.entries({ ...contract.controls, ...contract.files })) {
       const controlId = Object.hasOwn(contract.controls, action) ? endpoint.lifecycle[action] : endpoint.lifecycle.files[action];
       const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
-      const sharedFalControl = protocol === "fal.queue" && controlBindings.get(controlId) === `${protocol}:${action}`;
-      if (!control || controlId === id || controls.has(controlId) && !sharedFalControl || control.lifecycle || incompatible(control) || !parametersMatch(control)
+      const sharedControl = ["fal.queue", "xai.video"].includes(protocol) && controlBindings.get(controlId) === `${protocol}:${action}`;
+      if (!control || controlId === id || controls.has(controlId) && !sharedControl || control.lifecycle || incompatible(control) || !parametersMatch(control)
         || Object.keys(control.query ?? {}).length !== Object.keys(query).length || Object.entries(query).some(([name, value]) => control.query?.[name] !== value)
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
-      if ((fourSegmentFal || ["dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks", "together.video"].includes(protocol)) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if ((fourSegmentFal || ["xai.video", "dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks", "together.video"].includes(protocol)) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if (protocol === "xai.video" && (control.requestPricing || control.toolPricing || control.outputTokenLimit)) fail();
       controls.add(controlId);
       controlBindings.set(controlId, `${protocol}:${action}`);
     }
@@ -664,7 +686,8 @@ function validateManagedLifecycles(manifest) {
   const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
     .flatMap(([, contract]) => [contract.request, ...Object.values(contract.requestByPath ?? {}), ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])].filter(Boolean)));
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    const reservedFormat = ["dashscope.video", "google.omni_video", "pixverse.", "runway.", "together.video"].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
+    const reservedFormat = ["xai.video", "dashscope.video", "google.omni_video", "pixverse.", "runway.", "together.video"].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix))
+      || manifest.id === "xai" && /^\/v1\/videos(?:\/|$)/.test(endpoint.path);
     if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }

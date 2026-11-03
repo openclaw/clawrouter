@@ -671,6 +671,15 @@
               "required": ["protocol", "retrieve"],
               "additionalProperties": false,
               "properties": {
+                "protocol": { "const": "xai.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
                 "protocol": { "const": "together.video" },
                 "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
               }
