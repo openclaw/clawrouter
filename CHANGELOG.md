@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Qualify frozen Vydra Models image/speech/video wire contracts and the scoped video wrapper, preserving partial/terminal state, original model identity and unknown ledger-to-dollar costs.
+- Qualify the three frozen fal unary music contracts with native Key dispatch, per-model inputs, bounded audio results and conservative unknown upstream costs.
+- Reject non-string native fal music MIME fields instead of coercing arrays into qualified audio descriptors.
+
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
@@ -64,12 +68,16 @@
 - Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
+- Qualify Synthetic data-only model discovery on its exact mapped GET endpoint and original API-key binding, without relaxing OpenAI model decoding or fabricating tariffs.
+- Qualify literal endpoint upstream-path mappings while preserving caller routes, native formats and selected credentials; reject ambiguous paths and conflicting grant transport overrides.
 - Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
 - Refresh pinned setup-node to 7.1.0 and upload-artifact to 7.0.2, including Node installation validation and updated cache/artifact clients.
 - Add bounded Replicate prediction protocol helpers and executable lifecycle fixtures for scoped async runtime integration, including partial output, cancellation, URL rewriting and explicit unknown-cost boundaries. Route activation and durable settlement remain separate integration work.
 - Add bounded fal queue protocol helpers and portable lifecycle fixtures, distinguishing result readiness from success and queued cancellation from an in-progress cancellation request. Runtime activation and billing integration remain separately qualified.
+- Qualify frozen fal FLUX dev and Krea v2 image transports with bounded inline references, per-model geometry, partial-result evidence and native Key dispatch.
+- Qualify the four frozen fal GPT Image 2.5 generate/edit products, preserving selected quality, ordered inline references and native geometry without fabricated cost bounds.
 - Add executable Perplexity Agent/Search wire fixtures covering native results, typed streaming failures, credential isolation and conservative billing for the provider/client integration.
 
 - Define typed Replicate prediction lifecycle links and validate the native create, retrieve and cancel endpoint contracts before compiling manifests.
@@ -200,6 +208,8 @@
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
+- Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
+- Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
 
 - Decouple dashboard screenshot fixtures from the evolving provider inventory, while checking the real demo catalog and accessibility separately.
 - Add bounded native Google Live setup/frame codecs for the frozen voice models, preserving PCM, tool ownership, interruption and unknown usage without activating an unqualified WebSocket or browser-token bridge.

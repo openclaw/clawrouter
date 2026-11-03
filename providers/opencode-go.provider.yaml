@@ -1,0 +1,48 @@
+# Gateway Chat contract: docs/hosted-gateway-providers.md.
+# Endpoint/model source checked 2026-11-03: https://opencode.ai/v2/docs/console/go/
+schema: clawrouter.service-provider.v1
+id: opencode-go
+displayName: OpenCode Go
+status: experimental
+class: openai_compatible
+service:
+  platform: opencode-go
+  kind: gateway_platform
+  upstreamService: opencode-go
+  configKeys: [OPENCODE_GO_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://opencode.ai/inference/go/openai/v1
+routing:
+  nativePrefixes: [clawrouter-opencode-go, opencode-go]
+  modelPrefixes: [opencode-go/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: opencode-go/glm-5.3
+      upstream: glm-5.3
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
