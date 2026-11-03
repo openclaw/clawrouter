@@ -37,7 +37,7 @@ function staticProviderProjection(provider: CompiledProvider) {
       anthropic: Object.freeze({ id: model.id, type: "model", display_name, ...availability, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
     }];
   }));
-  const routes = new Map(provider.endpoints.filter(endpoint => endpoint.native_proxy).map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}) })]));
+  const routes = new Map(provider.endpoints.map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}) })]));
   return { models, routes, connectionTypes: Object.freeze(connectionTypes(provider)) as unknown as string[] };
 }
 const compiledProjections = new WeakMap(snapshot.providers.map(provider => [provider, staticProviderProjection(provider)]));
@@ -145,7 +145,8 @@ function projectCatalogModel(provider: CompiledProvider, model: CompiledModel, c
 function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
-  // v1 keeps native route locations as metadata; scoped offers describe caller eligibility.
+  // Route formats describe both native and manifest payloads. Only scoped
+  // offers choose a callable route and convey caller eligibility.
   const providers: ClientCatalogProvider[] = rows.filter((row) => row.allowed && row.provider !== "clawrouter").flatMap((row) => {
     const provider = snapshot.providers.find((candidate) => candidate.id === row.provider);
     if (!provider) return [];
@@ -157,7 +158,7 @@ function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: row.readiness, connectionTypes: compiledProjection(provider).connectionTypes,
-      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && (endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id))).map((endpoint) => ({ ...compiledProjection(provider).routes.get(endpoint.id)!, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
+      routes: provider.endpoints.filter((endpoint) => endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id)).map((endpoint) => ({ ...compiledProjection(provider).routes.get(endpoint.id)!, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
       models: view.models, offers: view.offers,
     }];
   });
