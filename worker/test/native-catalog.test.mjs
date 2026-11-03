@@ -19,12 +19,12 @@ async function fixture(t) {
   const limited = { ...policy, models: [sol], serviceTiers: { allowed: ["priority"], models: { [sol]: ["default", "priority"] } } };
   const secrets = { full: "synthetic-full-catalog", limited: "synthetic-limited-catalog" };
   const credentials = await Promise.all(Object.entries(secrets).map(async ([credentialId, secret]) => ({ credentialId, credential: { enabled: true, secretSha256: await sha256Hex(secret), policyId: credentialId, policyGeneration: "v1", ...(credentialId === "limited" ? { serviceTiers: ["default", "ultrafast"] } : {}) } })));
-  const records = new Map(), calls = [], pending = [];
+  const records = new Map(), calls = [], pending = [], events = [];
   const env = { OPENAI_API_KEY: "synthetic-upstream-only", POLICY_KV: {
     async get(key, type) { const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
     async put(key, value) { records.set(key, JSON.parse(value)); },
     async list() { return { keys: [], list_complete: true }; },
-  }, USAGE_QUEUE: { send: async () => {} }, BUDGET_LEDGER: { get() { throw new Error("unmetered catalog must not reserve or observe budgets"); } } };
+  }, USAGE_QUEUE: { send: async event => events.push(event) }, BUDGET_LEDGER: { get() { throw new Error("unmetered catalog must not reserve or observe budgets"); } } };
   const authority = createGrantAuthority(undefined, env);
   env.ACCESS_CONTROL = { idFromName: name => name, get: () => ({ fetch(url, init) { calls.push(new URL(url).pathname); return authority.fetch(url, init); } }) };
   const call = (path, body) => authorityCall(env, path, body);
@@ -49,7 +49,7 @@ async function fixture(t) {
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await Promise.all(pending); });
   const get = (key = "full", path = "/v1/catalog") => networkFetch("http://127.0.0.1:" + server.address().port + path, { headers: key ? { authorization: "Bearer clawrouter-live-" + key + "-" + (secrets[key] ?? "incorrect") } : {} });
   const post = (key, path, body) => networkFetch("http://127.0.0.1:" + server.address().port + path, { method: "POST", headers: { authorization: "Bearer clawrouter-live-" + key + "-" + secrets[key], "content-type": "application/json" }, body: JSON.stringify(body) });
-  return { env, records, policy, limited, credentials, authority, call, calls, get, post, upstream };
+  return { env, records, policy, limited, credentials, authority, call, calls, get, post, upstream, events, pending };
 }
 
 async function catalog(f, key = "full") {
@@ -60,6 +60,81 @@ async function catalog(f, key = "full") {
   assert.equal(body.scope.credentialId, key);
   return body.providers.find(provider => provider.id === "openai");
 }
+
+// This is synthetic Worker protocol evidence, not a live-provider or OpenClaw
+// transport certification. Follow the same scoped catalog a client consumes.
+for (const outcome of ["completed", "failed"]) test(`catalog-selected Responses stream reports ${outcome} usage under its caller`, async t => {
+  const f = await fixture(t), provider = await catalog(f, "limited");
+  const model = provider.models.find(row => row.id === sol);
+  const route = provider.routes.find(row => row.endpoint === "responses");
+  assert.ok(model && route);
+  assert.equal(route.requestFormat, "openai.responses");
+  assert.ok(route.methods.includes("POST"));
+  assert.equal(model.requestParameters.responses.toolCalling, "supported");
+  assert.deepEqual(model.nativeCapabilities.endpoints.responses.input, ["text", "image"]);
+  const path = provider.nativeBaseUrl + route.path;
+  const history = [
+    { type: "reasoning", id: "rs_fixture", encrypted_content: "synthetic-reasoning" },
+    { type: "function_call", call_id: "call_fixture", name: "lookup", arguments: "{}" },
+    { type: "function_call_output", call_id: "call_fixture", output: "synthetic-result" },
+  ];
+  const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
+  const output = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "synthetic-output" }] }];
+  const terminal = { type: `response.${outcome}`, response: {
+    id: "resp_fixture", model: model.upstream, status: outcome,
+    ...(outcome === "completed" ? { output, usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } }
+      : { error: { code: "server_error", message: "synthetic-failure" } }),
+  } };
+  const wire = `event: response.${outcome}\ndata: ${JSON.stringify(terminal)}\n\n`;
+  f.upstream.mock.mockImplementation(async (url, init) => {
+    assert.equal(String(url), "https://api.openai.com/v1/responses");
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer synthetic-upstream-only");
+    const body = JSON.parse(init.body);
+    assert.equal(body.model, model.upstream);
+    assert.equal(body.stream, true);
+    assert.deepEqual(body.input, history);
+    assert.deepEqual(body.tools, tools);
+    assert.deepEqual(body.reasoning, { effort: "high" });
+    const bytes = new TextEncoder().encode(wire);
+    let offset = 0;
+    return new Response(new ReadableStream({ pull(controller) {
+      if (offset === bytes.length) { controller.close(); return; }
+      const end = Math.min(offset + 7, bytes.length);
+      controller.enqueue(bytes.slice(offset, end)); offset = end;
+    } }), { headers: { "content-type": "text/event-stream", "x-request-id": "upstream_fixture" } });
+  });
+  const response = await f.post("limited", path, { model: model.upstream, input: history, tools, reasoning: { effort: "high" }, stream: true, service_tier: "default", max_output_tokens: 32 });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), wire, "native SSE bytes and terminal error stay intact");
+  await Promise.all(f.pending);
+  assert.equal(f.upstream.mock.callCount(), 1);
+  const events = f.events.filter(event => event.type === "clawrouter.usage.v1");
+  assert.equal(events.length, 1, "one stream produces exactly one usage event");
+  const [event] = events;
+  assert.equal(event.credential_id, "limited");
+  assert.equal(event.policy_id, "limited");
+  assert.equal(event.provider, "openai");
+  assert.equal(event.model, model.id);
+  assert.equal(event.capability, "llm.responses");
+  assert.equal(event.request_id, response.headers.get("x-clawrouter-request-id"));
+  assert.equal(event.status, outcome === "completed" ? "success" : "provider_error", "HTTP 200 alone never proves success");
+  if (outcome === "completed") {
+    assert.equal(event.input_tokens, 100);
+    assert.equal(event.output_tokens, 20);
+    assert.equal(event.total_tokens, 120);
+    assert.equal(event.cost_basis, "manifest_pricing");
+    assert.ok(event.actual_cost_micros > 0, "unmetered admission still records priced usage");
+  } else {
+    assert.equal(event.actual_cost_micros, 0, "pre-output terminal errors are nonbillable");
+  }
+  assert.doesNotMatch(JSON.stringify(event), /synthetic-reasoning|synthetic-result|synthetic-output|synthetic-upstream-only/);
+  await f.call("/credentials/mutate", { operation: "revoke", scope: "admin", credentialId: "limited", actor: { auth: "admin_token", role: "admin", email: "admin@example.com" } });
+  assert.equal((await f.get("limited")).status, 403);
+  const denied = await f.post("limited", path, { model: model.upstream, input: "revoked", stream: true });
+  assert.equal(denied.status, 403);
+  await denied.arrayBuffer();
+  assert.equal(f.upstream.mock.callCount(), 1, "a previously discovered route cannot bypass revoked credentials");
+});
 
 test("public same-key HTTP catalog carries authoritative input and context without guessing unknown models", async t => {
   const f = await fixture(t), provider = await catalog(f);
