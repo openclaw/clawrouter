@@ -258,6 +258,7 @@ function validateManifest(manifest) {
   if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
   validateDeepgramPrerecorded(manifest);
+  validateGoogleEmbeddings(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
@@ -548,6 +549,38 @@ function validateManagedLifecycles(manifest) {
     if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
+}
+
+function validateGoogleEmbeddings(manifest) {
+  const formats = new Map([
+    ["google.embed_content", "/v1beta/models/${model}:embedContent"],
+    ["google.batch_embed_contents", "/v1beta/models/${model}:batchEmbedContents"],
+  ]);
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("google.embed") || format.startsWith("google.batch_embed"))
+    || /:(?:embedContent|batchEmbedContents)$/.test(endpoint.path));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("Google embeddings require paired native formats, original API-key auth, finite qualified models and unpriced accounting"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length !== 2 || new Set(endpoints.map(([, endpoint]) => endpoint.requestFormat)).size !== 2
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(adapter?.injectHeaders ?? {}).length
+    || Object.keys(adapter?.injectQuery ?? {}).length || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  for (const [id, endpoint] of endpoints) {
+    if (!formats.has(endpoint.requestFormat) || endpoint.responseFormat !== endpoint.requestFormat || endpoint.path !== formats.get(endpoint.requestFormat)
+      || endpoint.auth || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+      || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+      || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => name !== "model" || style !== "segment")) fail();
+    const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+    if (capabilities.length !== 1 || capabilities[0].id !== "llm.embeddings" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  }
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("llm.embeddings"));
+  // The preview remains codec compatibility only; current live availability is
+  // not established by that fixture. No native tariff/bound is qualified yet.
+  if (!models.length || models.some(model => !["gemini-embedding-001", "gemini-embedding-2"].includes(model.upstream)
+    || model.capabilities.length !== 1 || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length)) fail();
 }
 
 function validateDeepgramPrerecorded(manifest) {

@@ -618,6 +618,14 @@
           ]
         },
         "then": { "$ref": "#/$defs/deepgramPrerecordedEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleEmbeddingEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -1670,6 +1678,39 @@
         "abstention": {
           "type": "boolean"
         }
+      }
+    },
+    "googleEmbeddingEndpoint": {
+      "type": "object",
+      "required": ["pathParams"],
+      "properties": {
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "const": ["model"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "path": { "const": "/v1beta/models/${model}:embedContent" },
+            "requestFormat": { "const": "google.embed_content" },
+            "responseFormat": { "const": "google.embed_content" }
+          }
+        },
+        {
+          "properties": {
+            "path": { "const": "/v1beta/models/${model}:batchEmbedContents" },
+            "requestFormat": { "const": "google.batch_embed_contents" },
+            "responseFormat": { "const": "google.batch_embed_contents" }
+          }
+        }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["streaming"] }, { "required": ["websocket"] },
+          { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+          { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+          { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+        ]
       }
     },
     "deepgramPrerecordedEndpoint": {
