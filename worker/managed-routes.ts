@@ -14,7 +14,7 @@ export function managedRoute(provider: CompiledProvider, create: CompiledEndpoin
     const id = lifecycle[action];
     if (id === undefined) continue;
     const endpoint = provider.endpoints.find(endpoint => endpoint.id === id);
-    if (!endpoint || endpoint.lifecycle || endpoint.modelPassthrough || Object.keys(endpoint.query).length) unavailable();
+    if (!endpoint || !endpoint.native_proxy || endpoint.lifecycle || endpoint.modelPassthrough || Object.keys(endpoint.query).length) unavailable();
     controls[action] = endpoint;
   }
   return { adapter, controls };

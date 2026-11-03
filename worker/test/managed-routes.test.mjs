@@ -9,7 +9,7 @@ function fixture(route) {
   const create = { id: "create", method: "POST", request_format: route.requestFormat, lifecycle: { protocol: route.protocol, retrieve: "retrieve" } };
   const endpoints = [create];
   for (const action of ["retrieve", "result", "cancel"]) if (route[action]) {
-    create.lifecycle[action] = action; endpoints.push({ ...route[action], id: action, query: {} });
+    create.lifecycle[action] = action; endpoints.push({ ...route[action], id: action, query: {}, headers: {}, native_proxy: true });
   }
   return { provider: { id: "configured-provider", endpoints }, create };
 }
@@ -22,6 +22,8 @@ for (const route of routes) test(`${route.protocol}: qualified control paths and
   const query = route.identityQuery ? new URLSearchParams([[route.identityQuery, id]]) : new URLSearchParams();
   assert.equal(await managedControlIdentity(route.protocol, "retrieve", params, query), id);
   query.append("unexpected", "value"); await assert.rejects(managedControlIdentity(route.protocol, "retrieve", params, query));
+  provider.endpoints[1].native_proxy = false; assert.throws(() => managedRoute(provider, create));
+  provider.endpoints[1].native_proxy = true;
   create.modelPassthrough = {}; assert.throws(() => managedRoute(provider, create));
 });
 
@@ -40,4 +42,18 @@ test("job identity separates protocols/providers and preserves already-issued Re
   const values = await Promise.all(routes.flatMap(route => ["one", "two"].map(provider => managedJobKey(route.protocol, provider, id))));
   assert.equal(new Set(values).size, 8);
   assert.equal(await managedJobKey("replicate.predictions", "replicate", id), await managedPredictionKey(id));
+});
+
+
+test("already-issued Replicate route digest remains compatible across the shared controller upgrade", async () => {
+  const { responseRouteDigest } = await import("../responses-control-dispatch.ts");
+  const { sha256Hex } = await import("../utils.ts");
+  const { provider, create } = fixture(routes[0]);
+  provider.auth = { schemes: [{ type: "bearer" }] }; provider.adapter = { passthroughHeaders: [] };
+  const upstream = { headers: new Headers({ authorization: "Bearer synthetic-environment-key" }), query: new URLSearchParams(), grant: null, transport: null };
+  const url = new URL("https://api.example/v1/predictions");
+  const identity = await sha256Hex(JSON.stringify([[...upstream.headers], [...upstream.query]]));
+  const oldDigest = await sha256Hex(JSON.stringify(["POST", url.href, identity, [], "replicate.predictions",
+    ["GET", "/v1/predictions/owner-pin", [], []], ["POST", "/v1/predictions/owner-pin/cancel", [], []]]));
+  assert.equal(await responseRouteDigest(provider, upstream, url, new Headers(), null, create.lifecycle, {}), oldDigest);
 });
