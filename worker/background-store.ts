@@ -2,6 +2,7 @@ import type { BudgetReservationIntent, BudgetReservationPlan } from "./accountin
 import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { UsageIngestReceipt } from "./ledgers.ts";
+import type { ManagedProtocol } from "./managed-lifecycle-types.ts";
 import type { UsageEvent } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -31,12 +32,14 @@ export interface BackgroundAdmission {
   managed?: ManagedAdmission;
 }
 export interface ManagedAdmission {
-  protocol: "replicate.predictions";
+  protocol: ManagedProtocol;
+  providerId?: string;
   idempotencyKey: string | null;
   requestDigest: string;
   requestedVersion: string;
 }
 interface ManagedState extends ManagedAdmission {
+  route?: BackgroundAdmission["route"];
   policyGeneration: string;
   submission: "pending" | "submission_unknown" | "bound";
   upstreamId: string | null;
@@ -105,7 +108,7 @@ export class BackgroundStore {
       legs: input.plan.legs.map(intent => ({ intent, reserve: "never", uncertainReserve: false, dispatched: false, settlement: "pending" })),
       route: input.route, stream: input.stream, responseId: null, egress: false, dispatchClaimed: false, event: null,
       nextAttemptAt: input.admittedAt + 60_000, attempts: 0, contentRef: null,
-      ...(input.managed ? { managed: { ...input.managed, policyGeneration: input.owner.policyGeneration, submission: "pending", upstreamId: null, terminal: null } as ManagedState } : {}),
+      ...(input.managed ? { managed: { ...input.managed, providerId: input.owner.providerId, route: input.route, policyGeneration: input.owner.policyGeneration, submission: "pending", upstreamId: null, terminal: null } as ManagedState } : {}),
     };
     encode(job);
     const active = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background WHERE phase IN ('admitting', 'observing')")][0].count;
@@ -131,7 +134,7 @@ export class BackgroundStore {
   managedRetry(input: ManagedAdmission, policyGeneration: string): BackgroundRecord | null {
     validateManagedMetadata(input);
     if (input.idempotencyKey === null) return null;
-    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE json_extract(job_json, '$.managed.protocol') = ? AND json_extract(job_json, '$.managed.idempotencyKey') = ? AND json_extract(job_json, '$.replayUntil') > ? LIMIT 1", input.protocol, input.idempotencyKey, Date.now())][0];
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE json_extract(job_json, '$.managed.protocol') = ? AND json_extract(job_json, '$.managed.idempotencyKey') = ? AND COALESCE(json_extract(job_json, '$.managed.providerId'), 'replicate') = ? AND json_extract(job_json, '$.replayUntil') > ? LIMIT 1", input.protocol, input.idempotencyKey, input.providerId ?? "replicate", Date.now())][0];
     if (!row) return null;
     const job = JSON.parse(row.job_json) as BackgroundRecord;
     if (job.managed?.requestDigest !== input.requestDigest) throw new HttpError(409, "idempotency_conflict", "idempotency key was already used for a different request");
@@ -196,7 +199,7 @@ export class BackgroundStore {
     const current = this.get(id);
     if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
     if (!current.managed || current.managed.submission !== "bound" || current.responseId !== upstreamId
-      || !["starting", "processing", "succeeded", "failed", "canceled", "aborted"].includes(status) || !Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) invalid();
+      || !["starting", "processing", "succeeded", "failed", "canceled", "aborted"].includes(status) || !Number.isInteger(statusCode) || !(statusCode >= 200 && statusCode < 300 || status === "failed" && statusCode === 422)) invalid();
     if (status === "starting" || status === "processing") return;
     current.managed.terminal = status as ManagedState["terminal"];
     this.save(current);
@@ -305,13 +308,16 @@ function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): Bac
 }
 function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
   const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-  if (!managed || Object.keys(managed).length !== 4 || managed.protocol !== "replicate.predictions"
+  if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion"].includes(key))
+    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs"].includes(managed.protocol)
+    || managed.providerId !== undefined && (typeof managed.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(managed.providerId))
+    || managed.protocol !== "replicate.predictions" && managed.providerId === undefined
     || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)
     || typeof managed.requestedVersion !== "string" || !/^[a-zA-Z0-9_./:-]{1,256}$/.test(managed.requestedVersion)) invalid();
 }
 function validateManagedAdmission(input: BackgroundAdmission): void {
   validateManagedMetadata(input.managed);
-  if (input.stream) invalid();
+  if (input.stream || (input.managed!.providerId ?? "replicate") !== input.owner.providerId) invalid();
   // This first protocol slice supports an explicit router tariff only. An
   // unknown provider price is never silently replaced with the flat fallback.
   if (input.facts.cost.basis !== "policy_fixed" || !Number.isSafeInteger(input.facts.fixed) || input.facts.fixed! < 0

@@ -109,6 +109,12 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
     return { model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
   }
   const body = requestObject(inputBody);
+  // Managed job models are native inputs, not inference catalog selectors.
+  // The explicit protocol adapter validates them before credential selection.
+  if (endpoint.lifecycle) {
+    if (endpoint.modelPassthrough) throw new HttpError(400, "invalid_managed_route", "managed lifecycles cannot use model passthrough");
+    return { model: null, body, pathParams: inputPathParams };
+  }
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
   if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
   const modelId = typeof body.model === "string" ? body.model : null;
