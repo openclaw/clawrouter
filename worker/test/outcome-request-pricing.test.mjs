@@ -59,7 +59,7 @@ test("outcome tariff cannot leak to Chat, regional prices, controls or credentia
     m => { m.endpoints.responses.requestHeaders = ["Authorization"]; }, m => { m.endpoints.responses.auth = "none"; },
     m => { m.endpoints.responses.path = "/v1/chat/completions"; }, m => { m.endpoints.responses.method = "GET"; },
     m => { m.endpoints.responses.requestFormat = "openai.chat_completions"; }, m => { m.endpoints.responses.responseFormat = "openai.chat_completions"; },
-    m => { m.capabilities.at(-1).id = "llm.chat"; }, m => { m.capabilities.at(-1).methods.push("GET"); },
+    m => { m.capabilities.at(-1).id = "llm.chat"; m.models.entries[0].capabilities = ["llm.chat"]; }, m => { m.capabilities.at(-1).methods.push("GET"); },
     m => { m.endpoints.responses.query = { background: "true" }; }, m => { m.endpoints.responses.modelPassthrough = {}; },
     m => { m.endpoints.responses.websocket = "openai.responses"; }, m => { m.endpoints.responses.responsesLifecycle = { retrieve: "get", cancel: "cancel" }; },
   ]) {
