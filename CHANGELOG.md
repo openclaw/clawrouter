@@ -95,6 +95,7 @@
 - Add a bounded Wan video lifecycle adapter and synthetic native fixtures, preserving model-specific inputs, regional credential boundaries and expired observations. Shared durable route activation remains separately qualified.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
 - Qualify PixVerse fresh trace UUIDs and Runway stable version headers against the shared managed dispatch contract, preserving route identity and scoped asset prerequisites. Require both scoped Replicate read/cancel paths when rewriting controls.
+- Add Azure Speech regional SSML manifests and bounded unary protocol qualification, with conservative character admission and separate resource credentials.
 - Add concrete managed lifecycle adapters for Replicate, fal, Kie and Vydra, with bounded native reads, scoped control-path construction and explicit result/cancel support for the shared durable controller.
 - Qualify the explicit four-segment fal submit template and shared owner/app control links against native HeyGen and Seedance fixtures; retain exact product admission, original credentials and unknown-cost boundaries.
 - Qualify the three native xAI video create formats and shared original-job retrieve link; reject unbound controls, credential overrides and fabricated token prices before activation.
