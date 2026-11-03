@@ -4,6 +4,7 @@ import test from "node:test";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { providerById } = await import("../providers.ts");
+const { sqlBudgetNamespace } = await import("./sql-budget-namespace.mjs");
 const usage = { input: 50, output: 12, cacheRead: 10, cacheWrite: 4, totalTokens: 76, cost: { input: 100, output: 100, cacheRead: 100, cacheWrite: 100, total: 400 } };
 const frame = value => `data: ${JSON.stringify(value)}\n\n`;
 const events = [
@@ -25,9 +26,11 @@ function fixture(t, { fixed = 7, permitted = true } = {}) {
   Object.assign(endpoint, { path: "/fixture/messages", request_format: "radius.messages", response_format: "radius.messages" });
   provider.models = [{ id: "openai/fixture", upstream: "fixture", capabilities: ["llm.chat"], pricing: null, pricing_ref: null }];
   const pending = [], recorded = [], budgets = [], sent = [];
-  const env = usageEnv(budgets, { provider: permitted ? "openai" : "anthropic", fixedCost: fixed, retainContent: false });
+  const env = usageEnv([], { provider: permitted ? "openai" : "anthropic", fixedCost: fixed, retainContent: false });
+  const ledger = sqlBudgetNamespace(t);
+  env.BUDGET_LEDGER = { idFromName: name => name, get(name) { if (!budgets.includes(name)) budgets.push(name); return ledger.get(name); } };
   env.OPENAI_API_KEY = "fixture-native-key"; env.USAGE_QUEUE = { send: async event => recorded.push(event) };
-  const f = { env, recorded, budgets, sent, reply: () => new Response([...events, done].map(frame).join(""), { headers: { "content-type": "text/event-stream" } }),
+  const f = { env, recorded, budgets, ledger, sent, reply: () => new Response([...events, done].map(frame).join(""), { headers: { "content-type": "text/event-stream" } }),
     call(body = input, manifest = false, signal) { return worker.fetch(new Request(`https://router.example${manifest ? "/v1/proxy/openai/chat_completions" : "/v1/native/openai/fixture/messages"}`, {
       method: "POST", signal, headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify(manifest ? { body } : body),
     }), env, { waitUntil: promise => pending.push(promise) }); },
@@ -49,6 +52,10 @@ for (const manifest of [false, true]) test(`Radius ${manifest ? "manifest" : "na
   assert.equal(event.status, "success"); assert.equal(event.credential_id, "maintainer_key"); assert.equal(event.tenant_id, "tenant");
   assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens, event.cache_write_input_tokens], [64, 12, 76, 10, 4]);
   assert.equal(event.actual_cost_micros, 7, "native cost fields never replace the fixed policy tariff"); assert.equal(event.cost_basis, "policy_fixed");
+  for (const name of f.budgets) {
+    const reservations = f.ledger.get(name).reservations(); assert.equal(reservations.length, 1);
+    assert.equal(reservations[0].settled, 1); assert.equal(reservations[0].reserved_micros, 7);
+  }
   assert.doesNotMatch(JSON.stringify(event), /synthetic-reasoning|synthetic-signature|synthetic-tool-signature|fixture-native-key/);
 });
 
