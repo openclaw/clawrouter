@@ -87,11 +87,20 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Build and smoke self-host image
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build self-host image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: deploy/self-host/Dockerfile
+          load: true
+          tags: clawrouter-self-host:ci
+          cache-from: type=gha,scope=self-host
+          cache-to: type=gha,scope=self-host,mode=max
+      - name: Smoke self-host image
         run: |
           read -r admin_token < <(openssl rand -hex 32)
           admin_hash="$(printf '%s' "$admin_token" | sha256sum | awk '{print $1}')"
-          docker build -f deploy/self-host/Dockerfile -t clawrouter-self-host:ci .
           container_id="$(docker run -d -p 8787:8787 \
             -e CLAWROUTER_ADMIN_TOKEN_SHA256="$admin_hash" \
             clawrouter-self-host:ci)"
