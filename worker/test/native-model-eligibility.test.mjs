@@ -1,9 +1,8 @@
-import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../../shared/native-model-eligibility.ts";
-const { createRouteCatalog, modelSupportsEndpoint } = await import("../../shared/route-catalog.ts");
+import { createRouteCatalog, modelSupportsEndpoint } from "../../shared/route-catalog.ts";
 import { googleSpeechModels, googleSpeechPreviewCutoff, prepareGoogleSpeech } from "../google-speech.ts";
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/google/speech.json", import.meta.url), "utf8"));
 const cutoff = Date.parse(googleSpeechPreviewCutoff), before = cutoff - 1;

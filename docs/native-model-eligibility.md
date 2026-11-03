@@ -3,7 +3,10 @@
 `shared/native-model-eligibility.ts` exports
 `nativeModelEligible(requestFormat, selectedUpstreamModel, now?)`. The inputs
 are the compiled endpoint's `request_format` and selected model's `upstream`.
-Existing compiled fields are sufficient; capability membership alone does not
+The implementation lives in the self-contained shared route catalog; the
+module above preserves the Worker entry point without requiring a native Node
+resolver or changing the admin compiler. Existing compiled fields are
+sufficient; capability membership alone does not
 qualify a model for every endpoint carrying that capability.
 
 The finite Google speech binding follows `worker/google-speech.ts`:
