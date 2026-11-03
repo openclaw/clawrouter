@@ -43,6 +43,57 @@ models:
     - id: zai/glm-5.3
       upstream: glm-5.3
       capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: zai/glm-5.3-flash
+      upstream: glm-5.3-flash
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: zai/glm-5.2
+      upstream: glm-5.2
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: zai/glm-5-turbo
+      upstream: glm-5-turbo
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: zai/glm-5v-turbo
+      upstream: glm-5v-turbo
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    # Frozen deprecated identity; no current global eligibility or effective date inferred.
+    - id: zai/glm-5.1
+      upstream: glm-5.1
+      capabilities: []
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
