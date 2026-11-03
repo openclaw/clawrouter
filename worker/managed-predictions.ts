@@ -20,6 +20,7 @@ import { errorResponse, HttpError, json, sha256Hex } from "./utils.ts";
 export async function proxyManagedPrediction(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
   selection: ProxySelection, query: ProxyQuery): Promise<Response> {
   const connection = await assertProviderAccess(selection.provider, auth, env);
+  if (!selection.endpoint.lifecycle) throw new HttpError(409, "response_owner_unavailable", "the managed prediction lifecycle is unavailable; raw job IDs cannot be forwarded");
   if (selection.endpoint.lifecycle?.protocol !== "replicate.predictions" || selection.method !== "POST"
     || hasProxyQuery(query) || new URL(request.url).search) throw new HttpError(400, "invalid_prediction_request", "managed prediction creation requires a body-only declared POST");
   if (retentionRequired(auth, selection.capability)) throw new HttpError(400, "prediction_retention_unsupported", "this managed protocol does not support required request-content retention");
