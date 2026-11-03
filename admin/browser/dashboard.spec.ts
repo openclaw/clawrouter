@@ -292,8 +292,8 @@ function dashboardFixture() {
       { provider: "openai", requestCount: 80, successCount: 78, errorCount: 2, totalTokens: 90_000, actualCostMicros: 5_600_000 },
       { provider: "anthropic", requestCount: 40, successCount: 38, errorCount: 2, totalTokens: 30_000, actualCostMicros: 2_800_000 },
     ],
-    daily: [10, 20, 15, 25, 20, 30].map((requestCount, index) => ({
-      dayStartMs: Date.UTC(2026, 6, index + 1), requestCount, successCount: requestCount - (index < 4 ? 1 : 0),
+    daily: Array.from({ length: 30 }, (_, index) => [2, 4, 3, 5, 4, 6][index % 6]).map((requestCount, index) => ({
+      dayStartMs: Date.UTC(2026, 5, index + 7), requestCount, successCount: requestCount - (index < 4 ? 1 : 0),
       errorCount: index < 4 ? 1 : 0, totalTokens: requestCount * 1000, actualCostMicros: requestCount * 70_000,
     })),
   };
