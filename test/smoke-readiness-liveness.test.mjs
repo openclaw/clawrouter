@@ -82,7 +82,7 @@ test("successful readiness clears its referenced request and probe deadlines", a
 
 for (const mode of [
   "delayed listener", "connection reset", "stalled body", "unavailable stream",
-  "redirect", "invalid JSON", "invalid health", "wrong version", "catalog failure",
+  "redirect", "invalid JSON", "invalid health", "wrong version", "catalog failure", "revocation ignored", "revocation failure",
 ]) {
   test(`self-host CLI preserves its outcome after ${mode} in a separate process`, async (t) => {
     const mutations = [];
@@ -122,6 +122,11 @@ for (const mode of [
         }));
       } else if (request.url === "/v1/catalog") {
         catalogCalls += 1;
+        if (catalogCalls > 1 && mode !== "revocation ignored") {
+          response.statusCode = mode === "revocation failure" ? 500 : 403;
+          response.end(JSON.stringify({ error: { code: "proxy_key_revoked" } }));
+          return;
+        }
         if (mode === "catalog failure") response.statusCode = 500;
         response.end(JSON.stringify({ providers: [{ id: "firecrawl" }] }));
       } else if (request.url.startsWith("/v1/admin/")) {
@@ -157,8 +162,8 @@ for (const mode of [
       "POST /v1/admin/keys/fixture/revoke",
       "POST /v1/admin/policies/fixture/revoke",
     ]);
-    assert.equal(catalogCalls, 1, "run the scoped catalog probe only once");
-    if (mode === "catalog failure") {
+    assert.equal(catalogCalls, mode === "catalog failure" ? 1 : 2, "probe catalog access before and after revocation");
+    if (["catalog failure", "revocation ignored", "revocation failure"].includes(mode)) {
       assert.equal(result.code, 1, result.stderr);
       assert.doesNotMatch(result.stdout, /self-host smoke ok/);
       return;
