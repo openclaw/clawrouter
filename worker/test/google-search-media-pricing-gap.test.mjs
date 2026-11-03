@@ -7,6 +7,7 @@ const { estimateCost, createProxyAccounting } = await import("../proxy-accountin
 const { validateBudgetReservation } = await import("../accounting.ts");
 const { correlateIngressRequest } = await import("../correlation.ts");
 const { providerById } = await import("../providers.ts");
+const { googleRequestServiceTier, googleResponseServiceTier } = await import("../google-protocol.ts");
 const { prepareGoogleGroundedSearch, observeGoogleGroundedSearch } = await import("../google-grounded-search.ts");
 const { prepareGoogleUnderstanding } = await import("../google-media-understanding.ts");
 const read = name => JSON.parse(readFileSync(new URL(`../../providers/_fixtures/google/${name}.json`, import.meta.url), "utf8"));
@@ -78,7 +79,10 @@ test("ordinary Google text and client functions named after hosted tools retain 
     tools: [{ functionDeclarations: [{ name: "google_search", description: "Synthetic client function" }] }] };
   assert.equal(requestPricingGap(pricing, body, "google.generate_content"), null);
   assert.notEqual(estimateModelCost(pricing, body, { request_format: "google.generate_content" }).pricingAvailable, false);
-  assert.notEqual(actualModelCost(pricing, tokens, "google.generate_content"), null);
+  const serviceTier = googleResponseServiceTier(googleRequestServiceTier(body), undefined, null);
+  assert.equal(serviceTier, "standard");
+  assert.equal(actualModelCost(pricing, { ...tokens, serviceTier }, "google.generate_content"), 240);
+  assert.equal(actualModelCost(pricing, tokens, "google.generate_content"), null);
   assert.equal(requestPricingGap(pricing, search.request.body, "google.generate_content"), "hosted_tool_fee");
 });
 
