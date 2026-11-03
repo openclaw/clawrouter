@@ -406,6 +406,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
+  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
@@ -685,7 +686,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage);
+  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
   if (nativeLease) void observed.result.then(() => nativeLease!.release());
   if (admission) admission.completion = observed.result;
   if (background) {

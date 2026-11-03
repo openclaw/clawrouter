@@ -8,7 +8,7 @@ import { createBedrockEventStreamInspector } from "./bedrock-eventstream.ts";
 import { extractImageUsageTokens } from "./image-generation.ts";
 import { extractCompactUsageTokens } from "./responses-compact.ts";
 import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
-import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection } from "./token-usage.ts";
+import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection, type UsageTokenContext } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 
@@ -33,7 +33,7 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
   if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
@@ -50,7 +50,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
   const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
   const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
-  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson) : null;
+  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
@@ -74,7 +74,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         const value: unknown = JSON.parse(text);
         inspection = { tokens: responseFormat === "voyage.embeddings"
           ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
-          : extractUsageTokens(value), outcome: responseOutcome(value) };
+          : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
       } catch { inspection.outcome = "provider_error"; }
     }
     responses?.stop(); text = "";
@@ -110,7 +110,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
             try {
               text += decoder.decode();
               const value: unknown = JSON.parse(text);
-              completedJson = { tokens: extractUsageTokens(value), outcome: responseOutcome(value) };
+              completedJson = { tokens: extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
               bodyInspection.acceptJson(value);
             } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
             text = ""; inspect = false;
