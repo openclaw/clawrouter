@@ -408,6 +408,10 @@ function validateManifest(manifest) {
 }
 
 const managedLifecycleContracts = {
+  "pixverse.video": {
+    provider: "pixverse", create: ["/openapi/v2/video/text/generate"], request: "pixverse.text_video", response: "pixverse.video",
+    controls: { retrieve: ["GET", "/openapi/v2/video/result/${video_id}", "pixverse.video_get", "pixverse.video"] },
+  },
   "google.omni_video": {
     provider: "google-gemini", create: ["/v1beta/interactions"], request: "google.omni_video_create", response: "google.omni_video",
     controls: {
@@ -474,6 +478,13 @@ function validateManagedLifecycles(manifest) {
       if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
         !(["x-dashscope-async", "content-type"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "x-dashscope-async" ? "enable" : "application/json")))) fail();
     }
+    if (protocol === "pixverse.video") {
+      // Image routes remain closed until uploads have durable original-job scope.
+      if (Object.values(manifest.baseUrls).some(base => !["https://app-api.pixverse.ai", "https://app-api.pixverseai.cn"].includes(base))
+        || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
+      const schemes = manifest.auth.schemes;
+      if (schemes.length !== 1 || schemes[0].type !== "api_key" || schemes[0].header?.toLowerCase() !== "api-key" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
+    }
     if (protocol === "google.omni_video") {
       // Keep Google's existing origin-only base; the registered wrapper must
       // translate the codec's /v1beta-relative paths without changing that base.
@@ -492,7 +503,7 @@ function validateManagedLifecycles(manifest) {
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
-      if (["dashscope.video", "google.omni_video"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if (["dashscope.video", "google.omni_video", "pixverse.video"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
       controls.add(controlId);
     }
   }
@@ -501,7 +512,7 @@ function validateManagedLifecycles(manifest) {
   const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
     .flatMap(([, contract]) => [contract.request, ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])]));
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    const reservedFormat = ["dashscope.video", "google.omni_video"].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
+    const reservedFormat = ["dashscope.video", "google.omni_video", "pixverse."].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
     if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
