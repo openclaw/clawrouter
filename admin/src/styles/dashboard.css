@@ -1,12 +1,4 @@
-/* Control-room dashboard: stat rail and service panels.
-   The canvas is a seamless rack — sections meet on shared hairlines instead
-   of floating in gutters. */
-
-.dashboardCanvas {
-  display: grid;
-  gap: 0;
-  color: var(--ink);
-}
+/* Control-room dashboard: stat rail and service panels. */
 
 .myKeysPanel {
   grid-column: 1 / -1;
@@ -141,47 +133,15 @@
 }
 
 .dashboardStats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
 }
-
-.dashboardStats > div {
-  display: grid;
-  gap: 3px;
-  border-right: 1px solid var(--line);
-  padding: 15px 16px;
-}
-
-.dashboardStats > div:last-child { border-right: 0; }
-.dashboardStats span { color: var(--muted); }
 
 .dashboardStats strong {
   margin-top: 3px;
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 22px;
-  font-weight: 460;
-  font-variant-numeric: tabular-nums;
-}
-
-.dashboardStats small {
-  color: var(--muted);
-  font-size: 10.5px;
-}
-
-.dashboardGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.85fr);
-  gap: 0;
-  align-items: stretch;
 }
 
 .dashboardPanel {
-  min-width: 0;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
 }
 
 /* Left rack column carries the shared vertical hairline. */
@@ -189,24 +149,11 @@
   border-right: 1px solid var(--line);
 }
 
-.dashboardPanelHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 64px;
-  border-bottom: 1px solid var(--line);
-  padding: 11px 16px;
-}
-
 .dashboardPanelHeader > div {
   display: grid;
   gap: 4px;
 }
-
-.dashboardPanelHeader span { color: var(--accent); }
-.dashboardPanelHeader h2 { font-size: 15px; }
-.dashboardPanelHeader small { color: var(--muted); font-family: var(--font-mono); font-size: 10px; }
+.dashboardPanelHeader small { font-family: var(--font-mono); }
 
 .dashboardPanelHeader button,
 .dashboardTextAction {
@@ -228,17 +175,13 @@
 
 .serviceSpectrum {
   display: flex;
-  height: 5px;
   overflow: hidden;
   background: var(--track);
 }
-
-.serviceSpectrumReady { background: var(--ok); }
 .serviceSpectrumBlocked { background: var(--warn); }
 
 .dashboardServiceGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .dashboardService {
@@ -246,7 +189,6 @@
   grid-template-columns: 34px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  min-height: 66px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 9px 16px;
@@ -267,7 +209,6 @@
   height: 34px;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: var(--radius-tag);
   background: var(--surface-raised);
 }
 
@@ -291,13 +232,8 @@
 .quotaList { display: grid; }
 
 .quotaRow {
-  display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  min-height: 72px;
   border-bottom: 1px solid var(--line);
-  padding: 10px 16px;
 }
 
 .quotaIdentity,
@@ -312,7 +248,7 @@
 .quotaIdentity small,
 .quotaNumbers small { color: var(--muted); font-size: 9.5px; }
 .quotaNumbers { justify-items: end; text-align: right; }
-.quotaNumbers strong { font-family: var(--font-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.quotaNumbers strong { font-weight: 500; }
 
 .operationsDiagram {
   display: grid;
@@ -330,11 +266,9 @@
 
 .operationsDiagram > div:nth-child(even) { border-right: 0; }
 .operationsDiagram span { color: var(--muted); }
-.operationsDiagram strong { color: var(--ink); font-family: var(--font-mono); font-size: 25px; font-weight: 460; font-variant-numeric: tabular-nums; }
+.operationsDiagram strong { color: var(--ink); font-size: 25px; font-weight: 460; }
 .operationsDiagram small { align-self: end; color: var(--muted); font-size: 9.5px; }
-.operationsDiagram .needsAttention { box-shadow: inset 3px 0 var(--warn); }
 .operationsDiagram .needsAttention strong { color: var(--warn); }
-.operationsDiagram .healthy { box-shadow: inset 3px 0 var(--ok); }
 .operationsDiagram .healthy strong { color: var(--ok); }
 
 .operationsFooter {
@@ -370,10 +304,8 @@
 }
 
 @media (max-width: 760px) {
-  .dashboardStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboardStats > div:nth-child(2) { border-right: 0; }
   .dashboardStats > div:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
-  .dashboardServiceGrid { grid-template-columns: 1fr; }
   .dashboardService { border-right: 0; }
 }
 
