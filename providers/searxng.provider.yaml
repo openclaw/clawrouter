@@ -1,0 +1,44 @@
+# Native GET contract checked 2026-11-03: https://docs.searxng.org/dev/search_api.html
+schema: clawrouter.service-provider.v1
+id: searxng
+displayName: SearXNG
+status: experimental
+class: rest_json
+service:
+  platform: searxng
+  kind: tool_provider
+  upstreamService: searxng
+  configKeys: [SEARXNG_BASE_URL, SEARXNG_API_KEY]
+  optionalConfigKeys: [SEARXNG_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: ${searxng_base_url}
+routing:
+  nativePrefixes: [clawrouter-searxng, searxng]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: web.search
+    endpoint: search
+    methods: [GET]
+endpoints:
+  search:
+    path: /search
+    method: GET
+    requestFormat: searxng.search
+    responseFormat: searxng.search
+    timeoutMs: 30000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request

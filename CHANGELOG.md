@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add operator-configured SearXNG native GET search with optional reverse-proxy Bearer authentication and unchanged query/results. Instance reachability, JSON enablement and operating costs remain explicit qualifications.
+
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
 
