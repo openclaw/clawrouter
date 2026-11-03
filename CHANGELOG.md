@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
+
 - Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.
 - Recognize fal’s canonical FAL_KEY binding for native Key authentication, preserving original managed-job credentials and rejecting malformed values without exposing them.
 
