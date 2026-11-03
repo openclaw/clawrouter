@@ -158,6 +158,7 @@
 - Add the frozen Mistral realtime transcription frame contract with acknowledged audio format, bounded PCM/transcripts, prevention of terminal transcript replay and conservative disconnect accounting.
 
 - Exercise the actual pinned OpenClaw search plugin through workerd and SQLite in secretless CI, checking scoped discovery, provider credentials, caller cancellation and policy-fixed accounting.
+- Verify catalog-selected OpenAI-format TTS and Talk through the actual OpenClaw consumer, Worker and SQLite accounting in isolated CI.
 
 - Verify actual OpenClaw memory embedding batch ordering, credential refresh and usage through workerd for concrete OpenAI-format models. Native embedding formats and deployment placeholders remain separately qualified.
 

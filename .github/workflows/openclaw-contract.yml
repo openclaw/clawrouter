@@ -78,3 +78,22 @@ jobs:
         run: node --test test/openclaw-embeddings.test.mjs
         env:
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
+      - name: Check out the actual public TTS and Talk consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 70fcd8cb826f1e70ee59aacaf442e4cf411c7ca4
+          path: .openclaw-contract
+          persist-credentials: false
+          fetch-depth: 1
+          clean: false
+      - name: Qualify the speech checkout against the same frozen install
+        working-directory: .openclaw-contract
+        run: |
+          git ls-files --stage -- '*package.json' pnpm-lock.yaml pnpm-workspace.yaml '.npmrc' '**/.npmrc' '.pnpmfile.*' 'patches/**' '**/patches/**' | cmp "$RUNNER_TEMP/openclaw-dependency-inputs" -
+          node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'
+          pnpm --version
+      - name: Actual TTS and Talk through workerd and SQLite
+        run: node --test test/openclaw-speech.test.mjs
+        env:
+          CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
