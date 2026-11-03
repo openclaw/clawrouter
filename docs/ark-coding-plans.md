@@ -32,10 +32,10 @@ entitlements. A configured key does not establish account eligibility.
 | Volcengine | `ark-code-latest` | Enabled as the documented console-managed alias; no fixed serving model or tariff inferred |
 | Volcengine | `deepseek-v4-pro` | Enabled; still listed in the current personal-plan quickstart |
 | Volcengine | `deepseek-v4-flash` | Enabled; still listed in the current personal-plan quickstart |
-| Volcengine | `doubao-seed-2.1-turbo` | Excluded: service stopped 2026-10-09 at 14:00 UTC+8 |
-| Volcengine | `glm-5.2` | Excluded pending explicit legacy-account/alias qualification; underlying model retired, upstream documents routing to `glm-5.3` |
+| Volcengine | `doubao-seed-2.1-turbo` | Known, non-executable `stopped` row: service stopped 2026-10-09 at 14:00 UTC+8 |
+| Volcengine | `glm-5.2` | Known, non-executable `upstream_alias` row naming `glm-5.3`, effective 2026-08-31; legacy-account and native alias qualification remain required |
 | BytePlus | `ark-code-latest` | Enabled as the documented console-managed alias |
-| BytePlus | `kimi-k2.5` | Excluded: current personal-plan notice marks it deprecated on September 23; current account availability needs qualification |
+| BytePlus | `kimi-k2.5` | Known, non-executable `deprecated` row dated 2026-09-23; current account availability needs qualification |
 
 The [current Volcengine retirement notice](https://docs.volcengine.com/docs/ark/coding-plan-personal-model-deprecation?lang=zh)
 records the Turbo shutdown and GLM 5.2 retirement on August 31. It also says
@@ -50,10 +50,20 @@ bounded personal-plan inventory does not advertise that disputed entitlement.
 The same notice restricts the BytePlus latest alias to `ark-code-latest`;
 `glm-latest`, `kimi-latest` and other latest names are not added.
 
-There is no opaque model passthrough. A policy granting an excluded name still
-cannot route it through these manifests. Alias/availability metadata and an
-eligible account contract are required before adding excluded compatibility
-cards. This does not block the qualified plan transport or surviving inventory.
+All seven frozen identities are retained. The three disposition rows use the
+published [model availability contract](model-availability-contract.md), with
+primary evidence and checked dates, no capabilities and no prices. The GLM row
+retains `upstream: glm-5.2`; `servingModel: glm-5.3` does not change its selected
+identity, tariff or facts. It does not add a GLM 5.3 card or authorize an account.
+
+There is no opaque model passthrough. A policy granting a non-executable name
+still cannot route it. Worker fixtures also enable passthrough on cloned
+endpoints to verify it cannot revive these known rows. Before bundling this
+source, the common owner must project availability and eligibility through
+discovery and live offers, including the legacy `openaiCompatible.models`
+projection. Schema publication alone does not satisfy that gate. Alias or
+deprecated cards require separate account, codec and runtime proof before any
+capability can be enabled; the stopped identity remains non-executable.
 
 ## Usage and proof
 
@@ -66,7 +76,7 @@ subscription rate or quota estimate.
 
 Real Worker/SQLite fixtures compile both source manifests and exercise both
 routes, JSON/SSE replay, account/product isolation, every enabled identity,
-pre-egress rejection of excluded cards, response serving identity, fixed
+pre-egress rejection of non-executable cards, response serving identity, fixed
 settlement, missing usage, errors and disconnects. Snapshot activation needs a
 later explicit serialized slot and green final-head checks. Native Messages,
 Responses, plan-scoped discovery, actual client and live account proofs remain

@@ -48,6 +48,28 @@ models:
     - id: volcengine-plan/deepseek-v4-flash
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
+    - id: volcengine-plan/doubao-seed-2.1-turbo
+      upstream: doubao-seed-2.1-turbo
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: stopped
+        effectiveAt: '2026-10-09'
+        checkedAt: '2026-11-03'
+        sources:
+          - https://docs.volcengine.com/docs/ark/coding-plan-personal-model-deprecation?lang=zh
+    # Keep the selected identity; legacy account access and native alias proof are pending.
+    - id: volcengine-plan/glm-5.2
+      upstream: glm-5.2
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: upstream_alias
+        servingModel: glm-5.3
+        effectiveAt: '2026-08-31'
+        checkedAt: '2026-11-03'
+        sources:
+          - https://docs.volcengine.com/docs/ark/coding-plan-personal-model-deprecation?lang=zh
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

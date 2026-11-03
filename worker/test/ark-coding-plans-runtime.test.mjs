@@ -23,14 +23,20 @@ const unqualified = {
   "volcengine-plan": ["doubao-seed-2.1-turbo", "glm-5.2"],
   "byteplus-plan": ["kimi-k2.5"],
 };
+const dispositions = {
+  "doubao-seed-2.1-turbo": { status: "stopped", effectiveAt: "2026-10-09" },
+  "glm-5.2": { status: "upstream_alias", effectiveAt: "2026-08-31", servingModel: "glm-5.3" },
+  "kimi-k2.5": { status: "deprecated", effectiveAt: "2026-09-23" },
+};
 const { providers } = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", ...contracts.map(([id]) => `providers/${id}.provider.yaml`)], { encoding: "utf8" }));
 const model = "ark-code-latest", frame = value => `data: ${JSON.stringify(value)}\n\n`;
 const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
 const result = { id: "chatcmpl_fixture", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: "synthetic-answer" }, finish_reason: "stop" }], usage };
 
-async function fixture(t, id, { ownGrant = true } = {}) {
+async function fixture(t, id, { ownGrant = true, passthrough = false } = {}) {
   const rows = structuredClone(providers); snapshot.providers.push(...rows);
+  if (passthrough) rows.find(p => p.id === id).endpoints.find(e => e.id === "chat_completions").modelPassthrough = {};
   t.after(() => { for (const row of rows) snapshot.providers.splice(snapshot.providers.indexOf(row), 1); });
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { ARK_API_KEY: "synthetic-payg", VOLCENGINE_API_KEY: "synthetic-volc-payg", BYTEPLUS_API_KEY: "synthetic-byteplus-payg", POLICY_KV: {
@@ -65,8 +71,16 @@ for (const [id, binding, base] of contracts) {
   const frozen = inventory[id];
   test(`${id} preserves the qualified frozen identities without pricing or cross-product credential fallback`, () => {
     const provider = providers.find(p => p.id === id);
-    assert.deepEqual(provider.models.map(m => m.upstream), frozen);
+    assert.deepEqual(provider.models.filter(m => m.capabilities.includes("llm.chat")).map(m => m.upstream), frozen);
+    assert.deepEqual(provider.models.map(m => m.upstream), [...frozen, ...unqualified[id]]);
     for (const m of provider.models) { assert.equal(m.id, `${id}/${m.upstream}`); assert.equal(m.pricing, null); assert.equal(m.nativeCapabilities, undefined); }
+    for (const name of unqualified[id]) {
+      const m = provider.models.find(m => m.upstream === name);
+      assert.deepEqual(m.capabilities, []);
+      assert.deepEqual(m.availability, { version: "clawrouter.model-availability.v1", ...dispositions[name], checkedAt: "2026-11-03", sources: [id === "volcengine-plan"
+        ? "https://docs.volcengine.com/docs/ark/coding-plan-personal-model-deprecation?lang=zh"
+        : "https://docs.byteplus.com/en/docs/modelark/coding-plan-personal-model-deprecation"] });
+    }
     const foreign = { ARK_API_KEY: "synthetic-payg", VOLCENGINE_API_KEY: "synthetic-volc-payg", BYTEPLUS_API_KEY: "synthetic-byteplus-payg" };
     foreign[contracts.find(([other]) => other !== id)[1]] = "synthetic-foreign-region";
     assert.throws(() => configuredUpstream(provider, null, foreign), e => e.code === "provider_not_configured");
@@ -161,8 +175,8 @@ for (const [id, binding, base] of contracts) {
     assert.equal(f.env.BUDGET_LEDGER.get("fixture:paid").reservations().length, 1);
   });
 
-  test(`${id} rejects retired or unqualified frozen cards even when the policy permits their names`, async t => {
-    const provider = providers.find(p => p.id === id), f = await fixture(t, id);
+  for (const passthrough of [false, true]) test(`${id} rejects non-executable frozen cards with granted names and passthrough ${passthrough}`, async t => {
+    const provider = providers.find(p => p.id === id), f = await fixture(t, id, { passthrough });
     assert.equal(provider.endpoints.find(e => e.id === "chat_completions").modelPassthrough, undefined);
     for (const blocked of unqualified[id]) for (const manifest of [false, true]) {
       const r = await f.call({ model: manifest ? `${id}/${blocked}` : blocked, messages: [] }, { manifest });
