@@ -35,9 +35,10 @@ const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
 const result = { id: "chatcmpl_fixture", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: "synthetic-answer" }, finish_reason: "stop" }], usage };
 
 async function fixture(t, id, { ownGrant = true, passthrough = false } = {}) {
-  const rows = structuredClone(providers); snapshot.providers.push(...rows);
+  const original = snapshot.providers, rows = structuredClone(providers);
+  snapshot.providers = [...original.filter(provider => !contracts.some(([id]) => id === provider.id)), ...rows];
   if (passthrough) rows.find(p => p.id === id).endpoints.find(e => e.id === "chat_completions").modelPassthrough = {};
-  t.after(() => { for (const row of rows) snapshot.providers.splice(snapshot.providers.indexOf(row), 1); });
+  t.after(() => { snapshot.providers = original; });
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { ARK_API_KEY: "synthetic-payg", VOLCENGINE_API_KEY: "synthetic-volc-payg", BYTEPLUS_API_KEY: "synthetic-byteplus-payg", POLICY_KV: {
       async get(k) { return Array.isArray(k) ? new Map(k.map(k => [k, values.get(k) ?? null])) : values.get(k) ?? null; },
