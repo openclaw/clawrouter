@@ -8,6 +8,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { waitForChildExit } from "./smoke-process.mjs";
 
 // Signal Wrangler directly; a package-manager launcher may leave its child alive.
 const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
@@ -892,8 +893,9 @@ try {
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`, { cause: error });
 } finally {
+  const exited = waitForChildExit(child);
   child.kill("SIGTERM");
-  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  await exited;
   upstreamServer.closeAllConnections();
   await new Promise((resolve) => upstreamServer.close(resolve));
   rmSync(config, { force: true });
