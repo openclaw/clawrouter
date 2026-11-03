@@ -1,4 +1,4 @@
-# Frozen Google Veo video contract
+# Historical Google Veo video contract
 
 Scope: `openclaw/openclaw@31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 `extensions/google/video-generation-provider.ts`, `generation-provider-metadata.ts`
@@ -6,8 +6,9 @@ and the pinned `@google/genai@2.31.0` MLDev converters. Only
 `veo-3.1-fast-generate-preview`, `veo-3.1-generate-preview` and
 `veo-3.1-lite-generate-preview` are admitted. No Vertex translation or newer model
 substitution. The [Google video notice](https://aistudio.google.com/docs/video)
-says these previews shut down on October 22, 2026. Deterministic protocol proof
-is possible; live availability of these exact IDs needs separate qualification.
+says these previews shut down on October 22, 2026. These codecs and fixtures are historical compatibility proof only. Do not
+activate retired live offers, call these IDs, or alias them to a replacement.
+The separately qualified replacement is documented in `google-omni-video-contract.md`.
 
 ## Native create and operation reads
 
