@@ -27,10 +27,50 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - { id: llm.responses, endpoint: responses, methods: [POST] }
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - { id: models.retrieve, endpoint: models_retrieve, methods: [GET] }
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  responses:
+    modelPassthrough: {}
+    path: /responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    responsesLifecycle: { retrieve: responses_retrieve, cancel: responses_cancel }
+    timeoutMs: 600000
+  responses_retrieve:
+    method: GET
+    path: /responses/${response_id}
+    pathParams: [response_id]
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
+  responses_cancel:
+    method: POST
+    path: /responses/${response_id}/cancel
+    pathParams: [response_id]
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    timeoutMs: 600000
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
+  models_retrieve:
+    method: GET
+    path: /models/${model_id}
+    pathParams: [model_id]
+    pathParamStyles: { model_id: opaque_segment }
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -42,7 +82,70 @@ models:
   entries:
     - id: meta/muse-spark-1.3
       upstream: muse-spark-1.3
-      capabilities: [llm.chat]
+      capabilities: [llm.chat, llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources: [https://dev.meta.ai/docs/models, https://dev.meta.ai/docs/protocols/responses]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+    - id: meta/muse-wonder-1.0
+      upstream: muse-wonder-1.0
+      capabilities: [llm.chat, llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources: [https://dev.meta.ai/docs/models, https://dev.meta.ai/docs/protocols/responses]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+    - id: meta/muse-spark-1.3-contributor
+      upstream: muse-spark-1.3-contributor
+      capabilities: [llm.chat, llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources: [https://dev.meta.ai/docs/models, https://dev.meta.ai/docs/protocols/responses]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+    - id: meta/muse-spark-1.2
+      upstream: muse-spark-1.2
+      capabilities: [llm.chat, llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources: [https://dev.meta.ai/docs/models, https://dev.meta.ai/docs/protocols/responses]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+    - id: meta/muse-spark-1.2-contributor
+      upstream: muse-spark-1.2-contributor
+      capabilities: [llm.chat, llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources: [https://dev.meta.ai/docs/models, https://dev.meta.ai/docs/protocols/responses]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+    - id: meta/muse-spark-1.1
+      upstream: muse-spark-1.1
+      capabilities: [llm.chat, llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources: [https://dev.meta.ai/docs/models, https://dev.meta.ai/docs/protocols/responses]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
