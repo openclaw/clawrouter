@@ -83,42 +83,62 @@ test("Gradium rejects forbidden providers and unpriced reserve requests before d
   }
 });
 
-test("Gradium fixed policy charge and rejected synthesis have distinct accounting", async t => {
+test("Gradium rejected synthesis keeps a conservative fixed charge without publishing native error bodies", async t => {
   const f = await fixture(t), success = await f.request("fixed");
   assert.equal(success.status, 200, await success.clone().text());
   await success.arrayBuffer();
   await Promise.all(f.pending);
   assert.equal(f.events[0].actual_cost_micros, 7);
+  assert.equal(f.events[0].status, "success");
   f.hooks.reject = true;
   const failed = await f.request("fixed");
-  assert.equal(failed.status, 422);
-  await failed.text();
+  assert.equal(failed.status, 502);
+  const failure = await failed.json();
+  assert.equal(failure.error.code, "provider_unavailable");
+  assert.doesNotMatch(JSON.stringify(failure), /fixture rejection|synthetic-api-key/);
   await Promise.all(f.pending);
-  assert.equal(f.events.at(-1).actual_cost_micros, 0);
-  assert.equal(f.events.at(-1).status, "client_error");
+  assert.equal(f.sent.length, 2, "one dispatch per request, no rejected-create replay");
+  assert.equal(f.events.length, 2, "one settlement per request");
+  assert.equal(f.events.at(-1).actual_cost_micros, 7);
+  assert.equal(f.events.at(-1).reserved_cost_micros, 7);
+  assert.equal(f.events.at(-1).cost_basis, "policy_fixed");
+  assert.equal(f.events.at(-1).input_tokens, null);
+  assert.equal(f.events.at(-1).output_tokens, null);
+  assert.equal(f.events.at(-1).status, "provider_error");
 });
 
 test("Gradium wrong-MIME success cannot be recorded as completed speech", async t => {
   const f = await fixture(t);
   f.hooks.wrongMime = true;
   const result = await f.request("fixed");
-  await result.arrayBuffer();
+  assert.equal(result.status, 502);
+  assert.equal((await result.json()).error.code, "provider_unavailable");
   await Promise.all(f.pending);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.events.length, 1);
   assert.equal(f.events.at(-1).status, "provider_error");
   assert.equal(f.events.at(-1).input_tokens, null);
+  assert.equal(f.events.at(-1).cost_basis, "policy_fixed");
+  assert.equal(f.events.at(-1).actual_cost_micros, 7);
 });
 
 
-test("Gradium interrupted binary delivery retains the fixed reservation without fabricated token usage", async t => {
+test("Gradium interrupted upstream audio is withheld and retains the fixed reservation without fabricated token usage", async t => {
   const f = await fixture(t);
   f.hooks.partial = true;
   const result = await f.request("fixed");
-  assert.equal(result.status, 200);
-  await assert.rejects(() => result.arrayBuffer(), /synthetic interrupted audio/);
+  assert.equal(result.status, 502);
+  assert.match(result.headers.get("content-type"), /^application\/json\b/);
+  const failure = await result.json();
+  assert.equal(failure.error.code, "provider_unavailable");
+  assert.doesNotMatch(JSON.stringify(failure), /RIFF|synthetic interrupted audio|synthetic-api-key/);
   await Promise.all(f.pending);
+  assert.equal(f.sent.length, 1, "interrupted generation is never replayed");
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].status, "provider_error");
   assert.equal(f.events[0].input_tokens, null);
+  assert.equal(f.events[0].output_tokens, null);
   assert.equal(f.events[0].cost_basis, "policy_fixed");
+  assert.equal(f.events[0].reserved_cost_micros, 7);
   assert.equal(f.events[0].actual_cost_micros, 7);
 });
