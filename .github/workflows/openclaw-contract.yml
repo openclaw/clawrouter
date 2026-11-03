@@ -59,6 +59,9 @@ jobs:
           - consumer: gradium
             ref: d2e88f6ff4b34b2141ee67b30a4c2783adf0f38c
             test: test/openclaw-gradium.test.mjs
+          - consumer: vercel
+            ref: 0093b58c0d132ae1707f9553839f1cf297fb9a25
+            test: test/openclaw-vercel.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
