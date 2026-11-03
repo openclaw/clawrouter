@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { streamSimple } from "../llm/stream.js";
 import type { Model } from "../llm/types.js";
 import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.js";
@@ -18,6 +19,7 @@ const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const modelId = "vercel-ai-gateway/anthropic/claude-sonnet-4.6";
 const key = (id: string) => `clawrouter-live-${id}-fixture-secret`;
 const nativeFetch = globalThis.fetch;
+const nativeCatalogGuard = ssrfRuntime.fetchWithSsrFGuard;
 beforeEach(() => {
   clearLiveCatalogCacheForTests();
   vi.stubEnv("ANTHROPIC_API_KEY", "must-not-fallback-anthropic");
@@ -28,11 +30,13 @@ beforeEach(() => {
     expect(new URL(request.url).origin).toBe(origin);
     return nativeFetch(request);
   });
-  // Trust only this isolated loopback catalog. The production parser, discovery,
-  // replay and SDK stay real; this fixture does not certify production SSRF policy.
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async ({ url, init }) => {
-    expect(String(url)).toBe(`${origin}/v1/catalog`);
-    return { response: await fetch(url, init), finalUrl: String(url), release: async () => undefined };
+  // Preserve the actual guard's dispatcher release. A no-op release couples the
+  // catalog's idle global-fetch socket to SDK dispatch after cold replay setup.
+  // Trust only this fixture origin; production SSRF policy is not certified here.
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(options => {
+    expect(String(options.url)).toBe(`${origin}/v1/catalog`);
+    return nativeCatalogGuard({ ...options, fetchImpl: fetchWithRuntimeDispatcher,
+      policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin) });
   });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); clearLiveCatalogCacheForTests(); });
@@ -89,6 +93,7 @@ describe("actual Vercel native Anthropic SDK through Worker", () => {
   it.each([false, true])("preserves catalog selection, native replay and fragmented stream usage (simple=%s)", async simple => {
     await fixture(async ({ start }) => {
       const result = await (await start(simple ? "vercel_simple" : "vercel_stream", { simple })).result();
+      expect(result.errorMessage?.replaceAll(origin, "<router>").replace(/clawrouter-live-[^\s"'<>]+/g, "<proxy-key>").slice(0, 512), "actual SDK terminal error").toBeUndefined();
       expect(result).toMatchObject({ stopReason: "stop", model: modelId, content: [{ type: "text", text: "synthetic-answer" }], usage: { input: 11, output: 3, totalTokens: 14 } });
     });
   });
