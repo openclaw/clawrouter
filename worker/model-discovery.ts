@@ -1,11 +1,13 @@
 import { filterOllamaModels } from "./provider-ollama.ts";
+import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
+import { readNativeJson } from "./native-json.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return ["openai.models", "anthropic.models", "ollama.models"].includes(endpoint.request_format);
+  return ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
@@ -92,6 +94,11 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       if (!restricted) { const headers = new Headers(response.headers); headers.set("cache-control", "private, no-store"); return new Response(response.body, { status: response.status, headers }); }
       void response.body?.cancel().catch(() => undefined);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
+    }
+    if (endpoint.request_format === "synthetic.models") {
+      const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,
+        value => filterSyntheticModels(value, id => discoveryAllows(policy, provider, id)), () => { throw malformed(); });
+      return metadataResponse(metadata, response);
     }
     const metadata = await readMetadata(response, operation);
     if (endpoint.request_format === "ollama.models") {
