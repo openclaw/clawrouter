@@ -387,7 +387,7 @@ setInterval(() => {}, 1000);
     // still existing is not evidence that it can execute or mutate a deployment.
     if (process.platform === 'linux') {
       try { return /^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
-      catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+      catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return true; throw error; }
     }
     return false;
   };
