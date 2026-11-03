@@ -24,6 +24,7 @@
 
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
+- Add frozen OpenRouter Lyria streaming music codecs and fixtures, preserving split base64 audio, native completion and unknown-cost outcomes on interrupted delivery.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
