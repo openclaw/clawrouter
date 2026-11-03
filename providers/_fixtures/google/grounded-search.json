@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/google/src/gemini-web-search-provider.runtime.ts",
+  "request": {
+    "model": "gemini-3.6-flash",
+    "path": "/v1beta/models/gemini-3.6-flash:generateContent",
+    "body": {
+      "contents": [{ "parts": [{ "text": "Find a synthetic reference." }] }],
+      "tools": [{ "google_search": { "timeRangeFilter": { "startTime": "2026-10-01T00:00:00Z", "endTime": "2026-11-01T00:00:00Z" } } }]
+    }
+  },
+  "response": {
+    "candidates": [{ "finishReason": "STOP", "content": { "parts": [{ "text": "A synthetic grounded answer." }] },
+      "groundingMetadata": {
+        "webSearchQueries": ["synthetic reference", "synthetic source"],
+        "groundingChunks": [{ "web": { "uri": "https://example.com/reference", "title": "Synthetic reference" } }],
+        "groundingSupports": [{ "segment": { "startIndex": 0, "endIndex": 28, "text": "A synthetic grounded answer." }, "groundingChunkIndices": [0] }],
+        "searchEntryPoint": { "renderedContent": "<span>Synthetic search suggestion</span>" }
+      }
+    }],
+    "usageMetadata": { "promptTokenCount": 12, "candidatesTokenCount": 8, "totalTokenCount": 20 }
+  },
+  "billing": { "actualProviderCostMicrousd": null, "observedQueryCountIsBilledCount": false, "emptyCitationListIsFree": false, "policyFixedIsSeparate": true },
+  "consumer": { "credentialScopedCache": true, "redirectResolverUsesProviderCredential": false, "rawSearchParityClaim": false }
+}

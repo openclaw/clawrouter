@@ -2,6 +2,20 @@ import type { ProviderUsageSummary, UsageAuditEvent, UsageDailySummary, UsageSna
 
 export const usageDayMs = 86_400_000;
 
+type UsageCounters = Omit<UsageDailySummary, "dayStartMs">;
+
+export function addUsageCounters<T extends UsageCounters>(current: T, point: UsageCounters): T {
+  return {
+    ...current,
+    requestCount: current.requestCount + point.requestCount,
+    successCount: current.successCount + point.successCount,
+    errorCount: current.errorCount + point.errorCount,
+    totalTokens: current.totalTokens + point.totalTokens,
+    actualCostMicros: current.actualCostMicros + point.actualCostMicros,
+    unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (point.unpricedRequestCount ?? 0),
+  };
+}
+
 export interface UsageEventGroup {
   id: string;
   compound: boolean;
@@ -18,13 +32,13 @@ export interface UsageEventGroup {
 
 export function usageEventGroups(events: UsageAuditEvent[]): UsageEventGroup[] {
   const grouped = new Map<string, UsageAuditEvent[]>();
-  const order: string[] = [];
   for (const event of events) {
     const key = event.compound_request_id ? `compound:${event.compound_request_id}` : `event:${event.id}`;
-    if (!grouped.has(key)) order.push(key);
-    grouped.set(key, [...(grouped.get(key) ?? []), event]);
+    const group = grouped.get(key);
+    if (group) group.push(event);
+    else grouped.set(key, [event]);
   }
-  return order.map((key) => summarizeUsageEvents(key, grouped.get(key) ?? []));
+  return Array.from(grouped, ([key, group]) => summarizeUsageEvents(key, group));
 }
 
 function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEventGroup {
@@ -57,15 +71,7 @@ export function usageTimeline(snapshot: UsageSnapshot, days = 30, now = Date.now
     const dayStartMs = Math.floor(point.dayStartMs / usageDayMs) * usageDayMs;
     if (dayStartMs < firstDay || dayStartMs > today) continue;
     const current = buckets.get(dayStartMs) ?? emptyUsageDay(dayStartMs);
-    buckets.set(dayStartMs, {
-      dayStartMs,
-      requestCount: current.requestCount + point.requestCount,
-      successCount: current.successCount + point.successCount,
-      errorCount: current.errorCount + point.errorCount,
-      totalTokens: current.totalTokens + point.totalTokens,
-      actualCostMicros: current.actualCostMicros + point.actualCostMicros,
-      unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (point.unpricedRequestCount ?? 0),
-    });
+    buckets.set(dayStartMs, addUsageCounters(current, point));
   }
 
   return Array.from({ length: days }, (_, index) => {
@@ -121,14 +127,6 @@ function emptyUsageDay(dayStartMs: number): UsageDailySummary {
 export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderUsageSummary[] {
   if (providers.length <= limit) return providers;
   const visibleCount = Math.max(1, limit - 1);
-  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>((total, provider) => ({
-    provider: "other-providers",
-    requestCount: total.requestCount + provider.requestCount,
-    successCount: total.successCount + provider.successCount,
-    errorCount: total.errorCount + provider.errorCount,
-    totalTokens: total.totalTokens + provider.totalTokens,
-    actualCostMicros: total.actualCostMicros + provider.actualCostMicros,
-    unpricedRequestCount: (total.unpricedRequestCount ?? 0) + (provider.unpricedRequestCount ?? 0),
-  }), { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
+  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>(addUsageCounters, { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
   return [...providers.slice(0, visibleCount), remainder];
 }

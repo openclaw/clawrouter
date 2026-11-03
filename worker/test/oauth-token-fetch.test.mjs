@@ -1,5 +1,6 @@
+import "../../test/helpers/typescript-resolver.mjs";
+import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { registerHooks } from "node:module";
 import test from "node:test";
@@ -11,9 +12,6 @@ registerHooks({
         return { shortCircuit: true, url: new URL("./oauth-token-fetch.mocks.mjs", import.meta.url).href };
       }
     }
-    if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) {
-      return nextResolve(`${specifier}.ts`, context);
-    }
     return nextResolve(specifier, context);
   },
 });
@@ -22,12 +20,7 @@ const { oauthCallback } = await import("../oauth.ts");
 const { attachGrantCredentialNamespace } = await import("./grant-credential-mock.mjs");
 
 test("OAuth token exchange aborts a hung tokenUrl instead of stalling the callback", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let tokenInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), "https://token.example/oauth/token");

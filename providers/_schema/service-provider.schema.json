@@ -151,16 +151,6 @@
           "maxItems": 4
         }
       }
-    },
-    "tests": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "fixtures": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/fixture" }
-        }
-      }
     }
   },
   "$defs": {
@@ -620,12 +610,125 @@
           "properties": { "responseFormat": { "const": "openai.responses_compact" }, "method": { "const": "POST" } },
           "not": { "anyOf": [{ "required": ["streaming"] }, { "required": ["websocket"] }, { "required": ["responsesLifecycle"] }, { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] }] }
         }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^baseten\\.systemone" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^baseten\\.systemone" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/basetenSystemOneEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^gradium\\." } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^gradium\\." } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/gradiumSpeechEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "const": "deepgram.prerecorded" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "const": "deepgram.prerecorded" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/deepgramPrerecordedEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleEmbeddingEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^google\\.image" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^google\\.image" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleImageEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^google\\.music" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^google\\.music" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleMusicEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "const": "xai.images" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/xaiImagesEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^synthetic\\." } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^synthetic\\." } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/syntheticModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^baseten\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^baseten\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/basetenModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^arcee\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^arcee\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/arceeModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^novita\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^novita\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/novitaModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^chutes\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^chutes\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/chutesModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^featherless\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^featherless\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/featherlessModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^venice\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^venice\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/veniceModelsEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "pattern": "^/" },
+        "upstreamPath": { "$ref": "#/$defs/literalUpstreamPath" },
         "method": { "type": "string" },
         "nativeProxy": { "type": "boolean" },
         "auth": { "type": "string" },
@@ -641,6 +744,199 @@
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
+        "lifecycle": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve", "files"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "openrouter.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "files": {
+                  "type": "object",
+                  "required": ["mode", "download"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "download_only" },
+                    "download": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "xai.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "together.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve", "cancel"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "runway.tasks" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "cancel": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "pixverse.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve", "cancel", "files"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "google.omni_video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "cancel": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "files": {
+                  "type": "object",
+                  "required": ["metadata", "download"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "metadata" },
+                    "metadata": { "type": "string", "minLength": 1, "maxLength": 64 },
+                    "download": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "dashscope.video"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve",
+                "cancel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "replicate.predictions"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "cancel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve",
+                "result",
+                "cancel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "fal.queue"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "result": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "cancel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "kie.jobs"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve",
+                "cancel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "vydra.jobs"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "cancel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            }
+          ]
+        },
         "responsesLifecycle": {
           "type": "object",
           "required": ["retrieve", "cancel"],
@@ -660,6 +956,7 @@
             "maximum": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           }
         },
+        "requestPricing": { "$ref": "#/$defs/requestPricing" },
         "toolPricing": {
           "type": "object",
           "required": ["version", "effectiveAt", "source", "webSearchMicrosPerCall", "previewMicrosPerCallByModel"],
@@ -684,6 +981,139 @@
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }
     },
+    "basetenModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "baseten.models" },
+        "responseFormat": { "const": "baseten.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "arceeModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "arcee.models" },
+        "responseFormat": { "const": "arcee.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "novitaModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "novita.models" },
+        "responseFormat": { "const": "novita.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "chutesModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "chutes.models" },
+        "responseFormat": { "const": "chutes.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "featherlessModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "featherless.models" },
+        "responseFormat": { "const": "featherless.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "veniceModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "venice.models" },
+        "responseFormat": { "const": "venice.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "syntheticModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "upstreamPath", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" },
+        "path": { "const": "/models" },
+        "upstreamPath": { "const": "/openai/v1/models" },
+        "requestFormat": { "const": "synthetic.models" },
+        "responseFormat": { "const": "synthetic.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["requestPricing"] },
+        { "required": ["toolPricing"] }, { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "literalUpstreamPath": {
+      "type": "string", "maxLength": 2048,
+      "pattern": "^(/[A-Za-z0-9._~-]+)+$(?![\\s\\S])",
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
+    },
     "model": {
       "type": "object",
       "required": ["id", "upstream"],
@@ -691,6 +1121,7 @@
       "properties": {
         "id": { "type": "string" },
         "upstream": { "type": "string" },
+        "availability": { "$ref": "#/$defs/modelAvailability" },
         "codexModel": { "type": "string", "minLength": 1 },
         "capabilities": { "type": "array", "items": { "type": "string" } },
         "supportedReasoningEfforts": {
@@ -717,11 +1148,32 @@
             "additionalProperties": false,
             "properties": {
               "pricingRef": { "type": "string", "minLength": 1 },
-              "pricing": { "$ref": "#/$defs/tokenPricing" }
+              "pricing": { "oneOf": [{ "$ref": "#/$defs/tokenPricing" }, { "type": "null" }] }
             }
           }
         }
       }
+    },
+    "modelAvailability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "status", "effectiveAt", "checkedAt", "sources"],
+      "properties": {
+        "version": { "const": "clawrouter.model-availability.v1" },
+        "status": { "enum": ["stopped", "deprecated", "upstream_alias"] },
+        "effectiveAt": { "type": "string", "format": "date" },
+        "checkedAt": { "type": "string", "format": "date" },
+        "sources": {
+          "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+          "items": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 }
+        },
+        "servingModel": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$" }
+      },
+      "allOf": [{
+        "if": { "properties": { "status": { "const": "upstream_alias" } } },
+        "then": { "required": ["servingModel"] },
+        "else": { "not": { "required": ["servingModel"] } }
+      }]
     },
     "nativeModelCapabilities": {
       "type": "object",
@@ -821,6 +1273,586 @@
       }
     },
     "nativeDecisionCapabilities": {
+      "oneOf": [
+        { "$ref": "#/$defs/nativeBasetenDecisionCapabilities" },
+        {
+          "$ref": "#/$defs/nativeOpenAiDecisionCapabilities"
+        },
+        {
+          "$ref": "#/$defs/nativeHostedDecisionCapabilities"
+        }
+      ]
+    },
+    "nativeBasetenDecisionCapabilities": {
+      "type": "object",
+      "required": ["protocol", "questions", "limits", "outputTokensPerQuestion"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "baseten-systemone" },
+        "questions": {
+          "type": "object", "required": ["boolean", "choice", "score"], "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "allOf": [{ "$ref": "#/$defs/nativeBooleanQuestion" }, { "properties": { "abstention": { "const": false } } }]
+            },
+            "choice": {
+              "allOf": [{ "$ref": "#/$defs/nativeDecisionOptionQuestion" }, {
+                "required": ["maxOptions"],
+                "properties": { "probabilities": { "const": "provider-defined" }, "abstention": { "const": false },
+                  "minOptions": { "const": 2 }, "maxOptions": { "const": 255 }, "maxImageOptions": false }
+              }]
+            },
+            "score": {
+              "allOf": [{ "$ref": "#/$defs/nativeDecisionOptionQuestion" }, {
+                "required": ["maxOptions"],
+                "properties": { "probabilities": { "const": "provider-defined" }, "abstention": { "const": false },
+                  "minOptions": { "const": 2 }, "maxOptions": { "const": 10 }, "maxImageOptions": false }
+              }]
+            }
+          }
+        },
+        "reasoning": {
+          "type": "object", "required": ["modes"], "additionalProperties": false,
+          "properties": { "modes": { "const": ["auto"] }, "default": { "const": "auto" }, "metadata": { "const": false } }
+        },
+        "confidence": { "const": "provider-specific" },
+        "outputTokensPerQuestion": { "const": 1 },
+        "limits": {
+          "type": "object", "required": ["maxTotalOptions", "maxStateAndQuestionTokens"], "additionalProperties": false,
+          "properties": { "maxTotalOptions": { "const": 512 }, "maxStateAndQuestionTokens": { "const": 16384 } }
+        }
+      }
+    },
+    "nativeHostedDecisionCapabilities": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "questions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "enum": [
+            "levanto-sage",
+            "liquid-ai-systemone",
+            "typesafe-systemone",
+            "subq-decisions"
+          ]
+        },
+        "questions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "$ref": "#/$defs/nativeBooleanQuestion"
+            },
+            "choice": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            },
+            "score": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            },
+            "sort": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            },
+            "tags": {
+              "$ref": "#/$defs/nativeDecisionOptionQuestion"
+            }
+          }
+        },
+        "reasoning": {
+          "type": "object",
+          "required": [
+            "modes"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "modes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "auto",
+                  "off",
+                  "on"
+                ]
+              }
+            },
+            "default": {
+              "enum": [
+                "auto",
+                "off",
+                "on"
+              ]
+            },
+            "metadata": {
+              "type": "boolean"
+            }
+          }
+        },
+        "confidence": {
+          "const": "provider-specific"
+        },
+        "limits": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "maxQuestions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxRequestTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "maxStateAndQuestionTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "image": {
+              "$ref": "#/$defs/nativeHostedDecisionImage"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "levanto-sage"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": true
+                      }
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 120
+                      },
+                      "maxOptions": {
+                        "maximum": 120
+                      },
+                      "abstention": {
+                        "const": true
+                      }
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 26
+                      },
+                      "maxOptions": {
+                        "maximum": 26
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "none"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 120
+                      },
+                      "maxOptions": {
+                        "maximum": 120
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "tags": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "independent"
+                      },
+                      "minOptions": {
+                        "minimum": 1,
+                        "maximum": 120
+                      },
+                      "maxOptions": {
+                        "maximum": 120
+                      },
+                      "abstention": {
+                        "const": true
+                      },
+                      "maxImageOptions": false
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "liquid-ai-systemone"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": false,
+                  "tags": false
+                }
+              },
+              "reasoning": {
+                "properties": {
+                  "modes": {
+                    "items": {
+                      "const": "auto"
+                    }
+                  },
+                  "default": {
+                    "const": "auto"
+                  },
+                  "metadata": false
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "typesafe-systemone"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "provider-defined"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 255
+                      },
+                      "maxOptions": {
+                        "maximum": 255
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "provider-defined"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 10
+                      },
+                      "maxOptions": {
+                        "maximum": 10
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": false,
+                  "tags": false
+                }
+              },
+              "reasoning": {
+                "properties": {
+                  "modes": {
+                    "items": {
+                      "const": "auto"
+                    }
+                  },
+                  "default": {
+                    "const": "auto"
+                  },
+                  "metadata": false
+                }
+              },
+              "limits": {
+                "properties": {
+                  "image": {
+                    "properties": {
+                      "mimeTypes": {
+                        "items": {
+                          "enum": [
+                            "image/png",
+                            "image/jpeg"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "const": "subq-decisions"
+              }
+            },
+            "required": [
+              "protocol"
+            ]
+          },
+          "then": {
+            "properties": {
+              "questions": {
+                "properties": {
+                  "boolean": {
+                    "properties": {
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "choice": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 255
+                      },
+                      "maxOptions": {
+                        "maximum": 255
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "score": {
+                    "properties": {
+                      "probabilities": {
+                        "const": "categorical"
+                      },
+                      "minOptions": {
+                        "minimum": 2,
+                        "maximum": 10
+                      },
+                      "maxOptions": {
+                        "maximum": 10
+                      },
+                      "abstention": {
+                        "const": false
+                      },
+                      "maxImageOptions": false
+                    }
+                  },
+                  "sort": false,
+                  "tags": false
+                }
+              },
+              "reasoning": {
+                "properties": {
+                  "modes": {
+                    "items": {
+                      "const": "auto"
+                    }
+                  },
+                  "default": {
+                    "const": "auto"
+                  },
+                  "metadata": false
+                }
+              },
+              "limits": {
+                "properties": {
+                  "maxQuestions": {
+                    "maximum": 128
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "nativeDecisionOptionQuestion": {
+      "type": "object",
+      "required": [
+        "probabilities",
+        "abstention",
+        "minOptions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "probabilities": {
+          "enum": [
+            "categorical",
+            "provider-defined",
+            "independent",
+            "none"
+          ]
+        },
+        "abstention": {
+          "type": "boolean"
+        },
+        "minOptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxImageOptions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
+      }
+    },
+    "nativeHostedDecisionImage": {
+      "type": "object",
+      "required": [
+        "maxBytes",
+        "mimeTypes",
+        "remoteUrls"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "mimeTypes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp"
+            ]
+          }
+        },
+        "remoteUrls": {
+          "const": false
+        },
+        "maxImages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        },
+        "maxTotalBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        }
+      }
+    },
+    "nativeOpenAiDecisionCapabilities": {
       "type": "object",
       "required": [
         "protocol",
@@ -969,6 +2001,137 @@
         }
       }
     },
+    "googleImageEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.image_generate" }, "responseFormat": { "const": "google.image" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleMusicEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.music_generate" }, "responseFormat": { "const": "google.music" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleEmbeddingEndpoint": {
+      "type": "object",
+      "required": ["pathParams"],
+      "properties": {
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "const": ["model"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "path": { "const": "/v1beta/models/${model}:embedContent" },
+            "requestFormat": { "const": "google.embed_content" },
+            "responseFormat": { "const": "google.embed_content" }
+          }
+        },
+        {
+          "properties": {
+            "path": { "const": "/v1beta/models/${model}:batchEmbedContents" },
+            "requestFormat": { "const": "google.batch_embed_contents" },
+            "responseFormat": { "const": "google.batch_embed_contents" }
+          }
+        }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["streaming"] }, { "required": ["websocket"] },
+          { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+          { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+          { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+        ]
+      }
+    },
+    "basetenSystemOneEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/systemone" }, "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "requestFormat": { "const": "baseten.systemone" }, "responseFormat": { "const": "baseten.systemone" },
+        "query": { "maxProperties": 0 }, "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["upstreamPath"] }
+      ] }
+    },
+    "gradiumSpeechEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/api/post/speech/tts" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "gradium.speech" },
+        "responseFormat": { "const": "audio.binary" },
+        "query": { "maxProperties": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["upstreamPath"] }
+      ] }
+    },
+    "deepgramPrerecordedEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/listen" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "deepgram.prerecorded" },
+        "responseFormat": { "const": "deepgram.prerecorded" },
+        "query": { "maxProperties": 0 },
+        "headers": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["auth"] },
+          { "required": ["streaming"] },
+          { "required": ["websocket"] },
+          { "required": ["responsesLifecycle"] },
+          { "required": ["lifecycle"] },
+          { "required": ["modelPassthrough"] },
+          { "required": ["outputTokenLimit"] },
+          { "required": ["requestPricing"] },
+          { "required": ["toolPricing"] }
+        ]
+      }
+    },
     "parameterSupport": { "enum": ["supported", "unsupported", "requires_reasoning_none"] },
     "modelRequestParameters": {
       "type": "object",
@@ -982,6 +2145,137 @@
         "topP": { "$ref": "#/$defs/parameterSupport" },
         "logprobs": { "$ref": "#/$defs/parameterSupport" },
         "toolCalling": { "$ref": "#/$defs/parameterSupport" }
+      }
+    },
+    "xaiImagesEndpoint": {
+      "type": "object",
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "responseFormat": { "const": "xai.images" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestPricing": { "$ref": "#/$defs/imageRequestPricing" }
+      },
+      "oneOf": [
+        { "properties": { "path": { "const": "/v1/images/generations" }, "requestFormat": { "const": "xai.images_generations" } } },
+        { "properties": { "path": { "const": "/v1/images/edits" }, "requestFormat": { "const": "xai.images_edits" } } }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["auth"] }, { "required": ["streaming"] }, { "required": ["websocket"] },
+          { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+          { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] }, { "required": ["toolPricing"] }
+        ]
+      }
+    },
+    "imageRequestPricing": {
+      "type": "object",
+      "required": ["unit", "protocol", "version", "effectiveAt", "source", "receipt", "alias", "rates"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "image" }, "protocol": { "const": "xai.images" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "effectiveAt": { "type": "string", "format": "date" },
+        "source": { "const": "https://docs.x.ai/developers/pricing" },
+        "receipt": { "const": "xai.usage.cost_in_usd_ticks" },
+        "alias": {
+          "const": {
+            "selectedModel": "grok-imagine-image-quality", "servingModel": "grok-imagine-image-2.0", "quality": "low",
+            "effectiveAt": "2026-11-02", "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2"
+          }
+        },
+        "rates": {
+          "const": {
+            "grok-imagine-image": { "inputMicrosPerImage": 2000, "outputMicrosPerImage": { "1k": 20000, "2k": 20000 } },
+            "grok-imagine-image-2.0": {
+              "inputMicrosPerImage": 10000,
+              "outputMicrosPerImage": { "low": { "1k": 40000, "2k": 60000 }, "medium": { "1k": 60000, "2k": 80000 } }
+            }
+          }
+        }
+      }
+    },
+    "requestPricing": {
+      "oneOf": [
+        { "$ref": "#/$defs/successfulRequestPricing" },
+        { "$ref": "#/$defs/outcomeRequestPricing" },
+        { "$ref": "#/$defs/imageRequestPricing" }
+      ]
+    },
+    "outcomeRequestPricing": {
+      "type": "object",
+      "required": ["unit", "version", "effectiveAt", "source", "outcome", "maximumAdditionalMicros", "receipt"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "request" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "effectiveAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "source": { "const": "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee" },
+        "outcome": { "const": "xai.responses_violation" },
+        "maximumAdditionalMicros": { "const": 50000 },
+        "receipt": { "const": "xai.usage.cost_in_usd_ticks" }
+      }
+    },
+    "successfulRequestPricing": {
+      "type": "object",
+      "required": [
+        "unit",
+        "version",
+        "effectiveAt",
+        "source",
+        "successfulResponseMicros"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "const": "request"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "effectiveAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "successfulResponseMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "parameterRates": {
+          "type": "object",
+          "required": [
+            "parameter",
+            "rates"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "parameter": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            "rates": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 16,
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
       }
     },
     "modelPricing": {
@@ -1185,6 +2479,7 @@
       "additionalProperties": false,
       "properties": {
         "effectiveAt": { "type": "string", "format": "date" },
+        "checkedAt": { "type": "string", "format": "date" },
         "source": { "type": "string", "pattern": "^https://" },
         "inputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "outputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
@@ -1198,6 +2493,7 @@
         "inputTokenOverhead": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "unpricedCosts": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "enum": ["request_fee"] } },
         "settlementBasis": { "enum": ["published_upper_bound"] },
+        "autoServiceTier": { "const": "unpriced" },
         "anthropicModifiers": { "$ref": "#/$defs/anthropicPriceModifiers" },
         "longContext": { "$ref": "#/$defs/longContextPricing" },
         "serviceTiers": {
@@ -1263,16 +2559,6 @@
         "paths": { "type": "array", "items": { "type": "string" } },
         "upstreams": { "type": "array", "items": { "type": "string" } },
         "upstreamConfig": { "type": "string" }
-      }
-    },
-    "fixture": {
-      "type": "object",
-      "required": ["name", "request", "response"],
-      "additionalProperties": false,
-      "properties": {
-        "name": { "type": "string" },
-        "request": { "type": "string" },
-        "response": { "type": "string" }
       }
     }
   }

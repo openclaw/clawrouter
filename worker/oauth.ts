@@ -5,7 +5,7 @@ import { authorityCall } from "./authority";
 import { putGrantCredentials } from "./grant-credentials.ts";
 import { providerById } from "./providers";
 import type { Env, OAuthState, UpstreamGrant } from "./types";
-import { errorResponse, nowIso, privateJson } from "./utils";
+import { envValue, errorResponse, nowIso, privateJson } from "./utils";
 
 export async function startOAuth(request: Request, env: Env, grantKey: string, providerId: string, priority: number, weight: number): Promise<Response> {
   const actor = await authorizeAdmin(request, env);
@@ -13,7 +13,7 @@ export async function startOAuth(request: Request, env: Env, grantKey: string, p
   if (actor.email === "token-admin") return errorResponse("access_admin_required", "browser OAuth requires a Cloudflare Access admin session", 403);
   const provider = providerById(providerId), config = provider?.auth.authorization;
   if (!provider || !config) return errorResponse("oauth_not_supported", "provider does not declare browser OAuth", 400);
-  const clientId = config.clientId ?? (config.clientIdConfig ? envString(env, config.clientIdConfig) : null);
+  const clientId = config.clientId ?? (config.clientIdConfig ? envValue(env, config.clientIdConfig) : null);
   if (!clientId) return errorResponse("oauth_not_configured", "provider OAuth client id is not configured", 503);
   const verifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
   const challenge = base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
@@ -39,11 +39,11 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   if (!code) return errorResponse("invalid_oauth_callback", "authorization code is missing", 400);
   const state = consumed.state, provider = providerById(state.provider), config = provider?.auth.authorization;
   if (!provider || !config) return errorResponse("oauth_not_supported", "provider OAuth configuration is unavailable", 400);
-  const clientId = config.clientId ?? (config.clientIdConfig ? envString(env, config.clientIdConfig) : null);
+  const clientId = config.clientId ?? (config.clientIdConfig ? envValue(env, config.clientIdConfig) : null);
   if (!clientId) return errorResponse("oauth_not_configured", "provider OAuth client id is not configured", 503);
   const form = new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, code, code_verifier: state.verifier, redirect_uri: state.redirectUri });
   if (config.clientSecretConfig) {
-    const secret = envString(env, config.clientSecretConfig); if (!secret) return errorResponse("oauth_not_configured", "provider OAuth client secret is not configured", 503); form.set("client_secret", secret);
+    const secret = envValue(env, config.clientSecretConfig); if (!secret) return errorResponse("oauth_not_configured", "provider OAuth client secret is not configured", 503); form.set("client_secret", secret);
   }
   for (const [key, value] of Object.entries(config.extraTokenParams)) form.set(key, value);
   let tokenResponse: Response;
@@ -84,7 +84,6 @@ function callbackPage(ok: boolean, message: string): Response {
   return new Response(`<!doctype html><meta charset="utf-8"><title>ClawRouter OAuth</title><style>body{font:16px system-ui;display:grid;place-items:center;min-height:100vh;margin:0;background:#f5f7f5;color:#17231d}main{padding:24px;border:1px solid #ccd6ce;background:white;max-width:420px}button{padding:8px 12px}</style><main><h1>${ok ? "Connected" : "Connection failed"}</h1><p>${safe}</p><button onclick="location.href='/dashboard/access'">Return to ClawRouter</button></main>`, { status: ok ? 200 : 400, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 }
 
-function envString(env: Env, name: string): string | null { const value = env[name]; return typeof value === "string" && value.trim() ? value : null; }
 function base64Url(bytes: Uint8Array): string { return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, ""); }
 function decodeJwtPayload(token: string): Record<string, unknown> { try { const part = token.split(".")[1].replaceAll("-", "+").replaceAll("_", "/"); return JSON.parse(atob(part.padEnd(Math.ceil(part.length / 4) * 4, "="))); } catch { return {}; } }
 function jsonPointer(value: unknown, pointer: string | null): string | null {

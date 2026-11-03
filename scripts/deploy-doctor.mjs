@@ -1,3 +1,4 @@
+import { cloudflareClient, cloudflareError, probeCloudflareKvWrite } from "./cloudflare-diagnostics.mjs";
 import { spawnSync } from "node:child_process";
 
 import {
@@ -64,6 +65,7 @@ const repo = process.env.CLAWROUTER_GITHUB_REPO ?? "openclaw/clawrouter";
 const githubCli = selectGitHubCli();
 const errors = [];
 const warnings = [];
+const cloudflareRequest = cloudflareClient(warnings);
 
 const snapshot = compileProviderSnapshot();
 const plan = buildProviderSmokePlan(snapshot);
@@ -226,26 +228,10 @@ async function checkCloudflareKvPermission() {
   if (!(await checkCloudflareKvIdentity(token, accountId, namespaceId))) return;
   const key = `__clawrouter_doctor_${Date.now()}`;
   const path = `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}`;
-  const put = await cloudflareRequest(token, path, {
-    method: "PUT",
-    headers: { "content-type": "text/plain" },
-    body: "ok",
-  });
-  if (put.status === 0) {
-    return;
-  }
-  if (!put.ok || put.body.success === false) {
-    errors.push(`CLOUDFLARE_API_TOKEN cannot write POLICY_KV: ${cloudflareError(put)}`);
-    return;
-  }
-  const deleted = await cloudflareRequest(token, path, { method: "DELETE" });
-  if (deleted.status === 0) {
-    return;
-  }
-  if (!deleted.ok || deleted.body.success === false) {
-    errors.push(
-      `CLOUDFLARE_API_TOKEN wrote POLICY_KV but could not delete probe key: ${cloudflareError(deleted)}`,
-    );
+  const failed = await probeCloudflareKvWrite(cloudflareRequest, token, path);
+  if (failed) {
+    if (failed.status === 0) return;
+    errors.push(failed.error);
     return;
   }
   console.log("cloudflare kv token: can write POLICY_KV");
@@ -273,29 +259,6 @@ async function checkCloudflareKvIdentity(token, accountId, namespaceId) {
   }
   console.log(`cloudflare kv target: ${response.body.result.title}`);
   return true;
-}
-
-async function cloudflareRequest(token, path, init = {}) {
-  let response;
-  let body;
-  try {
-    response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    body = await response.json().catch(() => ({}));
-  } catch (error) {
-    warnings.push(`could not reach Cloudflare API: ${error.message}`);
-    return { ok: false, status: 0, body: {} };
-  }
-  return { ok: response.ok, status: response.status, body };
-}
-
-function cloudflareError(response) {
-  return response.body.errors?.[0]?.message ?? `HTTP ${response.status}`;
 }
 
 function checkGitHubRepository(repo) {

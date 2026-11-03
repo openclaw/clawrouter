@@ -35,6 +35,7 @@ export interface EstimatedCost {
   inputTokens: number | null;
   outputTokens: number | null;
   pricingGap?: PricingGap;
+  requestTariff?: import("./request-tariff.ts").RequestTariff;
 }
 
 // Shared with read-only availability. Passing this guard never replaces the
@@ -52,7 +53,7 @@ export function validateBudgetReservation(capability: string, cost: EstimatedCos
   if (cost.basis === "unpriced_modifier") throw new HttpError(400, "pricing_required", "Anthropic speed, inference geography or service tier is unsupported or has no published price; use supported modifiers or configure a fixed policy request price");
   if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
   if (cost.pricingGap === "audio_upload_bound") throw new HttpError(400, "pricing_required", "transcription uploads have no source-qualified whole-request token ceiling; enforced budgets require a qualified envelope or explicit fixed policy price");
-  if (cost.pricingGap === "opaque_input_bound") throw new HttpError(400, "pricing_required", "opaque Responses input requires a valid manifest input bound or a fixed policy request price");
+  if (cost.pricingGap === "opaque_input_bound") throw new HttpError(400, "pricing_required", "request input has no qualified whole-request price bound; use a qualified manifest tariff or a fixed policy request price");
   if (cost.pricingGap === "retained_tool_unknown") throw new HttpError(400, "pricing_required", "retained response tools have no qualified bounded price; start a token-priced request without previous_response_id or configure a fixed policy request price");
   if (cost.pricingGap) throw new HttpError(400, "pricing_required", `${cost.pricingGap === "model_request_fee" ? "model request fees" : cost.pricingGap === "hosted_tool_fee" ? "hosted tool fees" : "hosted tool usage"} have no complete bounded price; choose a token-priced request or configure a fixed policy request price`);
   if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");

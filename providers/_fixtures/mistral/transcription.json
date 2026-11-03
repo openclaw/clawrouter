@@ -1,0 +1,12 @@
+{
+  "sourceRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "sourcePath": "extensions/mistral/media-understanding-provider.ts",
+  "method": "POST",
+  "path": "/v1/audio/transcriptions",
+  "fields": {"model": "voxtral-mini-latest", "language": "en"},
+  "file": {"name": "sample.mp3", "type": "audio/mpeg", "base64": "AAECAw==", "qualification": "synthetic byte identity only, not a playable recording"},
+  "response": {"model": "voxtral-mini-2602", "text": "Synthetic transcript.", "language": "en", "segments": [], "usage": {"prompt_audio_seconds": 2, "prompt_tokens": 0, "completion_tokens": 3, "total_tokens": 3}},
+  "prompt": {"qualified": false, "silentlyDrop": false, "convertToContextBias": false},
+  "billing": {"actualCostMicros": null, "aliasResolutionIsObserved": true, "durationProvesDollarCharge": false},
+  "qualification": {"legacyDocs": "https://docs.mistral.ai/studio/audio/deprecated/speech_to_text/offline_transcription", "migration": "https://docs.mistral.ai/studio/audio/migrate-from-voxtral-2", "explicitShutdownDateFound": false, "silentModelReplacement": false}
+}

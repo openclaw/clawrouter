@@ -83,10 +83,25 @@ Policies without `tenantId` now use the dispatch/ledger tenant `default`
 consistently during Access selection and discovery, instead of inheriting the
 session tenant only in those two views.
 
-`/v1/models` uses the same eligible model projection. Grant-pool ownership stays
-unchanged: when canonical selection reports a configured pool with no available
-candidate, discovery does not reopen environment authorization. Fusion's
-advertised model uses the same concrete aggregator eligibility.
+`/v1/models` and `client-catalog.v1` share a scoped model projection. Authorized,
+configured model identity, capabilities, request parameters and supported native
+routes (including supported key-only WebSocket metadata) survive temporary grant
+cooldowns or quota exhaustion with a known recovery time. Retention requires a
+recovering grant that supports the exact operation and still passes credential,
+configuration, scope, stale-state, model and budget checks. A generic
+`upstream_grant_pool_unavailable` reason is not sufficient: authentication
+failures, denied grants, removed configuration and unsupported transports do not
+retain otherwise blocked metadata.
+
+Retained inventory is not execution eligibility. Cooling offers remain
+`eligible: false`, `affordability: "exact-blocked"`, with
+`reasonCode: "upstream_grant_pool_unavailable"`; provider `executable` and
+readiness continue to describe current availability. Inference still returns
+HTTP 429 with `Retry-After` until the earliest eligible grant recovery, or 503
+without `Retry-After` when recovery is unknown. Grant-pool ownership stays
+unchanged: discovery never reopens environment authorization for an unavailable
+configured pool. Fusion's virtual model still requires concrete aggregator
+eligibility.
 
 Fusion emits one HTTP `clawrouter/fusion` offer for the synthesizer's selected
 policy and generation. Its route is `/v1/chat/completions` for a key or
@@ -538,7 +553,7 @@ the connection. Binary frames, steering events, and background execution are
 rejected visibly. This contract runs on the Worker deployment; other hosts must
 qualify native upgrade forwarding before advertising it.
 
-See the upstream [Responses WebSocket contract](https://developers.openai.com/api/docs/guides/websocket-mode). An authenticated catalog route advertises `websocket: "openai.responses"` only when its endpoint and grant transport are eligible.
+See the upstream [Responses WebSocket contract](https://developers.openai.com/api/docs/guides/websocket-mode). An authenticated key catalog route advertises `websocket: "openai.responses"` only for a supported endpoint and configured grant transport, retaining that metadata during a known temporary grant cooldown. Consult eligible offers for current availability; the metadata never authorizes an upgrade.
 
 ## Access session routes
 

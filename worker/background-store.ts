@@ -2,6 +2,7 @@ import type { BudgetReservationIntent, BudgetReservationPlan } from "./accountin
 import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { UsageIngestReceipt } from "./ledgers.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
 import type { UsageEvent } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -28,6 +29,25 @@ export interface BackgroundAdmission {
   plan: BudgetReservationPlan;
   route: { pathParams: Record<string, string>; organization: string | null; project: string | null };
   stream: boolean;
+  managed?: ManagedAdmission;
+}
+export interface ManagedAdmission {
+  protocol: ManagedProtocol;
+  providerId?: string;
+  idempotencyKey: string | null;
+  requestDigest: string;
+  requestedVersion: string;
+  // Secret-free selected API base for qualifying only this job's output descriptors.
+  fileBaseUrl?: string;
+}
+interface ManagedState extends ManagedAdmission {
+  observationUnavailable?: ManagedObservationLoss;
+  files?: ManagedFileDescriptor[];
+  route?: BackgroundAdmission["route"];
+  policyGeneration: string;
+  submission: "pending" | "submission_unknown" | "bound";
+  upstreamId: string | null;
+  terminal: "succeeded" | "failed" | "canceled" | "aborted" | null;
 }
 interface BackgroundSummary {
   id: string;
@@ -42,6 +62,7 @@ interface BackgroundSummary {
   usage: UsageIngestReceipt["outcome"] | "pending" | "unavailable";
   settlements: SettlementDisposition[];
   lastError: "admission_lost" | "observation_unavailable" | "observation_expired" | "accounting_unavailable" | null;
+  managed?: ManagedState;
 }
 export interface BackgroundJob extends BackgroundSummary {
   phase: "admitting" | "observing" | "outbox";
@@ -77,6 +98,10 @@ export class BackgroundStore {
 
   admit(input: BackgroundAdmission): BackgroundJob {
     if (!/^bg_[0-9a-f]{32}$/.test(input.id) || !Number.isSafeInteger(input.admittedAt) || Math.abs(Date.now() - input.admittedAt) > 60_000) invalid();
+    if (input.managed) {
+      validateManagedAdmission(input);
+      if (this.managedRetry(input.managed, input.owner.policyGeneration)) throw new HttpError(409, "background_job_exists", "managed admission already exists");
+    }
     if (this.get(input.id)) throw new HttpError(409, "background_job_exists", "background admission already exists");
     const job: BackgroundJob = {
       id: input.id, admittedAt: input.admittedAt, observeUntil: input.admittedAt + backgroundObservationMs,
@@ -87,16 +112,37 @@ export class BackgroundStore {
       legs: input.plan.legs.map(intent => ({ intent, reserve: "never", uncertainReserve: false, dispatched: false, settlement: "pending" })),
       route: input.route, stream: input.stream, responseId: null, egress: false, dispatchClaimed: false, event: null,
       nextAttemptAt: input.admittedAt + 60_000, attempts: 0, contentRef: null,
+      ...(input.managed ? { managed: { ...input.managed, providerId: input.owner.providerId, route: input.route, policyGeneration: input.owner.policyGeneration, submission: "pending", upstreamId: null, terminal: null } as ManagedState } : {}),
     };
     encode(job);
     const active = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background WHERE phase IN ('admitting', 'observing')")][0].count;
     if (active >= backgroundActiveLimit) capacity();
     const count = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background")][0].count;
     if (count >= backgroundCapacity) {
-      const evicted = [...this.sql.exec("DELETE FROM responses_background WHERE job_id IN (SELECT job_id FROM responses_background WHERE phase IN ('complete', 'expired') ORDER BY admitted_at_ms, job_id LIMIT 1) RETURNING job_id")];
+      // Completed managed keys remain replay guards for the original retention
+      // window. Capacity pressure must not authorize another generation POST.
+      const evicted = [...this.sql.exec("DELETE FROM responses_background WHERE job_id IN (SELECT job_id FROM responses_background WHERE phase IN ('complete', 'expired') AND (json_extract(job_json, '$.managed') IS NULL OR json_extract(job_json, '$.replayUntil') <= ?) ORDER BY admitted_at_ms, job_id LIMIT 1) RETURNING job_id", Date.now())];
       if (!evicted.length) capacity();
     }
     this.save(job);
+    return job;
+  }
+
+  // Called inside the scoped owner's transaction, before any reservation RPC.
+  admitManaged(input: BackgroundAdmission): { created: boolean; job: BackgroundRecord } {
+    validateManagedAdmission(input);
+    const existing = this.managedRetry(input.managed!, input.owner.policyGeneration);
+    return existing ? { created: false, job: existing } : { created: true, job: this.admit(input) };
+  }
+
+  managedRetry(input: ManagedAdmission, policyGeneration: string): BackgroundRecord | null {
+    validateManagedMetadata(input);
+    if (input.idempotencyKey === null) return null;
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE json_extract(job_json, '$.managed.protocol') = ? AND json_extract(job_json, '$.managed.idempotencyKey') = ? AND COALESCE(json_extract(job_json, '$.managed.providerId'), 'replicate') = ? AND json_extract(job_json, '$.replayUntil') > ? LIMIT 1", input.protocol, input.idempotencyKey, input.providerId ?? "replicate", Date.now())][0];
+    if (!row) return null;
+    const job = JSON.parse(row.job_json) as BackgroundRecord;
+    if (job.managed?.requestDigest !== input.requestDigest) throw new HttpError(409, "idempotency_conflict", "idempotency key was already used for a different request");
+    if (job.managed.policyGeneration !== policyGeneration) throw new HttpError(409, "background_owner_changed", "the original job policy has changed");
     return job;
   }
 
@@ -131,8 +177,12 @@ export class BackgroundStore {
 
   beginEgress(id: string): BackgroundJob {
     const job = this.admitting(id);
+    if (job.managed && !job.dispatchClaimed) invalid();
     if (job.legs.some(leg => leg.reserve !== "accepted" || !leg.dispatched)) invalid();
     job.egress = true; job.phase = "observing"; job.nextAttemptAt = Date.now() + 5_000;
+    // Commit uncertainty before granting egress: losing either acknowledgement
+    // or the create response can never make the job eligible for another POST.
+    if (job.managed) job.managed.submission = "submission_unknown";
     this.save(job); return job;
   }
 
@@ -142,7 +192,56 @@ export class BackgroundStore {
     if (job.phase !== "observing") invalid();
     if (!responseId || new TextEncoder().encode(responseId).byteLength > 256) invalid();
     if (job.responseId && job.responseId !== responseId) throw new HttpError(502, "background_identity_conflict", "upstream changed the background response identity");
+    if (job.managed) {
+      if (!/^[a-zA-Z0-9_-]{1,128}$/.test(responseId)) invalid();
+      job.managed.upstreamId = responseId; job.managed.submission = "bound";
+    }
     job.responseId = responseId; job.nextAttemptAt = Math.min(job.nextAttemptAt, Date.now() + 5_000); this.save(job);
+  }
+
+  observeManaged(id: string, upstreamId: string, status: string, statusCode: number, attempt?: number, observationUnavailable?: ManagedObservationLoss): void {
+    const current = this.get(id);
+    if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
+    if (!current.managed || current.managed.submission !== "bound" || current.responseId !== upstreamId
+      || !["starting", "processing", "succeeded", "failed", "canceled", "aborted"].includes(status) || !Number.isInteger(statusCode) || !(statusCode >= 200 && statusCode < 300 || status === "failed" && statusCode === 422)) invalid();
+    if (observationUnavailable !== undefined) {
+      if (!["expired_or_unknown", "deleted", "canceled_or_deleted"].includes(observationUnavailable) || status !== "processing") invalid();
+      current.managed.observationUnavailable = observationUnavailable;
+      current.lastError = "observation_unavailable";
+      // Retain terminal=null: observation loss is not failed/free execution.
+    } else {
+      if (status === "starting" || status === "processing") return;
+      current.managed.terminal = status as ManagedState["terminal"];
+    }
+    this.save(current);
+    this.freeze(id, { occurredAtMs: Date.now(), statusCode, status: status === "succeeded" ? "success" : "provider_error", billable: true, tokens: null, contentRef: null });
+  }
+
+  // Called only by the scoped owner after a qualified original-job observation.
+  // Inline observations do not erase an earlier URI. File processing never
+  // changes generation outcome, reservation, settlement or the frozen receipt.
+  bindManagedFiles(id: string, upstreamId: string, files: readonly ManagedFileDescriptor[]): ManagedFileDescriptor[] {
+    const job = this.get(id), managed = job?.managed;
+    if (!job || !managed || managed.submission !== "bound" || managed.upstreamId !== upstreamId
+      || managed.terminal !== "succeeded" || managed.observationUnavailable || Date.now() >= job.replayUntil) {
+      throw new HttpError(409, "managed_files_unavailable", "files require the original succeeded managed job before its retention deadline");
+    }
+    const merged = new Map<string, ManagedFileDescriptor>();
+    for (const entries of [managed.files ?? [], files]) {
+      if (!Array.isArray(entries) || entries.length > 64) invalidFiles();
+      for (const file of entries) {
+        if (!file || typeof file !== "object" || Array.isArray(file) || Object.keys(file).some(key => key !== "id" && key !== "mimeType")
+          || typeof file.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(file.id)
+          || typeof file.mimeType !== "string" || !/^(?:video|audio|image)\/[a-z0-9.+-]{1,64}$/.test(file.mimeType)) invalidFiles();
+        const previous = merged.get(file.id);
+        if (previous && previous.mimeType !== file.mimeType) throw new HttpError(409, "managed_file_conflict", "a bound output file cannot change its media type");
+        merged.set(file.id, { id: file.id, mimeType: file.mimeType });
+        if (merged.size > 64) invalidFiles();
+      }
+    }
+    const result = [...merged.values()];
+    if (JSON.stringify(managed.files ?? []) !== JSON.stringify(result)) { managed.files = result; this.save(job); }
+    return result;
   }
 
   beginDispatch(id: string, contentRef: string | null): BackgroundJob {
@@ -243,7 +342,29 @@ export class BackgroundStore {
 
 function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): BackgroundTombstone {
   const { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError } = job;
-  return { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError, phase };
+  return { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError, phase, ...(job.managed ? { managed: job.managed } : {}) };
+}
+function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
+  const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion", "fileBaseUrl"].includes(key))
+    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs", "dashscope.video", "pixverse.video", "runway.tasks", "together.video", "google.omni_video", "openrouter.video"].includes(managed.protocol)
+    || managed.providerId !== undefined && (typeof managed.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(managed.providerId))
+    || managed.protocol !== "replicate.predictions" && managed.providerId === undefined
+    || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)
+    || managed.fileBaseUrl !== undefined && (typeof managed.fileBaseUrl !== "string" || managed.fileBaseUrl.length > 2048
+      || !/^https:\/\/[a-z0-9.-]+(?::443)?(?:\/[a-zA-Z0-9_/-]*)?$/.test(managed.fileBaseUrl))
+    || typeof managed.requestedVersion !== "string" || !/^[a-zA-Z0-9_./:-]{1,256}$/.test(managed.requestedVersion)) invalid();
+}
+function validateManagedAdmission(input: BackgroundAdmission): void {
+  validateManagedMetadata(input.managed);
+  if (input.stream || (input.managed!.providerId ?? "replicate") !== input.owner.providerId) invalid();
+  // This first protocol slice supports an explicit router tariff only. An
+  // unknown provider price is never silently replaced with the flat fallback.
+  if (input.facts.cost.basis !== "policy_fixed" || !Number.isSafeInteger(input.facts.fixed) || input.facts.fixed! < 0
+    || input.facts.fixed !== input.facts.cost.reserveMicros || input.plan.reservedMicros !== (input.plan.legs.length ? input.facts.fixed : 0)
+    || input.plan.legs.some(leg => leg.request.costMicros !== input.facts.fixed)) {
+    throw new HttpError(400, "pricing_required", "managed predictions require an explicit policy-fixed tariff before dispatch");
+  }
 }
 function encode(record: BackgroundRecord): string {
   const value = JSON.stringify(record);
@@ -253,3 +374,5 @@ function encode(record: BackgroundRecord): string {
 function capacity(): never { throw new HttpError(503, "background_capacity", "background recovery scope has no admission capacity"); }
 function invalid(): never { throw new HttpError(400, "background_request_invalid", "invalid background recovery transition"); }
 function missing(): never { throw new HttpError(404, "background_unavailable", "background recovery record is unavailable; this does not confirm settlement"); }
+
+function invalidFiles(): never { throw new HttpError(400, "managed_files_invalid", "managed files require at most 64 bounded native identifiers and media types"); }

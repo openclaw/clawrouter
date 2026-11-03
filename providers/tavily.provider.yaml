@@ -66,8 +66,3 @@ billing:
     - name: request
       source: request.count
       unit: request
-tests:
-  fixtures:
-    - name: search-basic
-      request: providers/_fixtures/tavily/search-basic.request.json
-      response: providers/_fixtures/tavily/search-basic.response.json

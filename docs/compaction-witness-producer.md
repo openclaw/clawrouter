@@ -48,7 +48,9 @@ runs the same case from an exact earlier source tree.
 
 The release case writes storage with the latest stable release, v0.4.0
 (`080831563e0a`). Its Worker and Durable Objects are bundled from that
-commit's own tree. Grants are stored with that release's OAuth-callback
+commit's own tree. CI fetches only that pinned commit before Worker tests and
+fails if it is unavailable. Local shallow checkouts skip this case until the
+commit is fetched. Grants are stored with that release's OAuth-callback
 sequence. Head then opens the same persisted SQLite/KV storage.
 
 v0.4.0 persisted these, and all of them carry over:

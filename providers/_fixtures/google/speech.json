@@ -1,0 +1,161 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/google/speech-provider.ts",
+  "checkedAt": "2026-11-03",
+  "generateContent": {
+    "model": "gemini-3.1-flash-tts-preview",
+    "request": {
+      "contents": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Read this synthetic fixture."
+            }
+          ]
+        }
+      ],
+      "generationConfig": {
+        "responseModalities": [
+          "AUDIO"
+        ],
+        "speechConfig": {
+          "voiceConfig": {
+            "prebuiltVoiceConfig": {
+              "voiceName": "Kore"
+            }
+          }
+        }
+      }
+    },
+    "response": {
+      "candidates": [
+        {
+          "finishReason": "STOP",
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "inlineData": {
+                  "mimeType": "audio/L16;codec=pcm;rate=24000",
+                  "data": "AAD/fw=="
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 5,
+        "candidatesTokenCount": 2,
+        "totalTokenCount": 7
+      }
+    }
+  },
+  "interactions": {
+    "model": "gemini-3.8-flash-tts",
+    "request": {
+      "model": "gemini-3.8-flash-tts",
+      "store": false,
+      "input": [
+        {
+          "type": "user_input",
+          "content": [
+            {
+              "type": "text",
+              "text": "Read this synthetic fixture.",
+              "annotations": [
+                {
+                  "type": "speech_metadata",
+                  "style": "calm"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "response_format": {
+        "type": "audio",
+        "mime_type": "audio/l16",
+        "sample_rate": 24000
+      },
+      "generation_config": {
+        "speech_config": [
+          {
+            "voice": "Kore"
+          }
+        ]
+      }
+    },
+    "response": {
+      "model": "gemini-3.8-flash-tts",
+      "status": "completed",
+      "output_audio": {
+        "type": "audio",
+        "mime_type": "audio/l16",
+        "data": "AAD/fw=="
+      }
+    }
+  },
+  "dialogue": {
+    "model": "gemini-3.8-flash-lite-tts",
+    "request": {
+      "model": "gemini-3.8-flash-lite-tts",
+      "store": false,
+      "input": [
+        {
+          "type": "user_input",
+          "content": [
+            {
+              "type": "text",
+              "text": "Synthetic first turn.",
+              "annotations": [
+                {
+                  "type": "speech_metadata",
+                  "speaker": "Narrator",
+                  "style": "calm"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": "Synthetic second turn.",
+              "annotations": [
+                {
+                  "type": "speech_metadata",
+                  "speaker": "Guest"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "response_format": {
+        "type": "audio",
+        "mime_type": "audio/l16",
+        "sample_rate": 24000
+      },
+      "generation_config": {
+        "speech_config": {
+          "mode": "conversational",
+          "speakers": [
+            {
+              "speaker": "Narrator",
+              "voice": "Kore"
+            },
+            {
+              "speaker": "Guest",
+              "voice": "Puck"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "billing": {
+    "actualProviderCostMicrousd": null,
+    "decodedBytesAreNotTokens": true,
+    "policyFixedIsUpstreamPrice": false
+  }
+}

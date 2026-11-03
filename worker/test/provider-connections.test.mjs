@@ -1,6 +1,6 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { PolicyBindingIndexObject, resolveConnection } from "../authority.ts";
 import { sha256Hex } from "../utils.ts";
@@ -98,14 +98,7 @@ function deferred() {
 }
 
 function connectionEnv(t, legacy = null) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
+  const { sql } = sqliteFixture(t);
   const authority = new PolicyBindingIndexObject({ storage: { sql } });
   const fixture = {
     authority, beforePut: null, beforeLegacyRead: null,

@@ -1,0 +1,48 @@
+# Standard API only; region and plan contracts: docs/hosted-asia-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.z.ai/api-reference/llm/chat-completion
+schema: clawrouter.service-provider.v1
+id: zai
+displayName: Z.AI (global standard API)
+status: experimental
+class: openai_compatible
+service:
+  platform: zai
+  kind: model_provider
+  upstreamService: zai
+  configKeys: [ZAI_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.z.ai/api/paas/v4
+routing:
+  nativePrefixes: [clawrouter-zai, zai]
+  modelPrefixes: [zai/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: zai/glm-5.3
+      upstream: glm-5.3
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

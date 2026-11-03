@@ -46,6 +46,44 @@ async function fixture(t, { legacy = false, routing } = {}) {
 }
 
 const freshCooling = (seconds, r) => ({ ...exhausted(600, r, 50), cooldownUntil: at(seconds), lastSignal: 'rate_limited' });
+test('stable catalog identity does not admit inference before the scoped cooldown deadline', async t => {
+  const f = await fixture(t);
+  f.env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS = '0';
+  let clock = now;
+  t.mock.method(Date, 'now', () => clock);
+  const upstream = t.mock.method(globalThis, 'fetch', async () => Response.json({ type: 'message', content: [], usage: { input_tokens: 1, output_tokens: 1 } }));
+  const catalog = async () => {
+    const response = await worker.fetch(new Request('https://fixture/v1/catalog', { headers: admissionHeaders }), f.env, f.context);
+    assert.equal(response.status, 200);
+    return (await response.json()).providers.find(({ id }) => id === provider.id);
+  };
+  const before = await catalog();
+  assert.ok(before.models.length > 0 && before.routes.length > 0);
+  assert.equal((await f.send()).status, 200);
+  await f.state(keyA, r => cooling(60, r)); await f.state(keyB, r => cooling(150, r));
+  for (const [elapsed, retryAfter] of [[0, '60'], [59_750, '1']]) {
+    clock = now + elapsed;
+    const during = await catalog();
+    assert.deepEqual(during.models, before.models);
+    assert.deepEqual(during.routes, before.routes);
+    assert.equal(during.executable, false);
+    assert.ok(during.offers.every(offer => !offer.eligible));
+    for (const path of ['/v1/messages', '/v1/native/anthropic/v1/messages']) {
+      const response = await worker.fetch(new Request(`https://fixture${path}`, { method: 'POST', headers: admissionHeaders, body: JSON.stringify({ model: path.startsWith('/v1/native/') ? model : `anthropic/${model}`, max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] }) }), f.env, f.context);
+      assert.equal(response.status, 429);
+      assert.equal(response.headers.get('retry-after'), retryAfter);
+      await response.json(); await Promise.all(f.pending.splice(0));
+    }
+    assert.equal(upstream.mock.callCount(), 1, 'no upstream dispatch during cooldown');
+  }
+  clock = now + 60_000;
+  const after = await catalog();
+  assert.deepEqual(after.models, before.models); assert.deepEqual(after.routes, before.routes);
+  assert.equal(after.executable, true);
+  assert.equal((await f.send()).status, 200);
+  assert.equal(upstream.mock.callCount(), 2);
+});
+
 for (const legacy of [false, true]) for (const [name, stateA, stateB, retryAfter, routing = { includedQuotaReservePercent: 10 }] of [
   ['rate-limit cooldowns', r => cooling(60, r), r => cooling(150, r), '60'],
   ['a quota window reset beats a later cooldown', r => cooling(200, r), r => exhausted(90, r), '90'],

@@ -1,6 +1,6 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
 import { finalizeAccounting, reserveBudget, settleBudget } from "../accounting.ts";
 import { queue, UsageLedgerObject, usageSnapshot } from "../ledgers.ts";
 
@@ -65,9 +65,8 @@ test("finalization reports durable recovery success and independent usage public
 });
 
 test("rejected usage publication recovers the exact event in its policy shard and deduplicates redelivery", async (t) => {
-  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
-  const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-  const ledger = new UsageLedgerObject({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
+  const { db, sql, transactionSync } = sqliteFixture(t);
+  const ledger = new UsageLedgerObject({ storage: { sql, transactionSync, getAlarm: async () => 1 } });
   const body = { ...event, occurred_at_ms: Date.now(), provider: "openai", model: "openai/gpt-6-astra", capability: "llm.responses", status: "success", status_code: 200, input_tokens: 3, output_tokens: 2, total_tokens: 5, actual_cost_micros: 42, cost_basis: "manifest_pricing", requested_service_tier: "priority", served_service_tier: "fast", session_id: "fixture-session", credential_id: "fixture-credential", principal_id: "fixture-principal", content_retained: false, content_ref: null };
   const accepted = [], calls = [];
   const env = mockEnv(async message => { accepted.push(structuredClone(message)); throw new Error("ambiguous queue acceptance"); });
@@ -148,8 +147,9 @@ const fourLegAuth = { policyId: "fixture", policy: { monthlyBudgetMicros: 100, d
 const budgetCost = { reserveMicros: 1, basis: "manifest_pricing" };
 const budgetConnection = { providerId: "openai", monthlyBudgetMicros: 100 };
 
-test("all budget legs overlap and retain plan order, with attempted IDs recorded before I/O", async t => {
-  const observations = [], calls = [];
+test("all budget legs overlap and retain plan order, with attempted IDs recorded before I/O", { timeout: 5_000 }, async () => {
+  const observations = [], calls = [], completed = [];
+  const gates = budgetKinds.map(() => Promise.withResolvers()), done = budgetKinds.map(() => Promise.withResolvers());
   let active = 0, peak = 0;
   const env = mockEnv(async () => assert.fail("no recovery needed"));
   env.BUDGET_LEDGER.get = name => ({ fetch: async (_url, init) => {
@@ -157,15 +157,19 @@ test("all budget legs overlap and retain plan order, with attempted IDs recorded
     calls.push(body.reservationId);
     assert.deepEqual(observations[index], [body.reservationId, "attempted"]);
     peak = Math.max(peak, ++active);
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await gates[index].promise;
     assert.equal(observations.length, 4, "every attempt precedes the first completed reserve");
     active--;
+    completed.push(body.reservationId);
+    done[index].resolve();
     return Response.json({ allowed: true, chargedMicros: 1 });
   } });
-  const start = performance.now();
-  const result = await reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, (leg, state) => observations.push([leg.request.reservationId, state]));
-  t.diagnostic(`four reserves: ${Math.round(performance.now() - start)} ms with 40 ms injected per reserve; peak in flight ${peak}`);
+  const pending = reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, (leg, state) => observations.push([leg.request.reservationId, state]));
+  assert.equal(calls.length, 4, "every reserve starts before any response is released");
   assert.equal(peak, 4);
+  for (let index = gates.length - 1; index >= 0; index--) { gates[index].resolve(); await done[index].promise; }
+  const result = await pending;
+  assert.deepEqual(completed, [...calls].reverse(), "responses complete in reverse plan order");
   assert.deepEqual(result.reservations.map(item => item.reservationId), calls);
 });
 

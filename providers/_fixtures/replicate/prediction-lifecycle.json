@@ -1,0 +1,310 @@
+{
+  "protocol": "replicate.predictions",
+  "synthetic": true,
+  "sources": [
+    "https://replicate.com/docs/reference/http",
+    "https://replicate.com/docs/topics/predictions/lifecycle",
+    "https://replicate.com/docs/topics/predictions/data-retention",
+    "https://replicate.com/docs/topics/billing"
+  ],
+  "request": {
+    "method": "POST",
+    "path": "/v1/predictions",
+    "headers": {
+      "Content-Type": "application/json",
+      "Cancel-After": "600s"
+    },
+    "body": {
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "input": {
+        "prompt": "A synthetic blue square"
+      }
+    }
+  },
+  "controls": {
+    "get": {
+      "method": "GET",
+      "path": "/v1/predictions/prediction_fixture_001"
+    },
+    "cancel": {
+      "method": "POST",
+      "path": "/v1/predictions/prediction_fixture_001/cancel"
+    }
+  },
+  "retention": {
+    "apiContentDefaultSeconds": 3600,
+    "routerObservationWindowSeconds": 3600,
+    "ownershipExpiryMeans": "deny controls; never release a scoped ID into unscoped pass-through"
+  },
+  "billing": {
+    "basis": "policy_fixed",
+    "fixturePolicyRequestMicrousd": 700,
+    "actualProviderCostMicrousd": null,
+    "predictTimeIsNotMoney": true,
+    "cancelAfterIsNotUniversalCostBound": true,
+    "unknownHardBudgetExpected": "pricing_required before upstream fetch"
+  },
+  "responses": {
+    "created": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "starting",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": null,
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      }
+    },
+    "partial": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "processing",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": [
+        "https://media.example/partial.png"
+      ],
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      }
+    },
+    "succeeded": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "succeeded",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": [
+        "https://media.example/final.png"
+      ],
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      },
+      "metrics": {
+        "predict_time": 2.5
+      }
+    },
+    "cancelAcknowledgedButOpen": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "processing",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": [
+        "https://media.example/partial.png"
+      ],
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      },
+      "metrics": {
+        "predict_time": 1.5
+      }
+    },
+    "canceled": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "canceled",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": null,
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      },
+      "metrics": {
+        "predict_time": 1.75
+      }
+    },
+    "failed": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "failed",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": null,
+      "error": "Synthetic model failure",
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      }
+    },
+    "hostileUrls": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "processing",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": null,
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://untrusted.example/steal",
+        "cancel": "https://untrusted.example/steal",
+        "stream": "https://untrusted.example/steal"
+      }
+    },
+    "mismatchedId": {
+      "id": "another_prediction",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "succeeded",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": null,
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      }
+    },
+    "dataRemoved": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "succeeded",
+      "input": null,
+      "output": null,
+      "error": null,
+      "logs": null,
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      },
+      "metrics": {
+        "predict_time": 2.5
+      },
+      "data_removed": true
+    },
+    "aborted": {
+      "id": "prediction_fixture_001",
+      "version": "1111111111111111111111111111111111111111111111111111111111111111",
+      "status": "aborted",
+      "input": {
+        "prompt": "A synthetic blue square"
+      },
+      "output": null,
+      "error": null,
+      "logs": "",
+      "urls": {
+        "get": "https://api.replicate.com/v1/predictions/prediction_fixture_001",
+        "cancel": "https://api.replicate.com/v1/predictions/prediction_fixture_001/cancel",
+        "stream": "https://stream.replicate.com/v1/files/fixture"
+      },
+      "started_at": null,
+      "completed_at": "2026-11-03T00:10:00Z"
+    }
+  },
+  "acceptanceScenarios": [
+    {
+      "name": "partial-output",
+      "observations": [
+        "created",
+        "partial",
+        "succeeded",
+        "succeeded"
+      ],
+      "expected": "starting/processing stay open; duplicate succeeded produces one frozen receipt"
+    },
+    {
+      "name": "immediate-terminal-create",
+      "observations": [
+        "succeeded"
+      ],
+      "expected": "bind ID before returning bytes, settle once"
+    },
+    {
+      "name": "cancel-ack",
+      "observations": [
+        "cancelAcknowledgedButOpen",
+        "canceled"
+      ],
+      "expected": "POST acknowledgement stays open until a matching terminal object is observed; no free-charge inference"
+    },
+    {
+      "name": "cancel-success-race",
+      "observations": [
+        "succeeded",
+        "canceled"
+      ],
+      "expected": "first committed terminal receipt stays immutable"
+    },
+    {
+      "name": "uncertain-cancel",
+      "observations": [
+        "partial",
+        "succeeded"
+      ],
+      "expected": "GET original scoped job before any further cancel attempt"
+    },
+    {
+      "name": "lost-create-response",
+      "expected": "submission_unknown; persist recovery locator and conservative accounting; never replay upstream POST"
+    },
+    {
+      "name": "same-idempotency-key",
+      "expected": "one create sender, same digest reuses job, changed digest returns 409"
+    },
+    {
+      "name": "owner-bound-controls",
+      "expected": "cross-caller/tenant/policy, changed credential lineage, unknown ID and expired binding fail before upstream fetch"
+    },
+    {
+      "name": "disconnect-restart",
+      "expected": "delivery may end; observation and fenced outbox settlement survive restart"
+    },
+    {
+      "name": "lost-settlement-ack",
+      "expected": "retry same frozen receipt; independent settlement and usage ACKs prevent double charge"
+    },
+    {
+      "name": "unresolved-evidence",
+      "expected": "404, transport error, malformed/truncated/oversized JSON, unsupported status and ID mismatch are not terminal; retain conservative accounting"
+    },
+    {
+      "name": "content-retention",
+      "observations": [
+        "dataRemoved"
+      ],
+      "expected": "removed output is not a billing refund or permission to forget ownership"
+    },
+    {
+      "name": "deadline-aborted-before-start",
+      "observations": [
+        "created",
+        "aborted"
+      ],
+      "expected": "stop polling a known terminal job even without metrics; preserve policy_fixed basis or conservative unknown-cost accounting; do not infer a refund"
+    }
+  ]
+}

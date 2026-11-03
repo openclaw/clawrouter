@@ -1,18 +1,18 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 
 test("TypeScript provider compiler is deterministic and preserves the catalog contract", () => {
   const files = readdirSync("providers").filter((file) => file.endsWith(".provider.yaml")).sort().map((file) => `providers/${file}`);
-  const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...files], { encoding: "utf8" }));
+  const compiled = compileProviderSnapshot(files.map(file => parse(readFileSync(file, "utf8"))));
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
-  assert.equal(compiled.providers.length, 22);
+  assert.deepEqual(compiled.providers.map(provider => provider.id).sort(), files.map(file => parse(readFileSync(file, "utf8")).id).sort(), "every source manifest must appear exactly once in the compiled inventory");
   const deepseek = compiled.providers.find(provider => provider.id === "deepseek");
   assert.deepEqual(deepseek.models.map(model => model.upstream), ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-v4-flash-vision-exp"]);
   for (const model of deepseek.models) {
@@ -28,9 +28,12 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(realtime.pricing.settlementBasis, "published_upper_bound");
   assert.equal(realtime.pricing.maxRequestInputTokens, 128000);
   assert.deepEqual([realtime.pricing.inputMicrosPerMillion, realtime.pricing.outputMicrosPerMillion], [32000000, 64000000]);
-  assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).filter(model => model.id !== "openai/gpt-realtime-2.1").every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
+  assert.equal(compiled.model_index["groq/gpt-oss-20b"].pricing.settlementBasis, "published_upper_bound");
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   const gemini = compiled.model_index["google/gemini-3.5-flash"];
+  const google = compiled.providers.find(provider => provider.id === "google-gemini");
+  assert.deepEqual(google.endpoints.find(endpoint => endpoint.id === "stream_generate_content").query, { alt: "sse" });
+  assert.deepEqual(google.endpoints.find(endpoint => endpoint.id === "generate_content").query, {});
   assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");
   assert.equal(gemini.pricing.effectiveAt, "2026-09-23");
   assert.deepEqual(gemini.pricing.serviceTiers.map(({ id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion }) => [id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion]), [
@@ -153,7 +156,7 @@ test("endpoint pricing is normalized, indexed, and limited to supported endpoint
   const card = manifest => model(manifest).endpointPricing.decisions;
   withManifest(path => {
     writeFileSync(path, JSON.stringify(valid));
-    const compiled = JSON.parse(compile(path));
+    const compiled = compile(path);
     const luna = compiled.providers[0].models.find(({ id }) => id === "openai/gpt-6-luna");
     assert.deepEqual(compiled.model_index[luna.id].endpointPricing, luna.endpointPricing);
     assert.equal(luna.endpointPricing.decisions.pricing.defaultMaxOutputTokens, 0);
@@ -182,7 +185,7 @@ test("endpoint output limits compile with closed, finite field and integer range
   const expected = { field: "max_tokens", minimum: 1, maximum: 393_216 };
   withManifest((path) => {
     writeFileSync(path, JSON.stringify(valid));
-    const compiled = JSON.parse(compile(path)).providers[0];
+    const compiled = compile(path).providers[0];
     assert.deepEqual(compiled.endpoints[0].outputTokenLimit, expected);
     assert.ok(compiled.models.every(model => model.pricing.maxInputTokens === 1_048_576 && model.pricing.defaultMaxOutputTokens === expected.maximum));
     for (const limit of [
@@ -228,7 +231,7 @@ test("quota header sources must retain their declared array shape", () => {
   try {
     const invalid = readFileSync("providers/openai.provider.yaml", "utf8").replace("limitHeaders: [x-ratelimit-limit-requests]", "limitHeaders: x-ratelimit-limit-requests");
     writeFileSync(manifest, invalid);
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/limitHeaders:/);
+    assert.throws(() => compile(manifest), /invalid manifest:.*\/limitHeaders:/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -240,9 +243,9 @@ test("quota metric scales and probe requirements reject invalid manifest values"
   const source = readFileSync("providers/anthropic.provider.yaml", "utf8");
   try {
     writeFileSync(manifest, source.replace("metricScale: 100", "metricScale: 0"));
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/metricScale:/);
+    assert.throws(() => compile(manifest), /invalid manifest:.*\/metricScale:/);
     writeFileSync(manifest, source.replace("requiresRefreshToken: true", "requiresRefreshToken: refresh"));
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/requiresRefreshToken:/);
+    assert.throws(() => compile(manifest), /invalid manifest:.*\/requiresRefreshToken:/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -256,7 +259,7 @@ test("reasoning effort metadata rejects empty, duplicate, and unsupported values
   try {
     for (const value of cases) {
       writeFileSync(manifest, source.replace("[none, low, medium, high, xhigh, max]", value));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/supportedReasoningEfforts/);
+      assert.throws(() => compile(manifest), /invalid manifest:.*\/supportedReasoningEfforts/);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -279,7 +282,7 @@ test("service tier compilation rejects ambiguous, incomplete, and drifting rate 
     for (const [from, to, expected] of cases) {
       assert.ok(source.includes(from));
       writeFileSync(manifest, source.replace(from, to));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), expected);
+      assert.throws(() => compile(manifest), expected);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
@@ -293,13 +296,13 @@ test("grant transport endpoint restrictions require unique own endpoint names", 
   try {
     for (const value of ["responses", "[]", "[responses, responses]", "[missing_endpoint]", "[null]", "[1]", "[[responses]]", "[toString]", "[constructor]"]) {
       writeFileSync(manifest, source.replace(anchor, `allowedEndpoints: ${value}`));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /allowedEndpoints/);
+      assert.throws(() => compile(manifest), /allowedEndpoints/);
     }
     writeFileSync(manifest, source);
-    const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
+    const compiled = compile(manifest);
     assert.deepEqual(compiled.providers[0].auth.grantTransports.subscription.allowedEndpoints, ["responses"]);
     writeFileSync(manifest, source.replace(`      ${anchor}\n`, ""));
-    const unrestricted = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
+    const unrestricted = compile(manifest);
     assert.equal("allowedEndpoints" in unrestricted.providers[0].auth.grantTransports.subscription, false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -316,12 +319,12 @@ test("Codex model aliases require an explicit nonempty native slug", () => {
   try {
     for (const value of ['""', '" "', "null", "42", "[gpt-5.6-sol]"]) {
       writeFileSync(manifest, source.replace(anchor, `codexModel: ${value}`));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /codexModel/);
+      assert.throws(() => compile(manifest), /codexModel/);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("ordinary pricing cards reject invalid schema fields before emitting a snapshot", () => {
+test("ordinary pricing cards reject invalid schema fields", () => {
   const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
   const rateFields = ["inputMicrosPerMillion", "outputMicrosPerMillion", "cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
   const cases = [
@@ -350,11 +353,7 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
       const manifest = structuredClone(valid);
       mutate(manifest.models.entries[0].pricing);
       writeFileSync(path, JSON.stringify(manifest));
-      assert.throws(() => compile(path), (error) => {
-        assert.equal(error.stdout, "", name);
-        assert.match(error.stderr, /provider deepseek invalid manifest:.*#\/models\/entries\/0\/pricing/);
-        return true;
-      }, name);
+      assert.throws(() => compile(path), /provider deepseek invalid manifest:.*#\/models\/entries\/0\/pricing/, name);
     }
     for (const value of [".inf", ".nan"]) {
       const source = readFileSync("providers/deepseek.provider.yaml", "utf8"), anchor = "inputMicrosPerMillion: 1320000";
@@ -365,7 +364,7 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
     const pricing = valid.models.entries[0].pricing;
     Object.assign(pricing, { effectiveAt: "2028-02-29", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, defaultMaxOutputTokens: 0, unpricedCosts: ["request_fee"] });
     writeFileSync(path, JSON.stringify(valid));
-    const snapshot = JSON.parse(compile(path));
+    const snapshot = compile(path);
     assert.equal(snapshot.providers[0].models[0].pricing.outputMicrosPerMillion, 0);
     assert.deepEqual(snapshot.providers[0].models[0].pricing.unpricedCosts, ["request_fee"]);
     assert.deepEqual(Object.values(snapshot.model_index)[0].pricing.unpricedCosts, ["request_fee"]);
@@ -377,6 +376,7 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
   const cases = [
     ["null root", () => null, /invalid manifest: #:/],
     ["unknown root field", (manifest) => ({ ...manifest, display_name: "wrong field" }), /invalid manifest: #:/],
+    ["unsupported fixture metadata", (manifest) => ({ ...manifest, tests: { fixtures: [] } }), /invalid manifest: #:/],
     ["missing endpoint format", (manifest) => { delete manifest.endpoints.chat_completions.requestFormat; return manifest; }, /invalid manifest:.*\/endpoints\/chat_completions:/],
     ["missing bearer header", (manifest) => { delete manifest.auth.schemes[0].header; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
     ["unknown auth field", (manifest) => { manifest.auth.schemes[0].token = "fixture"; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
@@ -394,7 +394,7 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
 });
 
 function compile(path) {
-  return execFileSync(process.execPath, ["scripts/compile-providers.mjs", path], { encoding: "utf8", stdio: "pipe" });
+  return compileProviderSnapshot([parse(readFileSync(path, "utf8"))]);
 }
 
 test("speech character cards round-trip without token defaults and reject incompatible contracts", () => {
@@ -403,7 +403,7 @@ test("speech character cards round-trip without token defaults and reject incomp
   assert.ok(index >= 0);
   withManifest(path => {
     writeFileSync(path, JSON.stringify(valid));
-    const compiled = JSON.parse(compile(path)), provider = compiled.providers[0];
+    const compiled = compile(path), provider = compiled.providers[0];
     const model = provider.models.find(model => model.id === "openai/tts-1");
     assert.deepEqual(model.pricing, valid.models.entries[index].pricing);
     assert.deepEqual(compiled.model_index[model.id], { provider: "openai", ...Object.fromEntries(Object.entries(model).filter(([key]) => key !== "id")) });
@@ -437,7 +437,7 @@ test("opaque model contracts validate endpoint-compatible pricing without templa
   const valid = parse(readFileSync("providers/local-openai.provider.yaml", "utf8"));
   withManifest((path) => {
     writeFileSync(path, JSON.stringify(valid));
-    const provider = JSON.parse(compile(path)).providers[0];
+    const provider = compile(path).providers[0];
     assert.deepEqual(provider.endpoints[0].modelPassthrough, { pricing_ref: provider.models[0].pricing_ref, pricing: provider.models[0].pricing });
     const cases = [
       ["boolean contract", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough = true; }, /invalid manifest/],
@@ -463,7 +463,7 @@ test("custom manifests keep known models and migrate opaque routing with an expl
   delete manifest.endpoints.chat_completions.modelPassthrough;
   withManifest((path) => {
     writeFileSync(path, JSON.stringify(manifest));
-    const previous = JSON.parse(compile(path)).providers[0];
+    const previous = compile(path).providers[0];
     const endpoint = previous.endpoints.find(({ id }) => id === "chat_completions");
     const known = prepareNativeRequest(previous, endpoint, { model: previous.models[0].id, messages: [] }, endpoint.path, {});
     assert.deepEqual(known.model, previous.models[0]);
@@ -471,7 +471,7 @@ test("custom manifests keep known models and migrate opaque routing with an expl
 
     manifest.endpoints.chat_completions.modelPassthrough = {};
     writeFileSync(path, JSON.stringify(manifest));
-    const migrated = JSON.parse(compile(path)).providers[0];
+    const migrated = compile(path).providers[0];
     const declared = migrated.endpoints.find(({ id }) => id === endpoint.id);
     assert.deepEqual(prepareNativeRequest(migrated, declared, { model: known.model.id, messages: [] }, declared.path, {}), known);
     const opaque = prepareNativeRequest(migrated, declared, { model: "fixture-unlisted", messages: [] }, declared.path, {});
@@ -512,7 +512,7 @@ test("request parameter facts validate endpoint compatibility, provenance, and r
     }
     for (const entry of valid.models.entries) delete entry.requestParameters;
     writeFileSync(path, JSON.stringify(valid));
-    assert.ok(JSON.parse(compile(path)).providers[0].models.every((entry) => !("requestParameters" in entry)));
+    assert.ok(compile(path).providers[0].models.every((entry) => !("requestParameters" in entry)));
   });
 });
 
@@ -521,7 +521,7 @@ test("image tariffs round-trip without chat rates and reject unqualified generat
   const index=valid.models.entries.findIndex(m=>m.id==="openai/gpt-image-2.5-flare");
   withManifest(path=>{
     writeFileSync(path,JSON.stringify(valid));
-    const provider=JSON.parse(compile(path)).providers[0],model=provider.models.find(m=>m.id==="openai/gpt-image-2.5-flare");
+    const provider=compile(path).providers[0],model=provider.models.find(m=>m.id==="openai/gpt-image-2.5-flare");
     assert.deepEqual(model.pricing,valid.models.entries[index].pricing);
     assert.equal(Object.hasOwn(model.pricing,"outputMicrosPerMillion"),false);
     for(const [name,mutate] of [
@@ -551,21 +551,17 @@ test("free moderation request format belongs only to the OpenAI provider", () =>
   };
   withManifest(path => {
     writeFileSync(path, JSON.stringify(manifest));
-    const allowed = JSON.parse(compile(path)).providers[0];
+    const allowed = compile(path).providers[0];
     assert.equal(allowed.id, "openai");
     assert.equal(allowed.endpoints[0].request_format, "openai.moderations");
     manifest.id = "fixture-paid-moderation";
     writeFileSync(path, JSON.stringify(manifest));
-    assert.throws(() => compile(path), error => {
-      assert.equal(error.stdout, "", "invalid providers cannot emit a usable snapshot");
-      assert.match(error.stderr, /openai\.moderations requires provider openai/);
-      return true;
-    });
+    assert.throws(() => compile(path), /openai\.moderations requires provider openai/);
     // Other providers retain their own contracts; a compatible response alone
     // does not opt into OpenAI's free request tariff or grant restrictions.
     manifest.endpoints.moderations.requestFormat = "fixture.moderations";
     writeFileSync(path, JSON.stringify(manifest));
-    const distinct = JSON.parse(compile(path)).providers[0];
+    const distinct = compile(path).providers[0];
     assert.equal(distinct.id, "fixture-paid-moderation");
     assert.equal(distinct.endpoints[0].request_format, "fixture.moderations");
     assert.equal(distinct.endpoints[0].response_format, "openai.moderations");

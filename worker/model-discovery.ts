@@ -1,22 +1,29 @@
+import { modelExecutable } from "../shared/route-catalog.ts";
+import { filterOllamaModels } from "./provider-ollama.ts";
+import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
+import { readNativeJson } from "./native-json.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return ["openai.models", "anthropic.models"].includes(endpoint.request_format);
+  return ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
 }
 export function discoveryAllows(policy: AccessPolicy, provider: CompiledProvider, upstream: string): boolean {
-  return policy.models == null || policy.models.includes(discoveryModelId(provider, upstream));
+  return modelExecutable(provider, { id: discoveryModelId(provider, upstream), upstream })
+    && (policy.models == null || policy.models.includes(discoveryModelId(provider, upstream)));
 }
 export function prepareModelDiscovery(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, pathParams: Record<string, string>): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
   if (Object.keys(body).length) throw new HttpError(400, "invalid_model_discovery", "model discovery does not accept a request body");
   if (Object.keys(pathParams).some(name => !endpoint.path_params.includes(name))) throw new HttpError(400, "invalid_model_discovery", "unknown discovery path parameter");
   const id = pathParams.model_id;
   if (endpoint.path_params.includes("model_id") && (typeof id !== "string" || !id.length || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id))) throw new HttpError(400, "invalid_model_id", "a bounded nonempty model_id is required");
+  if (id && !modelExecutable(provider, { id: discoveryModelId(provider, id), upstream: id }))
+    throw new HttpError(400, "model_unavailable", "the selected model identity is stopped");
   // Metadata pricing must never inherit the selected model's inference tariff.
   const model: CompiledModel | null = id ? { id: discoveryModelId(provider, id), upstream: id, capabilities: [], pricing: null, pricing_ref: null } : null;
   return { model, body: {}, pathParams };
@@ -33,7 +40,7 @@ export function validateDiscoveryQuery(provider: CompiledProvider, endpoint: Com
     query["lifecycle[]"] = query.lifecycle; delete query.lifecycle;
   }
   for (const [name, value] of Object.entries(query)) {
-    if (provider.id !== "anthropic" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
+    if (endpoint.request_format !== "anthropic.models" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
     if (name === "lifecycle[]") {
       const values = Array.isArray(value) ? value : [value];
       if (!values.length || values.length > 3 || values.some(v => typeof v !== "string" || !["active", "deprecated", "retired"].includes(v))) throw new HttpError(400, "invalid_model_discovery_query", "invalid model lifecycle filter");
@@ -92,7 +99,16 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       void response.body?.cancel().catch(() => undefined);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
+    if (endpoint.request_format === "synthetic.models") {
+      const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,
+        value => filterSyntheticModels(value, id => discoveryAllows(policy, provider, id)), () => { throw malformed(); });
+      return metadataResponse(metadata, response);
+    }
     const metadata = await readMetadata(response, operation);
+    if (endpoint.request_format === "ollama.models") {
+      try { return metadataResponse(filterOllamaModels(metadata, id => discoveryAllows(policy, provider, id)), response); }
+      catch { throw malformed(); }
+    }
     const valid = (value: unknown): value is Record<string, unknown> & { id: string } => !!value && typeof value === "object" && !Array.isArray(value) && typeof (value as { id?: unknown }).id === "string" && !!(value as { id: string }).id && (value as { id: string }).id.length <= 512 && !/[\u0000-\u001f\u007f]/.test((value as { id: string }).id);
     if (endpoint.path_params.includes("model_id")) {
       if (!valid(metadata)) throw malformed();
@@ -100,10 +116,10 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       return metadataResponse(metadata, response);
     }
     if (!Array.isArray(metadata.data) || !metadata.data.every(valid)) throw malformed();
-    if (provider.id === "anthropic" && typeof metadata.has_more !== "boolean" || provider.id === "openai" && metadata.object !== "list") throw malformed();
-    if (!restricted) return metadataResponse(metadata, response);
+    if (endpoint.request_format === "anthropic.models" && typeof metadata.has_more !== "boolean" || endpoint.request_format === "openai.models" && metadata.object !== "list") throw malformed();
+    if (!restricted && !provider.models.some(model => model.availability?.status === "stopped")) return metadataResponse(metadata, response);
     const data = metadata.data.filter(model => discoveryAllows(policy, provider, model.id));
-    if (provider.id === "openai") return metadataResponse({ object: "list", data }, response);
+    if (endpoint.request_format === "openai.models") return metadataResponse({ object: "list", data }, response);
     if (data.length || !metadata.has_more) return metadataResponse({ data, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null, has_more: metadata.has_more }, response);
     const before = query.before_id != null;
     const cursor = before ? metadata.first_id : metadata.last_id;

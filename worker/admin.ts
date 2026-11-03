@@ -1,3 +1,4 @@
+import { normalizeUpstreamRetentionPolicy } from "../shared/upstream-retention.ts";
 import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { authorizationTimestamp, refreshExpiryWarning } from "../shared/refresh-expiry.ts";
 import { budgetCapsCall } from "./authority-budgets.ts";
@@ -11,7 +12,7 @@ import {
   type PoolSubmissionTicket, type PoolSubmissionTicketView,
 } from "./authority";
 import {
-  listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
+  listAssignmentRules, normalizeAssignmentEvidence, normalizeGroups, reconcileUserAssignments,
   type AssignmentEvidence,
 } from "./assignments";
 import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
@@ -548,13 +549,16 @@ export function normalizePolicy(
   let requestCostsMicros: AccessPolicy["requestCostsMicros"];
   try { requestCostsMicros = normalizeRequestCosts(body.requestCostsMicros === undefined ? existing?.requestCostsMicros : body.requestCostsMicros); }
   catch (error) { throw new HttpError(400, "invalid_policy", (error as Error).message); }
+  let upstreamRetention: AccessPolicy["upstreamRetention"];
+  try { upstreamRetention = normalizeUpstreamRetentionPolicy(body.upstreamRetention === undefined ? existing?.upstreamRetention : body.upstreamRetention); }
+  catch { throw new HttpError(400, "invalid_policy", "upstreamRetention requires an explicit versioned provider/protocol permission list"); }
   // New policies default to soft (no foreground budget RPCs); updates keep the stored mode.
   const budgetMode = body.budgetMode === undefined ? existing ? existing.budgetMode : "soft" : body.budgetMode;
   if (budgetMode !== undefined && budgetMode !== "reserve" && budgetMode !== "soft") throw new HttpError(400, "invalid_policy", "budgetMode must be reserve or soft");
   const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
   if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, requestCostsMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, requestCostsMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), ...(upstreamRetention ? { upstreamRetention } : {}), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
@@ -712,7 +716,7 @@ function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["main
   return { keepWarm: body.keepWarm === true };
 }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), ...(entry.policy.upstreamRetention ? { upstreamRetention: entry.policy.upstreamRetention } : {}), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { ...(user.record.budgetOverrides ? { budgetOverrides: user.record.budgetOverrides } : {}), email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) {
@@ -723,7 +727,6 @@ function grantResponse(key: string, grant: UpstreamGrant) {
   return { refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
 }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
-function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }
 function mutationObject(value: unknown, code: string, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, code, `${label} must be an object`);

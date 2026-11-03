@@ -1,0 +1,143 @@
+# Native Chat/catalog continuation: docs/deepinfra-native-catalog.md.
+# Endpoint/model source checked 2026-11-03: https://deepinfra.com/blog/qwen3-8-27b-deepinfra
+schema: clawrouter.service-provider.v1
+id: deepinfra
+displayName: DeepInfra
+status: experimental
+class: openai_compatible
+service:
+  platform: deepinfra
+  kind: model_provider
+  upstreamService: deepinfra
+  configKeys: [DEEPINFRA_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.deepinfra.com/v1/openai
+routing:
+  nativePrefixes: [clawrouter-deepinfra, deepinfra]
+  modelPrefixes: [deepinfra/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  models_list:
+    method: GET
+    path: /models
+    query: { sort_by: openclaw, filter: with_meta }
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 5000
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: deepinfra/Qwen/Qwen3.8-27B
+      upstream: Qwen/Qwen3.8-27B
+      capabilities: [llm.chat]
+    - id: deepinfra/deepseek-ai/DeepSeek-V4-Flash
+      upstream: deepseek-ai/DeepSeek-V4-Flash
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1048576
+    - id: deepinfra/deepseek-ai/DeepSeek-V4-Pro
+      upstream: deepseek-ai/DeepSeek-V4-Pro
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1048576
+    - id: deepinfra/zai-org/GLM-5.2
+      upstream: zai-org/GLM-5.2
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1048576
+    - id: deepinfra/moonshotai/Kimi-K2.6
+      upstream: moonshotai/Kimi-K2.6
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+    - id: deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+      upstream: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 262144
+    - id: deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
+      upstream: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 262144
+    - id: deepinfra/deepseek-ai/DeepSeek-V3.2
+      upstream: deepseek-ai/DeepSeek-V3.2
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta, https://docs.deepinfra.com/api-reference/models/openai-models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 163840
+    - id: deepinfra/zai-org/GLM-5.1
+      upstream: zai-org/GLM-5.1
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: upstream_alias
+        servingModel: zai-org/GLM-5.3
+        effectiveAt: "2026-10-01"
+        checkedAt: "2026-11-03"
+        sources: [https://api.deepinfra.com/models/list, https://docs.deepinfra.com/models.md]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

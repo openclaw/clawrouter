@@ -1,0 +1,98 @@
+# MiniMax frozen video and generated-file protocol
+
+Frozen source: OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
+`extensions/minimax/video-generation-provider.ts`. The six finite models are
+MiniMax-Hailuo-2.3, MiniMax-Hailuo-2.3-Fast, MiniMax-Hailuo-02,
+I2V-01-Director, I2V-01-live and I2V-01. No H3/V2 route or cancellation alias.
+
+## Concrete request and lifecycle
+
+`worker/minimax-video.ts` exports `miniMaxVideoProtocol`,
+`miniMaxVideoModels`, `miniMaxVideoOrigins`, `validateMiniMaxMediaId`,
+`prepareMiniMaxVideo`, `prepareMiniMaxVideoControl`, `observeMiniMaxVideo`,
+`readMiniMaxVideo`, `miniMaxVideoFiles`, `prepareMiniMaxVideoFile`,
+`readMiniMaxVideoFileState`, `readMiniMaxVideoFile` and
+`parseMiniMaxMediaJson`.
+
+POST `/v1/video_generation` returns `task_id`; authenticated GET
+`/v1/query/video_generation?task_id=...` reads the original task. Preparing,
+Queueing and Processing are nonterminal; Success and Fail are terminal.
+Every read must match the durable original task ID. HTTP/API errors without
+qualified terminal evidence cannot invent a failed/free job. Fail with native
+safety codes 1026/1027 is accepted only alongside the matching task and Fail
+state; authentication errors are not terminal job evidence.
+
+Legacy cancellation is not documented. Reject cancel/delete/result controls;
+do not borrow the newer H3 V2 cancellation route. No documented task-retention
+bound was found. A 404, missing task or exhausted caller deadline remains an
+uncertain observation, not a refund. Common runtime owns bounded polling,
+uncertain-create handling without POST replay, original policy/grant binding,
+reservation/idempotency/outbox and exactly-once terminal settlement.
+
+Text creation supports frozen Hailuo-2.3/02; Fast and I2V models require an image.
+Hailuo 768P supports 6/10 seconds, 1080P only 6. Legacy I2V uses 6 seconds and
+720P. No nearest-value rounding or silent resolution rewrite. The frozen client
+needs these model/mode combinations; source 11.2 owns that correction. The newer
+512P Hailuo-02 option is outside the frozen surface. Image data encoding is
+bounded to 8MiB, below the primary limit; actual dimensions, aspect and media
+validity remain client/runtime asset qualification. HTTPS references are opaque
+upstream inputs, never router downloads or credential destinations.
+
+## Original-job files
+
+Only a successful original task supplies a generated `file_id` descriptor.
+The primary metadata/download schemas declare int64 IDs. The bounded native
+JSON reader preserves task/file integer tokens as decimal strings before
+JavaScript can round them; already unsafe parsed numbers are rejected.
+IDs must be positive canonical signed-int64 values. String content is inert.
+
+GET `/v1/files/retrieve?file_id=...` must use the original regional credential
+and match the exact generated file ID and `purpose:video_generation`.
+Metadata can contain a download URL valid for one hour. That lifetime is not
+task retention, and the URL is stripped from the qualified file state. No
+credentials are forwarded to a response-supplied CDN URL.
+
+The native same-origin GET `/v1/files/retrieve_content?file_id=...` downloads
+bytes using the original grant. Its primary schema labels binary output as
+application/json; this codec accepts that MIME only with an MP4 ftyp box, and
+also permits video/mp4 or octet-stream with the same header check. A JSON error
+cannot become video. Complete HTTP 200 bytes, no ranges/redirects, matching
+declared lengths, a caller abort signal and at most 16MiB are required. The
+minimal ftyp test fixture proves header validation, not a playable full video.
+File-processing or delivery failure does not reverse generation settlement.
+
+## Shared owner handshake and cost
+
+Proposed protocol `minimax.video`; create request `minimax.video_create`, read
+request `minimax.video_get`, response `minimax.video`; file formats
+`minimax.file_get` / `minimax.file` and `minimax.file_download` / `binary`.
+These are proposed exact names, not existing registered offers. Source 11.1
+must qualify the actual ManagedProtocol/query/file links, using the existing
+scoped BackgroundStore and file descriptor machinery. Source 11.5 will attach
+its concrete wrapper/factory after that type contract is published. No cast,
+replacement job store, global job index or raw task/file-ID route is introduced.
+
+Source 11.3 owns existing MiniMax YAML/schema/catalog; source 11.4/11.1 own
+regional native-media product/grant qualification. The selected origin is
+explicitly global api.minimax.io or CN api.minimaxi.com, independent of any
+Anthropic resource prefix. Source 11.2 owns actual native consumption and
+source 11.6 owns integrated proof. Codecs alone do not activate this route.
+
+The public card lists Hailuo per-video USD prices and separate resource-pack
+point deductions. Resource-pack failure/safety non-deduction does not establish
+every account's USD refund. No per-job debit, I2V legacy tariff or complete hard
+budget bound is inferred. Upstream cost stays unknown and upstream-dollar hard
+budgets remain closed; `policy_fixed` is a separate basis.
+
+Fixture: `providers/_fixtures/minimax/video.json`. Seven tests cover finite
+model shapes, lossless int64 IDs, state transitions, unsupported controls,
+original-file metadata, unsafe URL isolation and complete/cancelled byte reads.
+No live call, manifest/snapshot edit or deployment.
+
+Primary evidence checked 2026-11-03:
+- [Text creation](https://platform.minimax.io/docs/api-reference/video-generation-t2v)
+- [Image creation](https://platform.minimax.io/docs/api-reference/video-generation-i2v)
+- [Task status](https://platform.minimax.io/docs/api-reference/video-generation-query)
+- [Video file metadata and one-hour link](https://platform.minimax.io/docs/api-reference/video-generation-download)
+- [Same-origin file bytes](https://platform.minimax.io/docs/api-reference/file-management-retrieve-content)
+- [Public tariffs and resource-pack rules](https://platform.minimax.io/docs/pricing/overview)

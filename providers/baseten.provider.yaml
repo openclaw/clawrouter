@@ -1,0 +1,159 @@
+# Frozen Chat continuation: docs/baseten-native-chat.md; SystemOne remains separate.
+# Endpoint/model source checked 2026-11-03: https://docs.baseten.co/inference/model-apis/overview
+schema: clawrouter.service-provider.v1
+id: baseten
+displayName: Baseten Model APIs
+status: experimental
+class: openai_compatible
+service:
+  platform: baseten
+  kind: model_provider
+  upstreamService: baseten
+  configKeys: [BASETEN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://inference.baseten.co/v1
+routing:
+  nativePrefixes: [clawrouter-baseten, baseten]
+  modelPrefixes: [baseten/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestHeaders: [x-session-affinity]
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: baseten/zai-org/GLM-5.3
+      upstream: zai-org/GLM-5.3
+      capabilities: [llm.chat]
+    - id: baseten/deepseek-ai/DeepSeek-V4.1-Flash
+      upstream: deepseek-ai/DeepSeek-V4.1-Flash
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.baseten.co/inference/model-apis/reasoning, https://docs.baseten.co/inference/model-apis/overview]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.baseten.co/inference/model-apis/overview, https://docs.baseten.co/inference/model-apis/vision]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: baseten/deepseek-ai/DeepSeek-V4-Pro-0813
+      upstream: deepseek-ai/DeepSeek-V4-Pro-0813
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.baseten.co/inference/model-apis/reasoning, https://docs.baseten.co/inference/model-apis/overview]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.baseten.co/inference/model-apis/overview, https://docs.baseten.co/inference/model-apis/vision]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: baseten/zai-org/GLM-5.2
+      upstream: zai-org/GLM-5.2
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.baseten.co/inference/model-apis/reasoning, https://docs.baseten.co/inference/model-apis/overview]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: none
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.baseten.co/inference/model-apis/overview, https://docs.baseten.co/inference/model-apis/vision]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: baseten/zai-org/GLM-5.2-Fast
+      upstream: zai-org/GLM-5.2-Fast
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.baseten.co/inference/model-apis/reasoning, https://docs.baseten.co/inference/model-apis/overview]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.baseten.co/inference/model-apis/overview, https://docs.baseten.co/inference/model-apis/vision]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: baseten/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+      upstream: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.baseten.co/inference/model-apis/reasoning, https://docs.baseten.co/inference/model-apis/overview]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: none
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.baseten.co/inference/model-apis/overview, https://docs.baseten.co/inference/model-apis/vision]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: baseten/openai/gpt-oss-120b
+      upstream: openai/gpt-oss-120b
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, minimal, low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.baseten.co/inference/model-apis/reasoning, https://docs.baseten.co/inference/model-apis/overview]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: medium
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.baseten.co/inference/model-apis/overview, https://docs.baseten.co/inference/model-apis/vision]
+            checkedAt: "2026-11-03"
+            input: [text]
+    # Known decision-only models must not fall through the opaque Chat route.
+    - id: baseten/decision-models/baseten-elephant-9b-latest
+      upstream: decision-models/baseten-elephant-9b-latest
+      capabilities: []
+    - id: baseten/decision-models/baseten-mammoth-27b-latest
+      upstream: decision-models/baseten-mammoth-27b-latest
+      capabilities: []
+    - id: baseten/decision-models/baseten-joey-2b-latest
+      upstream: decision-models/baseten-joey-2b-latest
+      capabilities: []
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

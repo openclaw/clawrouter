@@ -1,5 +1,5 @@
 import type { CompiledProvider, Env } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { envValue, HttpError } from "./utils.ts";
 
 export function optionalConfigKeys(provider: CompiledProvider, env: Env): Set<string> {
   return new Set([...provider.optional_config_keys, ...(envValue(env, "CLAWROUTER_OPTIONAL_CONFIG_KEYS") ?? "").split(",").map((key) => key.trim()).filter(Boolean)]);
@@ -40,9 +40,4 @@ function renderTemplate(provider: CompiledProvider, value: string, env: Env, opt
   // Resolve every binding before omitting a header: an optional field must not
   // hide a missing required field in the same template.
   return omit ? null : resolved;
-}
-
-function envValue(env: Env, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
 }

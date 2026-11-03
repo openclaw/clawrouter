@@ -1,3 +1,9 @@
+import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
+import { assertNativeResponseDestination } from "./native-response.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
+import { GoogleContinuation, googleContinuationRequested, googleContinuationRoute } from "./google-continuation.ts";
+import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
+import { assertRequestTariffDestination } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
@@ -5,16 +11,15 @@ import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
-import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
+import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
-import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
+import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
 import { identitySelectionDenied } from "./native-request-headers.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
@@ -22,7 +27,7 @@ import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
 import {
-  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
+  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeModelEndpoint, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
@@ -42,14 +47,14 @@ import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { backgroundResponse, requireEmptyResponseControlBody, responsesControl } from "./responses-lifecycle.ts";
+import { backgroundResponse, requireEmptyResponseControlBody, responsesControls, responsesFileControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
-  assertProviderAccess, capabilityForPath, copyRequestHeaders, modelRoute, providerById,
+  assertProviderAccess, capabilityForPath, modelRoute, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
-import { applyTransportHeaders, assertOperationConfiguration, grantSupports, transformTransportBody } from "./provider-auth.ts";
+import { assertOperationConfiguration, grantSupports } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
@@ -60,7 +65,7 @@ import {
 type AuthMode = "proxy_key" | "access";
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
-const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions"]);
+const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits"]);
 const mediaPaths = new Set(["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/chat/completions"]);
 const mediaEnvelope = (endpoint: { request_format: string }) => mediaFormats.has(endpoint.request_format);
 const bodyLimit = (endpoint: { request_format: string }) => mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
@@ -123,6 +128,7 @@ interface PreparedUpstream {
   backgroundRecovery: boolean;
   failedGrantKey?: string;
   continuation?: ContinuationOwner;
+  managedBaseUrl?: string;
   revalidateAccount?: () => Promise<void>;
 }
 
@@ -268,22 +274,43 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
   let preauthenticated: AuthorizedIdentity | Response | null = null;
-  const control = responsesControl(provider, endpoint);
+  const fileControls = responsesFileControls(provider, endpoint);
+  if (fileControls.length) {
+    const auth = await preauthenticate(request, env, mode, provider.id);
+    if (auth instanceof Response) return auth;
+    if (request.method !== "GET" || responsesControls(provider, endpoint).length) return errorResponse("method_not_allowed", "file controls require a declared GET", 405);
+    await requireEmptyResponseControlBody(request);
+    const query = new URL(request.url).searchParams, params: Record<string, string> = {};
+    for (const name of endpoint.path_params) {
+      const values = query.getAll(name);
+      if (values.length !== 1) throw new HttpError(400, "managed_file_invalid", "one declared file path parameter is required");
+      params[name] = values[0]; query.delete(name);
+    }
+    return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider,
+      fileControls.map(control => ({ ...control, endpoint, pathParams: params })), query, mode, auth ?? undefined, session ?? undefined);
+  }
+  const controls = responsesControls(provider, endpoint), control = controls[0];
   if (control) {
     preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
     if (preauthenticated instanceof Response) return preauthenticated;
+    if (controls.some(candidate => candidate.action !== control.action || candidate.protocol !== control.protocol)) throw new HttpError(409, "response_owner_unavailable", "control declarations do not agree on one protocol and action");
     if (request.method === "GET") {
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
       await requireEmptyResponseControlBody(request);
-      const query = new URL(request.url).searchParams, ids = query.getAll("response_id");
-      if (ids.length !== 1) throw new HttpError(400, "response_id_required", "one response_id path parameter is required");
-      query.delete("response_id");
-      return proxyResponseControl(request, env, control.action, ids[0], query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
+      const query = new URL(request.url).searchParams, params: Record<string, string> = {};
+      for (const name of control.protocol ? endpoint.path_params : ["response_id"]) {
+        const ids = query.getAll(name);
+        if (ids.length !== 1) throw new HttpError(400, "response_id_required", "one declared identity path parameter is required");
+        params[name] = ids[0]; query.delete(name);
+      }
+      const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, params, query) : params.response_id;
+      return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), preauthenticated ?? undefined, session ?? undefined, control.protocol, params);
     }
     if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
     const envelope = manifestEnvelope(await readJson<unknown>(request));
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
-    return proxyResponseControl(request, env, control.action, envelope.pathParams.response_id, envelope.query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
+    const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, envelope.pathParams, envelope.query) : envelope.pathParams.response_id;
+    return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: envelope.pathParams })), preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams);
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
@@ -314,16 +341,48 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!match) return errorResponse("route_not_found", "native proxy route not found", 404);
   const provider = providerById(decodePathSegment(match[1]));
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
-  const endpoint = provider.endpoints.find((candidate) => nativeMatch(candidate, match[2]));
+  const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
+  let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
   if (!endpoint || !endpoint.native_proxy) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-  const control = responsesControl(provider, endpoint);
+  const controlEndpoints = matching.filter(candidate => candidate.native_proxy && candidate.methods.includes(method));
+  const fileControls = controlEndpoints.flatMap(candidate => responsesFileControls(provider, candidate).map(control => ({ ...control, endpoint: candidate, pathParams: nativeParams(candidate, match[2]) })));
+  if (fileControls.length) {
+    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (auth instanceof Response) return auth;
+    if (method !== "GET" || controlEndpoints.some(candidate => !fileControls.some(item => item.endpoint === candidate) || responsesControls(provider, candidate).length)) {
+      throw new HttpError(409, "managed_file_owner_unavailable", "native file declarations do not agree on one file control");
+    }
+    await requireEmptyResponseControlBody(request);
+    return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider, fileControls, new URL(request.url).searchParams, "proxy_key", auth ?? undefined);
+  }
+  const controls = controlEndpoints.flatMap(candidate => responsesControls(provider, candidate).map(control => ({ ...control, endpoint: candidate })));
+  const control = controls[0];
   if (control) {
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id);
     if (preauthenticated instanceof Response) return preauthenticated;
+    if (controlEndpoints.some(candidate => !controls.some(item => item.endpoint === candidate))
+      || controls.some(candidate => candidate.action !== control.action || candidate.protocol !== control.protocol)) {
+      throw new HttpError(409, "response_owner_unavailable", "native control declarations do not agree on one protocol and action");
+    }
     await requireEmptyResponseControlBody(request);
-    return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
+    const query = new URL(request.url).searchParams;
+    const routes = await Promise.all(controls.map(async candidate => {
+      const params = nativeParams(candidate.endpoint, match[2]);
+      const id = candidate.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(candidate.protocol, candidate.action, params, query) : params.response_id;
+      return { createId: candidate.create.id, pathParams: params, id };
+    }));
+    if (routes.some(route => route.id !== routes[0].id)) throw new HttpError(409, "response_owner_unavailable", "native control declarations disagree on the bound identity");
+    // The scoped owner selects its original create route; endpoint order never
+    // chooses between text/image jobs sharing the same native control path.
+    return proxyResponseControl(request, env, control.action, routes[0].id, control.protocol ? {} : query, "proxy_key", provider.id, routes, preauthenticated ?? undefined, undefined, control.protocol);
+  }
+  try { endpoint = nativeModelEndpoint(provider, matching, match[2], method) ?? endpoint; }
+  catch (error) {
+    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (auth instanceof Response) return auth;
+    throw error;
   }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
@@ -359,25 +418,35 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     createProxyAccounting({ context, env, auth, selection, request, compound, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } }).fail(identityDenial.status, "denied");
     return identityDenial;
   }
+  if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
   validateSelectedInput(selection);
+  if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
+    const { proxyManagedPrediction } = await import("./managed-predictions.ts");
+    return proxyManagedPrediction(request, env, context, auth, selection, queryInput);
+  }
   const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
+  let googleContinuation: GoogleContinuation | undefined;
   let search: SearchSession | undefined;
   let grantFailover = false;
   try {
     if (isStandaloneSearch(selection.endpoint)) search = await SearchSession.resolve(env, auth, selection.body as Record<string, unknown>, selection.endpoint.id);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, search?.pinned ?? continuation?.pinned, "http", true);
+    if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned, "http", true);
+    assertRequestTariffDestination(selection.endpoint, prepared.url);
+    assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
+    if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
     if (search) {
       if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
       prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
     }
-    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
+    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       accounting.fail(500, "provider_error", reservedBudget.reservation);
@@ -387,7 +456,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
   }
   catch (error) {
-    let failure = selectedFailure(search?.preflightError(error) ?? continuation?.preflightError(error) ?? error);
+    let failure = selectedFailure(search?.preflightError(error) ?? continuation?.preflightError(error) ?? googleContinuation?.preflightError(error) ?? error);
     if (isModelDiscovery(selection.endpoint) && failure.status === 400 && failure.code === "grant_transport_unavailable")
       failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
@@ -484,12 +553,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
   }
   const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
+  const discardNative = (value: { response: Response }) => discard(value.response);
   let response: Response | undefined;
   let priceGuard: AnthropicPriceGuard | undefined;
+  let nativeLease: BodyLease | undefined;
+  let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
+    nativeLease = selection.nativeResponse?.acquire();
+    if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
     const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
@@ -501,7 +575,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await operation.wait(pending, "upstream", discard);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -522,6 +596,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }), "upstream", discard);
         captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
+        if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
         grantFailover = true;
       }
     }
@@ -537,17 +612,22 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         return page;
       });
     }
+    if (selection.nativeResponse) {
+      const validated = await operation.wait(selection.nativeResponse.read(response, signal), "upstream", discardNative);
+      response = validated.response;
+      nativeUsage = validated.usage;
+    }
     upstreamMs = performance.now() - upstreamStart;
     if (soft) {
       budgetMs = await soft.beforeDelivery();
       if (soft.denial) throw soft.denial;
     }
-    if (!response.ok) operation.acceptRejection(response.status);
+    if (!response.ok && !selection.nativeResponse) operation.acceptRejection(response.status);
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
     // Retire only the timer; caller cancellation remains connected through EOF.
     operation.retireDeadline();
@@ -556,21 +636,27 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       response = priceGuard.response;
     }
   } catch (error) {
+    nativeLease?.release();
     soft?.close();
     if (soft?.denial) {
       operation.stop("upstream", soft.denial);
       void response?.body?.cancel().catch(() => undefined);
-      accounting.fail(402, "denied", undefined, content);
+      if (nativeUsage?.requestCostReceipt && cost.requestTariff) context.waitUntil(accounting.settle(402, "denied", true, null, reservation!, content, null, undefined, "unknown", nativeUsage.requestCostReceipt));
+      else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
     operation.stop("upstream", error);
     void response?.body?.cancel().catch(() => undefined);
+    if (!dispatched && error instanceof HttpError) {
+      accounting.fail(error.status, "provider_error", reservation, content);
+      return errorResponse(error.code, error.message, error.status);
+    }
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
     if (background) {
       if (!dispatched || response?.ok === false) context.waitUntil(background.unsent(response?.status ?? 502, operation.status ?? "provider_error", content));
       // Unknown dispatched delivery remains collectible; it is not a terminal.
-    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && (!!cost.requestTariff || !!selection.nativeResponse || response?.ok !== false));
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
@@ -587,12 +673,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const inspection = response.ok && !operation.receivedRejection ? continuation?.inspect(response, selection.capability === "llm.responses.compact") : undefined;
+  const inspection = response.ok && !operation.receivedRejection ? continuation?.inspect(response, selection.capability === "llm.responses.compact") ?? googleContinuation?.inspect(response) : undefined;
   if (inspection && background) {
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format);
+  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage);
+  if (nativeLease) void observed.result.then(() => nativeLease!.release());
   if (admission) admission.completion = observed.result;
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
@@ -678,6 +765,11 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     queryInput = discoveryQuery(queryInput);
     validateDiscoveryQuery(selection.provider, selection.endpoint, auth.policy, queryInput);
   }
+  if (selection.endpoint.upstreamPath !== undefined && !isModelDiscovery(selection.endpoint)
+    && (hasProxyQuery(queryInput) || new URL(request.url).search))
+    throw new HttpError(400, "invalid_mapped_endpoint_query", "mapped operation options must be in the request body");
+  if (selection.nativeResponse || selection.nativeQuery || selection.endpoint.request_format === "elevenlabs.speech")
+    queryInput = nativeDispatchQuery(selection, queryInput, new URL(request.url));
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
@@ -690,7 +782,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection) }); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -701,36 +793,25 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     // Decide once from the materialized transport, before reservation. An
     // ordinary failover cannot promote an already reserved request into a job.
     const backgroundRecovery = recoverBackground && backgroundResponse(selection.endpoint, selection.body) && grantSupports(lifecycle, upstream.grant);
+    if (selection.endpoint.lifecycle) assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: transport, managedLifecycle: true }, upstream.grant, env);
     if (backgroundRecovery) {
       assertOperationConfiguration(lifecycle, upstream.grant, env);
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
-    const headers = new Headers(upstream.headers);
-    copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
-    applyTransportHeaders(headers, upstream.transport, upstream.grant);
-    const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
-    const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
-    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-    for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
-    // Continuations and controls reconstruct the configured route, not the
-    // incidental query of one create call. Credential/config changes still pin.
-    const configuredOwnerUrl = new URL(url);
-    applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
-    const body = transformTransportBody(upstream.transport, selection.body);
-    // The 32 MB media envelope must not coexist with whole-document transport
-    // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media
-    // splice it in as raw chunks; other Claude bodies above 8 MiB use the
-    // chunked serializer. WebSocket creates send their own frame instead.
-    const signed = selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4");
-    const bodyless = ["GET", "HEAD"].includes(selection.method) || transport === "websocket";
-    const media = bodyless || signed ? null : mediaJsonBody(body);
-    const bytes = media ? media.bytes : !bodyless && !signed && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(body) : 0;
-    const streamBody = media !== null || bytes > maxJsonBodyBytes;
-    const requestBody = bodyless ? undefined : media ? media.stream().pipeThrough(new FixedLengthStream(bytes)) : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
-    if (!streamBody) await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant);
+    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
+    const signingRegion = !streamBody ? await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant) : undefined;
+    if (selection.provider.id === "aws-bedrock" && selection.capability === "llm.embeddings") {
+      const signingScheme = selection.provider.auth.schemes.find(scheme => scheme.type === "sig_v4");
+      if (transport !== "http" || signingScheme?.type !== "sig_v4" || signingScheme.service !== "bedrock"
+        || !signingRegion || url.origin !== `https://bedrock-runtime.${signingRegion}.amazonaws.com`
+        || hasProxyQuery(queryInput) || new URL(request.url).search)
+        throw new HttpError(400, "invalid_native_bedrock_embedding_destination", "Bedrock embeddings require the original signed regional destination without query options");
+      selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
+      assertNativeResponseDestination(selection.nativeResponse, url);
+    }
     let continuation: ContinuationOwner | undefined;
-    if (selection.capability === "llm.responses" || compact || search) {
-      if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
+    if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
+      if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
       if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
       const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : configuredOwnerUrl;
@@ -740,11 +821,11 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         lineage: upstream.grant?.credentialLineage ?? null,
         // A WebSocket GET is only the handshake; both transports execute the
         // same logical Responses POST and must share continuation ownership.
-        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey),
+        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams),
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
@@ -784,6 +865,7 @@ async function preauthenticate(request: Request, env: Env, mode: AuthMode, provi
       try { validateSelectedInput(selection); }
       catch { selection = undefined; }
       if (selection && ["llm.responses", "llm.responses.compact"].includes(selection.capability) && (request.headers.has("x-codex-turn-state") || !Array.isArray(selection.body) && selection.body.previous_response_id)) selection = undefined;
+      if (selection && googleContinuationRequested(selection)) selection = undefined;
     }
     const provider = providerId ? providerById(providerId) : null;
     return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId, selection ? { providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "http", model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null, capability: selection.capability } : undefined);

@@ -72,10 +72,7 @@ export function validTimestamp(value: string | null | undefined): string | null 
   return new Date(value).toISOString();
 }
 
-export function envValue(env: Record<string, unknown>, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
+export { envValue } from "./utils.ts";
 
 /** Equal jitter, 15–30s initially, exponential to a 2m cap. Preserve at least
  * another attempt before access expiry where possible; Retry-After is a floor,

@@ -1,16 +1,20 @@
+import { googleAudioRequest } from "./google-audio-classification.ts";
+import { nativeEmbeddingMode } from "./native-embeddings.ts";
+import { googleImageRequest } from "./google-image-classification.ts";
+import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
-import { actualCharacterCost, actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint } from "./pricing";
+import { actualCharacterCost, actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, outcomeRequestPricingGap, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint, type RequestCostReceipt } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, ProxyRequestBody, UsageEvent } from "./types";
 import { randomId } from "./utils";
-import type { ToolKnowledge } from "./responses-tool-evidence.ts";
+import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
 export interface CompoundRequestContext {
@@ -48,6 +52,10 @@ export interface AccountingFacts {
   startedAtMs: number;
   hostedSearchPrice?: HostedSearchPrice;
   anthropicWebPrice?: AnthropicWebPrice;
+  // Freeze the admission classification; an output token counter cannot price
+  // image/audio generation, including generic GenerateContent and soft budgets.
+  googleImage?: boolean;
+  googleAudio?: boolean;
 }
 
 export interface AccountingOutcome {
@@ -62,6 +70,8 @@ export interface AccountingOutcome {
   characterEstimate?: number | null;
   hostedSearch?: HostedSearchUsage;
   pricingUnavailable?: boolean;
+  requestTariffOutcome?: RequestTariffOutcome;
+  requestCostReceipt?: RequestCostReceipt;
 }
 
 export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOutcome): UsageEvent {
@@ -72,6 +82,26 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
+  if ((facts.googleImage || facts.googleAudio) && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: billable ? reservation.reservedMicros : 0,
+    cost_basis: billable ? "unpriced_usage" : "none", input_tokens: null, output_tokens: null, total_tokens: null,
+    pricing_ref: null, pricing_effective_at: null,
+    cached_input_tokens: null, cache_write_input_tokens: null, duration_ms: outcome.occurredAtMs - facts.startedAtMs,
+    content_retained: !!contentRef, content_ref: contentRef };
+  if (cost.requestTariff && fixed == null) {
+    const knownReceipt = outcome.requestCostReceipt?.pricingVersion === cost.requestTariff.version ? outcome.requestCostReceipt : undefined;
+    const settled = cost.requestTariff.kind === "successful_request" ? settleRequestTariff(cost.requestTariff, outcome.requestTariffOutcome ?? "unknown")
+      : outcome.requestTariffOutcome === "unsent" ? { micros: 0, basis: "none" }
+      : knownReceipt ? { micros: knownReceipt.costMicros, basis: knownReceipt.basis }
+      : { micros: cost.reserveMicros, basis: cost.basis === "manifest_request" ? "manifest_request_reservation" : "unpriced_usage" };
+    const inference = cost.requestTariff.kind === "outcome_request" ? tokens : null;
+    return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+      reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: settled.micros, cost_basis: settled.basis,
+      pricing_ref: cost.requestTariff.version, pricing_effective_at: cost.requestTariff.effectiveAt,
+      input_tokens: inference?.input ?? null, output_tokens: inference?.output ?? null, total_tokens: inference?.total ?? null,
+      cached_input_tokens: inference?.cached ?? null, cache_write_input_tokens: inference?.cacheWrite ?? null,
+      duration_ms: outcome.occurredAtMs - facts.startedAtMs, content_retained: !!contentRef, content_ref: contentRef };
+  }
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
   const soft = reservation.charges !== undefined;
   const audioUnbounded = cost.pricingGap === "audio_upload_bound";
@@ -112,7 +142,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
 
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
-  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint);
+  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, undefined, selection.nativeResponse?.tariff);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const google = selection.endpoint.request_format === "google.generate_content";
   const count = selection.endpoint.request_format === "openai.responses_input_tokens";
@@ -123,6 +153,8 @@ export function createProxyAccounting(options: AccountingContext) {
   const requestId = correlation.requestId;
   const started = options.startedAtMs ?? Date.now();
   const facts: AccountingFacts = {
+    googleImage: googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
+    googleAudio: googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
@@ -143,14 +175,14 @@ export function createProxyAccounting(options: AccountingContext) {
       model: model?.id ?? null, input_tokens: null, output_tokens: null,
       total_tokens: null, cached_input_tokens: null, cache_write_input_tokens: null,
       reserved_cost_micros: 0, actual_cost_micros: 0, reserved_input_tokens: cost.inputTokens,
-      reserved_output_tokens: cost.outputTokens, pricing_ref: count ? null : model?.pricing_ref ?? null,
-      pricing_effective_at: count ? null : model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: null,
+      reserved_output_tokens: cost.outputTokens, pricing_ref: count ? null : cost.requestTariff?.version ?? model?.pricing_ref ?? null,
+      pricing_effective_at: count ? null : cost.requestTariff?.effectiveAt ?? model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: null,
       requested_service_tier: requestedTier, served_service_tier: null,
       duration_ms: null, content_retained: false, content_ref: null, status: "success",
     },
   };
-  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null, hostedSearch?: HostedSearchUsage) {
-    const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch });
+  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null, hostedSearch?: HostedSearchUsage, requestTariffOutcome?: RequestTariffOutcome, requestCostReceipt?: RequestCostReceipt) {
+    const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt });
     return finalizeAccounting(env, reservation, event.actual_cost_micros, event);
   }
   return {
@@ -165,7 +197,7 @@ export function createProxyAccounting(options: AccountingContext) {
     setGrant(key: string | null, lane: import("./types").GrantLane) { facts.event.grant_key = key; facts.event.grant_lane = lane; },
     fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
       // Missing response headers cannot prove that dispatched upstream work was free.
-      context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));
+      context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"));
     },
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
       if (google) responseTier = googleResponseServiceTier(googleRequestServiceTier(selection.body), observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
@@ -177,23 +209,44 @@ export function createProxyAccounting(options: AccountingContext) {
       const characterEstimate = observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination
         && selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary" && !Array.isArray(selection.body)
         ? actualCharacterCost(model?.pricing, selection.body.input) : null;
-      return settle(response.status, status, response.ok && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch);
+      return settle(response.status, status, (response.ok || !!selection.nativeResponse) && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch, observed.requestTariffOutcome, observed.requestCostReceipt);
     },
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint, parentTools?: ToolKnowledge): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  // Classify with trusted routing context, then consume the source-owned image
+  // pricing guard. This changes no wire format and clears no other price gap.
+  const imageGap = googleImageRequest(model?.upstream, body, endpoint.request_format)
+    ? requestPricingGap(model?.pricing, Array.isArray(body) ? {} : body, "google.image_generate") : null;
+  if (imageGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: imageGap, inputTokens: null, outputTokens: null };
+  // Native embedding shape/byte bounds are not qualified whole-request dollar bounds.
+  if (nativeEmbeddingMode(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
+  const requestTariff = preparedTariff ?? selectRequestTariff(endpoint, body);
+  if (requestTariff?.kind === "successful_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
+  if (requestTariff?.kind === "image_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
+  if (nativeImageMode(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
-  const pricingGap = requestPricingGap(pricing, body, endpoint.request_format, parentTools);
-  if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null };
-  if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
+  // Only the source-qualified outcome classifier can discharge request_fee.
+  // Inventory completeness is independent of a known positive pricing gap.
+  const outcomePricing = requestTariff?.kind === "outcome_request" ? requestTariff.pricing : undefined;
+  const inventoryKnown = !outcomePricing || retainedToolBase(body, parentTools ?? "token_only") === "token_only"
+    && (body.tools === undefined || retainedToolBase({ input: [{ type: "additional_tools", tools: body.tools }] }, "token_only") === "token_only");
+  const pricingGap = (outcomePricing ? outcomeRequestPricingGap(pricing, body, endpoint.request_format, outcomePricing, parentTools)
+    : requestPricingGap(pricing, body, endpoint.request_format, parentTools)) ?? (inventoryKnown ? null : "retained_tool_unknown");
+  if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null, ...(requestTariff ? { requestTariff } : {}) };
+  if (!pricing) return requestTariff ? { reserveMicros: 0, basis: "unpriced_request", pricingGap: "model_request_fee", inputTokens: null, outputTokens: null, requestTariff }
+    : { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const qualified = endpoint.request_format === "anthropic.messages" ? anthropicPricing(pricing, model?.upstream, anthropicModifiers(body)) : pricing;
   if (!qualified) return { reserveMicros: 0, basis: "unpriced_modifier", inputTokens: null, outputTokens: null };
-  const estimate = estimateModelCost(qualified, body, endpoint);
-  return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
+  // Source-owned pricing can consume this selected model context without
+  // interpreting body.model as caller authority or conflating router aliases.
+  const pricingEndpoint = { ...endpoint, selectedUpstreamModel: model?.upstream ?? null };
+  const estimate = estimateModelCost(qualified, body, pricingEndpoint, outcomePricing);
+  return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : requestTariff ? "manifest_request" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens, ...(requestTariff ? { requestTariff } : {}) };
 }
 
 function actualCost(model: AccountingFacts["model"], tokens: UsageTokens, fixed: number | null | undefined, requestFormat?: string, requested?: AnthropicModifiers): number | null {

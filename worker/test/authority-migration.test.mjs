@@ -1,5 +1,5 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   PolicyBindingIndexObject, listBindings, listConnections, listCredentials, listPolicies, listUsers,
@@ -62,14 +62,7 @@ for (const family of families.slice(0, 2)) {
 }
 
 function migrationEnv(t, family) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
+  const { sql } = sqliteFixture(t);
   const authority = new PolicyBindingIndexObject({ storage: { sql } });
   const fixture = {
     beforeRead: null, reads: 0, store: new Map([[family.key, family.value]]),

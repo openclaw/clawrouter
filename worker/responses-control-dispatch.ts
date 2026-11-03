@@ -1,6 +1,9 @@
+import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
+import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { resolveConnection } from "./authority.ts";
 import type { BackgroundAdmission } from "./background-store.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
+import { applyManagedHeaders, assertManagedDispatch, managedHeaderIdentity, managedProbeId } from "./managed-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { applyTransportHeaders, assertOperationConfiguration, providerCredentialScheme } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
@@ -8,7 +11,7 @@ import { configuredUpstream, copyRequestHeaders, providerById, upstreamPath, typ
 import { responseIdentity } from "./response-identities.ts";
 import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
-import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
+import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
 export interface ResponseControlDispatch {
@@ -18,18 +21,58 @@ export interface ResponseControlDispatch {
   action: ResponsesControlAction;
   query: string;
   stream: boolean;
+  protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol;
+  requestedVersion?: string;
+  // Internal scoped-controller input, never decoded from a public request body.
+  file?: { action: import("./managed-lifecycle-types.ts").ManagedFileAction;
+    descriptor: import("./managed-lifecycle-types.ts").ManagedFileDescriptor;
+    state?: import("./managed-lifecycle-types.ts").ManagedFileState };
   deadline?: number;
   // Per-call diagnostics, not persisted ownership or an idempotency promise.
   clientRequestId?: string;
   authorization: ResponseControlAuthorization;
 }
 
-export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null): Promise<string> {
+export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null, lifecycle?: CompiledEndpoint["lifecycle"], env?: Env, pathParams: Record<string, string> = {}): Promise<string> {
   const routeUrl = new URL(url), scheme = providerCredentialScheme(provider, upstream.grant);
   if (grantKey && scheme.type === "query_api_key") routeUrl.searchParams.delete(scheme.param);
   const identity = upstream.grant?.credentialLineage ?? await sha256Hex(JSON.stringify([[...upstream.headers], [...upstream.query]]));
   const passthrough = provider.adapter.passthroughHeaders.map(name => [name.toLowerCase(), headers.get(name)]).sort();
-  return sha256Hex(JSON.stringify(["POST", routeUrl.href, identity, passthrough]));
+  const parts: unknown[] = ["POST", routeUrl.href, identity, passthrough];
+  if (lifecycle) {
+    const create = provider.endpoints.find(endpoint => endpoint.lifecycle === lifecycle);
+    if (!create || !env) unavailable();
+    const { managedRoute } = await import("./managed-routes.ts");
+    const { adapter, controls, retained } = managedRoute(provider, create, pathParams);
+    if (retained) parts.push(["managed-job-params", retained]);
+    if (adapter.prepareAdmitted) parts.push(["managed-upstream-retention", "v1"]);
+    if (lifecycle.files) {
+      const { managedFileRoute, managedFileBase } = await import("./managed-files.ts");
+      const { endpoints } = managedFileRoute(provider, create);
+      managedFileBase(provider, upstream.baseUrl);
+      const actions = endpoints.metadata ? ["metadata", "download"] as const : ["download"] as const;
+      // Keep existing metadata-backed job digests byte-identical. A new mode
+      // must be pinned so changing it cannot repurpose an already-owned job.
+      parts.push(["managed-files", ...(endpoints.metadata ? [] : ["download_only"]), ...actions.map(action => {
+        const endpoint = endpoints[action];
+        if (!endpoint) unavailable();
+        if (upstream.transport?.endpointPaths[endpoint.id]) unavailable();
+        return [action, endpoint.id, endpoint.method, endpoint.path, endpoint.path_params, endpoint.request_format,
+          endpoint.response_format, Object.entries(endpoint.query).sort()];
+      })]);
+    }
+    parts.push(lifecycle.protocol, ...(["retrieve", "result", "cancel"] as const).flatMap(action => {
+      const endpoint = controls[action];
+      if (!endpoint) return [];
+      const control = adapter.control(action, endpoint, managedProbeId(adapter), pathParams);
+      // Transport overrides must not silently move a declared managed control.
+      if (upstream.transport?.endpointPaths[endpoint.id]) unavailable();
+      const headers = managedHeaderIdentity(provider, control);
+      return [[endpoint.method, control.path,
+        Object.entries(endpoint.headers).map(([name, value]) => [name, resolveTemplate(provider, value, env)]), [...control.query], ...(headers.length ? [headers] : [])]];
+    }));
+  }
+  return sha256Hex(JSON.stringify(parts));
 }
 
 export function retainedResponseRoute(pathParams: Record<string, string>, headers: Headers): BackgroundAdmission["route"] {
@@ -42,14 +85,18 @@ export function retainedResponseRoute(pathParams: Record<string, string>, header
 export async function prepareResponseControl(env: Env, input: ResponseControlDispatch, grant: UpstreamGrant | null): Promise<Request> {
   assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
-  const id = responseIdentity("response", input.responseId);
-  if (!provider || !create?.responsesLifecycle || !id || !["retrieve", "cancel"].includes(input.action)) unavailable();
+  const managed = input.protocol !== undefined;
+  const contract = managed && provider && create ? (await import("./managed-routes.ts")).managedRoute(provider, create, input.route.pathParams) : null;
+  const lifecycle = managed ? create?.lifecycle : create?.responsesLifecycle;
+  const id = managed ? { value: contract?.adapter.validateId(input.responseId) } : responseIdentity("response", input.responseId);
+  if (!provider || !create || !lifecycle || managed && create.lifecycle?.protocol !== input.protocol || !id || !(managed ? ["retrieve", "result", "cancel"] : ["retrieve", "cancel"]).includes(input.action)) unavailable();
   validateRoute(input.route);
   if (typeof input.query !== "string" || input.query.length > 8192) unavailable();
-  const query = responsesControlQuery(input.action, new URLSearchParams(input.query));
+  if (managed && input.query !== "") unavailable();
+  const query = managed ? new URLSearchParams() : responsesControlQuery(input.action, new URLSearchParams(input.query));
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
-  if (Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
-  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: true }, grant, env);
+  if (!contract?.retained && Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
+  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed }, grant, env);
   const connection = await resolveConnection(env, provider.id);
   if (connection?.enabled === false) throw new HttpError(503, "provider_disabled", "response provider is disabled");
   const upstream = configuredUpstream(provider, grant, env), incoming = new Headers();
@@ -66,14 +113,48 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   };
   // Compare the original create route, not the necessarily different control
   // URL. Environment credential/configuration changes also invalidate the pin.
-  if (await responseRouteDigest(provider, upstream, urlFor(create, input.route.pathParams), headers, input.owner.grantKey) !== input.owner.routeSha256) unavailable();
-  const endpoint = provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action])!;
-  const url = urlFor(endpoint, { response_id: id.value });
+  if (await responseRouteDigest(provider, upstream, urlFor(create, input.route.pathParams), headers, input.owner.grantKey, managed ? create.lifecycle : undefined, env, input.route.pathParams) !== input.owner.routeSha256) unavailable();
+  const fileContract = input.file && provider && create ? (await import("./managed-files.ts")).managedFileRoute(provider, create) : null;
+  if (input.file && (!managed || !fileContract || input.action !== "retrieve" || input.authorization.kind !== "public"
+    || !["metadata", "download"].includes(input.file.action))) unavailable();
+  if (input.file) {
+    (await import("./managed-files.ts")).validateManagedFile(input.file.descriptor);
+    if (fileContract!.adapter.mode === "download_only") {
+      if (input.file.action !== "download" || input.file.state !== undefined) unavailable();
+    } else if (input.file.action === "download" && (input.file.state?.id !== input.file.descriptor.id || input.file.state.status !== "active")) unavailable();
+  }
+  const endpoint = input.file ? fileContract?.endpoints[input.file.action] : managed ? contract?.controls[input.action]
+    : provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action as "retrieve" | "cancel"]);
+  if (!endpoint) unavailable();
+  if (input.file) assertOperationConfiguration({ provider, endpoint, mode: "http" }, grant, env);
+  const control = input.file ? fileContract!.adapter.control(input.file.action, endpoint, input.file.descriptor, upstream.baseUrl, input.file.state)
+    : managed ? contract!.adapter.control(input.action, endpoint, id.value!, input.route.pathParams) : null;
+  if (input.file && control && (!control.path.startsWith("/") || /[\\%?#\s]/.test(control.path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(control.path)
+    || control.headers && [...control.headers].length || control.transientHeaders?.length)) unavailable();
+  const url = control ? new URL(`${upstream.baseUrl.replace(/\/$/, "")}${control.path}`) : urlFor(endpoint, { response_id: id.value! });
+  if (input.file) {
+    const base = new URL(upstream.baseUrl);
+    if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/")) unavailable();
+  }
+  if (control) {
+    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
+    control.query.forEach((value, name) => { if (url.searchParams.has(name)) unavailable(); url.searchParams.set(name, value); });
+  }
   for (const [name, value] of query) url.searchParams.append(name, value);
   if (input.clientRequestId) incoming.set("x-client-request-id", input.clientRequestId);
   copyRequestHeaders(incoming, provider, endpoint, headers, env);
   applyTransportHeaders(headers, upstream.transport, grant);
+  if (control) applyManagedHeaders(provider, headers, control);
   return new Request(url, { method: endpoint.method, headers, redirect: "manual" });
+}
+
+export function responseControlRetentionProtocol(input: ResponseControlDispatch): string | undefined {
+  return input.protocol && managedLifecycleAdapter(input.protocol)?.prepareAdmitted ? input.protocol : undefined;
+}
+export function assertResponseControlRetention(env: Env, input: ResponseControlDispatch): void {
+  const protocol = responseControlRetentionProtocol(input);
+  if (protocol && !upstreamRetentionBindingAllowed(env, input.owner, protocol))
+    throw new HttpError(403, "upstream_retention_unqualified", "the original upstream retention qualification is unavailable");
 }
 
 export async function dispatchResponseControl(env: Env, input: ResponseControlDispatch, signal: AbortSignal): Promise<Response> {
@@ -87,16 +168,19 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
   const preparation = new HttpOperation(signal, 10_000);
   try {
     const request = await preparation.wait(prepareResponseControl(env, input, null));
-    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal));
+    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input)));
     preparation.signal.throwIfAborted();
     assertControlDeadline(input);
     assertControlCallerLive(input.authorization);
+    assertResponseControlRetention(env, input);
+    assertManagedDispatch(input.protocol, request);
     return fetch(request, { signal });
   } finally { preparation.stop("complete"); }
 }
 
 export function assertControlDeadline(input: ResponseControlDispatch): void {
-  if (input.authorization?.kind === "collection" && (input.action !== "retrieve" || input.query !== "" || input.deadline === undefined)) unavailable();
+  if (input.file && (input.authorization?.kind !== "public" || input.deadline === undefined)) unavailable();
+  if (input.authorization?.kind === "collection" && ((input.action !== "retrieve" && !(input.protocol && input.action === "result")) || input.query !== "" || input.deadline === undefined)) unavailable();
   if (input.deadline !== undefined && (!Number.isSafeInteger(input.deadline) || Date.now() >= input.deadline)) {
     throw new HttpError(409, "response_observation_expired", "automatic response observation has ended; authenticated controls remain available");
   }

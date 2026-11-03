@@ -62,16 +62,23 @@ test("bundled smoke models belong to the selected endpoint's catalog", () => {
 });
 
 test("generated model requests pass the real router selection and envelope seams", () => {
-  const env = { AZURE_OPENAI_DEPLOYMENT: "smoke-deployment" };
+  const env = Object.fromEntries(snapshot.providers.flatMap(provider => provider.config_keys
+    .filter(key => /_(?:MODEL|DEPLOYMENT)$/.test(key))
+    .map(key => [key, key.endsWith("_MODEL") ? "fixture/served-model" : "smoke-deployment"])));
   const plan = buildProviderSmokePlan(snapshot, env);
   for (const { id, target } of plan.providers) {
     const provider = snapshot.providers.find((entry) => entry.id === id);
     if (target.kind === "openai_chat") {
+      const model = provider.models.find((entry) => entry.id === target.model);
+      if (model.upstream.includes("${")) {
+        const missing = concreteOpenAiSelection(target.route, target.body, {});
+        assert.equal(isSelectionFailure(missing), true, `${id}: missing model binding must fail closed`);
+        assert.equal(missing.response.status, 503, id);
+      }
       const selection = concreteOpenAiSelection(target.route, target.body, env);
       assert.equal(isSelectionFailure(selection), false, id);
-      const model = provider.models.find((entry) => entry.id === target.model);
       assert.equal(selection.model.id, model.id, id);
-      assert.equal(selection.body.model, id === "azure-openai" ? env.AZURE_OPENAI_DEPLOYMENT : model.upstream, id);
+      assert.equal(selection.body.model, model.upstream.replace("${deployment}", "smoke-deployment").replace("${model}", "fixture/served-model"), id);
     } else if (["anthropic", "aws-bedrock", "cohere", "google-gemini"].includes(id)) {
       const envelope = manifestEnvelope(target.envelope);
       const endpoint = provider.endpoints.find((entry) => entry.id === target.endpoint);
@@ -96,6 +103,8 @@ test("manifest model IDs skip earlier incompatible models and resolve upstream",
 
 test("Cohere body and path share the selected native name without stripping its namespace", () => {
   const provider = structuredClone(snapshot.providers.find((entry) => entry.id === "cohere"));
+  provider.endpoints = provider.endpoints.filter((entry) => entry.request_format === "cohere.chat");
+  provider.capabilities = provider.capabilities.filter((entry) => provider.endpoints.some((endpoint) => endpoint.id === entry.endpoint));
   provider.models[0].upstream = "cohere/native-model";
   provider.endpoints.find((entry) => entry.id === "chat").path_params = ["model"];
   for (const override of [undefined, provider.models[0].id, provider.models[0].upstream]) {

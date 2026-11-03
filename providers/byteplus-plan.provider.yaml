@@ -1,0 +1,58 @@
+# Frozen plan inventory, aliases and retirement dispositions: docs/ark-coding-plans.md.
+# Primary endpoint checked 2026-11-03; no standard API or cross-region key fallback.
+schema: clawrouter.service-provider.v1
+id: byteplus-plan
+displayName: BytePlus Coding Plan (Singapore)
+status: experimental
+class: openai_compatible
+service:
+  platform: byteplus
+  kind: model_provider
+  upstreamService: byteplus-plan
+  configKeys: [BYTEPLUS_PLAN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://ark.ap-southeast.bytepluses.com/api/coding/v3
+routing:
+  nativePrefixes: [clawrouter-byteplus-plan, byteplus-plan]
+  modelPrefixes: [byteplus-plan/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: byteplus-plan/ark-code-latest
+      upstream: ark-code-latest
+      capabilities: [llm.chat]
+    # Personal-plan deprecation does not establish universal retirement or team access.
+    - id: byteplus-plan/kimi-k2.5
+      upstream: kimi-k2.5
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: '2026-09-23'
+        checkedAt: '2026-11-03'
+        sources:
+          - https://docs.byteplus.com/en/docs/modelark/coding-plan-personal-model-deprecation
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

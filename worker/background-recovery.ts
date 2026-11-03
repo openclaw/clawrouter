@@ -33,5 +33,6 @@ function summary(record: BackgroundRecord) {
   const { id, phase, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError } = record;
   return { id, phase, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis,
     usageDisposition: usage, settlementDispositions: settlements, lastError,
+    ...(record.managed ? { protocol: record.managed.protocol, submission: record.managed.submission, terminal: record.managed.terminal } : {}),
     replayEligible: liveBackground(record) && !!record.event && Date.now() < replayUntil };
 }

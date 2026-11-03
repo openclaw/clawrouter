@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parse } from "yaml";
+import { compileProviderSnapshot as compileManifests } from "./compile-providers.mjs";
 import { runWithinDeadline } from "./smoke-readiness.mjs";
 
 export class SmokeKeyInspectionUnavailableError extends Error {}
@@ -244,18 +245,7 @@ export function compileProviderSnapshot() {
     .filter((file) => file.endsWith(".provider.yaml"))
     .sort()
     .map((file) => `providers/${file}`);
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/compile-providers.mjs", ...providerFiles],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error("provider snapshot compile failed");
-  }
-  return JSON.parse(result.stdout);
+  return compileManifests(providerFiles.map(path => parse(readFileSync(path, "utf8"))));
 }
 
 export function summarizePlan(plan) {
@@ -307,7 +297,7 @@ function smokeTarget(provider, env) {
   // which can themselves start with another provider's routing prefix.
   const model = manifestSmokeModelOverride(provider, endpoint, env)
     ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.id;
-  if (["openai.chat_completions", "openai.responses", "openai.decisions", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
+  if (["openai.chat_completions", "openai.responses", "openai.decisions", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "voyage.embeddings", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
   const pathParams = Object.fromEntries(
     endpoint.path_params.map((param) => [param, samplePathParam(provider, param, model, env)]),
   );
@@ -328,7 +318,7 @@ function smokeTarget(provider, env) {
     envelope: {
       method: upstreamMethod,
       pathParams,
-      query: {},
+      query: endpoint.request_format === "brave.search" ? { q: "OpenClaw", count: "1" } : {},
       body: body ?? {},
     },
   };
@@ -390,6 +380,7 @@ function smokeEndpoint(provider) {
     ["openai.decisions", "llm.decisions"],
     ["openai.embeddings", "llm.embeddings"],
     ["cohere.embed", "llm.embeddings"],
+    ["voyage.embeddings", "llm.embeddings"],
     ["tavily.extract", "web.extract"],
   ]) {
     const preferred = provider.endpoints.find(endpoint => endpoint.request_format === format
@@ -603,6 +594,12 @@ function sampleBody(provider, endpoint, method, model, env) {
   if (format === "tavily.search") {
     return { query: "OpenClaw", max_results: 1 };
   }
+  if (format === "exa.search") {
+    return { query: "OpenClaw", numResults: 1 };
+  }
+  if (format === "parallel.search") {
+    return { search_queries: ["OpenClaw official website"], mode: "basic", max_chars_total: 1000 };
+  }
   if (format === "tavily.extract") {
     return { urls: ["https://example.com"] };
   }
@@ -633,6 +630,9 @@ function sampleBody(provider, endpoint, method, model, env) {
   }
   if (format === "openai.embeddings") {
     return { model, input: "OpenClaw" };
+  }
+  if (format === "voyage.embeddings") {
+    return { model, input: ["OpenClaw"], input_type: "query", truncation: false, output_dimension: 256, output_dtype: "float" };
   }
   if (format === "cohere.embed") {
     return { model, texts: ["OpenClaw"], input_type: "search_query", embedding_types: ["float"] };

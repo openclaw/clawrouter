@@ -1,17 +1,19 @@
 import { markBudgetDispatched, reserveLedgerIntent } from "./accounting.ts";
 import { collectBackground } from "./background-collection.ts";
-import { BackgroundStore, liveBackground, type BackgroundAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
+import { BackgroundStore, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
 import { HttpContinuationStore, type ContinuationInput } from "./continuation-store.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { identityKey } from "./http-continuation.ts";
+import { managedJobKey } from "./managed-prediction-identity.ts";
 import { responseIdentity } from "./response-identities.ts";
 import { BudgetSettlementError, ingestUsage, settleLedger } from "./ledgers.ts";
+import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
 import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
-import { HttpError, json, readJson } from "./utils.ts";
+import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
 
-type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay"; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number };
+type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
 
 // Continuation cleanup, collection and financial recovery share the object's
 // only alarm and serialized mutation tail. Network waits never hold that tail.
@@ -36,6 +38,7 @@ export class ResponsesScopeStore {
     }
     return this.serial(() => {
       const job = input.backgroundJobId ? this.jobs.get(input.backgroundJobId) : null;
+      if (job?.managed) throw new HttpError(409, "background_protocol_conflict", "predictions cannot publish Responses identities");
       if (input.backgroundJobId && (!job || liveBackground(job) && JSON.stringify(job.owner) !== JSON.stringify(input.owner))) {
         throw new HttpError(409, "background_owner_conflict", "response publication does not belong to this admitted job");
       }
@@ -50,7 +53,24 @@ export class ResponsesScopeStore {
     const input = await readJson<Input>(request);
     if (input.action === "get") return this.serial(() => json(this.jobs.get(input.id)), false);
     if (input.action === "list") return this.serial(() => json({ records: this.jobs.list(input.after) }), false);
-    if (input.action === "admit" && input.admission) return json(await this.admit(input.admission));
+    if (input.action === "admit" && input.admission && !input.admission.managed) return json(await this.admit(input.admission));
+    if (input.action === "managed_lookup" && input.managed && typeof input.policyGeneration === "string") return this.serial(() => json(this.jobs.managedRetry(input.managed!, input.policyGeneration!)), false);
+    if (input.action === "managed_admit" && input.admission) {
+      const result = await this.mutate(() => this.jobs.admitManaged(input.admission!));
+      if (result.created) await this.reserve(result.job as BackgroundJob);
+      return json({ admitted: true, created: result.created, job: await this.serial(() => this.jobs.get(result.job.id), false) });
+    }
+    if (input.action === "managed_bind" && typeof input.responseId === "string") return this.bindManaged(input.id, input.responseId);
+    if (input.action === "managed_files" && typeof input.responseId === "string" && input.files !== undefined) {
+      return this.mutate(() => json({ files: this.jobs.bindManagedFiles(input.id, input.responseId!, input.files!) }));
+    }
+    if (input.action === "managed_observe" && typeof input.responseId === "string" && typeof input.predictionStatus === "string") {
+      return this.mutate(() => {
+        this.jobs.observeManaged(input.id, input.responseId!, input.predictionStatus!, input.statusCode!, undefined, input.observationUnavailable);
+        if (input.files !== undefined) this.jobs.bindManagedFiles(input.id, input.responseId!, input.files);
+        return json({ observed: true });
+      });
+    }
     if (input.action === "dispatch") { await this.dispatch(input.id, input.contentRef ?? null); return json({ dispatched: true }); }
     if (input.action === "observe" && input.fact && Number.isInteger(input.statusCode)) {
       await this.observe(input.id, input.fact, input.statusCode!); return json({ observed: true });
@@ -61,7 +81,10 @@ export class ResponsesScopeStore {
       return json(await this.mutate(() => this.jobs.get(input.id)));
     }
     return this.mutate(() => {
-      if (input.action === "identity" && typeof input.responseId === "string") { this.jobs.identity(input.id, input.responseId); return json({ stored: true }); }
+      if (input.action === "identity" && typeof input.responseId === "string") {
+        if (this.jobs.get(input.id)?.managed) throw new HttpError(409, "background_protocol_conflict", "managed identity requires an atomic ownership binding");
+        this.jobs.identity(input.id, input.responseId); return json({ stored: true });
+      }
       if (input.action === "freeze" && input.outcome) return json(this.freeze(input.id, input.outcome));
       throw new HttpError(400, "background_request_invalid", "invalid background owner action");
     });
@@ -79,6 +102,11 @@ export class ResponsesScopeStore {
 
   private async admit(input: BackgroundAdmission): Promise<{ admitted: true }> {
     const job = await this.mutate(() => this.jobs.admit(input));
+    await this.reserve(job);
+    return { admitted: true };
+  }
+
+  private async reserve(job: BackgroundJob): Promise<void> {
     for (let index = 0; index < job.legs.length; index++) {
       const intent = await this.mutate(() => this.jobs.beginReserve(job.id, index));
       try {
@@ -92,7 +120,24 @@ export class ResponsesScopeStore {
         throw error instanceof HttpError ? error : new HttpError(503, "accounting_unavailable", "background admission could not confirm budget ownership; recovery remains pending");
       }
     }
-    return { admitted: true };
+  }
+
+  private async bindManaged(id: string, upstreamId: string): Promise<Response> {
+    const original = await this.serial(() => this.jobs.get(id), false);
+    if (!original?.managed || !liveBackground(original)) throw new HttpError(409, "background_binding_unavailable", "the admitted job is unavailable");
+    const key = await managedJobKey(original.managed.protocol, original.owner.providerId, upstreamId), producerId = await sha256Hex(id);
+    const response = await this.serial(() => {
+      const job = this.jobs.get(id);
+      if (!job?.managed || !liveBackground(job) || job.event || job.phase !== "observing" || Date.now() >= job.observeUntil) {
+        throw new HttpError(409, "background_binding_unavailable", "the admitted prediction cannot publish a new identity");
+      }
+      return this.continuations.handle({ action: "register", keys: [key], owner: job.owner,
+        responseClaim: { key, producerId }, backgroundJobId: id }, false, false, false,
+        () => this.jobs.identity(id, upstreamId));
+    });
+    const receipt = await response.json<{ outcome: string }>();
+    if (receipt.outcome !== "stored") throw new HttpError(409, "background_binding_conflict", "prediction ownership could not be committed");
+    return json({ bound: true });
   }
 
   private async dispatch(id: string, contentRef: string | null): Promise<void> {
@@ -120,6 +165,7 @@ export class ResponsesScopeStore {
     await this.mutate(() => {
       const current = this.jobs.get(id);
       if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
+      if (current.managed) throw new HttpError(409, "background_protocol_conflict", "predictions require their own terminal observation");
       this.jobs.identity(id, fact.id);
       if (fact.terminal) this.freeze(id, { occurredAtMs: Date.now(), statusCode: status, status: fact.status === "completed" || fact.status === "incomplete" ? "success" : "provider_error", billable: true, tokens: fact.tokens, contentRef: current.contentRef });
     });
@@ -129,7 +175,15 @@ export class ResponsesScopeStore {
     const until = automatic ? Math.min(claimed.autoRetryUntil, claimed.replayUntil) : claimed.replayUntil;
     if (Date.now() >= until) return;
     try {
-      if (!claimed.event) await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
+      if (!claimed.event) {
+        if (claimed.managed) {
+          const { collectManagedPrediction } = await import("./managed-predictions.ts");
+          await collectManagedPrediction(this.env, claimed, (id, status, statusCode, loss, files) => this.mutate(() => {
+            this.jobs.observeManaged(claimed.id, id, status, statusCode, claimed.attempts, loss);
+            if (files !== undefined) this.jobs.bindManagedFiles(claimed.id, id, files);
+          }));
+        } else await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
+      }
       const current = await this.mutate(() => this.jobs.get(claimed.id));
       if (!current || !liveBackground(current) || current.attempts !== claimed.attempts || Date.now() >= current.replayUntil) return;
       if (!current.event) { await this.mutate(() => this.jobs.retry(current.id, null, claimed.attempts)); return; }

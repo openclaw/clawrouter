@@ -1,7 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 const { default: worker } = await import("../index.ts");
@@ -83,14 +83,7 @@ test("legacy owner IDs agree across admission, credential, overview, tenant, and
 });
 
 async function authorityFixture(t, principalId = email) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
+  const { sql } = sqliteFixture(t);
   let authority;
   const env = {
     CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(adminToken),

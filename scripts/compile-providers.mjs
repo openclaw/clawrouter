@@ -1,27 +1,21 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { Validator } from "@cfworker/json-schema";
 import { parse } from "yaml";
 
 const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
+const decisionContracts = new Map([
+  ["baseten-systemone", { provider: "baseten", format: "baseten.systemone" }],
+  ["openai-decisions", { provider: "openai", format: "openai.decisions" }],
+  ["levanto-sage", { provider: "levanto", format: "levanto.sage" }],
+  ["liquid-ai-systemone", { provider: "liquid-ai", format: "liquid.systemone" }],
+  ["typesafe-systemone", { provider: "typesafe", format: "typesafe.systemone" }],
+  ["subq-decisions", { provider: "subq", format: "subq.decisions" }],
+]);
 const manifestSchema = JSON.parse(readFileSync(new URL("../providers/_schema/service-provider.schema.json", import.meta.url), "utf8"));
 const manifestValidator = new Validator(manifestSchema, "2020-12");
 
-const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
-const outputIndex = rawArgs.indexOf("--output");
-const output = outputIndex >= 0 ? rawArgs[outputIndex + 1] : null;
-const paths = rawArgs.filter((_, index) => outputIndex < 0 || (index !== outputIndex && index !== outputIndex + 1));
-if (!paths.length) throw new Error("usage: compile-providers <manifest...> [--output path]");
-
-const manifests = paths.sort().map((path) => parse(readFileSync(path, "utf8")));
-const snapshot = compileProviderSnapshot(manifests);
-const encoded = output ? `${JSON.stringify(snapshot)}\n` : `${JSON.stringify(snapshot, null, 2)}\n`;
-if (output) {
-  mkdirSync(dirname(output), { recursive: true });
-  writeFileSync(output, encoded);
-} else {
-  process.stdout.write(encoded);
-}
 
 export function compileProviderSnapshot(manifests) {
   const ids = new Set();
@@ -42,6 +36,7 @@ export function compileProviderSnapshot(manifests) {
         provider: provider.id,
         upstream: model.upstream,
         capabilities: model.capabilities,
+        ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
         ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
@@ -69,6 +64,7 @@ function compileProvider(manifest, ids) {
     method: endpoint.method ?? "POST",
     methods: unique([endpoint.method ?? "POST", ...capabilities.filter((item) => item.endpoint === id).flatMap((item) => item.methods)]),
     path: endpoint.path,
+    ...(endpoint.upstreamPath ? { upstreamPath: endpoint.upstreamPath } : {}),
     native_proxy: endpoint.nativeProxy ?? true,
     auth: endpoint.auth ?? null,
     headers: endpoint.headers ?? {},
@@ -81,7 +77,9 @@ function compileProvider(manifest, ids) {
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
     ...(endpoint.responsesLifecycle ? { responsesLifecycle: endpoint.responsesLifecycle } : {}),
+    ...(endpoint.lifecycle ? { lifecycle: structuredClone(endpoint.lifecycle) } : {}),
     ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
+    ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}),
     ...(endpoint.toolPricing ? { toolPricing: structuredClone(endpoint.toolPricing) } : {}),
     ...(endpoint.modelPassthrough ? { modelPassthrough: {
       pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
@@ -124,11 +122,12 @@ function compileProvider(manifest, ids) {
     id: model.id,
     upstream: model.upstream,
     capabilities: model.capabilities ?? [],
+    ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
     ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
     ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
-    ...(model.endpointPricing ? { endpointPricing: Object.fromEntries(Object.entries(model.endpointPricing).map(([id, card]) => [id, { pricing_ref: card.pricingRef, pricing: normalizePricing(card.pricing) }])) } : {}),
+    ...(model.endpointPricing ? { endpointPricing: Object.fromEntries(Object.entries(model.endpointPricing).map(([id, card]) => [id, { pricing_ref: card.pricingRef, pricing: card.pricing === null ? null : normalizePricing(card.pricing) }])) } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
   }));
@@ -206,6 +205,7 @@ function normalizePricing(pricing) {
   if (pricing.unit === "character") return { unit: pricing.unit, effectiveAt: pricing.effectiveAt, source: pricing.source, inputMicrosPerMillionCharacters: pricing.inputMicrosPerMillionCharacters, maxInputCharacters: pricing.maxInputCharacters };
   return {
     effectiveAt: pricing.effectiveAt,
+    ...(pricing.checkedAt ? { checkedAt: pricing.checkedAt } : {}),
     source: pricing.source,
     ...normalizeRates(pricing),
     maxInputTokens: pricing.maxInputTokens,
@@ -214,6 +214,7 @@ function normalizePricing(pricing) {
     inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
     ...(pricing.unpricedCosts ? { unpricedCosts: pricing.unpricedCosts } : {}),
     ...(pricing.settlementBasis ? { settlementBasis: pricing.settlementBasis } : {}),
+    ...(pricing.autoServiceTier ? { autoServiceTier: pricing.autoServiceTier } : {}),
     ...(pricing.anthropicModifiers ? { anthropicModifiers: structuredClone(pricing.anthropicModifiers) } : {}),
     longContext: normalizeLongContext(pricing.longContext),
     ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
@@ -239,6 +240,7 @@ function validatePricing(pricing, modelId) {
     return;
   }
   if (pricing.longContext && pricing.longContext.thresholdInputTokens >= pricing.maxInputTokens) throw new Error(`model ${modelId} has an invalid long-context threshold`);
+  if (pricing.autoServiceTier && !pricing.serviceTiers?.length) throw new Error(`model ${modelId} autoServiceTier requires explicit service-tier cards`);
   if (pricing.serviceTiers === undefined) return;
   const tiers = pricing.serviceTiers;
   const fail = (message) => { throw new Error(`model ${modelId} serviceTiers ${message}`); };
@@ -261,12 +263,37 @@ function validateManifest(manifest) {
   const validation = manifestValidator.validate(manifest);
   if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
+  validateBasetenSystemOne(manifest);
+  validateGradiumSpeech(manifest);
+  validateDeepgramPrerecorded(manifest);
+  validateGoogleEmbeddings(manifest);
+  validateGoogleUnaryMedia(manifest, "image", "image.generate", ["gemini-3.1-flash-image", "gemini-3-pro-image"]);
+  validateGoogleUnaryMedia(manifest, "music", "audio.generate", ["lyria-3-clip-preview", "lyria-3-pro-preview"]);
+  validateXaiImages(manifest);
+  validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
+  validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
+  validateNativeModels(manifest, "chutes", "https://llm.chutes.ai/v1");
+  validateNativeModels(manifest, "featherless", "https://api.featherless.ai/v1");
+  validateNativeModels(manifest, "venice", "https://api.venice.ai/api/v1");
+  validateNativeModels(manifest, "novita", "https://api.novita.ai/openai/v1");
+  validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
     if (!Object.hasOwn(manifest.endpoints, capability.endpoint)) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
   }
+  validateModels(manifest);
+  validateManagedLifecycles(manifest);
+  validateEndpoints(manifest);
+  validateGrantTransports(manifest);
+  validateQuota(manifest.id, manifest.quota);
+}
+
+function validateModels(manifest) {
+  const stopped = new Set((manifest.models?.entries ?? []).filter(model => model.availability?.status === "stopped").map(model => model.upstream));
   for (const model of manifest.models?.entries ?? []) {
+    validateModelAvailability(model);
+    if (model.capabilities?.length && stopped.has(model.upstream)) throw new Error(`model ${model.id} availability stopped upstream cannot be exposed through another model identity`);
     for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
     for (const [id, parameters] of Object.entries(model.requestParameters ?? {})) {
@@ -302,8 +329,21 @@ function validateManifest(manifest) {
       if (facts.inference?.chat === true && !supported.some(capability => ["llm.chat", "llm.responses", "llm.messages", "llm.generate"].includes(capability.id))) fail("chat requires a conversational capability");
       if (facts.inference?.chat && facts.maxOutputTokens === 0) fail("chat cannot declare zero output tokens");
       const decision = facts.inference?.decision;
-      if (decision && (endpoint.requestFormat !== "openai.decisions" || !supported.some(capability => capability.id === "llm.decisions"))) fail("decision requires the declared Decisions endpoint");
-      if (decision?.questions.choice && decision.questions.choice.minOptions > decision.questions.choice.maxOptions) fail("choice minOptions exceeds maxOptions");
+      if (decision) {
+        const contract = decisionContracts.get(decision.protocol);
+        if (!contract || manifest.id !== contract.provider || endpoint.requestFormat !== contract.format || endpoint.responseFormat !== contract.format
+          || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.nativeProxy === false
+          || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
+          || !supported.some(capability => capability.id === "llm.decisions")
+          || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) fail("decision requires the declared Decisions endpoint and qualified protocol/provider pair");
+        for (const [kind, question] of Object.entries(decision.questions)) {
+          if (question.minOptions > question.maxOptions) fail(`${kind} minOptions exceeds maxOptions`);
+          if (question.maxImageOptions > question.maxOptions) fail(`${kind} maxImageOptions exceeds maxOptions`);
+        }
+        if (decision.reasoning?.default && !decision.reasoning.modes.includes(decision.reasoning.default)) fail("decision default reasoning must belong to declared modes");
+        if (decision.limits?.maxStateAndQuestionTokens > decision.limits?.maxRequestTokens) fail("decision state/question limit exceeds request limit");
+        if (decision.limits?.image && !facts.input?.includes("image")) fail("decision image limits require image input");
+      }
       if (facts.hostedTools && (manifest.id !== "openai" || id !== "responses" || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || !supported.some(capability => capability.id === "llm.responses"))) fail("hosted tools require the OpenAI Responses endpoint");
       if (facts.supportedServiceTiers) {
         if (!["openai.responses", "openai.chat_completions"].includes(endpoint.requestFormat)) fail("service tiers require a supported tier wire format");
@@ -311,8 +351,68 @@ function validateManifest(manifest) {
       }
     }
   }
+}
+
+function validateModelAvailability(model) {
+  const availability = model.availability;
+  if (!availability) return;
+  const fail = message => { throw new Error(`model ${model.id} availability ${message}`); };
+  for (const date of [availability.effectiveAt, availability.checkedAt]) {
+    const time = Date.parse(`${date}T00:00:00Z`);
+    if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== date) fail("requires calendar dates");
+  }
+  if (availability.effectiveAt > availability.checkedAt) fail("must be effective by its verification date");
+  for (const source of availability.sources) {
+    const url = new URL(source);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) fail("requires public HTTPS evidence without credentials");
+  }
+  if (availability.status === "upstream_alias" && [model.id, model.upstream].includes(availability.servingModel)) fail("must name a distinct serving model");
+  // Keep the stopped identity in inventory: removing it could let an opaque
+  // model-passthrough endpoint accept the same name as an unknown live model.
+  if (availability.status === "stopped" && ((model.capabilities ?? []).length || ["pricing", "pricingRef", "endpointPricing", "nativeCapabilities", "requestParameters", "supportedReasoningEfforts", "codexModel"].some(key => Object.hasOwn(model, key))))
+    fail("stopped identities cannot declare executable capabilities, prices or request facts");
+}
+
+function validateEndpoints(manifest) {
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    validateUpstreamPath(manifest, id, endpoint);
+    if (endpoint.requestPricing?.unit === "image") {
+      if (manifest.id !== "xai" || !["xai.images_generations", "xai.images_edits"].includes(endpoint.requestFormat) || endpoint.responseFormat !== "xai.images")
+        throw new Error(`endpoint ${id} requestPricing requires the qualified native xAI image contract`);
+    } else if (endpoint.requestPricing?.outcome) {
+      // A possible charged rejection is additive to the inference reservation.
+      // This contract never attests a free error or a fee from HTTP status alone.
+      if (manifest.id !== "xai" || Object.values(manifest.baseUrls).some(url => url !== "https://api.x.ai")
+        || manifest.auth.schemes.length !== 1 || manifest.auth.schemes[0].type !== "bearer"
+        || manifest.auth.schemes[0].header !== "Authorization" || manifest.auth.schemes[0].format !== "Bearer ${secret}"
+        || manifest.auth.schemes[0].secretKind !== "api_key" || manifest.auth.grantTransports
+        || Object.keys(manifest.adapter.injectHeaders ?? {}).length || Object.keys(manifest.adapter.injectQuery ?? {}).length || manifest.adapter.passthroughHeaders?.length
+        || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST"
+        || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses"
+        || endpoint.auth || Object.keys(endpoint.headers ?? {}).length || endpoint.requestHeaders?.length
+        || endpoint.websocket || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
+        || Object.keys(endpoint.query ?? {}).length || endpoint.pathParams?.length
+        || endpoint.streaming && endpoint.streaming !== "sse"
+        || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "llm.responses")
+        || manifest.capabilities.some(capability => capability.endpoint === id && (capability.id !== "llm.responses" || capability.methods?.some(method => method !== "POST"))))
+        throw new Error(`endpoint ${id} requestPricing requires the qualified xAI Responses outcome contract`);
+    } else if (endpoint.requestPricing) {
+      // The runtime can select a flat request tariff without provider branches.
+      // Qualification remains explicit until another protocol has sourced billing semantics.
+      const pricing = endpoint.requestPricing, variants = pricing.parameterRates;
+      if (manifest.id !== "perplexity" || endpoint.path !== "/search" || (endpoint.method ?? "POST") !== "POST"
+        || endpoint.requestFormat !== "perplexity.search" || endpoint.responseFormat !== "perplexity.search"
+        || endpoint.streaming || endpoint.websocket || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
+        || Object.keys(endpoint.query ?? {}).length || endpoint.pathParams?.length
+        || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "web.search")
+        || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST")))
+        throw new Error(`endpoint ${id} requestPricing requires a qualified successful-request contract`);
+      if (!variants || variants.parameter !== "search_type" || Object.keys(variants.rates).length !== 2 || !["web", "fast"].every(value => Object.hasOwn(variants.rates, value)))
+        throw new Error(`endpoint ${id} requestPricing has unqualified parameter rates`);
+      if (variants && Object.hasOwn(variants.rates, "web") && variants.rates.web !== pricing.successfulResponseMicros)
+        throw new Error(`endpoint ${id} requestPricing default must match the web tariff`);
+    }
     // This request format owns OpenAI's free tariff and API-key-only transport.
     // Wire compatibility alone cannot qualify another provider's billing.
     if (endpoint.requestFormat === "openai.moderations" && manifest.id !== "openai") throw new Error(`provider ${manifest.id} endpoint ${id} openai.moderations requires provider openai`);
@@ -363,6 +463,76 @@ function validateManifest(manifest) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }
   }
+}
+
+function validateUpstreamPath(manifest, id, endpoint) {
+  if (endpoint.upstreamPath === undefined) return;
+  const fail = () => { throw new Error(`endpoint ${id} upstreamPath requires a literal same-format Chat, Messages, Responses create or model-list path without conflicting transport overrides`); };
+  const methods = { "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.responses": "POST", "openai.models": "GET", "anthropic.models": "GET", "synthetic.models": "GET" };
+  const canonical = new RegExp(manifestSchema.$defs.literalUpstreamPath.pattern);
+  if (!canonical.test(endpoint.path) || endpoint.path.length > 2048 || !canonical.test(endpoint.upstreamPath)
+    || [endpoint.path, endpoint.upstreamPath].some(path => path.split("/").some(segment => segment === "." || segment === ".."))
+    || endpoint.pathParams?.length || Object.keys(endpoint.pathParamStyles ?? {}).length
+    || !Object.hasOwn(methods, endpoint.requestFormat) || endpoint.responseFormat !== endpoint.requestFormat
+    || (endpoint.method ?? "POST") !== methods[endpoint.requestFormat]
+    || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== methods[endpoint.requestFormat]))
+    || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.requestPricing || endpoint.toolPricing
+    || endpoint.requestFormat === "openai.responses" && (endpoint.path !== "/v1/responses" || Object.keys(endpoint.query ?? {}).length)
+    || endpoint.requestFormat.endsWith(".models") && (endpoint.streaming || endpoint.modelPassthrough)) fail();
+  for (const transport of Object.values(manifest.auth.grantTransports ?? {})) {
+    const path = transport.endpointPaths?.[id];
+    if (path !== undefined && path !== endpoint.upstreamPath) fail();
+  }
+}
+
+function validateNativeModels(manifest, providerId, baseUrl) {
+  const format = `${providerId}.models`;
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
+    || manifest.id === providerId && (endpoint.path === "/models" || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error(`${format} requires its native GET /models route, canonical inference origin and original Bearer API-key binding`); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== providerId || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== baseUrl)
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== format || endpoint.responseFormat !== format
+    || endpoint.method !== "GET" || endpoint.path !== "/models" || endpoint.upstreamPath !== undefined
+    || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "accept" || value !== "application/json")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "models.list"
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "GET") fail();
+}
+
+function validateSyntheticModels(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("synthetic.")));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("synthetic.models upstreamPath requires the qualified Synthetic GET metadata route and original Bearer API-key binding"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "synthetic" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://api.synthetic.new")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(adapter?.injectHeaders ?? {}).length
+    || Object.keys(adapter?.injectQuery ?? {}).length || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "synthetic.models" || endpoint.responseFormat !== "synthetic.models"
+    || endpoint.method !== "GET" || endpoint.path !== "/models" || endpoint.upstreamPath !== "/openai/v1/models"
+    || endpoint.auth || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "models.list"
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "GET") fail();
+}
+
+function validateGrantTransports(manifest) {
   const headerName = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
   for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
     if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
@@ -377,7 +547,376 @@ function validateManifest(manifest) {
     }
     if (transport.maintenance?.quotaPoll && !(manifest.quota?.probes ?? []).some((probe) => probe.grantKinds?.includes(kind))) throw new Error(`provider ${manifest.id} grant transport ${kind} quota polling requires a matching quota probe`);
   }
-  validateQuota(manifest.id, manifest.quota);
+}
+
+const managedLifecycleContracts = {
+  "openrouter.video": {
+    provider: "openrouter", create: ["/v1/videos"], request: "openrouter.video_create", response: "openrouter.video",
+    controls: { retrieve: ["GET", "/v1/videos/${video_id}", "openrouter.video_get", "openrouter.video"] },
+    files: { download: ["GET", "/v1/videos/${video_id}/content", "openrouter.video_content", "openrouter.video_content", { index: "0" }] },
+  },
+  "xai.video": {
+    provider: "xai", create: ["/v1/videos/generations", "/v1/videos/edits", "/v1/videos/extensions"], response: "xai.video",
+    requestByPath: { "/v1/videos/generations": "xai.video_generate", "/v1/videos/edits": "xai.video_edit", "/v1/videos/extensions": "xai.video_extend" },
+    controls: { retrieve: ["GET", "/v1/videos/${request_id}", "xai.video_get", "xai.video"] },
+  },
+  "together.video": {
+    provider: "together", create: ["/v2/videos"], request: "together.video_create", response: "together.video",
+    controls: { retrieve: ["GET", "/v2/videos/${video_id}", "together.video_get", "together.video"] },
+  },
+  "runway.tasks": {
+    provider: "runway", create: ["/v1/text_to_video", "/v1/image_to_video", "/v1/video_to_video"], response: "runway.task",
+    requestByPath: { "/v1/text_to_video": "runway.text_video", "/v1/image_to_video": "runway.image_video", "/v1/video_to_video": "runway.video_video" },
+    controls: {
+      retrieve: ["GET", "/v1/tasks/${id}", "runway.task_get", "runway.task"],
+      cancel: ["DELETE", "/v1/tasks/${id}", "runway.task_cancel", "runway.task_cancel"],
+    },
+  },
+  "pixverse.video": {
+    provider: "pixverse", create: ["/openapi/v2/video/text/generate"], request: "pixverse.text_video", response: "pixverse.video",
+    controls: { retrieve: ["GET", "/openapi/v2/video/result/${video_id}", "pixverse.video_get", "pixverse.video"] },
+  },
+  "google.omni_video": {
+    provider: "google-gemini", create: ["/v1beta/interactions"], request: "google.omni_video_create", response: "google.omni_video",
+    controls: {
+      retrieve: ["GET", "/v1beta/interactions/${interaction_id}", "google.omni_video_get", "google.omni_video"],
+      cancel: ["POST", "/v1beta/interactions/${interaction_id}/cancel", "google.omni_video_cancel", "google.omni_video"],
+    },
+    files: {
+      metadata: ["GET", "/v1beta/files/${file_id}", "google.omni_video_file_metadata", "google.omni_video_file"],
+      download: ["GET", "/v1beta/files/${file_id}:download", "google.omni_video_file_download", "google.omni_video_bytes", { alt: "media" }],
+    },
+  },
+  "dashscope.video": {
+    provider: "alibaba", create: ["/api/v1/services/aigc/video-generation/video-synthesis"], request: "dashscope.video_create", response: "dashscope.video",
+    controls: { retrieve: ["GET", "/api/v1/tasks/${task_id}", "dashscope.video_get", "dashscope.video"] },
+  },
+  "replicate.predictions": {
+    provider: "replicate", create: ["/v1/predictions"], request: "replicate.prediction_create", response: "replicate.prediction",
+    controls: {
+      retrieve: ["GET", "/v1/predictions/${prediction_id}", "replicate.prediction_get", "replicate.prediction"],
+      cancel: ["POST", "/v1/predictions/${prediction_id}/cancel", "replicate.prediction_cancel", "replicate.prediction"],
+    },
+  },
+  "fal.queue": {
+    provider: "fal", create: ["/${owner}/${app}", "/${owner}/${app}/${variant}", "/${owner}/${app}/${variant}/${subvariant}"], request: "fal.queue_submit", response: "fal.queue_submission",
+    controls: {
+      retrieve: ["GET", "/${owner}/${app}/requests/${request_id}/status", "fal.queue_status", "fal.queue_status"],
+      result: ["GET", "/${owner}/${app}/requests/${request_id}", "fal.queue_result", "fal.queue_result"],
+      cancel: ["PUT", "/${owner}/${app}/requests/${request_id}/cancel", "fal.queue_cancel", "fal.queue_cancel"],
+    },
+  },
+  "kie.jobs": {
+    provider: "kie", create: ["/api/v1/jobs/createTask"], request: "kie.job_create", response: "kie.job",
+    controls: { retrieve: ["GET", "/api/v1/jobs/recordInfo", "kie.job_get", "kie.job"] },
+  },
+  "vydra.jobs": {
+    provider: "vydra", create: ["/api/v1/jobs"], request: "vydra.job_create", response: "vydra.job",
+    controls: {
+      retrieve: ["GET", "/api/v1/jobs/${job_id}", "vydra.job_get", "vydra.job"],
+      cancel: ["DELETE", "/api/v1/jobs/${job_id}", "vydra.job_cancel", "vydra.job_cancel"],
+    },
+  },
+};
+
+function validateManagedLifecycles(manifest) {
+  const controls = new Set(), creates = new Set(), controlBindings = new Map();
+  for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (!endpoint.lifecycle) continue;
+    const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct qualified native create/control endpoints`); };
+    const protocol = endpoint.lifecycle.protocol;
+    const fourSegmentFal = protocol === "fal.queue" && endpoint.path === "/${owner}/${app}/${variant}/${subvariant}";
+    const contract = Object.hasOwn(managedLifecycleContracts, protocol) ? managedLifecycleContracts[protocol] : null;
+    const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false;
+    const methodsMatch = (endpointId, method) => !manifest.capabilities.some(capability => capability.endpoint === endpointId && capability.methods?.some(value => value !== method));
+    const parametersMatch = value => {
+      const names = [...value.path.matchAll(/\$\{([^}]+)\}/g)].map(match => match[1]).sort();
+      return JSON.stringify([...(value.pathParams ?? [])].sort()) === JSON.stringify(names)
+        && !Object.entries(value.pathParamStyles ?? {}).some(([name, style]) => !names.includes(name) || style !== "segment");
+    };
+    if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || Object.keys(endpoint.query ?? {}).length || !parametersMatch(endpoint)
+      || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
+      || endpoint.requestFormat !== (contract.requestByPath?.[endpoint.path] ?? contract.request) || endpoint.responseFormat !== contract.response
+      || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
+    if (fourSegmentFal) {
+      // Concrete product/segment values are checked by the registered fal codec.
+      // The new shape cannot change origin, credentials or control ownership.
+      const scheme = manifest.auth.schemes[0];
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://queue.fal.run")
+        || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+        || scheme.format !== "Key ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+        || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(manifest.adapter?.injectHeaders ?? {}).length
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length || endpoint.auth || endpoint.requestHeaders?.length
+        || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+    }
+    if (protocol === "openrouter.video") {
+      // This product has authenticated content, not a file metadata endpoint.
+      // Only the original succeeded job and descriptor can authorize download.
+      const scheme = manifest.auth.schemes[0];
+      const attribution = { "HTTP-Referer": "${site_url}", "X-Title": "ClawRouter" };
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://openrouter.ai/api")
+        || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+        || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+        || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+        || Object.keys(manifest.auth.grantTransports ?? {}).length
+        || Object.entries(manifest.adapter?.injectHeaders ?? {}).some(([name, value]) => !Object.hasOwn(attribution, name) || attribution[name] !== value)
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length || endpoint.auth || endpoint.requestHeaders?.length
+        || endpoint.requestPricing || endpoint.toolPricing || endpoint.outputTokenLimit
+        || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+      if ((manifest.models?.entries ?? []).some(model => model.capabilities?.includes("media.predict")
+        && (model.upstream !== "google/veo-3.1-fast" || model.capabilities.length !== 1
+          || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length))) fail();
+    }
+    if (protocol === "xai.video") {
+      const scheme = manifest.auth.schemes[0];
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://api.x.ai")
+        || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+        || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+        || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(manifest.adapter?.injectHeaders ?? {}).length
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length || endpoint.auth || endpoint.requestHeaders?.length
+        || endpoint.requestPricing || endpoint.toolPricing || endpoint.outputTokenLimit
+        || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+      // Native duration and advisory idempotency are not a qualified tariff or
+      // retry guarantee. These cards cannot borrow the provider's Chat prices.
+      if ((manifest.models?.entries ?? []).some(model => model.capabilities?.includes("media.predict")
+        && (!["grok-imagine-video", "grok-imagine-video-1.5"].includes(model.upstream) || model.capabilities.length !== 1
+          || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length))) fail();
+    }
+    if (protocol === "dashscope.video") {
+      // The bound credential comes from the shared owner, never endpoint overrides.
+      if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
+        !(["x-dashscope-async", "content-type"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "x-dashscope-async" ? "enable" : "application/json")))) fail();
+    }
+    if (protocol === "together.video") {
+      // Pin the selected Together origin and credential; no alias fallback or
+      // cross-product Wan/MiniMax authorization on the native video route.
+      if (Object.values(manifest.baseUrls).some(base => !["https://api.together.xyz", "https://api.together.ai"].includes(base))
+        || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")
+        || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(manifest.adapter?.injectHeaders ?? {}).length
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length) fail();
+      const schemes = manifest.auth.schemes;
+      if (schemes.length !== 1 || schemes[0].type !== "bearer" || schemes[0].header?.toLowerCase() !== "authorization"
+        || schemes[0].format !== "Bearer ${secret}" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
+    }
+    if (protocol === "runway.tasks") {
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://api.dev.runwayml.com")
+        || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
+          !(["content-type", "x-runway-version"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "content-type" ? "application/json" : "2024-11-06")))) fail();
+      const schemes = manifest.auth.schemes;
+      if (schemes.length !== 1 || schemes[0].type !== "bearer" || schemes[0].header?.toLowerCase() !== "authorization"
+        || schemes[0].format !== "Bearer ${secret}" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
+    }
+    if (protocol === "pixverse.video") {
+      // Image routes remain closed until uploads have durable original-job scope.
+      if (Object.values(manifest.baseUrls).some(base => !["https://app-api.pixverse.ai", "https://app-api.pixverseai.cn"].includes(base))
+        || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
+      const schemes = manifest.auth.schemes;
+      if (schemes.length !== 1 || schemes[0].type !== "api_key" || schemes[0].header?.toLowerCase() !== "api-key" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
+    }
+    if (protocol === "google.omni_video") {
+      // Keep Google's existing origin-only base; the registered wrapper must
+      // translate the codec's /v1beta-relative paths without changing that base.
+      for (const base of Object.values(manifest.baseUrls)) {
+        let url; try { url = new URL(base); } catch { fail(); }
+        if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash || url.pathname !== "/") fail();
+      }
+      if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
+    }
+    creates.add(id);
+    for (const [action, [method, path, request, response, query = {}]] of Object.entries({ ...contract.controls, ...contract.files })) {
+      const controlId = Object.hasOwn(contract.controls, action) ? endpoint.lifecycle[action] : endpoint.lifecycle.files[action];
+      const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
+      const sharedControl = ["fal.queue", "xai.video"].includes(protocol) && controlBindings.get(controlId) === `${protocol}:${action}`;
+      if (!control || controlId === id || controls.has(controlId) && !sharedControl || control.lifecycle || incompatible(control) || !parametersMatch(control)
+        || Object.keys(control.query ?? {}).length !== Object.keys(query).length || Object.entries(query).some(([name, value]) => control.query?.[name] !== value)
+        || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
+        || control.requestFormat !== request || control.responseFormat !== response
+        || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
+      if ((fourSegmentFal || ["openrouter.video", "xai.video", "dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks", "together.video"].includes(protocol)) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if (["openrouter.video", "xai.video"].includes(protocol) && (control.requestPricing || control.toolPricing || control.outputTokenLimit)) fail();
+      controls.add(controlId);
+      controlBindings.set(controlId, `${protocol}:${action}`);
+    }
+  }
+  // New managed wire formats cannot accidentally expose an unbound raw control.
+  // Legacy Replicate manifests retain their existing runtime ownership guard.
+  const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
+    .flatMap(([, contract]) => [contract.request, ...Object.values(contract.requestByPath ?? {}), ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])].filter(Boolean)));
+  for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    const reservedFormat = ["openrouter.video", "xai.video", "dashscope.video", "google.omni_video", "pixverse.", "runway.", "together.video"].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix))
+      || ["openrouter", "xai"].includes(manifest.id) && /^\/v1\/videos(?:\/|$)/.test(endpoint.path);
+    if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
+      throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
+  }
+}
+
+function validateXaiImages(manifest) {
+  const formats = new Map([["xai.images_generations", "/v1/images/generations"], ["xai.images_edits", "/v1/images/edits"]]);
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("xai.images"))
+    || manifest.id === "xai" && [...formats.values()].includes(endpoint.path));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("xAI images require qualified native formats, original global Bearer auth, finite models and separate per-image accounting"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "xai" || endpoints.length > 2 || new Set(endpoints.map(([, endpoint]) => endpoint.requestFormat)).size !== endpoints.length
+    || Object.values(manifest.baseUrls).some(base => base !== "https://api.x.ai")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(adapter?.injectHeaders ?? {}).length
+    || Object.keys(adapter?.injectQuery ?? {}).length || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  for (const [id, endpoint] of endpoints) {
+    if (!formats.has(endpoint.requestFormat) || endpoint.responseFormat !== "xai.images" || endpoint.path !== formats.get(endpoint.requestFormat)
+      || endpoint.auth || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+      || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+      || endpoint.requestPricing && endpoint.requestPricing.unit !== "image") fail();
+    const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+    if (capabilities.length !== 1 || capabilities[0].id !== "image.generate" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  }
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("image.generate"));
+  // These units belong to the endpoint tariff, never a fabricated token card.
+  if (!models.length || models.some(model => !["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"].includes(model.upstream)
+    || model.capabilities.length !== 1 || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length)) fail();
+}
+
+function validateGoogleUnaryMedia(manifest, kind, capabilityId, upstreams) {
+  const format = `google.${kind}`;
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
+    || manifest.id === "google-gemini" && manifest.capabilities.some(capability => capability.endpoint === id && capability.id === capabilityId));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error(`Google ${kind === "image" ? "images" : "music"} require the finite native unary format, canonical API-key origin and unpriced single-capability models`); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== `${format}_generate` || endpoint.responseFormat !== format
+    || endpoint.path !== "/v1beta/models/${model}:generateContent" || endpoint.method !== "POST"
+    || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+    || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => name !== "model" || style !== "segment")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== capabilityId
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes(capabilityId));
+  // Media counters and bounded bytes cannot qualify a text-token price card.
+  if (!models.length || models.some(model => !upstreams.includes(model.upstream)
+    || model.id !== `google/${model.upstream}` || model.capabilities.length !== 1 || model.availability?.status === "upstream_alias"
+    || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
+}
+
+function validateGoogleEmbeddings(manifest) {
+  const formats = new Map([
+    ["google.embed_content", "/v1beta/models/${model}:embedContent"],
+    ["google.batch_embed_contents", "/v1beta/models/${model}:batchEmbedContents"],
+  ]);
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("google.embed") || format.startsWith("google.batch_embed"))
+    || /:(?:embedContent|batchEmbedContents)$/.test(endpoint.path));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("Google embeddings require paired native formats, original API-key auth, finite qualified models and unpriced accounting"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length !== 2 || new Set(endpoints.map(([, endpoint]) => endpoint.requestFormat)).size !== 2
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(adapter?.injectHeaders ?? {}).length
+    || Object.keys(adapter?.injectQuery ?? {}).length || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  for (const [id, endpoint] of endpoints) {
+    if (!formats.has(endpoint.requestFormat) || endpoint.responseFormat !== endpoint.requestFormat || endpoint.path !== formats.get(endpoint.requestFormat)
+      || endpoint.auth || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+      || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+      || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => name !== "model" || style !== "segment")) fail();
+    const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+    if (capabilities.length !== 1 || capabilities[0].id !== "llm.embeddings" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  }
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("llm.embeddings"));
+  // The preview remains codec compatibility only; current live availability is
+  // not established by that fixture. No native tariff/bound is qualified yet.
+  if (!models.length || models.some(model => !["gemini-embedding-001", "gemini-embedding-2"].includes(model.upstream)
+    || model.capabilities.length !== 1 || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length)) fail();
+}
+
+function validateBasetenSystemOne(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("baseten.systemone"))
+    || manifest.id === "baseten" && /^\/(?:v1\/)?systemone(?:\/|$)/.test(endpoint.path));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("baseten.systemone requires its finite decision-only models, native metadata, original Bearer origin and unpriced request contract"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "baseten" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://inference.baseten.co/v1")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "baseten.systemone" || endpoint.responseFormat !== "baseten.systemone"
+    || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "llm.decisions" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  const nativeIds = ["decision-models/baseten-elephant-9b-latest", "decision-models/baseten-mammoth-27b-latest", "decision-models/baseten-joey-2b-latest"];
+  const models = (manifest.models?.entries ?? []).filter(model => nativeIds.includes(model.upstream) || model.capabilities?.includes("llm.decisions"));
+  if (!models.length || models.some(model => {
+    const facts = model.nativeCapabilities?.endpoints?.[id];
+    return !nativeIds.includes(model.upstream) || model.capabilities?.length !== 1 || model.capabilities[0] !== "llm.decisions"
+      || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length
+      || model.codexModel || model.supportedReasoningEfforts?.length
+      || !facts || facts.inference?.decision?.protocol !== "baseten-systemone" || facts.inference.chat === true
+      || facts.input?.some(input => !["text", "json"].includes(input)) || facts.maxOutputTokens !== undefined
+      || facts.contextTokens !== undefined || facts.contextWindow !== undefined;
+  })) fail();
+}
+
+function validateGradiumSpeech(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("gradium."))
+    || manifest.id === "gradium" && endpoint.path === "/api/post/speech/tts");
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("gradium.speech requires model-less native unary speech, canonical origin and original x-api-key auth without inferred tariffs"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "gradium" || manifest.class !== "rest_json" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://api.gradium.ai")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-api-key" || scheme.secretKind !== "api_key"
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || (manifest.models?.entries ?? []).length
+    || manifest.routing?.modelPrefixes?.length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || (adapter?.request ?? "rest_json") !== "rest_json" || (adapter?.response ?? "rest_json") !== "rest_json" || adapter?.stream
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "gradium.speech" || endpoint.responseFormat !== "audio.binary"
+    || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "audio.speech" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+}
+
+function validateDeepgramPrerecorded(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) => endpoint.requestFormat.startsWith("deepgram.") || endpoint.responseFormat.startsWith("deepgram."));
+  if (manifest.id !== "deepgram" && !endpoints.length) return;
+  const fail = () => { throw new Error("deepgram.prerecorded requires the qualified raw-audio provider, Token auth, nova-3 model and unpriced transcription contract"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "deepgram" || manifest.baseUrls.default !== "https://api.deepgram.com" || endpoints.length !== 1
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header.toLowerCase() !== "authorization"
+    || scheme.format !== "Token ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "deepgram.prerecorded" || endpoint.responseFormat !== "deepgram.prerecorded") fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "audio.transcription" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("audio.transcription"));
+  if (models.length !== 1 || models[0].upstream !== "nova-3" || models[0].capabilities.length !== 1
+    || models[0].pricing || models[0].pricingRef || Object.keys(models[0].endpointPricing ?? {}).length) fail();
 }
 
 function validateQuota(providerId, quota) {
@@ -468,4 +1007,22 @@ function normalizeGrantTransport(value) {
 
 function unique(values) {
   return [...new Set(values.map((value) => String(value).toUpperCase()))];
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
+  const outputIndex = rawArgs.indexOf("--output");
+  const output = outputIndex >= 0 ? rawArgs[outputIndex + 1] : null;
+  const paths = rawArgs.filter((_, index) => outputIndex < 0 || (index !== outputIndex && index !== outputIndex + 1));
+  if (!paths.length) throw new Error("usage: compile-providers <manifest...> [--output path]");
+
+  const manifests = paths.sort().map((path) => parse(readFileSync(path, "utf8")));
+  const snapshot = compileProviderSnapshot(manifests);
+  const encoded = output ? `${JSON.stringify(snapshot)}\n` : `${JSON.stringify(snapshot, null, 2)}\n`;
+  if (output) {
+    mkdirSync(dirname(output), { recursive: true });
+    writeFileSync(output, encoded);
+  } else {
+    process.stdout.write(encoded);
+  }
 }

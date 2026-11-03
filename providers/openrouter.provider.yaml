@@ -66,8 +66,3 @@ billing:
     - name: output_tokens
       source: usage.completion_tokens
       unit: token
-tests:
-  fixtures:
-    - name: chat-basic
-      request: providers/_fixtures/openrouter/chat-basic.request.json
-      response: providers/_fixtures/openrouter/chat-basic.response.json

@@ -1,0 +1,37 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "checkedAt": "2026-11-03",
+  "migrationSource": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
+  "aliasEffectiveDate": "2026-11-02",
+  "generate": {
+    "model": "grok-imagine-image-quality", "prompt": "Synthetic paper boat", "n": 1,
+    "response_format": "b64_json", "resolution": "1k", "aspect_ratio": "16:9"
+  },
+  "edit": {
+    "model": "grok-imagine-image-quality", "prompt": "Synthetic edit", "n": 1,
+    "response_format": "b64_json",
+    "image": { "type": "image_url", "url": "data:image/png;base64,AP+A" }
+  },
+  "result": { "model": "grok-imagine-image-2.0", "data": [{ "b64_json": "AP+A" }] },
+  "dispositions": [
+    { "selected": "grok-imagine-image-quality", "serving": "grok-imagine-image-2.0", "mode": "generate", "quality": "low", "basis": "retired_alias" },
+    { "selected": "grok-imagine-image-quality", "serving": "grok-imagine-image-2.0", "mode": "edit", "quality": "low", "basis": "retired_alias" },
+    { "selected": "grok-imagine-image-2.0", "serving": "grok-imagine-image-2.0", "mode": "generate", "quality": "low", "basis": "service_default" },
+    { "selected": "grok-imagine-image-2.0", "serving": "grok-imagine-image-2.0", "mode": "edit", "quality": "medium", "basis": "service_default" },
+    { "selected": "grok-imagine-image", "serving": "grok-imagine-image", "mode": "generate", "quality": null, "basis": "legacy" }
+  ],
+  "pricingEvidence": {
+    "source": "https://docs.x.ai/developers/pricing",
+    "model": "grok-imagine-image-2.0",
+    "inputImageMicros": 10000,
+    "lowOutputMicros": { "1k": 40000, "2k": 60000 },
+    "mediumOutputMicros": { "1k": 60000, "2k": 80000 },
+    "activatedTariff": false
+  },
+  "qualification": {
+    "syntheticBytesOnly": true, "liveCall": false, "requestModelRewritten": false,
+    "rawFileIdsAllowed": false, "remotePostReplayAllowed": false,
+    "policyFixedIsUpstreamCost": false, "unknownCostIsZero": false
+  }
+}
+

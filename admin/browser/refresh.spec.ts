@@ -240,89 +240,105 @@ test("navigation keeps its first usage read while a Catalog background refresh f
   expect(state.usageReads).toBe(1);
 });
 
-test("same-role principal changes replace the first lazy usage read", async ({ page }) => {
-  const state = await fixture(page);
-  await page.goto("/dashboard/catalog");
-  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-  let releaseSession!: () => void;
-  state.holdSession = new Promise<void>((resolve) => { releaseSession = resolve; });
-  state.email = "second@example.com";
-  await focusRefresh(page, "2026-07-06T12:01:00.000Z");
-  await expect.poll(() => state.sessionReads).toBe(2);
-  let releaseOld!: () => void;
-  state.holdUsage = new Promise<void>((resolve) => { releaseOld = resolve; });
-  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-  await expect.poll(() => state.usageReads).toBe(1);
-  let releaseCurrent!: () => void;
-  state.holdUsage = new Promise<void>((resolve) => { releaseCurrent = resolve; });
-  state.usage.policies[0].budget.remainingMicros = 4_000_000;
-  releaseSession();
-  await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
-  await expect.poll(() => state.usageReads).toBe(2);
-  const oldResponse = page.waitForResponse("**/v1/admin/usage");
-  releaseOld();
-  await oldResponse;
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
-  await expect(page.locator(".quotaNumbers")).not.toContainText("$8.00");
-  releaseCurrent();
-  await expect(page.locator(".quotaNumbers")).toContainText("$4.00 remaining$10.00 monthly limit · $2.00 used");
-  await expect(page.locator(".usageFreshness")).toHaveCount(0);
-  expect(state.usageReads).toBe(2);
-});
-
-for (const readStart of ["before", "after"] as const) {
-  test(`a ledger read started ${readStart} metadata refresh keeps its success`, async ({ page }) => {
+for (const outcome of ["success", "failure"] as const) {
+  test(`same-role principal changes retire a pending usage ${outcome}`, async ({ page }) => {
     const state = await fixture(page);
     await page.goto("/dashboard/catalog");
     await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-    const updated = await page.locator(".connectionMeta time").getAttribute("datetime");
-    let releaseUsage!: () => void;
-    state.holdUsage = new Promise<void>((resolve) => { releaseUsage = resolve; });
-    let releaseBootstrap!: () => void;
-    state.holdBootstrap = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
-    state.failBootstrap = true;
-    if (readStart === "before") {
-      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-      await expect.poll(() => state.usageReads).toBe(1);
-    }
+    let releaseSession!: () => void;
+    state.holdSession = new Promise<void>((resolve) => { releaseSession = resolve; });
+    state.email = "second@example.com";
     await focusRefresh(page, "2026-07-06T12:01:00.000Z");
-    await expect.poll(() => state.bootstrapReads).toBe(2);
-    if (readStart === "after") {
-      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-      await expect.poll(() => state.usageReads).toBe(1);
-    }
-    releaseUsage();
-    await expect(page.locator(".quotaNumbers")).toContainText("$8.00 remaining$10.00 monthly limit · $2.00 used");
-    releaseBootstrap();
-    await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
-    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", updated!);
+    await expect.poll(() => state.sessionReads).toBe(2);
+    state.failUsage = outcome === "failure";
+    let releaseOld!: () => void;
+    state.holdUsage = new Promise<void>((resolve) => { releaseOld = resolve; });
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await expect.poll(() => state.usageReads).toBe(1);
+    state.failUsage = false;
+    let releaseCurrent!: () => void;
+    state.holdUsage = new Promise<void>((resolve) => { releaseCurrent = resolve; });
+    state.usage.policies[0].budget.remainingMicros = 4_000_000;
+    releaseSession();
+    await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
+    await expect.poll(() => state.usageReads).toBe(2);
+    const oldResponse = page.waitForResponse("**/v1/admin/usage");
+    releaseOld();
+    await oldResponse;
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await expect(page.locator(".quotaNumbers")).not.toContainText("$8.00");
+    releaseCurrent();
+    await expect(page.locator(".quotaNumbers")).toContainText("$4.00 remaining$10.00 monthly limit · $2.00 used");
     await expect(page.locator(".usageFreshness")).toHaveCount(0);
-    await expect(page.locator(".quotaPanel")).toContainText("live ledger");
-    expect(state.usageReads).toBe(1);
+    expect(state.usageReads).toBe(2);
   });
 }
 
-test("a late admin usage read cannot overwrite a new principal's unavailable usage", async ({ page }) => {
-  const state = await fixture(page);
-  await page.goto("/dashboard/catalog");
-  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-  let release!: () => void;
-  state.holdUsage = new Promise<void>((resolve) => { release = resolve; });
-  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-  await expect.poll(() => state.usageReads).toBe(1);
-  state.role = "user";
-  state.email = "second@example.com";
-  state.failUsage = true;
-  await focusRefresh(page, "2026-07-06T12:01:00.000Z");
-  await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
-  await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
-  const oldResponse = page.waitForResponse("**/v1/admin/usage");
-  release();
-  await oldResponse;
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
-  await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
-  await expect(page.locator(".quotaNumbers")).toHaveCount(0);
-});
+for (const outcome of ["success", "failure"] as const) {
+  for (const readStart of ["before", "after"] as const) {
+    test(`a ledger read started ${readStart} metadata refresh keeps its ${outcome}`, async ({ page }) => {
+      const state = await fixture(page);
+      state.failUsage = outcome === "failure";
+      await page.goto("/dashboard/catalog");
+      await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+      const updated = await page.locator(".connectionMeta time").getAttribute("datetime");
+      let releaseUsage!: () => void;
+      state.holdUsage = new Promise<void>((resolve) => { releaseUsage = resolve; });
+      let releaseBootstrap!: () => void;
+      state.holdBootstrap = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
+      state.failBootstrap = true;
+      if (readStart === "before") {
+        await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+        await expect.poll(() => state.usageReads).toBe(1);
+      }
+      await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+      await expect.poll(() => state.bootstrapReads).toBe(2);
+      if (readStart === "after") {
+        await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+        await expect.poll(() => state.usageReads).toBe(1);
+      }
+      releaseUsage();
+      if (outcome === "success") await expect(page.locator(".quotaNumbers")).toContainText("$8.00 remaining$10.00 monthly limit · $2.00 used");
+      else await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
+      releaseBootstrap();
+      await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+      await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", updated!);
+      if (outcome === "success") {
+        await expect(page.locator(".usageFreshness")).toHaveCount(0);
+        await expect(page.locator(".quotaPanel")).toContainText("live ledger");
+      } else {
+        await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
+        await expect(page.locator(".quotaNumbers")).toContainText("Remaining unavailable");
+      }
+      expect(state.usageReads).toBe(1);
+    });
+  }
+}
+
+for (const outcome of ["success", "failure"] as const) {
+  test(`a late admin usage ${outcome} cannot overwrite a new principal's unavailable usage`, async ({ page }) => {
+    const state = await fixture(page);
+    await page.goto("/dashboard/catalog");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+    state.failUsage = outcome === "failure";
+    let release!: () => void;
+    state.holdUsage = new Promise<void>((resolve) => { release = resolve; });
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await expect.poll(() => state.usageReads).toBe(1);
+    state.role = "user";
+    state.email = "second@example.com";
+    state.failUsage = true;
+    await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
+    await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
+    const oldResponse = page.waitForResponse("**/v1/admin/usage");
+    release();
+    await oldResponse;
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
+    await expect(page.locator(".quotaNumbers")).toHaveCount(0);
+  });
+}
 
 async function focusRefresh(page: Page, time: string) {
   await page.clock.setFixedTime(new Date(time));

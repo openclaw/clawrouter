@@ -1,14 +1,15 @@
 import { isModelDiscovery } from "./model-discovery.ts";
+import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { envValue, HttpError } from "./utils.ts";
 
 export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
   if (!grant?.kind) return null;
   return provider.auth.grantTransports[grant.kind] ?? null;
 }
 
-export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean }
+export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
@@ -18,9 +19,10 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   if (requirement.endpoint.request_format === "openai.responses_input_tokens" && grant && grant.kind !== "api_key") return false;
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
-  if (requirement.responsesLifecycle) {
-    const lifecycle = requirement.endpoint.responsesLifecycle;
-    if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel].every(id =>
+  if (requirement.responsesLifecycle || requirement.managedLifecycle) {
+    const lifecycle = requirement.managedLifecycle ? requirement.endpoint.lifecycle : requirement.endpoint.responsesLifecycle;
+    if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined,
+      ...(requirement.managedLifecycle ? [requirement.endpoint.lifecycle?.files?.metadata, requirement.endpoint.lifecycle?.files?.download] : [])].filter((id): id is string => typeof id === "string").every(id =>
       requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
   }
   return requirement.mode === "http" || (["openai.responses", "openai.realtime"].includes(requirement.endpoint.websocket ?? "") && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"));
@@ -31,8 +33,10 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
 export function assertOperationConfiguration(requirement: GrantRequirement, grant: UpstreamGrant | null, env: Env): void {
   const { provider, endpoint } = requirement;
   if (!grantSupports(requirement, grant)) throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
-  if (requirement.responsesLifecycle) {
-    for (const id of Object.values(endpoint.responsesLifecycle!)) {
+  if (requirement.responsesLifecycle || requirement.managedLifecycle) {
+    const lifecycle = requirement.managedLifecycle ? endpoint.lifecycle! : endpoint.responsesLifecycle!;
+    for (const id of [lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined,
+      ...(requirement.managedLifecycle ? [requirement.endpoint.lifecycle?.files?.metadata, requirement.endpoint.lifecycle?.files?.download] : [])].filter((id): id is string => typeof id === "string")) {
       assertOperationConfiguration({ provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === id)!, mode: "http" }, grant, env);
     }
   }
@@ -43,8 +47,8 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
     applyTransportHeaders(headers, transport, grant);
     applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers);
     applyTemplateHeaders(provider, endpoint.headers, env, headers);
-    const path = (transport?.endpointPaths[endpoint.id] ?? endpoint.path).replace(/\$\{([^}]+)\}/g, (template, name: string) => endpoint.path_params.includes(name) ? "path-param" : template);
     const base = transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env);
+    const path = configuredEndpointPath(endpoint, transport?.endpointPaths[endpoint.id], base).replace(/\$\{([^}]+)\}/g, (template, name: string) => endpoint.path_params.includes(name) ? "path-param" : template);
     new URL(`${base.replace(/\/$/, "")}${resolveTemplate(provider, path, env)}`);
     for (const value of [...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query)]) resolveTemplate(provider, value, env);
   } catch (error) {
@@ -134,21 +138,43 @@ export function requiredGrantTemplate(value: string, grant: UpstreamGrant, error
   });
 }
 
+// Canonical product bindings do not make arbitrary *_KEY names credentials.
+function falKeyScheme(scheme: AuthScheme | GrantTransportAuth): boolean {
+  return scheme.type === "bearer" && scheme.header.toLowerCase() === "authorization"
+    && scheme.format === "Key ${secret}" && "secretKind" in scheme && scheme.secretKind === "api_key";
+}
+
+function canonicalSecretKey(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth, key: string): boolean {
+  return provider.id === "fal" && key === "FAL_KEY" && falKeyScheme(scheme)
+    || provider.id === "runway" && key === "RUNWAYML_API_SECRET" && scheme.type === "bearer"
+      && scheme.header.toLowerCase() === "authorization" && scheme.format === "Bearer ${secret}"
+      && "secretKind" in scheme && scheme.secretKind === "api_key";
+}
+
+export function providerSecretConfigKey(provider: CompiledProvider, key: string): boolean {
+  return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key)
+    || provider.auth.schemes.some(scheme => canonicalSecretKey(provider, scheme, key));
+}
+
 function providerSecret(provider: CompiledProvider, scheme: AuthScheme | GrantTransportAuth, grant: UpstreamGrant | null, env: Env): string | null {
+  let secret: string | null;
   if (grant) {
-    if ((grant.kind === "oauth" || grant.kind === "subscription") && grant.accessToken) return grant.accessToken;
-    return grant.credential ?? grant.accessToken ?? firstCredential(grant.credentials) ?? null;
+    secret = (grant.kind === "oauth" || grant.kind === "subscription") && grant.accessToken
+      ? grant.accessToken : grant.credential ?? grant.accessToken ?? firstCredential(grant.credentials) ?? null;
+  } else {
+    const kind = "secretKind" in scheme ? scheme.secretKind : "";
+    const candidates = provider.config_keys.filter((key) => kind === "api_token"
+      ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN")
+      : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN") || canonicalSecretKey(provider, scheme, key));
+    secret = candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
   }
-  const kind = "secretKind" in scheme ? scheme.secretKind : "";
-  const candidates = provider.config_keys.filter((key) => kind === "api_token" ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN") : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN"));
-  return candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
+  // Reject before Headers can include the malformed value in an exception.
+  // The selected grant never falls back to an environment credential.
+  if ((canonicalSecretKey(provider, scheme, "FAL_KEY") || canonicalSecretKey(provider, scheme, "RUNWAYML_API_SECRET"))
+    && secret && /[^\x21-\x7e]/.test(secret)) return null;
+  return secret;
 }
 
 function firstCredential(values: Record<string, string> | undefined): string | null {
   return values ? Object.values(values).find(Boolean) ?? null : null;
-}
-
-function envValue(env: Env, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
 }

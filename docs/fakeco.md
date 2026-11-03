@@ -236,7 +236,7 @@ The integration contract is:
 | --- | --- | --- |
 | `GET /v1/health` | none | Process liveness, environment identity, and observability mode. It is not upstream readiness. |
 | `GET /v1/catalog` | FakeCo credential | Authoritative allowed provider/model catalog. Require `provider.executable=true`; inspect `provider.readiness.status`, `verified`, and `reasons`. |
-| `GET /v1/models` | FakeCo credential | OpenAI model-list view containing currently executable models. |
+| `GET /v1/models` | FakeCo credential | Scoped OpenAI model-list view; configured identity survives known temporary grant cooldowns, not authorization or configuration removal. |
 | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings` | FakeCo credential | OpenAI-compatible inference. Model ids retain the provider namespace, such as `openai/gpt-4.1-mini`. |
 | `GET /v1/usage` | FakeCo credential | Policy or principal budget status, shared policy request/error/token/spend/provider/daily totals, the same totals for the caller alone under `usage.personal`, and caller-owned recent-event metadata. |
 

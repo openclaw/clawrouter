@@ -1,7 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { markBudgetDispatched, reserveBudget, settleBudget } from "../accounting.ts";
 import { budgetLedgerAddress, providerBudgetLedgerAddress } from "../budget-scope.ts";
@@ -88,18 +88,26 @@ test("migration preserves untyped debt and older writers while receipt scope own
   assert.equal(object.db.prepare("SELECT spent_micros FROM budget_windows").get().spent_micros, 5);
 });
 
-for (const failedScope of ["policy", "provider"]) {
-  test(`${failedScope} settlement recovers independently inside a colliding storage shard`, async (t) => {
-    const f = fixture(t);
+for (const [startedAt, rollsMonth] of [["2026-10-15T12:00:00Z", false], ["2026-10-30T12:00:00Z", true], ["2026-12-30T12:00:00Z", true]]) for (const failedScope of ["policy", "provider"]) {
+  test(`${failedScope} settlement recovers independently inside a colliding storage shard from ${startedAt}`, async (t) => {
+    const f = fixture(t, Date.parse(startedAt));
+    const addresses = [budgetLedgerAddress(auth.policyId, policy), providerBudgetLedgerAddress("openai")];
+    // Settlement belongs to its original window, while public budget status
+    // intentionally follows the current month after the simulated outage.
+    const originalSpent = () => Promise.all(addresses.map(async address => (await f.status(address)).spentMicros));
+    const outstanding = failedScope === "policy" ? [60, 25] : [25, 60];
     const reserved = await reserveBudget(f.env, auth, "llm.responses", cost, connection);
     await markBudgetDispatched(f.env, reserved);
     const failed = reserved.reservations[failedScope === "policy" ? 0 : 1];
     f.failures.add(failed.reservationId);
     await settleBudget(f.env, reserved, 25);
-    assert.deepEqual(await f.spent(), failedScope === "policy" ? [60, 25] : [25, 60]);
+    assert.deepEqual(await f.spent(), outstanding);
     f.advance(4 * day);
-    assert.deepEqual(await f.spent(), failedScope === "policy" ? [60, 25] : [25, 60]);
+    assert.deepEqual(await originalSpent(), outstanding);
+    assert.deepEqual(await f.spent(), rollsMonth ? [0, 0] : outstanding);
     assert.equal(f.rows(name).find(row => row.reservation_id === failed.reservationId).settled, 2);
+    f.restart(name);
+    assert.deepEqual(await originalSpent(), outstanding);
     const message = queued(f.messages[0]);
     await queue({ messages: [message] }, f.env);
     assert.equal(message.retries, 1);
@@ -107,7 +115,9 @@ for (const failedScope of ["policy", "provider"]) {
     await queue({ messages: [message] }, f.env);
     await queue({ messages: [message] }, f.env);
     assert.equal(message.acks, 2);
-    assert.deepEqual(await f.spent(), [25, 25]);
+    assert.deepEqual(await originalSpent(), [25, 25]);
+    assert.deepEqual(await f.spent(), rollsMonth ? [0, 0] : [25, 25]);
+    assert.ok(f.rows(name).every(row => row.window_key === addresses[0].windowKey), "late retries never move retained charges into the current month");
     assert.equal((await f.call(name, "/settle", { reservationId: failed.reservationId, actualCostMicros: 24 })).status, 409);
   });
 }
@@ -212,10 +222,8 @@ function fixture(t, initialNow = Date.now()) {
   const objects = new Map(), failures = new Set(), messages = [];
   function object(objectName, seed) {
     if (!objects.has(objectName)) {
-      const db = new DatabaseSync(":memory:");
-      t.after(() => db.close());
+      const { db, sql } = sqliteFixture(t);
       seed?.(db);
-      const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
       const state = { storage: { sql, getAlarm: async () => 1 } };
       objects.set(objectName, { db, state, ledger: new BudgetLedgerObject(state) });
     }

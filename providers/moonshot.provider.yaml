@@ -1,0 +1,143 @@
+# Frozen native Chat/model discovery and regional account contracts: docs/moonshot-native-contracts.md.
+# Primary endpoint and finite model contracts checked 2026-11-03; no Kimi Code credential fallback.
+schema: clawrouter.service-provider.v1
+id: moonshot
+displayName: Moonshot (global API)
+status: experimental
+class: openai_compatible
+service:
+  platform: moonshot
+  kind: model_provider
+  upstreamService: moonshot
+  configKeys: [MOONSHOT_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.moonshot.ai/v1
+routing:
+  nativePrefixes: [clawrouter-moonshot, moonshot]
+  modelPrefixes: [moonshot/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: moonshot/kimi-k3
+      upstream: kimi-k3
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [max]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.kimi.ai/docs/guide/kimi-k3-quickstart]
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: max
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.kimi.ai/docs/guide/kimi-k3-quickstart, https://platform.kimi.ai/docs/pricing/chat]
+            checkedAt: "2026-11-03"
+            input: [text, image, video]
+            contextWindow: 1048576
+            maxOutputTokens: 1048576
+    - id: moonshot/kimi-k3.1-pro
+      upstream: kimi-k3.1-pro
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [max]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart]
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: max
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart, https://platform.kimi.ai/docs/pricing/chat]
+            checkedAt: "2026-11-03"
+            input: [text, image, video]
+            contextWindow: 1048576
+            maxOutputTokens: 1048576
+    - id: moonshot/kimi-k3.1-pro-highspeed
+      upstream: kimi-k3.1-pro-highspeed
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [max]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart]
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: max
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart, https://platform.kimi.ai/docs/pricing/chat]
+            checkedAt: "2026-11-03"
+            input: [text, image, video]
+            contextWindow: 1048576
+            maxOutputTokens: 1048576
+    - id: moonshot/kimi-k2.7-code
+      upstream: kimi-k2.7-code
+      capabilities: [llm.chat]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-10-31"
+        checkedAt: "2026-11-03"
+        sources: [https://platform.kimi.ai/docs/pricing/chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart, https://platform.kimi.ai/docs/pricing/chat]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+    - id: moonshot/kimi-k2.7-code-highspeed
+      upstream: kimi-k2.7-code-highspeed
+      capabilities: [llm.chat]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-10-31"
+        checkedAt: "2026-11-03"
+        sources: [https://platform.kimi.ai/docs/pricing/chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart, https://platform.kimi.ai/docs/pricing/chat]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

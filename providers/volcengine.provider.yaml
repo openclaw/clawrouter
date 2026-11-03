@@ -1,0 +1,48 @@
+# Standard API only; region and plan contracts: docs/hosted-platform-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.volcengine.com/docs/ark/text-generation?lang=en
+schema: clawrouter.service-provider.v1
+id: volcengine
+displayName: Volcengine Ark Beijing
+status: experimental
+class: openai_compatible
+service:
+  platform: volcengine
+  kind: model_provider
+  upstreamService: volcengine
+  configKeys: [VOLCANO_ENGINE_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://ark.cn-beijing.volces.com/api/v3
+routing:
+  nativePrefixes: [clawrouter-volcengine, volcengine]
+  modelPrefixes: [volcengine/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: volcengine/doubao-seed-2-1-pro-260915
+      upstream: doubao-seed-2-1-pro-260915
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

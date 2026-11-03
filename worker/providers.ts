@@ -1,22 +1,25 @@
+import { capabilityForPath, createRouteCatalog, unifiedPathForRequestFormat } from "../shared/route-catalog.ts";
+export { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
+import { configuredEndpointPath } from "./endpoint-path.ts";
 import { modelForEndpoint } from "./model-pricing.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
 import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
 
-import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
-import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
 } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { envValue, HttpError, sha256Hex } from "./utils.ts";
 import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates } from "./provider-templates.ts";
 
 export const snapshot = snapshotJson as unknown as ProviderSnapshot;
@@ -75,10 +78,6 @@ export function modelRoute(model: string, capability?: string): { provider: Comp
   return entry ? { provider, model: entry } : null;
 }
 
-export function modelSupportsEndpoint(provider: CompiledProvider, model: CompiledModel, endpoint: CompiledEndpoint): boolean {
-  return provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
-}
-
 export function providerModel(provider: CompiledProvider, value: string, endpoint?: CompiledEndpoint, native = false): CompiledModel | null {
   const prefix = provider.routing.modelPrefixes.find((candidate) => value.startsWith(candidate));
   const upstream = prefix && !native ? value.slice(prefix.length) : value;
@@ -103,42 +102,14 @@ export function endpointForPath(provider: CompiledProvider, path: string): Compi
   return endpointId ? provider.endpoints.find((endpoint) => endpoint.id === endpointId) : undefined;
 }
 
-export function capabilityForPath(path: string): string | null {
-  return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/decisions" ? "llm.decisions" : path === "/v1/responses/compact" ? "llm.responses.compact" : path === "/v1/responses/input_tokens" ? "llm.count_tokens" : path === "/v1/moderations" ? "llm.moderations" : path === "/v1/embeddings" ? "llm.embeddings" : path === "/v1/audio/speech" ? "audio.speech" : path === "/v1/audio/transcriptions" ? "audio.transcription" : path === "/v1/images/generations" ? "image.generation" : null;
-}
-
 export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
   const format = endpoint.request_format;
-  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.decisions" ? "/v1/decisions" : format === "openai.responses_compact" ? "/v1/responses/compact" : format === "openai.responses_input_tokens" ? "/v1/responses/input_tokens" : format === "openai.moderations" ? "/v1/moderations" : format === "openai.embeddings" ? "/v1/embeddings" : format === "openai.audio_speech" ? "/v1/audio/speech" : format === "openai.audio_transcriptions" ? "/v1/audio/transcriptions" : format === "openai.images_generations" ? "/v1/images/generations" : null;
+  const path = unifiedPathForRequestFormat(format);
   const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
 
-export function routeCatalog() {
-  const openaiCompatible = snapshot.providers.filter((provider) => provider.class === "openai_compatible").map((provider) => ({
-    provider: provider.id,
-    models: provider.models.map((model) => ({
-      id: model.id,
-      capabilities: model.capabilities,
-      endpoints: model.capabilities.map(unifiedPathForCapability).filter(Boolean),
-    })),
-    modelPrefixes: provider.routing.modelPrefixes,
-    endpoints: provider.capabilities.map((capability) => unifiedPathForCapability(capability.id)).filter(Boolean),
-  }));
-  const manifestProxy = snapshot.providers.flatMap((provider) => provider.endpoints.map((endpoint) => ({
-    provider: provider.id,
-    endpoint: endpoint.id,
-    route: `/v1/proxy/${provider.id}/${endpoint.id}`,
-    methods: endpoint.methods,
-    pathParams: endpoint.path_params,
-    requestFormat: endpoint.request_format,
-    responseFormat: endpoint.response_format,
-    sampleModel: provider.models.find((model) => modelSupportsEndpoint(provider, model, endpoint))?.id ?? null,
-    models: provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint)).map((model) => ({ id: model.id, capabilities: model.capabilities })),
-    streaming: endpoint.streaming != null,
-  })));
-  return { openaiCompatible, manifestProxy };
-}
+export function routeCatalog() { return createRouteCatalog(snapshot.providers); }
 
 export async function providerReadiness(env: Env): Promise<Readiness[]> {
   const { grants, health, connections } = await readinessInputs(env);
@@ -164,11 +135,11 @@ async function readinessInputs(env: Env, suppliedConnections?: ProviderConnectio
 
 export function providerReadinessForState(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth, operation?: Pick<Readiness, "executableEndpoints" | "executable" | "status" | "reasons">): Readiness {
   const configuredOptional = optionalConfigKeys(provider, env);
-  const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
+  const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && providerSecretConfigKey(provider, key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
   const providerGrants = grants.filter((entry) => entry.grant.enabled !== false && entry.grant.provider === provider.id && grantUsable(entry.grant));
   const hasGrant = providerGrants.length > 0;
-  const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(key, providerGrants));
+  const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(provider, key, providerGrants));
   const configPresent = missingConfig.length === 0;
   const executableEndpoints = operation?.executableEndpoints ?? (configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : []);
   const checked = health?.checkedAt ? Date.parse(health.checkedAt) : NaN;
@@ -265,7 +236,7 @@ export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGr
 
 export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpoint, pathParams: Record<string, string>, env: Env, auth: UpstreamAuth): string {
   const transportPath = auth.transportPaths[endpoint.id as keyof typeof auth.transportPaths];
-  let path = transportPath ?? endpoint.path;
+  let path = configuredEndpointPath(endpoint, transportPath, auth.baseUrl);
   for (const name of endpoint.path_params) {
     const raw = pathParams[name];
     if (!raw) throw new HttpError(400, "missing_path_param", `path parameter ${name} is required`);
@@ -302,7 +273,7 @@ export function transformRequestBody(provider: CompiledProvider, path: string, m
   return transformed;
 }
 
-export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<void> {
+export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<string | undefined> {
   const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
   if (!scheme || scheme.type !== "sig_v4") return;
   const credentials = grant?.credentials;
@@ -317,7 +288,7 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
     throw new HttpError(503, "provider_not_configured", message);
   }
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ""), dateStamp = amzDate.slice(0, 8);
-  const payloadHash = await sha256(body ?? "");
+  const payloadHash = await sha256Hex(body ?? "");
   headers.set("host", url.host); headers.set("x-amz-date", amzDate); headers.set("x-amz-content-sha256", payloadHash);
   if (sessionToken) headers.set("x-amz-security-token", sessionToken);
   const headerNames: string[] = []; headers.forEach((_, name) => headerNames.push(name.toLowerCase()));
@@ -329,12 +300,13 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
   const uri = url.pathname.split("/").map(awsEncode).join("/") || "/";
   const canonicalRequest = `${method}\n${uri}\n${query}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
   const scope = `${dateStamp}/${region}/${scheme.service}/aws4_request`;
-  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256(canonicalRequest)}`;
+  const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
   const dateKey = await hmac(new TextEncoder().encode(`AWS4${secretAccessKey}`), dateStamp);
   const regionKey = await hmac(dateKey, region), serviceKey = await hmac(regionKey, scheme.service), signingKey = await hmac(serviceKey, "aws4_request");
   const signature = hex(await hmac(signingKey, stringToSign));
   headers.set("authorization", `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
   headers.delete("host");
+  return region;
 }
 
 export async function listGrantRecords(env: Env): Promise<GrantRecord[]> {
@@ -423,12 +395,8 @@ async function refreshGrant(key: string, grant: UpstreamGrant, provider: Compile
   return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force);
 }
 
-function grantUsable(grant: UpstreamGrant): boolean {
-  return canonicalGrantUsable(grant);
-}
-
-function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {
-  if (secretConfigKey(key)) return grants.length > 0;
+function grantSatisfiesConfig(provider: CompiledProvider, key: string, grants: GrantRecord[]): boolean {
+  if (providerSecretConfigKey(provider, key)) return grants.length > 0;
   const fields: Record<string, string> = { AWS_ACCESS_KEY_ID: "accessKeyId", AWS_SECRET_ACCESS_KEY: "secretAccessKey", AWS_SESSION_TOKEN: "sessionToken" };
   const field = fields[key];
   return !!field && grants.some(({ grant }) => !!grant.credentials?.[field] || grant.credentialFields?.includes(field));
@@ -450,12 +418,6 @@ function endpointTemplatesConfigured(provider: CompiledProvider, endpoint: Compi
   }
 }
 
-function envValue(env: Env, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
-async function sha256(value: string): Promise<string> { return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)))); }
 async function hmac(key: Uint8Array, value: string): Promise<Uint8Array> { const cryptoKey = await crypto.subtle.importKey("raw", key.buffer as ArrayBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value))); }
 function hex(value: Uint8Array): string { return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function awsEncode(value: string): string { return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`); }
@@ -465,8 +427,6 @@ function configuredList(provider: CompiledProvider, name: string, env: Env): str
   const key = templateCandidates(provider, name).find((candidate) => envValue(env, candidate));
   return key ? envValue(env, key)!.split(",").map((item) => item.trim()).filter(Boolean) : [];
 }
-
-
 
 function encodePathParam(value: string, style: string): string {
   if (style === "opaque_segment") {
@@ -482,6 +442,3 @@ function encodePathParam(value: string, style: string): string {
   if (value.includes("/") || value === "." || value === "..") throw new HttpError(400, "invalid_path_param", "path parameter must be one segment");
   return encodeURIComponent(value);
 }
-
-function secretConfigKey(key: string): boolean { return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key); }
-function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.decisions" ? "/v1/decisions" : capability === "llm.responses.compact" ? "/v1/responses/compact" : capability === "llm.count_tokens" ? "/v1/responses/input_tokens" : capability === "llm.moderations" ? "/v1/moderations" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : capability === "audio.transcription" ? "/v1/audio/transcriptions" : capability === "image.generation" ? "/v1/images/generations" : ""; }

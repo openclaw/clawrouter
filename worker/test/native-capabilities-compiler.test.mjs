@@ -1,33 +1,17 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 
 const openai = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
 const sol = "openai/gpt-6.1-sol";
-function compiler(paths) {
-  return spawnSync(process.execPath, ["scripts/compile-providers.mjs", ...paths], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
-}
-function compile(manifest) {
-  const directory = mkdtempSync(join(tmpdir(), "clawrouter-native-capabilities-"));
-  try {
-    const path = join(directory, "provider.yaml");
-    writeFileSync(path, JSON.stringify(manifest));
-    return compiler([path]);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-}
+function compile(manifest) { return compileProviderSnapshot([manifest]); }
 function model(manifest) { return manifest.models.entries.find(model => model.id === sol); }
 function facts(manifest) { return model(manifest).nativeCapabilities.endpoints.responses; }
 
-test("all provider sources validate and generate the shipped snapshot with optional native facts intact", () => {
-  const paths = readdirSync("providers").filter(path => path.endsWith(".provider.yaml")).sort().map(path => "providers/" + path);
-  const result = compiler(paths);
-  assert.equal(result.status, 0, result.stderr);
-  const compiled = JSON.parse(result.stdout), shipped = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
-  assert.deepEqual(compiled, shipped, "source manifests and runtime must agree");
+test("compiler preserves optional native facts in provider models and the model index", () => {
+  const compiled = compile(openai);
   const provider = compiled.providers.find(provider => provider.id === "openai");
   for (const id of [sol, "openai/gpt-6-astra", "openai/gpt-6-sol", "openai/gpt-6-luna"]) {
     const entry = provider.models.find(model => model.id === id);
@@ -47,9 +31,7 @@ test("old manifests remain valid and unknown model names do not acquire native c
   const manifest = structuredClone(openai);
   for (const entry of manifest.models.entries) delete entry.nativeCapabilities;
   manifest.models.entries.push({ id: "openai/gpt-999-vision", upstream: "gpt-999-vision", capabilities: ["llm.responses"] });
-  const result = compile(manifest);
-  assert.equal(result.status, 0, result.stderr);
-  const compiled = JSON.parse(result.stdout);
+  const compiled = compile(manifest);
   assert.ok(compiled.providers[0].models.every(model => model.nativeCapabilities === undefined));
   assert.equal(compiled.model_index["openai/gpt-999-vision"].nativeCapabilities, undefined);
 });
@@ -80,10 +62,7 @@ test("compiler rejects malformed or cross-endpoint capability metadata instead o
   ];
   for (const [name, mutate, error] of cases) {
     const manifest = structuredClone(openai); mutate(manifest);
-    const result = compile(manifest);
-    assert.equal(result.status, 1, name);
-    assert.match(result.stderr, error, name);
-    assert.equal(result.stdout, "", name + ": no partial snapshot");
+    assert.throws(() => compile(manifest), error, name);
   }
 });
 
@@ -94,9 +73,7 @@ test("typed decision schema is endpoint-specific and cannot replace a conversati
   entry.capabilities.push("llm.decisions");
   entry.nativeCapabilities.endpoints.decisions = { sources: ["https://example.com/synthetic-contract"], checkedAt: "2026-10-20", input: ["text", "image", "json"], maxOutputTokens: 0,
     inference: { chat: false, decision: { protocol: "openai-decisions", reasoning: { modes: ["auto"] }, questions: { boolean: { probabilities: "boolean", abstention: false }, choice: { probabilities: "categorical", abstention: false, minOptions: 2, maxOptions: 255 }, score: { probabilities: "categorical", abstention: false } }, confidence: "provider-specific", limits: { maxQuestions: 400, image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg", "image/webp"], remoteUrls: false } } } } };
-  const result = compile(manifest);
-  assert.equal(result.status, 0, result.stderr);
-  const output = JSON.parse(result.stdout).model_index[sol];
+  const output = compile(manifest).model_index[sol];
   assert.equal(output.nativeCapabilities.endpoints.decisions.maxOutputTokens, 0);
   assert.equal(output.nativeCapabilities.endpoints.responses.maxOutputTokens, 128000);
   assert.equal(output.nativeCapabilities.endpoints.responses.contextWindow, 1050000);
@@ -106,9 +83,9 @@ test("typed decision schema is endpoint-specific and cannot replace a conversati
   for (const [field, value] of [["protocol", "unknown-protocol"], ["limits", { maxQuestions: 401 }], ["questions", { arbitrary: {} }]]) {
     const bad = structuredClone(manifest);
     model(bad).nativeCapabilities.endpoints.decisions.inference.decision[field] = value;
-    assert.match(compile(bad).stderr, /invalid manifest/);
+    assert.throws(() => compile(bad), /invalid manifest/);
   }
   entry.nativeCapabilities.endpoints.decisions.inference.decision.questions.choice.minOptions = 255;
   entry.nativeCapabilities.endpoints.decisions.inference.decision.questions.choice.maxOptions = 2;
-  assert.match(compile(manifest).stderr, /minOptions exceeds maxOptions/);
+  assert.throws(() => compile(manifest), /minOptions exceeds maxOptions/);
 });

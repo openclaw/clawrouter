@@ -1,5 +1,5 @@
+import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
 import { registerHooks } from "node:module";
 import test from "node:test";
 
@@ -7,9 +7,6 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL === new URL("../oauth.ts", import.meta.url).href && ["./access", "./authority"].includes(specifier)) {
       return { shortCircuit: true, url: new URL("./oauth-onboarding.mocks.mjs", import.meta.url).href };
-    }
-    if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) {
-      return nextResolve(`${specifier}.ts`, context);
     }
     return nextResolve(specifier, context);
   },

@@ -1,24 +1,10 @@
-import { DatabaseSync } from "node:sqlite";
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { after } from "node:test";
 import { PolicyBindingIndexObject } from "../authority.ts";
 
 export function createGrantAuthority(initialize, env) {
-  const db = new DatabaseSync(":memory:");
-  after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
-  const storage = {
-    sql,
-    transactionSync(callback) {
-      db.exec("BEGIN");
-      try { const result = callback(); db.exec("COMMIT"); return result; }
-      catch (error) { db.exec("ROLLBACK"); throw error; }
-    },
-  };
+  const { sql, transactionSync } = sqliteFixture({ after });
+  const storage = { sql, transactionSync };
   initialize?.(sql);
   const object = new PolicyBindingIndexObject({ storage }, env);
   return {

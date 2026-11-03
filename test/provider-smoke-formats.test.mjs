@@ -1,6 +1,6 @@
+import { sqliteFixture } from "../worker/test/sqlite-storage.mjs";
 import "../worker/test/typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { buildProviderSmokePlan, runLiveProviderSmokes, summarizePlan } from "../scripts/provider-smoke-plan.mjs";
 import catalog from "../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -25,23 +25,40 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", "cloudflare-ai-gateway": "universal", cohere: "chat", firecrawl: "scrape", "google-gemini": "generate_content", replicate: "prediction", tavily: "search" };
-  assert.equal(plan.providerCount, 22);
-  assert.equal(plan.targetCount, 22);
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
+  assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
+  assert.equal(plan.providerCount, catalog.providers.length);
+  assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, id === "replicate", id);
+    assert.equal(!!target.unresolved, ["replicate", "gradium"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
+  assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("configured Gradium stays visibly unresolved without a paid speech attempt", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "gradium");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { GRADIUM_API_KEY: "fixture-private-upstream-key" });
+  assert.equal(plan.configuredCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["GRADIUM_API_KEY"]);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); });
+  const health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["gradium"], onResult: result => health.push(result) }), /no smoke request template for gradium.speech/);
+  assert.equal(network.mock.callCount(), 0);
+  assert.deepEqual(health, [], "an unresolved target cannot publish successful provider health");
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-upstream-key|fixture-proxy-key/);
 });
 
 for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of [
-  ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false],
+  ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false], ["cohere", false, false, "cohere.chat"],
   ["google-gemini", false, false], ["tavily", false, false], ["firecrawl", false, false],
+  ["brave", false, false], ["exa", false, false], ["parallel", false, false],
   ["openai", false, false], ["openai", false, true],
   ["openai", false, false, "openai.responses"], ["openai", false, false, "openai.decisions"], ["openai", false, false, "openai.embeddings"],
-  ["cohere", false, false, "cohere.embed"], ["tavily", false, false, "tavily.extract"],
+  ["cohere", false, false, "cohere.embed"], ["voyage", false, false], ["tavily", false, false, "tavily.extract"],
   ["firecrawl", false, false, "fixture.status", "GET"], ["firecrawl", false, false, "fixture.status", "HEAD"],
   ["firecrawl", false, false, "fixture.graphql", "POST"],
   ["groq", false, true], ["groq", false, true, null, null, "catalog"], ["groq", false, true, null, null, "native"],
@@ -94,7 +111,7 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
       }
       const native = new URL(url), headers = new Headers(init.headers), body = init.body === undefined ? undefined : JSON.parse(init.body);
       assert.equal(native.origin, "https://format-upstream.example");
-      assert.equal(init.method, method ?? "POST");
+      assert.equal(init.method, method ?? endpoint.method);
       assert.equal(native.pathname, endpoint.path.replace(/\$\{([^}]+)\}/g, (_, name) => encodeURIComponent(["model", "deployment"].includes(name) ? expectedModel.upstream : target.envelope.pathParams[name])));
       for (const scheme of provider.auth.schemes) {
         if (scheme.type === "bearer") assert.equal(headers.get(scheme.header), "Bearer fixture-upstream-key");
@@ -102,9 +119,10 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         if (scheme.type === "query_api_key") assert.equal(native.searchParams.get(scheme.param), "fixture-upstream-key");
       }
       assert.ok(!JSON.stringify(body ?? {}).includes("unrelated"));
-      if (["GET", "HEAD"].includes(method)) {
+      if (["GET", "HEAD"].includes(endpoint.method)) {
         assert.equal(init.body, undefined);
         assert.deepEqual(target.envelope.body, {});
+        if (endpoint.request_format === "brave.search") assert.deepEqual(Object.fromEntries(native.searchParams), { q: "OpenClaw", count: "1" });
       } else if (endpoint.request_format === "fixture.graphql") {
         assert.deepEqual(body, { query: "{ viewer { id } }" });
       } else if (endpoint.request_format === "anthropic.messages") {
@@ -118,6 +136,10 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         assert.deepEqual(body, { contents: [{ parts: [{ text: "reply with ok" }] }] });
       } else if (endpoint.request_format === "tavily.search") {
         assert.deepEqual(body, { query: "OpenClaw", max_results: 1 });
+      } else if (endpoint.request_format === "exa.search") {
+        assert.deepEqual(body, { query: "OpenClaw", numResults: 1 });
+      } else if (endpoint.request_format === "parallel.search") {
+        assert.deepEqual(body, { search_queries: ["OpenClaw official website"], mode: "basic", max_chars_total: 1000 });
       } else if (endpoint.request_format === "tavily.extract") {
         assert.deepEqual(body, { urls: ["https://example.com"] });
       } else if (endpoint.request_format === "openai.responses") {
@@ -126,10 +148,13 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         assert.deepEqual(body, { model: expectedModel.upstream, input: "The product is damaged.", questions: [{ type: "predicate", name: "damaged", instructions: "Is the product described as damaged?" }] });
       } else if (endpoint.request_format === "openai.embeddings") {
         assert.deepEqual(body, { model: expectedModel.upstream, input: "OpenClaw" });
+      } else if (endpoint.request_format === "voyage.embeddings") {
+        assert.deepEqual(body, { model: expectedModel.upstream, input: ["OpenClaw"], input_type: "query", truncation: false, output_dimension: 256, output_dtype: "float" });
       } else if (endpoint.request_format === "cohere.embed") {
         assert.deepEqual(body, { model: expectedModel.upstream, texts: ["OpenClaw"], input_type: "search_query", embedding_types: ["float"] });
       } else assert.deepEqual(body, { url: "https://example.com", formats: ["markdown"] });
       upstream.push(body);
+      if (endpoint.request_format === "voyage.embeddings") return Response.json({ object: "list", data: [{ object: "embedding", index: 0, embedding: Array(256).fill(0) }], usage: { total_tokens: 1 } });
       return method === "HEAD" ? new Response(null) : Response.json({ fixture: "synthetic upstream", usage: { prompt_tokens: 1, completion_tokens: 1 } });
     });
     try {
@@ -173,6 +198,9 @@ test("unified smoke eligibility uses the selected endpoint's wire contract", () 
   const cohere = renamed("cohere");
   cohere.class = "openai_compatible";
   Object.assign(cohere.adapter, { request: "openai", response: "openai" });
+  assert.equal(buildProviderSmokePlan({ providers: [cohere] }, {}).providers[0].target.kind, "openai_chat");
+  cohere.endpoints = cohere.endpoints.filter(endpoint => endpoint.request_format === "cohere.chat");
+  cohere.capabilities = cohere.capabilities.filter(capability => cohere.endpoints.some(endpoint => endpoint.id === capability.endpoint));
   assert.equal(buildProviderSmokePlan({ providers: [cohere] }, {}).providers[0].target.kind, "manifest_proxy");
   const openai = renamed("openai");
   openai.endpoints.push({ id: "unrelated", path: "/${project}/${resource}", path_params: ["project", "resource"] });
@@ -246,9 +274,8 @@ async function smokeEnvironment(provider, t) {
     USAGE_QUEUE: { send: async (body) => { fixtureQueue.push({ body, ackCount: 0, retryCount: 0, ack() { this.ackCount += 1; }, retry() { this.retryCount += 1; } }); } },
     USAGE_LEDGER: { idFromName: name => name, get(name) {
       if (!ledgers.has(name)) {
-        const db = new DatabaseSync(":memory:"); t.after(() => db.close());
-        const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-        const ledger = new UsageLedgerObject({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
+        const { sql, transactionSync } = sqliteFixture(t);
+        const ledger = new UsageLedgerObject({ storage: { sql, transactionSync, getAlarm: async () => 1 } });
         ledgers.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)) });
       }
       return ledgers.get(name);

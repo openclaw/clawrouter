@@ -1,7 +1,8 @@
+import "../../test/helpers/typescript-resolver.mjs";
+import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { registerHooks } from "node:module";
 import test from "node:test";
@@ -12,9 +13,6 @@ registerHooks({
       if (specifier === "./access") {
         return { shortCircuit: true, url: new URL("./avatar-fetch.mocks.mjs", import.meta.url).href };
       }
-    }
-    if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) {
-      return nextResolve(`${specifier}.ts`, context);
     }
     return nextResolve(specifier, context);
   },
@@ -30,12 +28,7 @@ function avatarRequest() {
 }
 
 test("session avatar Gravatar fetch attaches a 30s AbortSignal", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let avatarInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), gravatarUrl);
@@ -55,12 +48,7 @@ test("session avatar fetch aborts a hung Gravatar instead of stalling the Worker
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const nativeFetch = globalThis.fetch.bind(globalThis);
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  const timeouts = [];
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(40);
-  });
+  const timeouts = captureTimeouts(context, 40);
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), gravatarUrl);
     return nativeFetch(`http://127.0.0.1:${port}/hung`, { signal: init?.signal });

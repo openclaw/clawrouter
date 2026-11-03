@@ -14,7 +14,7 @@ import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
 import { demoClientCatalog } from "./demo-data";
 import { oauthCallbackStatus, settled, usagePolicyId } from "./ui-helpers";
-import { syntheticUsageTimeline } from "./usage-analytics";
+import { addUsageCounters, syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
   AdminBootstrapResponse,
@@ -282,15 +282,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     const effective = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
     const providerIds = new Set(effective.services.map((service) => service.provider));
     const providerUsage = demo.usage.providers.filter((provider) => providerIds.has(provider.provider));
-    const summary = providerUsage.reduce<UsageSummary>((current, provider) => ({
-      ...current,
-      requestCount: current.requestCount + provider.requestCount,
-      successCount: current.successCount + provider.successCount,
-      errorCount: current.errorCount + provider.errorCount,
-      totalTokens: current.totalTokens + provider.totalTokens,
-      actualCostMicros: current.actualCostMicros + provider.actualCostMicros,
-      unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (provider.unpricedRequestCount ?? 0),
-    }), { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
+    const summary = providerUsage.reduce<UsageSummary>(addUsageCounters, { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
     const contentRetention = {
       enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),
       retentionDays: 30,

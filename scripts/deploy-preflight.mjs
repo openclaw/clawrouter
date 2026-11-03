@@ -1,3 +1,4 @@
+import { cloudflareClient, cloudflareError as firstCloudflareError, probeCloudflareKvWrite } from "./cloudflare-diagnostics.mjs";
 import {
   buildProviderSmokePlan,
   compileProviderSnapshot,
@@ -37,6 +38,7 @@ const requiredDeployEnv = [
 ];
 
 const errors = [];
+const cloudflareFetch = cloudflareClient(errors);
 for (const name of requiredDeployEnv) {
   if (!process.env[name]) {
     errors.push(`missing required deploy env: ${name}`);
@@ -257,44 +259,10 @@ async function checkCloudflareKvWrite({ token, accountId, namespaceId }) {
   const key = `__clawrouter_preflight_${Date.now()}`;
   const encodedKey = encodeURIComponent(key);
   const path = `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodedKey}`;
-  const put = await cloudflareFetch(token, path, {
-    method: "PUT",
-    headers: { "content-type": "text/plain" },
-    body: "ok",
-  });
-  if (!put.ok || put.body.success === false) {
-    errors.push(`CLOUDFLARE_API_TOKEN cannot write POLICY_KV: ${firstCloudflareError(put)}`);
-    return;
-  }
-  const deleted = await cloudflareFetch(token, path, { method: "DELETE" });
-  if (!deleted.ok || deleted.body.success === false) {
-    errors.push(
-      `CLOUDFLARE_API_TOKEN wrote POLICY_KV but could not delete probe key: ${firstCloudflareError(deleted)}`,
-    );
+  const failed = await probeCloudflareKvWrite(cloudflareFetch, token, path);
+  if (failed) {
+    errors.push(failed.error);
     return;
   }
   console.log("cloudflare kv token: can write POLICY_KV");
-}
-
-async function cloudflareFetch(token, path, init = {}) {
-  let response;
-  let body;
-  try {
-    response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    body = await response.json().catch(() => ({}));
-  } catch (error) {
-    errors.push(`could not reach Cloudflare API: ${error.message}`);
-    return { ok: false, status: 0, body: {} };
-  }
-  return { ok: response.ok, status: response.status, body };
-}
-
-function firstCloudflareError(response) {
-  return response.body.errors?.[0]?.message ?? `HTTP ${response.status}`;
 }

@@ -1,3 +1,4 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
@@ -12,8 +13,7 @@ const now = 1_800_000_000_000, period = 30 * 86_400_000;
 const sweep = (owner) => owner.fetch(new Request("https://cleanup/sweep", { method: "POST" }));
 
 function fixture(t, values, pageSize = 1000, path = ":memory:") {
-  const db = new DatabaseSync(path);
-  t.after(() => db.close());
+  const { db, sql } = sqliteFixture(t, path);
   const objects = new Map(values.map((value) => [value.key, value]));
   const calls = [], deletes = [];
   const archive = {
@@ -30,12 +30,6 @@ function fixture(t, values, pageSize = 1000, path = ":memory:") {
       for (const key of keys) objects.delete(key);
     },
   };
-  const sql = { exec(query, ...args) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...args);
-    statement.run(...args);
-    return [];
-  } };
   const state = () => {
     const row = db.prepare("SELECT state_json FROM content_cleanup WHERE id = 1").get();
     return row ? JSON.parse(row.state_json) : null;

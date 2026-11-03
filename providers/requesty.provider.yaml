@@ -1,0 +1,48 @@
+# Gateway Chat contract: docs/hosted-gateway-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.requesty.ai/quickstart
+schema: clawrouter.service-provider.v1
+id: requesty
+displayName: Requesty
+status: experimental
+class: openai_compatible
+service:
+  platform: requesty
+  kind: gateway_platform
+  upstreamService: requesty
+  configKeys: [REQUESTY_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://router.requesty.ai/v1
+routing:
+  nativePrefixes: [clawrouter-requesty, requesty]
+  modelPrefixes: [requesty/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: requesty/openai/gpt-6-luna
+      upstream: openai/gpt-6-luna
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

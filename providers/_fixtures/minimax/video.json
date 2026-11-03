@@ -1,0 +1,71 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "checkedAt": "2026-11-03",
+  "request": {
+    "model": "MiniMax-Hailuo-2.3",
+    "prompt": "Synthetic paper boat in motion",
+    "duration": 6,
+    "resolution": "1080P"
+  },
+  "image": {
+    "model": "MiniMax-Hailuo-2.3-Fast",
+    "prompt": "Synthetic first frame",
+    "first_frame_image": "data:image/png;base64,AP+A",
+    "duration": 10,
+    "resolution": "768P"
+  },
+  "submitted": {
+    "task_id": "9007199254740993",
+    "base_resp": {
+      "status_code": 0
+    }
+  },
+  "pending": {
+    "task_id": "9007199254740993",
+    "status": "Processing",
+    "base_resp": {
+      "status_code": 0
+    }
+  },
+  "success": {
+    "task_id": "9007199254740993",
+    "status": "Success",
+    "file_id": "9223372036854775807",
+    "video_width": 1920,
+    "video_height": 1080,
+    "base_resp": {
+      "status_code": 0
+    }
+  },
+  "failed": {
+    "task_id": "9007199254740993",
+    "status": "Fail",
+    "base_resp": {
+      "status_code": 1027,
+      "status_msg": "Synthetic output safety rejection"
+    }
+  },
+  "file": {
+    "file": {
+      "file_id": "9223372036854775807",
+      "bytes": 16,
+      "purpose": "video_generation",
+      "filename": "synthetic.mp4",
+      "download_url": "https://media.example/expiring.mp4"
+    },
+    "base_resp": {
+      "status_code": 0
+    }
+  },
+  "qualification": {
+    "taskRetention": "not_qualified",
+    "metadataDownloadUrlSeconds": 3600,
+    "cancelSupported": false,
+    "actualCostMicros": null,
+    "policyFixedIsUpstreamCost": false,
+    "liveCall": false,
+    "mp4HeaderFixtureOnly": true,
+    "originalJobAndCredentialRequired": true
+  }
+}
+

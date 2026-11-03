@@ -70,18 +70,20 @@ test("current content errors remain visible and can be closed", async ({ page })
   await expect(page.locator(".retainedContentFeedback")).toHaveCount(0);
 });
 
-test("leaving Usage retires its read before returning to a new inspector", async ({ page }) => {
-  await open(page);
-  await inspect(page, "ordinary-a", 1);
-  await page.getByRole("button", { name: "Catalog", exact: true }).click();
-  expect(await aborted(page, 0)).toBe(true);
-  await page.getByRole("button", { name: "Usage", exact: true }).click();
-  await inspect(page, "ordinary-b", 2);
-  await complete(page, 1, "returned-content");
-  await complete(page, 0, "departed-content");
-  await expect(page.locator(".retainedContentPanel")).toContainText("returned-content");
-  await expect(page.locator("body")).not.toContainText("departed-content");
-});
+for (const outcome of ["success", "error"] as const) {
+  test(`leaving Usage retires its pending ${outcome} before returning to a new inspector`, async ({ page }) => {
+    await open(page);
+    await inspect(page, "ordinary-a", 1);
+    await page.getByRole("button", { name: "Catalog", exact: true }).click();
+    expect(await aborted(page, 0)).toBe(true);
+    await page.getByRole("button", { name: "Usage", exact: true }).click();
+    await inspect(page, "ordinary-b", 2);
+    await complete(page, 1, "returned-content");
+    await settle(page, 0, outcome, "departed-content");
+    await expect(page.locator(".retainedContentPanel")).toContainText("returned-content");
+    await expect(page.locator("body")).not.toContainText("departed-content");
+  });
+}
 
 test("identity replacement cannot publish a pending old content reply", async ({ page }) => {
   const state = await open(page);

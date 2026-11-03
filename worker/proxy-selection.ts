@@ -1,3 +1,20 @@
+import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
+import { googleAudioRequest } from "./google-audio-classification.ts";
+import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
+import { googleImageRequest } from "./google-image-classification.ts";
+import { validateCompactRequest } from "./responses-compact.ts";
+import { validateSpeechRequest } from "./speech-request.ts";
+import { prepareNativeImage } from "./native-images.ts";
+import { prepareNativeGoogleMusic } from "./native-google-music.ts";
+import { prepareNativeGradiumSpeech } from "./native-gradium-speech.ts";
+import { prepareNativeGoogleImage } from "./native-google-images.ts";
+import type { NativeResponse } from "./native-response.ts";
+import type { NativeQueryBinding } from "./native-query.ts";
+import { nativeEmbeddingInput, prepareNativeEmbedding } from "./native-embeddings.ts";
+import { selectRequestTariff } from "./request-tariff.ts";
+import { prepareRadiusRequest } from "./provider-radius.ts";
+import { prepareOllamaChatRequest } from "./provider-ollama.ts";
 import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
 import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
 import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
@@ -16,9 +33,38 @@ export interface ProxySelection {
   pathParams: Record<string, string>;
   method: string;
   timeoutMs?: number;
+  nativeResponse?: NativeResponse;
+  nativeQuery?: NativeQueryBinding;
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.provider.id === "aws-bedrock" && (selection.model?.capabilities.includes("llm.embeddings")
+    || isBedrockEmbeddingModel(selection.model?.upstream ?? selection.pathParams?.model ?? ""))
+    && selection.capability !== "llm.embeddings")
+    throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
+  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
+    ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
+    ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection);
+  if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
+    && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
+    throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
+  if (googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
+    && (!["google.music_generate", "google.speech_generate_content", "google.speech_interactions"].includes(selection.endpoint.request_format) || !selection.nativeResponse))
+    throw new HttpError(400, "native_audio_route_required", "Google audio output requires its qualified nonstream native audio route");
+  if (selection.nativeResponse) return;
+  if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
+  if (selection.endpoint.request_format === "radius.messages") {
+    const body = requestObject(selection.body);
+    try { selection.body = { ...prepareRadiusRequest(body, typeof body.model === "string" ? body.model : "") }; }
+    catch { throw new HttpError(400, "invalid_radius_request", "native messages require a selected model, Pi context and valid options"); }
+    return;
+  }
+  if (selection.endpoint.request_format === "ollama.chat") {
+    const body = requestObject(selection.body);
+    try { prepareOllamaChatRequest(body, typeof body.model === "string" ? body.model : ""); }
+    catch { throw new HttpError(400, "invalid_ollama_chat_request", "native Chat requires a selected model, native messages and valid tools, thinking, stream and options fields"); }
+    return;
+  }
   if (isStandaloneSearch(selection.endpoint)) {
     if (!selection.model) throw new HttpError(400, "model_required", "standalone search requires a qualified registered model");
     validateStandaloneSearch(requestObject(selection.body));
@@ -30,12 +76,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     return;
   }
   if (selection.endpoint.request_format === "openai.responses_compact") {
-    const body = requestObject(selection.body), pricing = selection.model?.pricing;
-    if (!selection.model || !pricing || pricing.unit != null || !Number.isSafeInteger(pricing.defaultMaxOutputTokens) || pricing.defaultMaxOutputTokens <= 0) throw new HttpError(400, "compact_model_unqualified", "a registered token-priced compaction model with an authoritative output bound is required");
-    if (body.stream !== undefined && body.stream !== false) throw new HttpError(400, "unsupported_compact_stream", "Responses compaction is unary; streaming is unsupported");
-    if (body.background !== undefined && body.background !== false) throw new HttpError(400, "unsupported_compact_background", "Responses compaction does not support background jobs");
-    if (body.previous_response_id != null && (typeof body.previous_response_id !== "string" || !body.previous_response_id.length || body.previous_response_id.length > 256)) throw new HttpError(400, "invalid_compact_parent", "previous_response_id must be a bounded nonempty response identifier");
-    if (body.input != null && typeof body.input !== "string" && !Array.isArray(body.input) || body.input == null && body.previous_response_id == null) throw new HttpError(400, "invalid_compact_input", "compaction requires input or an owned previous_response_id");
+    validateCompactRequest(requestObject(selection.body), selection.model);
     return;
   }
   if (selection.endpoint.request_format === "openai.images_generations") {
@@ -45,13 +86,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     return;
   }
   if (selection.endpoint.request_format !== "openai.audio_speech") return;
-  const body = requestObject(selection.body);
-  if (!selection.model) throw new HttpError(400, "model_required", "a registered speech model is required");
-  // The legacy speech API accepts at most 4096 characters and binary audio;
-  // SSE belongs to newer speech models, outside this endpoint's qualified contract.
-  if (typeof body.input !== "string" || !body.input.length || [...body.input].length > 4096) throw new HttpError(400, "invalid_speech_input", "speech input must contain 1 to 4096 Unicode code points");
-  if (Object.hasOwn(body, "instructions")) throw new HttpError(400, "unsupported_speech_instructions", "this speech model does not support instructions");
-  if (body.stream_format !== undefined && body.stream_format !== "audio") throw new HttpError(400, "unsupported_speech_stream", "this speech model supports binary audio only");
+  validateSpeechRequest(requestObject(selection.body), selection.model);
 }
 
 interface ProxySelectionFailure {
@@ -95,9 +130,17 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
     return { model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
   }
   const body = requestObject(inputBody);
+  // Managed job models are native inputs, not inference catalog selectors.
+  // The explicit protocol adapter validates them before credential selection.
+  if (endpoint.lifecycle) {
+    if (endpoint.modelPassthrough) throw new HttpError(400, "invalid_managed_route", "managed lifecycles cannot use model passthrough");
+    return { model: null, body, pathParams: inputPathParams };
+  }
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
   if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
-  const modelId = typeof body.model === "string" ? body.model : null;
+  const embedding = nativeEmbeddingInput(provider, endpoint);
+  // Native models/foo is a wire assertion, not a second router selector.
+  const modelId = !embedding && typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
   const resolve = (value: string | null) => {
     if (value === null) return null;
@@ -113,11 +156,13 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
 
   const model = bodyModel ?? pathModel;
+  if (!nativeModelEligible(endpoint.request_format, model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model is not qualified for this native protocol");
   const upstreamModel = bodyUpstream ?? pathUpstream;
   const pathParams = { ...inputPathParams };
   for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
     if (upstreamModel) pathParams[name] = upstreamModel;
   }
+  if (embedding) return { model, body, pathParams };
   const transformedInput = { ...body };
   if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
   else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
@@ -180,4 +225,24 @@ export function nativeParams(endpoint: CompiledEndpoint, path: string): Record<s
   const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "([^/]+)");
   const match = path.match(new RegExp(`^${pattern}$`));
   return Object.fromEntries(names.map((name, index) => [name, decodePathSegment(match?.[index + 1] ?? "")]));
+}
+
+// Several native protocols can share one model-qualified path. A registered
+// model's declared capability chooses the operation, never YAML order or a
+// guessed body shape. Stateful controls retain their original-owner resolver.
+export function nativeModelEndpoint(provider: CompiledProvider, matching: CompiledEndpoint[], path: string, method: string): CompiledEndpoint | undefined {
+  const candidates = matching.filter(endpoint => endpoint.native_proxy && endpoint.methods.includes(method));
+  if (candidates.length < 2 || candidates.some(endpoint => endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket
+    || !endpoint.path_params.some(name => name === "model" || name === "deployment"))) return;
+  const qualified = candidates.filter(endpoint => {
+    const params = nativeParams(endpoint, path), value = params.model ?? params.deployment;
+    const model = provider.models.find(model => model.upstream === value);
+    // A router alias is not an upstream model assertion on an overlapping native
+    // path. Manifest routes continue to resolve their explicit router selector.
+    if (!model && provider.models.some(model => model.id === value))
+      throw new HttpError(400, "native_model_alias_unsupported", "overlapping native routes require the selected upstream model identity");
+    return model && modelSupportsEndpoint(provider, model, endpoint);
+  });
+  if (qualified.length > 1) throw new HttpError(409, "native_route_ambiguous", "native model matches multiple declared operations");
+  return qualified[0];
 }

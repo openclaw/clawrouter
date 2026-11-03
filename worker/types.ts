@@ -1,4 +1,5 @@
-import type { ClientCatalogModel, ModelPricing } from "../shared/contracts";
+import type { ClientCatalogModel, ModelPricing, GrantRoutingPolicy, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride } from "../shared/contracts";
+export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride, PolicyBinding } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
 
 export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
@@ -90,7 +91,7 @@ export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, 
 export type CompiledModel = ClientCatalogModel;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
 export interface ToolPricing { version: string; effectiveAt: string; source: string; webSearchMicrosPerCall: number; previewMicrosPerCallByModel: Record<string, number> }
-export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; responsesLifecycle?: { retrieve: string; cancel: string }; outputTokenLimit?: OutputTokenLimit; toolPricing?: ToolPricing; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses" | "openai.realtime"; timeout_ms: number | null }
+export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; upstreamPath?: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; responsesLifecycle?: { retrieve: string; cancel: string }; lifecycle?: { protocol: import("./managed-lifecycle-types.ts").ManagedProtocol; retrieve: string; result?: string; cancel?: string; files?: import("./managed-lifecycle-types.ts").ManagedFileLinks }; outputTokenLimit?: OutputTokenLimit; toolPricing?: ToolPricing; requestPricing?: import("../shared/request-pricing.ts").RequestPricing; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses" | "openai.realtime"; timeout_ms: number | null }
 
 export interface Env {
   CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
@@ -115,6 +116,7 @@ export interface Env {
   CLAWROUTER_LOCAL_AUTH?: string;
   CLAWROUTER_LOCAL_ADMIN_EMAIL?: string;
   CLAWROUTER_PUBLIC_ORIGIN?: string;
+  CLAWROUTER_UPSTREAM_RETENTION_BINDINGS?: string;
   CLAWROUTER_CONTENT_RETENTION_DEFAULT?: string;
   /** Isolate hot-cache max age in seconds (default 60); 0 disables admission/credential/budget caching. */
   CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS?: string;
@@ -140,23 +142,9 @@ export interface AccessPolicy {
   requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
+  upstreamRetention?: import("../shared/upstream-retention.ts").UpstreamRetentionPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
-}
-
-export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "threshold" | "weighted_random";
-export type GrantStickiness = "none" | "identity" | "session";
-export interface GrantRoutingPolicy {
-  strategy: GrantSelectionStrategy;
-  stickiness: GrantStickiness;
-  failover: boolean;
-  environmentFallback?: boolean;
-  includedQuotaReservePercent?: number;
-  staleState: "allow" | "deny";
-  staleAfterSeconds: number;
-  switchAtUsedPercent: number;
-  hysteresisPercent: number;
-  eligibleGrants: Record<string, string[]>;
 }
 
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
@@ -174,15 +162,6 @@ export interface ProxyCredential {
 
 export interface ProxyCredentialEntry { credentialId: string; credential: ProxyCredential }
 
-export interface ProviderConnection {
-  providerId: string;
-  enabled: boolean;
-  label?: string | null;
-  monthlyBudgetMicros?: number | null;
-  spentMicros?: number | null;
-  remainingMicros?: number | null;
-}
-
 export interface ProviderHealth {
   providerId: string;
   status: string;
@@ -190,14 +169,6 @@ export interface ProviderHealth {
   latencyMs?: number | null;
   statusCode?: number | null;
   error?: string | null;
-}
-
-export interface BudgetOverride {
-  dailyBudgetMicros?: number | null;
-  weeklyBudgetMicros?: number | null;
-  monthlyBudgetMicros?: number | null;
-  updatedBy: string;
-  updatedAt: string;
 }
 
 export interface AccessUserRecord {
@@ -225,14 +196,6 @@ export interface AccessSession {
   tenantId: string;
   groups: string[];
   contentRetentionDisabled: boolean;
-}
-
-export interface PolicyBinding {
-  policyId: string;
-  principalType: "user" | "group";
-  principalId: string;
-  enabled: boolean;
-  priority: number;
 }
 
 export interface OAuthState {
@@ -292,10 +255,6 @@ export interface UpstreamGrant {
   updatedAt?: string | null;
   revokedAt?: string | null;
 }
-
-export interface GrantAccount { email?: string; displayName?: string; rateLimitTier?: string; subscriptionStatus?: string; extraUsageEnabled?: boolean }
-export interface GrantExtraUsage { enabled?: boolean; usedCredits?: number; monthlyLimit?: number; utilization?: number; currency?: string; spendLimitReached?: boolean }
-export type GrantLane = "subscription" | "api_key" | "environment";
 
 export interface GrantQuotaWindow {
   observedAt?: string;

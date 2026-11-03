@@ -1,6 +1,7 @@
 import { allowedServiceTiers, normalizeServiceTier, type PolicyServiceTiers } from "../shared/service-tiers.ts";
 import type { AuthorizedIdentity, CompiledGrantTransport } from "./types";
 import type { ProxySelection } from "./proxy-selection";
+import { googleRequestServiceTier } from "./google-protocol.ts";
 import { extractServiceTier } from "./token-usage.ts";
 import { withLimitHint } from "./policy-limits.ts";
 import { HttpError } from "./utils.ts";
@@ -25,16 +26,18 @@ export function normalizePolicyTiers(value: unknown, catalog: ReadonlySet<string
   return { allowed, models };
 }
 export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "serviceTiers">, selection: Pick<ProxySelection, "provider" | "endpoint" | "model" | "body">, transport?: CompiledGrantTransport | null): void {
-  if (!selection.endpoint.request_format.startsWith("openai.") || Array.isArray(selection.body)) return;
+  const google = selection.endpoint.request_format === "google.generate_content";
+  if ((!google && !selection.endpoint.request_format.startsWith("openai.")) || Array.isArray(selection.body)) return;
   const body = selection.body;
   const raw = body.service_tier;
   // Invalid values must not become an omitted/default tier through extraction.
-  const normalized = typeof raw === "string" ? normalizeServiceTier(extractServiceTier({ service_tier: raw.toLowerCase() }) ?? raw.toLowerCase()) : raw == null ? "default" : "invalid";
+  const nativeTier = google ? googleRequestServiceTier(body) : null;
+  const normalized = google ? nativeTier === "standard" ? "default" : nativeTier : typeof raw === "string" ? normalizeServiceTier(extractServiceTier({ service_tier: raw.toLowerCase() }) ?? raw.toLowerCase()) : raw == null ? "default" : "invalid";
   const pricing = selection.model?.pricing;
-  const tier = pricing && pricing.unit == null ? pricing.serviceTiers?.find(card => card.aliases.includes(normalized))?.id ?? normalized : normalized;
+  const tier = !google && pricing && pricing.unit == null ? pricing.serviceTiers?.find(card => card.aliases.includes(normalized ?? ""))?.id ?? normalized : normalized;
   const model = selection.model?.id ?? (typeof body.model === "string" ? body.model : "unknown");
   const allowed = allowedServiceTiers(auth.policy, model, auth.serviceTiers);
-  if (!allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", withLimitHint(`Service tier ${tier} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`, auth.policy));
+  if (tier === null || !allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", withLimitHint(`Service tier ${tier ?? "invalid"} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`, auth.policy));
   // Only a resolved API transport can pin the project default; subscription
   // transports and the preliminary allowlist check retain the caller's tier.
   const supportsTier = ["openai.responses", "openai.responses_compact", "openai.chat_completions"].includes(selection.endpoint.request_format);
