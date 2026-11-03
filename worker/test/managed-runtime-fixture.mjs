@@ -75,4 +75,3 @@ export async function fixture(t, { fixed = 700, pooled = false, providerId = "re
   t.mock.method(globalThis, "fetch", async (input, init) => { const request = new Request(input, init); sent.push(request); return f.upstream(request); });
   return f;
 }
-
