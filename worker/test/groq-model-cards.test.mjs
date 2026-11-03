@@ -81,7 +81,7 @@ test("real Worker preserves plain Groq hard-budget Chat and denies conditional g
       [{ service_tier: "future" }, 400],
     ]) {
       const env = usageEnv([], { provider: "groq", limit: 1000000, fixedCost: null, retainContent: false, budgetMode: "reserve",
-        serviceTiers: ["default", "on_demand", "flex", "auto", "performance", "future"] });
+        serviceTiers: { allowed: ["default", "flex", "performance", "future"], models: {} } });
       const ledger = sqlBudgetNamespace(t), pending = [], events = [];
       Object.assign(env, { GROQ_API_KEY: "fixture-groq-key", BUDGET_LEDGER: ledger, USAGE_QUEUE: { send: async event => events.push(event) } });
       const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
@@ -98,7 +98,7 @@ test("real Worker preserves plain Groq hard-budget Chat and denies conditional g
         }), env, { waitUntil: promise => pending.push(promise) });
         assert.equal(response.status, expected, JSON.stringify(extra));
         const body = await response.json();
-        if (expected === 400) assert.equal(body.error.code, "pricing_required");
+        if (expected === 400) assert.equal(body.error.code, "pricing_required", JSON.stringify(extra));
         await Promise.all(pending);
         assert.equal(upstream.mock.callCount(), expected === 200 ? 1 : 0);
         if (expected === 200) assert.ok(events.some(event => event.actual_cost_micros > 0 && event.cost_basis === "manifest_pricing"));

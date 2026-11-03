@@ -38,6 +38,37 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: groq/gpt-oss-120b
+      upstream: openai/gpt-oss-120b
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://console.groq.com/docs/openai
+            - https://console.groq.com/docs/reasoning
+          checkedAt: "2026-09-23"
+          logprobs: unsupported
+      pricingRef: groq-gpt-oss-120b-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://console.groq.com/docs/model/openai/gpt-oss-120b
+        inputMicrosPerMillion: 150000
+        cachedInputMicrosPerMillion: 75000
+        outputMicrosPerMillion: 600000
+        maxInputTokens: 131072
+        defaultMaxOutputTokens: 65536
+        autoServiceTier: unpriced
+        serviceTiers:
+          - id: default
+            aliases: [on_demand]
+            inputMicrosPerMillion: 150000
+            cachedInputMicrosPerMillion: 75000
+            outputMicrosPerMillion: 600000
+          - id: flex
+            inputMicrosPerMillion: 150000
+            cachedInputMicrosPerMillion: 75000
+            outputMicrosPerMillion: 600000
     - id: groq/gpt-oss-20b
       upstream: openai/gpt-oss-20b
       capabilities: [llm.chat]
@@ -88,37 +119,6 @@ models:
             inputMicrosPerMillion: 75000
             cachedInputMicrosPerMillion: 37500
             outputMicrosPerMillion: 300000
-    - id: groq/gpt-oss-120b
-      upstream: openai/gpt-oss-120b
-      capabilities: [llm.chat]
-      supportedReasoningEfforts: [low, medium, high]
-      requestParameters:
-        chat_completions:
-          sources:
-            - https://console.groq.com/docs/openai
-            - https://console.groq.com/docs/reasoning
-          checkedAt: "2026-09-23"
-          logprobs: unsupported
-      pricingRef: groq-gpt-oss-120b-standard-2026-06-22
-      pricing:
-        effectiveAt: "2026-06-22"
-        source: https://console.groq.com/docs/model/openai/gpt-oss-120b
-        inputMicrosPerMillion: 150000
-        cachedInputMicrosPerMillion: 75000
-        outputMicrosPerMillion: 600000
-        maxInputTokens: 131072
-        defaultMaxOutputTokens: 65536
-        autoServiceTier: unpriced
-        serviceTiers:
-          - id: default
-            aliases: [on_demand]
-            inputMicrosPerMillion: 150000
-            cachedInputMicrosPerMillion: 75000
-            outputMicrosPerMillion: 600000
-          - id: flex
-            inputMicrosPerMillion: 150000
-            cachedInputMicrosPerMillion: 75000
-            outputMicrosPerMillion: 600000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
