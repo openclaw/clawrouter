@@ -79,7 +79,7 @@ for (const format of ["openai.models", "anthropic.models"]) {
       : [{ data: [] }, { data: [], has_more: "false" }, { data: [{}], has_more: false }];
     for (const body of malformed) {
       f.reply = () => Response.json(body); const r = await f.call();
-      assert.equal(r.status, 502, await r.clone().text()); assert.equal(r.headers.get("x-clawrouter-error-code"), "invalid_model_discovery_response");
+      assert.equal(r.status, 502, await r.clone().text()); assert.equal((await r.json()).error.code, "invalid_model_discovery_response");
     }
   });
 }
@@ -145,5 +145,6 @@ test("alternate discovery revocation cannot fall back to an environment credenti
 test("alternate discovery deadline cancels a stalled metadata body", { timeout: 2000 }, async t => {
   const f = await fixture(t, "openai.models", { timeoutMs: 30 }); let cancelled = false;
   f.reply = () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "content-type": "application/json" } });
-  const r = await f.call(); assert.equal(r.status, 504, await r.clone().text()); assert.equal(cancelled, true); assert.equal(f.sent.length, 1);
+  const r = await f.call(); assert.equal(r.status, 502, await r.clone().text()); assert.equal((await r.json()).error.code, "provider_unavailable");
+  assert.equal(cancelled, true); assert.equal(f.sent.length, 1);
 });
