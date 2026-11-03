@@ -25,8 +25,10 @@ const replay = [
 ];
 
 async function fixture(t, models = null) {
-  const row = structuredClone(provider); snapshot.providers.push(row);
-  t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(row), 1));
+  const previous = snapshot.providers.find(p => p.id === id), row = structuredClone(provider);
+  assert.ok(previous, "replace the bundled provider so the fixture exercises the new source");
+  snapshot.providers.splice(snapshot.providers.indexOf(previous), 1, row);
+  t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(row), 1, previous));
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { AI_GATEWAY_API_KEY: "synthetic-environment-fallback", ANTHROPIC_API_KEY: "synthetic-foreign-key", VERCEL_OIDC_TOKEN: "synthetic-oidc",
     POLICY_KV: { async get(k) { return Array.isArray(k) ? new Map(k.map(k => [k, values.get(k) ?? null])) : values.get(k) ?? null; },
@@ -81,7 +83,7 @@ for (const manifest of [false, true]) for (const stream of [false, true]) test(`
         { headers: { "content-type": "text/event-stream" } });
     } catch (e) { upstreamError = e; throw e; }
   };
-  const r = await f.call(manifest ? `/v1/proxy/${id}/messages` : `/v1/native/${id}/messages`, manifest ? { body: { ...body, model: `${id}/${model}` } } : body);
+  const r = await f.call(manifest ? `/v1/proxy/${id}/messages` : `/v1/native/${id}/v1/messages`, manifest ? { body: { ...body, model: `${id}/${model}` } } : body);
   assert.ifError(upstreamError); assert.equal(r.status, 200, await r.clone().text());
   if (stream) assert.equal(await r.text(), wire); else assert.deepEqual(await r.json(), result);
   await f.drain(); assert.equal(f.sent.length, 1);
@@ -93,15 +95,15 @@ for (const manifest of [false, true]) for (const stream of [false, true]) test(`
 
 test("Vercel foreign policy and unknown price reject before egress", async t => {
   const f = await fixture(t), body = { model, max_tokens: 16, messages: [] };
-  assert.equal((await f.call(`/v1/native/${id}/messages`, body, "foreign")).status, 403);
-  assert.equal((await f.call(`/v1/native/${id}/messages`, body, "unpriced")).status, 400);
+  assert.equal((await f.call(`/v1/native/${id}/v1/messages`, body, "foreign")).status, 403);
+  assert.equal((await f.call(`/v1/native/${id}/v1/messages`, body, "unpriced")).status, 400);
   assert.equal(f.sent.length, 0);
 });
 
 test("Vercel native SSE error retains error identity without fabricated usage", async t => {
   const f = await fixture(t);
   f.reply = () => new Response(frame({ type: "error", error: { type: "overloaded_error", message: "synthetic-upstream-error" } }), { headers: { "content-type": "text/event-stream" } });
-  const r = await f.call(`/v1/native/${id}/messages`, { model, max_tokens: 16, messages: [], stream: true });
+  const r = await f.call(`/v1/native/${id}/v1/messages`, { model, max_tokens: 16, messages: [], stream: true });
   const body = await r.text(); await f.drain(); assert.match(body, /overloaded_error/);
   const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(event.status, "provider_error"); assert.equal(event.total_tokens, null);
 });
@@ -109,7 +111,7 @@ test("Vercel native SSE error retains error identity without fabricated usage", 
 test("Vercel Messages disconnect cancels transport and leaves unknown usage", async t => {
   const f = await fixture(t); let cancelled = false;
   f.reply = () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(frame({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "fixture" } }))); }, cancel() { cancelled = true; } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
-  const r = await f.call(`/v1/native/${id}/messages`, { model, max_tokens: 16, messages: [], stream: true }); assert.equal(r.status, 200);
+  const r = await f.call(`/v1/native/${id}/v1/messages`, { model, max_tokens: 16, messages: [], stream: true }); assert.equal(r.status, 200);
   const reader = r.body.getReader(); await reader.read(); await reader.cancel(); await f.drain(); assert.equal(cancelled, true);
   const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(event.status, "client_error"); assert.equal(event.total_tokens, null);
 });
@@ -123,4 +125,34 @@ test("Vercel dynamic catalog is policy-filtered without promoting upstream prici
   assert.deepEqual(await r.json(), { object: "list", data: [visible] }); await f.drain();
   for (const reservation of f.env.BUDGET_LEDGER.get("fixture:paid").reservations()) assert.equal(reservation.reserved_micros, 0);
   const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(event.actual_cost_micros, 0); assert.equal(provider.models[0].pricing, null);
+});
+
+test("Vercel catalog offers the SDK Messages path under the original selected policy", async t => {
+  const f = await fixture(t, [`${id}/${model}`]);
+  const r = await f.call("/v1/catalog"); assert.equal(r.status, 200, await r.clone().text());
+  const catalog = await r.json(), visible = catalog.providers.find(p => p.id === id);
+  const route = visible.routes.find(r => r.endpoint === "messages");
+  assert.equal(route.path, "/v1/messages"); assert.equal(route.requestFormat, "anthropic.messages");
+  assert.equal(route.responseFormat, "anthropic.messages"); assert.equal(route.streaming, "sse");
+  assert.equal(visible.nativeBaseUrl, `/v1/native/${id}`);
+  const offer = visible.offers.find(o => o.endpoint === "messages" && o.modelId === `${id}/${model}` && o.routeKind === "native");
+  assert.ok(offer); assert.equal(offer.eligible, true); assert.equal(offer.policyId, "paid");
+  assert.equal(offer.route, `/v1/native/${id}/v1/messages`); assert.equal(f.sent.length, 0);
+  const body = { model, max_tokens: 16, messages: [{ role: "user", content: "synthetic-input" }] };
+  const response = await f.call(visible.nativeBaseUrl + route.path, body);
+  assert.equal(response.status, 200, await response.clone().text()); await response.text(); await f.drain();
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].url, "https://ai-gateway.vercel.sh/v1/messages");
+  assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-gateway-key");
+  assert.deepEqual(await f.sent[0].json(), body);
+  assert.equal(provider.endpoints.find(e => e.id === "messages").upstreamPath, "/messages");
+  assert.equal(visible.routes.find(r => r.endpoint === "chat_completions").path, "/chat/completions");
+});
+
+test("Vercel does not create an unversioned or doubled-version native Messages alias", async t => {
+  const f = await fixture(t), body = { model, max_tokens: 16, messages: [] };
+  for (const path of ["/messages", "/v1/v1/messages"]) {
+    const r = await f.call(`/v1/native/${id}${path}`, body);
+    assert.equal(r.status, 404, await r.clone().text()); await r.text();
+  }
+  await f.drain(); assert.equal(f.sent.length, 0);
 });
