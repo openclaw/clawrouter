@@ -48,6 +48,8 @@ export interface ManagedLifecycleAdapter {
   supportsCancel: boolean;
   validateId(value: unknown): string;
   prepare(body: unknown, headers: Headers, pathParams: Record<string, string>, query: URLSearchParams): ManagedCreate;
+  // Parse only the protocol's declared ID fields; reject extra control query.
+  identify(action: ManagedControlAction, pathParams: Record<string, string>, query: URLSearchParams): string;
   // Validate the declared method/path against this protocol, then return only a
   // relative control path/query. No origin, credentials or arbitrary URL input.
   control(action: ManagedControlAction, endpoint: Pick<CompiledEndpoint, "method" | "path">,
