@@ -40,6 +40,7 @@
 - Managed media: retain original per-job control permissions without exposing unsupported poll/cancel routes; pin non-secret flags through credential and route revalidation.
 
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
+- Validate the two frozen Kie Grok video input contracts in the scoped jobs adapter, preserving native duration types and unknown costs while keeping unbound image creation closed.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
 - Validate frozen fal MiniMax Live and HeyGen prompt-only video requests in the registered scoped queue adapter, preserving original control routes and terminal execution when output media is unusable.
 - Validate the two frozen fal Wan video input contracts in the scoped queue adapter, preserving exact version paths and credential boundaries; keep the unsupported Kling 2.1 Master endpoint closed.
