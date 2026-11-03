@@ -1,6 +1,6 @@
+import { sqliteFixture } from "../worker/test/sqlite-storage.mjs";
 import "../worker/test/typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { buildProviderSmokePlan, runLiveProviderSmokes, summarizePlan } from "../scripts/provider-smoke-plan.mjs";
 import catalog from "../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -246,9 +246,8 @@ async function smokeEnvironment(provider, t) {
     USAGE_QUEUE: { send: async (body) => { fixtureQueue.push({ body, ackCount: 0, retryCount: 0, ack() { this.ackCount += 1; }, retry() { this.retryCount += 1; } }); } },
     USAGE_LEDGER: { idFromName: name => name, get(name) {
       if (!ledgers.has(name)) {
-        const db = new DatabaseSync(":memory:"); t.after(() => db.close());
-        const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-        const ledger = new UsageLedgerObject({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
+        const { sql, transactionSync } = sqliteFixture(t);
+        const ledger = new UsageLedgerObject({ storage: { sql, transactionSync, getAlarm: async () => 1 } });
         ledgers.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)) });
       }
       return ledgers.get(name);

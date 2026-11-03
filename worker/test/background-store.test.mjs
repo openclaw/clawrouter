@@ -1,6 +1,6 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { planBudgetReservation } from "../accounting.ts";
 const { BackgroundStore, backgroundObservationMs, backgroundAutoRetryMs, backgroundReplayMs } = await import("../background-store.ts");
@@ -11,9 +11,8 @@ const auth = { policyId: "policy", credentialId: "key", principalId: null, authT
 const cost = { reserveMicros: 100, basis: "manifest_pricing", inputTokens: 40, outputTokens: 60 };
 
 function fixture(t) {
-  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const { db, sql } = sqliteFixture(t);
   let now = Date.parse("2026-09-25T00:00:00Z"); t.mock.method(Date, "now", () => now);
-  const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
   let store = new BackgroundStore(sql), sequence = 0;
   const admission = () => {
     const facts = createProxyAccounting({ env: {}, context: {}, auth, cost, selection: { provider: { id: "fixture" }, model: null, capability: "llm.responses", endpoint: { request_format: "openai.responses" }, body: {} }, request: new Request("https://router.example/v1/responses", { headers: { "x-request-id": "fixture-request" } }) }).facts;

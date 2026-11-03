@@ -1,6 +1,6 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
 import { UsageLedgerObject, usageSnapshots } from "../ledgers.ts";
 import { emptyUsageSnapshot } from "../usage-sharding.ts";
 import { legacySnapshot, snapshotRequest, syntheticUsage, usageFixture } from "./usage-snapshot-fixture.mjs";
@@ -40,10 +40,9 @@ test("a current shard failure fails the aggregate instead of returning partial t
 });
 
 test("unpriced SQL totals survive the recent-event limit and duplicate delivery on existing stores", async (t) => {
-  const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+  const { db, sql, transactionSync } = sqliteFixture(t);
   db.exec("CREATE TABLE usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
-  const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-  const ledger = new UsageLedgerObject({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
+  const ledger = new UsageLedgerObject({ storage: { sql, transactionSync, getAlarm: async () => 1 } });
   const now = Date.now();
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy", provider: "openai", status: "success", status_code: 200, input_tokens: 1, output_tokens: 1, total_tokens: 2, actual_cost_micros: 0 };
   const ingest = event => ledger.fetch(new Request("https://ledger/ingest", { method: "POST", body: JSON.stringify(event) }));

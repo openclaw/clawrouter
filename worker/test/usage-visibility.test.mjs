@@ -1,7 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 const { default: worker } = await import("../index.ts");
 const { PolicyBindingIndexObject, authorityCall } = await import("../authority.ts");
@@ -305,9 +305,8 @@ async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("
     const objects = new Map();
     return { idFromName: name => name, get(name) {
       if (!objects.has(name)) {
-        const db = new DatabaseSync(":memory:"); t.after(() => db.close());
-        const sql = { exec(query, ...bindings) { const s = db.prepare(query); if (s.columns().length) return s.all(...bindings); s.run(...bindings); return []; } };
-        const owner = new ObjectClass({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
+        const { sql, transactionSync } = sqliteFixture(t);
+        const owner = new ObjectClass({ storage: { sql, transactionSync, getAlarm: async () => 1 } });
         objects.set(name, { fetch: (url, init) => owner.fetch(new Request(url, init)) });
       }
       return objects.get(name);

@@ -1,7 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { markBudgetDispatched, reserveBudget, settleBudget } from "../accounting.ts";
 import { budgetLedgerAddress, providerBudgetLedgerAddress } from "../budget-scope.ts";
@@ -222,10 +222,8 @@ function fixture(t, initialNow = Date.now()) {
   const objects = new Map(), failures = new Set(), messages = [];
   function object(objectName, seed) {
     if (!objects.has(objectName)) {
-      const db = new DatabaseSync(":memory:");
-      t.after(() => db.close());
+      const { db, sql } = sqliteFixture(t);
       seed?.(db);
-      const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
       const state = { storage: { sql, getAlarm: async () => 1 } };
       objects.set(objectName, { db, state, ledger: new BudgetLedgerObject(state) });
     }

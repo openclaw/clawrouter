@@ -1,8 +1,8 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { putGrantCredentials } from "../grant-credentials.ts";
@@ -122,10 +122,10 @@ test("additive usage migration preserves old rows; admin aggregation reads only 
   f.env.USAGE_LEDGER = { idFromName: name => name, get(name) {
     names.push(name);
     if (!shards.has(name)) {
-      const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+      const { db, sql, transactionSync } = sqliteFixture(t);
       db.exec("CREATE TABLE usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
       db.prepare("INSERT INTO usage_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy", Date.now(), "tenant-pool", "pool", "anthropic", "success", 200, 1, 2, 3, 4, '{}');
-      const storage = { sql: { exec(sql, ...args) { const stmt = db.prepare(sql); return stmt.columns().length ? stmt.all(...args) : (stmt.run(...args), []); } }, transactionSync(fn) { db.exec("BEGIN"); try { const value = fn(); db.exec("COMMIT"); return value; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 };
+      const storage = { sql, transactionSync, getAlarm: async () => 1 };
       const object = new UsageLedgerObject({ storage }); shards.set(name, { fetch: (url, init) => object.fetch(new Request(url, init)) });
     }
     return shards.get(name);

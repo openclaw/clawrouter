@@ -1,6 +1,6 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { ingestUsage, queue, UsageLedgerObject } from "../ledgers.ts";
 
@@ -273,10 +273,8 @@ async function receipt(f, body) {
 }
 
 function fixture(t, initialNow = now) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-  const storage = { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1, setAlarm: async () => {} };
+  const { db, sql, transactionSync } = sqliteFixture(t);
+  const storage = { sql, transactionSync, getAlarm: async () => 1, setAlarm: async () => {} };
   const f = { db, sql, storage, now: initialNow, ledger: new UsageLedgerObject({ storage }), reconstruct() { this.ledger = new UsageLedgerObject({ storage }); }, rows: () => db.prepare("SELECT * FROM usage_events ORDER BY id").all(), call: body => f.ledger.fetch(new Request("https://ledger/ingest", { method: "POST", body: JSON.stringify(body) })) };
   t.mock.method(Date, "now", () => f.now);
   return f;

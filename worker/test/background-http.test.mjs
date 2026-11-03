@@ -1,7 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -28,8 +28,8 @@ async function fixture(t) {
   const budgets = sqlBudgetNamespace(t), budgetCalls = [], queue = [], pending = [], sent = [];
   env.BUDGET_LEDGER = { idFromName: name => name, get: name => ({ fetch: (url, init) => { budgetCalls.push({ name, path: new URL(url).pathname, body: init?.body ? JSON.parse(init.body) : null }); return budgets.get(name).fetch(url, init); } }) };
   env.USAGE_QUEUE = { send: async message => { queue.push(message); } };
-  const usageDb = new DatabaseSync(":memory:"); t.after(() => usageDb.close());
-  const usageState = { storage: { transactionSync: fn => { usageDb.exec("BEGIN"); try { const result = fn(); usageDb.exec("COMMIT"); return result; } catch (error) { usageDb.exec("ROLLBACK"); throw error; } }, sql: { exec(query, ...bindings) { const statement = usageDb.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } }, getAlarm: async () => 1 } };
+  const { db: usageDb, sql, transactionSync } = sqliteFixture(t);
+  const usageState = { storage: { transactionSync, sql, getAlarm: async () => 1 } };
   let usage = new UsageLedgerObject(usageState);
   env.USAGE_LEDGER = { idFromName: name => name, get: () => ({ fetch: (url, init) => usage.fetch(new Request(url, init)) }) };
   const scopes = continuationAuthority(t, env), authorityCalls = [], scopeCalls = [], hooks = { owner: async (_body, dispatch) => dispatch(), upstream: request => Response.json(request.method === "POST" ? queued : completed) };

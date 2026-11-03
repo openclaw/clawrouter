@@ -1,3 +1,4 @@
+import { sqliteStorage } from "./sqlite-storage.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { UsageLedgerObject } from "../ledgers.ts";
 import { normalizeEmail } from "../utils.ts";
@@ -12,18 +13,11 @@ export function usageFixture() {
   const insert = db.prepare("INSERT INTO usage_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
   const queries = [];
   let alarm = null;
+  const { sql, transactionSync } = sqliteStorage(db);
+  const exec = sql.exec;
+  sql.exec = (query, ...bindings) => { queries.push(query); return exec(query, ...bindings); };
   const state = { storage: {
-    sql: { exec(query, ...bindings) {
-      queries.push(query);
-      const statement = db.prepare(query);
-      if (statement.columns().length) return statement.all(...bindings);
-      statement.run(...bindings); return [];
-    } },
-    transactionSync(fn) {
-      db.exec("BEGIN");
-      try { const result = fn(); db.exec("COMMIT"); return result; }
-      catch (error) { db.exec("ROLLBACK"); throw error; }
-    },
+    sql, transactionSync,
     getAlarm: async () => alarm,
     setAlarm: async value => { alarm = value; },
   } };
