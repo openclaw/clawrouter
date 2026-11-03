@@ -17,7 +17,8 @@ test("Google continuation tokens reserve restored context, independent of prompt
     const cost = estimateModelCost(model.pricing, { ...original, [field]: token }, endpoint);
     assert.equal(cost.inputTokens, model.pricing.maxRequestInputTokens ?? model.pricing.maxInputTokens);
     assert.equal(cost.outputTokens, 100);
-    assert.ok(cost.reserveMicros >= actualModelCost(model.pricing, { input: cost.inputTokens, output: 100, cached: 0 }, endpoint.request_format));
+    const actual = actualModelCost(model.pricing, { input: cost.inputTokens, output: 100, cached: 0, serviceTier: "standard" }, endpoint.request_format);
+    assert.notEqual(actual, null); assert.ok(cost.reserveMicros >= actual);
   }
   const priced = { ...model.pricing, maxRequestInputTokens: 200000 };
   assert.equal(estimateModelCost(priced, { ...original, continuationToken: "eA==" }, endpoint).inputTokens, 200000);
@@ -83,7 +84,7 @@ for (const manifest of [false, true]) for (const stream of [false, true]) {
         if (denied) assert.equal(events[0].actual_cost_micros, 0);
         else {
           assert.equal(events[0].reserved_cost_micros, fixed ?? (body === original ? plainReserve : reserve));
-          assert.equal(events[0].actual_cost_micros, fixed ?? actualModelCost(model.pricing, { input: 1000, output: 100, cached: 0 }, endpoint.request_format));
+          assert.equal(events[0].actual_cost_micros, fixed ?? actualModelCost(model.pricing, { input: 1000, output: 100, cached: 0, serviceTier: "standard" }, endpoint.request_format));
           assert.equal(events[0].cost_basis, fixed == null ? "manifest_pricing" : "policy_fixed");
           assert.equal(events[0].output_tokens, 100);
         }
