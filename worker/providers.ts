@@ -5,7 +5,7 @@ import snapshotJson from "./generated/provider-snapshot.json" with { type: "json
 import { listConnections, resolveConnection } from "./authority.ts";
 import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
 
-import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
@@ -16,7 +16,7 @@ import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
 } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { envValue, HttpError, sha256Hex } from "./utils.ts";
 import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates } from "./provider-templates.ts";
 
 export const snapshot = snapshotJson as unknown as ProviderSnapshot;
@@ -423,10 +423,6 @@ async function refreshGrant(key: string, grant: UpstreamGrant, provider: Compile
   return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force);
 }
 
-function grantUsable(grant: UpstreamGrant): boolean {
-  return canonicalGrantUsable(grant);
-}
-
 function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {
   if (secretConfigKey(key)) return grants.length > 0;
   const fields: Record<string, string> = { AWS_ACCESS_KEY_ID: "accessKeyId", AWS_SECRET_ACCESS_KEY: "secretAccessKey", AWS_SESSION_TOKEN: "sessionToken" };
@@ -450,11 +446,6 @@ function endpointTemplatesConfigured(provider: CompiledProvider, endpoint: Compi
   }
 }
 
-function envValue(env: Env, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
 async function hmac(key: Uint8Array, value: string): Promise<Uint8Array> { const cryptoKey = await crypto.subtle.importKey("raw", key.buffer as ArrayBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value))); }
 function hex(value: Uint8Array): string { return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function awsEncode(value: string): string { return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`); }
@@ -464,8 +455,6 @@ function configuredList(provider: CompiledProvider, name: string, env: Env): str
   const key = templateCandidates(provider, name).find((candidate) => envValue(env, candidate));
   return key ? envValue(env, key)!.split(",").map((item) => item.trim()).filter(Boolean) : [];
 }
-
-
 
 function encodePathParam(value: string, style: string): string {
   if (style === "opaque_segment") {

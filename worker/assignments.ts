@@ -6,7 +6,7 @@ import {
 } from "./assignment-evaluator.ts";
 import type { AccessControlUser, AssignmentRule, AssignmentState, Env } from "./types";
 
-export { assignmentRulesRevision, normalizeAssignmentEvidence } from "./assignment-evaluator.ts";
+export { assignmentRulesRevision, normalizeAssignmentEvidence, normalizeGroups } from "./assignment-evaluator.ts";
 export type { AssignmentEvidence, AssignmentRuleEntry } from "./assignment-evaluator.ts";
 
 export async function listAssignmentRules(env: Env): Promise<AssignmentRuleEntry[]> {

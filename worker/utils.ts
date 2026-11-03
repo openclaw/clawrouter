@@ -136,6 +136,11 @@ export function normalizeEmail(value: string): string | null {
   return email.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;
 }
 
+export function envValue(env: Record<string, unknown>, key: string): string | null {
+  const value = env[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 export function commaSet(value: string | undefined): Set<string> {
   return new Set((value ?? "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
 }
