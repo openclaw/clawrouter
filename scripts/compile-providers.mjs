@@ -332,7 +332,17 @@ function validateModels(manifest) {
         if (decision.limits?.maxStateAndQuestionTokens > decision.limits?.maxRequestTokens) fail("decision state/question limit exceeds request limit");
         if (decision.limits?.image && !facts.input?.includes("image")) fail("decision image limits require image input");
       }
-      if (facts.hostedTools && (manifest.id !== "openai" || id !== "responses" || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || !supported.some(capability => capability.id === "llm.responses"))) fail("hosted tools require the OpenAI Responses endpoint");
+      if (facts.hostedTools) {
+        if (!["openai", "xai"].includes(manifest.id) || id !== "responses" || endpoint.path !== "/v1/responses"
+          || (endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses"
+          || !supported.some(capability => capability.id === "llm.responses")) fail("hosted tools require a qualified Responses endpoint");
+        // Support is a model fact, never a static caller admission verdict.
+        // xAI's possible outcome fee and unknown hosted charges remain separate.
+        if (manifest.id === "xai" && (model.upstream !== "grok-4.7"
+          || endpoint.requestPricing?.outcome !== "xai.responses_violation" || !model.pricing?.unpricedCosts?.includes("request_fee")
+          || !model.supportedReasoningEfforts?.includes("low") || model.requestParameters?.responses?.toolCalling !== "supported"))
+          fail("xAI hosted tools require the qualified Grok 4.7 model, reasoning and independent outcome tariff");
+      }
       if (facts.supportedServiceTiers) {
         if (!["openai.responses", "openai.chat_completions"].includes(endpoint.requestFormat)) fail("service tiers require a supported tier wire format");
         if (facts.supportedServiceTiers.some(tier => ["auto", "fast"].includes(tier) || !model.pricing?.serviceTiers?.some(card => card.id === tier))) fail("service tiers require canonical priced tier ids");

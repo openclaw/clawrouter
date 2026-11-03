@@ -12,11 +12,16 @@ test("xAI advertises Responses only on the sourced Grok row and retains the requ
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === "responses");
   assert.equal(endpoint.path, "/v1/responses");
   assert.equal(endpoint.streaming, "sse");
-  assert.equal(endpoint.modelPassthrough.pricing, null);
+  assert.equal(endpoint.modelPassthrough, undefined);
+  assert.equal(endpoint.requestPricing.outcome, "xai.responses_violation");
+  assert.equal(endpoint.requestPricing.maximumAdditionalMicros, 50000);
   assert.equal(endpoint.responsesLifecycle, undefined);
   const model = snapshot.model_index["xai/grok-4.7"];
   assert.deepEqual(model.capabilities, ["llm.responses"]);
   assert.deepEqual(model.nativeCapabilities.endpoints.responses.input, ["text", "image"]);
+  assert.deepEqual(model.nativeCapabilities.endpoints.responses.hostedTools, ["web_search"]);
+  assert.ok(model.supportedReasoningEfforts.includes("low"));
+  assert.equal(model.nativeCapabilities.endpoints.responses.hostedToolAdmission, undefined);
   assert.equal(model.requestParameters.responses.defaultReasoningEffort, "high");
   assert.deepEqual(model.pricing.unpricedCosts, ["request_fee"]);
   assert.equal(model.pricing.longContext.thresholdInputTokens, 199999);

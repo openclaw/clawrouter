@@ -33,10 +33,17 @@ capabilities:
     methods: [POST]
 endpoints:
   responses:
-    modelPassthrough: {}
     path: /v1/responses
     requestFormat: openai.responses
     responseFormat: openai.responses
+    requestPricing:
+      unit: request
+      version: xai-responses-outcome-2026-11-03
+      effectiveAt: "2026-11-03"
+      source: https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee
+      outcome: xai.responses_violation
+      maximumAdditionalMicros: 50000
+      receipt: xai.usage.cost_in_usd_ticks
     streaming: sse
     timeoutMs: 600000
   chat_completions:
@@ -66,15 +73,17 @@ models:
           responses:
             sources:
               - https://docs.x.ai/developers/models/grok-4.7
+              - https://docs.x.ai/developers/tools/web-search
             checkedAt: "2026-11-03"
             input: [text, image]
             contextWindow: 500000
+            hostedTools: [web_search]
       pricingRef: xai-grok-4-7-token-rates-2026-11-03
       pricing:
         effectiveAt: "2026-11-03"
         source: https://docs.x.ai/developers/models/grok-4.7
-        # Responses can charge $0.05 before generation. Token rates do not
-        # qualify whole-request budgets: https://docs.x.ai/developers/pricing
+        # The bound outcome tariff handles this gap only on its qualified runtime
+        # path. Hosted tool fees and iteration bounds remain independent gaps.
         unpricedCosts: [request_fee]
         inputMicrosPerMillion: 2000000
         cachedInputMicrosPerMillion: 500000

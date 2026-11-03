@@ -34,8 +34,8 @@ test("outcome request tariff compiles separately from token pricing and preserve
   assert.equal(endpoint.requestPricing.version, tariff.version);
   const pricing = snapshot.model_index["xai/grok-4.3"].pricing;
   assert.equal(requestPricingGap(pricing, { input: "synthetic", max_output_tokens: 10 }, "openai.responses"), "model_request_fee");
-  assert.deepEqual(snapshot.providers[0].endpoints.find(e => e.id === "chat_completions"), compile(original).providers[0].endpoints[0]);
-  assert.ok(compile(original).providers[0].endpoints.every(e => e.requestPricing === undefined));
+  assert.deepEqual(snapshot.providers[0].endpoints.find(e => e.id === "chat_completions"), compile(original).providers[0].endpoints.find(e => e.id === "chat_completions"));
+  assert.equal(compile(original).providers[0].endpoints.find(e => e.id === "chat_completions").requestPricing, undefined);
 });
 
 test("outcome tariffs reject invented signals, unqualified rates and successful-request mixing", () => {
