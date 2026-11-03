@@ -3,14 +3,16 @@
 This source wrapper consumes the actual `ManagedLifecycleAdapter` and
 `ManagedFileAdapter` download-only variant published in
 [PR624](https://github.com/openclaw/clawrouter/pull/624), source
-`fcbcc6db59d44cd381cf7a073a08fa3c0a7e93ea`. It reuses the frozen native codec from
+`8384d7c515f1a7fc4051bfaaa438de5d3abb3a67`, plus trusted create admission from
+[PR637](https://github.com/openclaw/clawrouter/pull/637) at
+`008bb4eafac58467d38fa1cc527bcf25d07c589e`. It reuses the frozen native codec from
 [PR567](https://github.com/openclaw/clawrouter/pull/567) for the single OpenRouter
 model `google/veo-3.1-fast`. Direct-Google retired preview IDs remain distinct.
 
 ## Exact exports and routes
 
 - `worker/managed-openrouter-video.ts` exports
-  `createOpenRouterVideoManagedAdapter(policy)` and the default registered
+  `createOpenRouterVideoManagedAdapter()` and the default registered
   `openRouterVideoManagedAdapter`.
 - `worker/managed-openrouter-video-files.ts` exports `openRouterVideoFiles`.
   Its `mode` is `download_only`; it has no metadata reader.
@@ -57,25 +59,33 @@ grant the wrapper a larger allowance. File failure changes neither original
 generation settlement nor its unknown upstream-dollar cost and never replays
 create. policy_fixed remains separate from native cost observations.
 
-## Remaining create-admission dependency
+## Trusted per-request create admission
 
 The native video product temporarily retains output and is not ZDR-compatible.
-`prepareOpenRouterVideo` already requires trusted `retentionAllowed`. PR624's
-four-argument prepare ABI supplies no such per-request authority. The registered
-adapter therefore denies creates with `retention_admission_required`; it never
-hard-codes approval or reads it from caller JSON, headers or query parameters.
+`prepareOpenRouterVideo` requires trusted `retentionAllowed`. The registered
+adapter's ordinary four-argument `prepare` remains denied with
+`retention_admission_required`. The factory no longer accepts a policy boolean.
+Its `prepareAdmitted(body, headers, pathParams, query, admission)` uses only
+`admission.upstreamRetention === "allowed"` from PR637's actual
+ManagedCreateAdmission type, after original credential selection. Neither body,
+headers, query, router logging nor model/budget facts supply permission.
 
-The factory can consume an immutable trusted policy for qualification, but is
-not a new authorization system. Source1 must publish the actual per-request
-admission boundary before create activation. Image/frame/reference creates also
-remain closed pending original asset ownership, including otherwise valid
-native wire bodies. These prerequisites do not block the concrete original-job
-file mapping. They do block a full production-parity claim.
+The hook returns canonical native JSON with empty adapter headers and route
+parameters. The already selected original request retains its headers and
+credential. The source wrapper's dispatch assertion only validates origin,
+path and native Bearer/JSON headers; source1 rechecks policy plus the original
+credential/route receipt at the real dispatch boundary. No wrapper-global
+permission or mutable cross-request admission state exists. Image/frame/reference
+creates remain closed pending original asset ownership, even when retention is
+allowed. No live policy or server binding is created by this code.
 
 `providers/_fixtures/openrouter/managed-video.json` and the original video fixture
 are synthetic. Source5 tests exercise registered lookup, the actual wrapper and
 file methods, exact route/MIME/byte limits, descriptor derivation and lifecycle
-outcomes. Source3 still owns endpoint/compiler links; source6 must qualify the
-composed actual Worker/client original-job/file path after runtime admission is
-published. No YAML, common controller/types, snapshot, credentials, deployment
+outcomes. A separate hosted composition test invokes the actual admission
+resolver and registered wrapper, covering missing permission, logging
+independence, original grant/route/generation mismatch and expired receipts.
+Source3 still owns endpoint/compiler links; source6 must qualify the composed
+actual Worker/client original-job/file path after the shared runtime qualifies.
+No YAML, common controller/types, snapshot, credentials, deployment
 or paid requests are changed by this wrapper slice.

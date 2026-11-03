@@ -8,28 +8,35 @@ const native = JSON.parse(readFileSync(new URL("../../providers/_fixtures/openro
 const f = JSON.parse(readFileSync(new URL("../../providers/_fixtures/openrouter/managed-video.json", import.meta.url)));
 const adapter = managedCreateAdapter("openrouter.video", "openrouter.video_create"), files = adapter.files;
 const prepare = (body, selected = adapter, headers = new Headers()) => selected.prepare(body, headers, {}, new URLSearchParams());
+const admitted = (body, admission, selected = adapter, headers = new Headers()) => selected.prepareAdmitted(body, headers, {}, new URLSearchParams(), admission);
 const context = action => ({ action, requestedVersion: native.create.model, pathParams: {}, ...(action === "create" ? {} : { expectedId: f.id }) });
 const observe = body => adapter.read(Response.json(body), context("retrieve"));
 const bytes = Uint8Array.from(Buffer.from(native.content.base64, "base64"));
 const response = (body = bytes, headers = {}) => new Response(body, { headers: { "content-type": "video/mp4", ...headers } });
 
-test("actual registry exposes the download-only adapter while unresolved trusted retention admission denies creates", () => {
+test("actual registry exposes admitted preparation while ordinary or caller-spoofed preparation remains denied", () => {
   assert.equal(adapter.protocol, "openrouter.video"); assert.equal(files, managedFileAdapter("openrouter.video"));
   assert.equal(files.mode, "download_only"); assert.equal(files.readState, undefined);
   assert.equal(managedCreateAdapter("openrouter.video", "openai.videos"), undefined);
   assert.throws(() => prepare(native.create), /retention_admission_required/);
   for (const body of [{ ...native.create, retentionAllowed: true }, { ...native.create, provider: { zdr: false } }]) assert.throws(() => prepare(body), /retention_admission_required/);
+  for (const value of [undefined, null, {}, { upstreamRetention: "denied" }, { upstreamRetention: true }, { retentionAllowed: true }])
+    assert.throws(() => admitted(native.create, value), /retention_admission_required/);
+  assert.throws(() => prepare(native.create, createOpenRouterVideoManagedAdapter({ retentionAllowed: true })), /retention_admission_required/);
 });
-test("trusted factory preparation preserves native text input but cannot authorize assets or caller secrets", () => {
-  const policy = { retentionAllowed: true }, selected = createOpenRouterVideoManagedAdapter(policy);
-  policy.retentionAllowed = false;
-  const prepared = prepare(native.create, selected, new Headers({ authorization: "Bearer synthetic-caller", "x-api-key": "synthetic-foreign" }));
+test("runtime-admitted preparation preserves text but cannot authorize assets, caller secrets or route changes", () => {
+  const selected = createOpenRouterVideoManagedAdapter(), admission = Object.freeze({ upstreamRetention: "allowed" });
+  const prepared = admitted(native.create, admission, selected, new Headers({ authorization: "Bearer synthetic-caller", "x-api-key": "synthetic-foreign" }));
   assert.deepEqual(prepared.body, native.create); assert.notEqual(prepared.body, native.create);
   assert.equal(prepared.requestedVersion, native.create.model); assert.deepEqual(prepared.pathParams, {});
   assert.equal(prepared.headers.get("authorization"), null); assert.equal(prepared.headers.get("x-api-key"), null);
-  for (const body of [native.image, { ...native.create, frame_images: [] }, { ...native.create, input_references: [] }]) assert.throws(() => prepare(body, selected), /asset_binding_required/);
-  for (const body of [{ ...native.create, model: "veo-3.1-fast-generate-preview" }, { ...native.create, retentionAllowed: true }]) assert.throws(() => prepare(body, selected));
+  assert.equal([...prepared.headers].length, 0);
+  for (const body of [native.image, { ...native.create, frame_images: [] }, { ...native.create, input_references: [] }]) assert.throws(() => admitted(body, admission, selected), /asset_binding_required/);
+  for (const body of [{ ...native.create, model: "veo-3.1-fast-generate-preview" }, { ...native.create, retentionAllowed: true }]) assert.throws(() => admitted(body, admission, selected));
+  for (const [params, query] of [[{ model: native.create.model }, ""], [{}, "allow=true"]])
+    assert.throws(() => selected.prepareAdmitted(native.create, new Headers(), params, new URLSearchParams(query), admission));
 });
+
 test("submit and original retrieve preserve terminal, expiry and cost semantics without cancellation or result controls", async () => {
   const submitted = await adapter.read(Response.json(native.accepted, { status: 202 }), context("create"));
   assert.equal(submitted.followUp, "retrieve"); assert.equal(submitted.id, f.id);
@@ -64,11 +71,11 @@ test("content control derives the original job and fixed index without metadata 
   assert.throws(() => files.control("download", f.contentEndpoint, { ...f.descriptor, mimeType: "video/webm" }, f.base));
 });
 test("every original dispatch boundary pins public origin, native Bearer and exact create/control paths", () => {
-  const selected = createOpenRouterVideoManagedAdapter({ retentionAllowed: true });
+  const selected = createOpenRouterVideoManagedAdapter();
   const request = (path, method = "GET", authorization = "Bearer synthetic-original") => new Request("https://openrouter.ai/api" + path, { method, headers: { authorization, "content-type": "application/json" } });
   selected.assertDispatch(request("/v1/videos", "POST"));
   adapter.assertDispatch(request(`/v1/videos/${f.id}`)); adapter.assertDispatch(request(`/v1/videos/${f.id}/content?index=0`));
-  assert.throws(() => adapter.assertDispatch(request("/v1/videos", "POST")), /create_dispatch/);
+  assert.throws(() => adapter.assertDispatch(request("/v1/videos?allow=true", "POST")), /create_dispatch/);
   for (const r of [request(`/v1/videos/${f.id}/content`), request(`/v1/videos/${f.id}/content?index=1`), request(`/v1/videos/${f.id}/cancel`, "POST"), request(`/v1/videos/${f.id}`, "GET", "Key synthetic"), new Request(`https://assets.example/${f.id}`, { headers: { authorization: "Bearer synthetic" } })]) assert.throws(() => selected.assertDispatch(r));
 });
 test("public rewriting drops bearer URLs and supplies only the original durable descriptor link", async () => {

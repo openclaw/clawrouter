@@ -2,14 +2,12 @@ import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { exactMediaParams, mediaObject, mediaPublicPath, noMediaQuery } from "./managed-media-json.ts";
 import { openRouterVideoFiles } from "./managed-openrouter-video-files.ts";
 import { openRouterVideoModels, prepareOpenRouterVideo, prepareOpenRouterVideoControl, readOpenRouterVideo,
-  validateOpenRouterVideoId, type OpenRouterVideoPolicy } from "./openrouter-video.ts";
+  validateOpenRouterVideoId } from "./openrouter-video.ts";
 
 function requireVideo(value: unknown, reason: string): asserts value { if (!value) throw new Error("invalid_managed_openrouter_video_" + reason); }
 
-// Only trusted server admission may supply this policy. Registry defaults deny
-// create until the runtime publishes the per-request retention boundary.
-export function createOpenRouterVideoManagedAdapter(policy: OpenRouterVideoPolicy = { retentionAllowed: false }): ManagedLifecycleAdapter {
-  const retentionAllowed = policy.retentionAllowed === true;
+// Retention authority is per request, after original credential selection.
+export function createOpenRouterVideoManagedAdapter(): ManagedLifecycleAdapter {
   return {
     protocol: "openrouter.video", requestFormats: ["openrouter.video_create"], supportsResult: false, supportsCancel: false,
     validateId: validateOpenRouterVideoId, files: openRouterVideoFiles,
@@ -18,7 +16,9 @@ export function createOpenRouterVideoManagedAdapter(policy: OpenRouterVideoPolic
       requireVideo(url.origin === "https://openrouter.ai" && !url.username && !url.password && !url.hash
         && /^Bearer [\x21-\x7e]{1,4096}$/.test(request.headers.get("authorization") ?? ""), "dispatch");
       if (request.method === "POST" && url.pathname === "/api/v1/videos") {
-        requireVideo(retentionAllowed && !url.search && request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/json", "create_dispatch");
+        // Shared dispatch rechecks original-grant retention permission. This
+        // pure hook only qualifies the materialized origin, path and headers.
+        requireVideo(!url.search && request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "application/json", "create_dispatch");
         return;
       }
       requireVideo(request.method === "GET", "method");
@@ -26,12 +26,16 @@ export function createOpenRouterVideoManagedAdapter(policy: OpenRouterVideoPolic
       requireVideo(match, "route");
       requireVideo(match[2] ? url.searchParams.size === 1 && url.searchParams.get("index") === "0" : !url.search, "query");
     },
-    prepare(body, _headers, pathParams, query) {
+    prepare() { throw new Error("invalid_managed_openrouter_video_retention_admission_required"); },
+    prepareAdmitted(body, _headers, pathParams, query, admission) {
       noMediaQuery(query); exactMediaParams(pathParams, []);
+      const retentionAllowed = admission?.upstreamRetention === "allowed";
       requireVideo(retentionAllowed, "retention_admission_required");
       requireVideo(mediaObject(body) && !Object.hasOwn(body, "frame_images") && !Object.hasOwn(body, "input_references"), "asset_binding_required");
       const prepared = prepareOpenRouterVideo(openRouterVideoModels[0], body, { retentionAllowed });
-      return { body: prepared.body, headers: prepared.headers, requestedVersion: prepared.requestedVersion, pathParams: {} };
+      // The original selected request already owns its JSON headers and auth.
+      // Admission allows canonical body replacement, never header/route changes.
+      return { body: prepared.body, headers: new Headers(), requestedVersion: prepared.requestedVersion, pathParams: {} };
     },
     identify(action, pathParams, query) {
       requireVideo(action === "retrieve", "control"); noMediaQuery(query); exactMediaParams(pathParams, ["video_id"]);

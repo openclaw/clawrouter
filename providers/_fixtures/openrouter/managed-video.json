@@ -7,7 +7,7 @@
     "mode": "download_only",
     "mimeType": "video/mp4",
     "maxBytes": 16777216,
-    "retentionAdmission": "required trusted runtime input; registered create is denied",
+    "retentionAdmission": "prepareAdmitted requires trusted policy plus original credential/route receipt; ordinary prepare is denied",
     "upstreamCostMicros": null
   },
   "base": "https://openrouter.ai/api",
