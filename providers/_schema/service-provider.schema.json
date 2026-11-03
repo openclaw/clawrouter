@@ -658,6 +658,14 @@
           ]
         },
         "then": { "$ref": "#/$defs/syntheticModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^baseten\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^baseten\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/basetenModelsEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -916,6 +924,24 @@
         "websocket": { "enum": ["openai.responses", "openai.realtime"] },
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }
+    },
+    "basetenModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "baseten.models" },
+        "responseFormat": { "const": "baseten.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
     },
     "syntheticModelsEndpoint": {
       "type": "object",
