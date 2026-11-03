@@ -16,3 +16,30 @@ export function parseArgs(values) {
   return out;
 }
 
+export function required(value, name) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${name} is required`);
+  }
+  return value.trim();
+}
+
+export function optionalValue(args, name) {
+  const value = args[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === true) {
+    throw new Error(`--${name} requires a value`);
+  }
+  return value.trim();
+}
+
+export function requiredOption(args, name) {
+  return required(optionalValue(args, name), `--${name}`);
+}
+
+export function setOptional(target, name, value) {
+  if (value !== undefined) {
+    target[name] = value;
+  }
+}
