@@ -1,6 +1,6 @@
+import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
-import { extname } from "node:path";
 import test from "node:test";
 
 // OAuth's browser identity/provider fixture supplies configuration only. Fetch
@@ -9,7 +9,6 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   if (context.parentURL === new URL("../oauth.ts", import.meta.url).href && ["./access", "./authority", "./providers"].includes(specifier)) {
     return { shortCircuit: true, url: new URL("./oauth-token-fetch.mocks.mjs", import.meta.url).href };
   }
-  if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) return nextResolve(`${specifier}.ts`, context);
   return nextResolve(specifier, context);
 } });
 const { oauthCallback } = await import("../oauth.ts");

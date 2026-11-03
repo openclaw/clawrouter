@@ -1,5 +1,5 @@
+import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { registerHooks } from "node:module";
 import test from "node:test";
@@ -10,9 +10,6 @@ registerHooks({
       if (specifier === "./access" || specifier === "./authority" || specifier === "./providers" || specifier === "./grant-selection") {
         return { shortCircuit: true, url: new URL("./oauth-token-fetch.mocks.mjs", import.meta.url).href };
       }
-    }
-    if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) {
-      return nextResolve(`${specifier}.ts`, context);
     }
     return nextResolve(specifier, context);
   },

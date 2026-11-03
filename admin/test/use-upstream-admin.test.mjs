@@ -1,14 +1,11 @@
+import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
-import { extname } from "node:path";
+import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { errorMessage } from "../src/domain.ts";
 import { consoleStatusPresentation } from "../src/status-display.ts";
 
-registerHooks({ resolve(specifier, context, nextResolve) {
-  return nextResolve(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
-} });
 const { DashboardRequestError } = await import("../src/dashboard-fetch.ts");
 
 // Exercise the actual owner without a local React install; browser journeys cover events/rendering.

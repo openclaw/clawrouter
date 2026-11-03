@@ -1,10 +1,6 @@
+import "../../test/helpers/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerHooks } from "node:module";
-import { extname } from "node:path";
-registerHooks({ resolve(specifier, context, nextResolve) {
-  return nextResolve(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
-} });
 const { credentialExpiryLabel, keyTierChoices } = await import("../src/member-key-options.ts");
 import { credentialOutcome } from "../src/domain.ts";
 
