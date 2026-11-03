@@ -1,0 +1,114 @@
+{
+  "protocol": "kie.market-jobs",
+  "synthetic": true,
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/jobs/createTask",
+    "body": {
+      "model": "kling-2.6/text-to-video",
+      "input": {
+        "prompt": "A synthetic blue square",
+        "duration": "5",
+        "sound": false,
+        "aspect_ratio": "1:1"
+      }
+    }
+  },
+  "submission": {
+    "code": 200,
+    "msg": "success",
+    "data": {
+      "taskId": "task_fixture_001"
+    }
+  },
+  "read": {
+    "method": "GET",
+    "path": "/api/v1/jobs/recordInfo?taskId=task_fixture_001"
+  },
+  "cancel": {
+    "supported": false,
+    "reason": "No scoped cancellation endpoint is qualified for this Market slice; disconnect is not upstream cancellation."
+  },
+  "responses": {
+    "waiting": {
+      "code": 200,
+      "msg": "success",
+      "data": {
+        "taskId": "task_fixture_001",
+        "model": "kling-2.6/text-to-video",
+        "state": "waiting"
+      }
+    },
+    "queuing": {
+      "code": 200,
+      "msg": "success",
+      "data": {
+        "taskId": "task_fixture_001",
+        "model": "kling-2.6/text-to-video",
+        "state": "queuing"
+      }
+    },
+    "partial": {
+      "code": 200,
+      "msg": "success",
+      "data": {
+        "taskId": "task_fixture_001",
+        "model": "kling-2.6/text-to-video",
+        "state": "generating",
+        "resultJson": "{\"resultUrls\": [\"https://media.example/partial.mp4\"]}"
+      }
+    },
+    "success": {
+      "code": 200,
+      "msg": "success",
+      "data": {
+        "taskId": "task_fixture_001",
+        "model": "kling-2.6/text-to-video",
+        "state": "success",
+        "resultJson": "{\"resultUrls\": [\"https://media.example/final.mp4\"]}",
+        "creditsConsumed": 50,
+        "costTime": 15
+      }
+    },
+    "failed": {
+      "code": 200,
+      "msg": "success",
+      "data": {
+        "taskId": "task_fixture_001",
+        "model": "kling-2.6/text-to-video",
+        "state": "fail",
+        "failCode": "SYNTHETIC_FAILURE",
+        "failMsg": "Synthetic failure"
+      }
+    },
+    "authError": {
+      "code": 401,
+      "msg": "Synthetic authentication rejection",
+      "data": null
+    },
+    "foreignTask": {
+      "code": 422,
+      "msg": "Synthetic missing or foreign task",
+      "data": null
+    }
+  },
+  "billing": {
+    "creditsAreNotDollars": true,
+    "actualProviderCostMicrousd": null,
+    "hardBudgetRequires": "frozen model/version tariff and whole-job bound, or explicit policy_fixed tariff",
+    "runtimeTimeoutIsNotCancel": true
+  },
+  "retention": {
+    "generatedFilesDays": 14,
+    "ownershipExpiryMeans": "deny controls, never expose raw task IDs"
+  },
+  "integrationRequirements": [
+    "persist caller/policy/original-credential/model lineage and dispatch fence before create",
+    "bind task ID before exposing bytes; local scoped idempotency does not authorize replay after uncertain create",
+    "HTTP 200 code!=200 is rejected observation, not terminal job or free charge",
+    "success/fail freeze one receipt; partial resultJson stays nonterminal",
+    "GET ownership errors, disconnect and observation expiry preserve conservative accounting",
+    "do not store prompt/param/resultJson/failMsg/URLs in durable ownership or receipt",
+    "download output only under separate bounded SSRF/origin policy with no provider credential forwarding"
+  ]
+}
