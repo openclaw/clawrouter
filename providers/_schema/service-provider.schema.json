@@ -613,6 +613,14 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^gradium\\." } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^gradium\\." } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/gradiumSpeechEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "const": "deepgram.prerecorded" } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "const": "deepgram.prerecorded" } }, "required": ["responseFormat"] }
           ]
@@ -1785,6 +1793,26 @@
           { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
         ]
       }
+    },
+    "gradiumSpeechEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/api/post/speech/tts" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "gradium.speech" },
+        "responseFormat": { "const": "audio.binary" },
+        "query": { "maxProperties": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["upstreamPath"] }
+      ] }
     },
     "deepgramPrerecordedEndpoint": {
       "type": "object",
