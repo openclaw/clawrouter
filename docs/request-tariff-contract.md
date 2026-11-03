@@ -123,3 +123,65 @@ observation and settlement, with the following invariants before activation:
 Synthetic receipt/error fixtures exercise the arithmetic, full-output reservation and evidence boundary.
 No violation-triggering live prompts or fabricated violation error codes are
 needed. Shared runtime and client types remain owned by their respective lanes.
+
+### Native hosted-tool admission boundary
+
+`outcomeRequestPricingGap(pricing, body, requestFormat, requestPricing, parentTools?)`
+is the exported classification hook for the shared outcome-tariff consumer.
+Use it only after selecting and binding the qualified tariff. A `null` result
+clears only the represented request-fee gap; it does not attest token prices,
+service tiers, media limits or a reservation. Next obtain the combined reserve
+with `estimateModelCost(pricing, body, endpoint, requestPricing)`. Keep explicit
+`policy_fixed` handling and label separate. The ordinary `requestPricingGap`
+still returns `model_request_fee` for the guarded card until runtime opts in.
+
+Checked 2026-11-03 against the actual REST declaration examples:
+
+| Native ToolParam `type` | Admission result | Primary wire evidence |
+| --- | --- | --- |
+| `web_search` | Unbounded hosted fee | [Web Search](https://docs.x.ai/developers/tools/web-search) |
+| `x_search` | Unbounded hosted fee | [X Search](https://docs.x.ai/developers/tools/x-search) |
+| `code_interpreter` | Unbounded hosted fee | [Code execution](https://docs.x.ai/developers/tools/code-execution) |
+| `file_search` | Unbounded hosted fee | [Collections Search](https://docs.x.ai/developers/tools/collections-search) |
+| `image_generation` | Unbounded hosted fee | [Image generation tool](https://docs.x.ai/developers/tools/image-generation) |
+| `mcp` | Unbounded hosted usage | [Remote MCP](https://docs.x.ai/developers/tools/remote-mcp) |
+
+The generic `hostedToolPricingGap` now recognizes `x_search`; existing budget
+admission therefore rejects it even on a token-priced card without an outcome
+component. It also flows through the existing typed additional-tool inventory
+and retained-tool classifier. A function with `type: function` named `x_search`
+or any other hosted name remains client execution. Never scan function names,
+JSON schemas, function arguments/output or ordinary message text for a fee.
+
+[X Search pricing](https://docs.x.ai/developers/pricing#tool-invocation-costs)
+is $5/1,000 fetched posts and $10/1,000 fetched profiles, including nested/thread
+items without deduplication. A declared tool, one search call, `max_turns` or a
+result-count hint does not establish an all-item dollar bound. Image/video
+understanding can add token processing too. The possible $0.05 violation fee
+is a separate component and cannot stand in for these costs.
+
+Pricing-table invocation names and SDK helper names do not define REST
+ToolParam discriminants. The opt-in native helper rejects unsupported types as
+unqualified hosted usage; it does not invent a rate or silently call them free.
+For example, code execution's qualified REST declaration is `code_interpreter`.
+An ordinary client function named `code_execution` is still a function.
+
+There are also implicit execution selectors:
+
+- [Native file attachments](https://docs.x.ai/developers/model-capabilities/files/chat-with-files)
+  automatically enable document search. The helper rejects `input_file` content
+  parts with either URL or file-ID input under this tariff. It inspects actual
+  input envelopes, not text or arbitrary nested user JSON.
+- The [Responses reference](https://docs.x.ai/developers/rest-api-reference/inference/responses)
+  still declares `search_parameters`. Only explicit `mode: off` proves that this
+  legacy selector disables search; other modes or malformed selectors stay
+  unqualified.
+- `previous_response_id` and conversation references can retain implicit search
+  state. A generic token-only tool witness does not qualify that native state;
+  the opt-in helper returns `retained_tool_unknown` until native ancestry proof
+  exists. Opaque prompts and multi-agent requests keep their existing guards.
+
+This change supplies classification and budget-admission tests, not runtime
+outcome-tariff activation or a native hosted-tool price schedule. PR383's bundled
+request-fee guard remains necessary until shared admission, observation and
+settlement consume the complete contract. No live charge probes are required.
