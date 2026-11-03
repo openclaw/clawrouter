@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
+- Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 
