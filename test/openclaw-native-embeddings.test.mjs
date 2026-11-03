@@ -110,10 +110,12 @@ for (const dispatch of ["native", "manifest"]) test(`actual OpenClaw ${dispatch}
           assert.equal(event.status, suffix && suffix !== "_invalid" || invalidAtWorker ? "provider_error" : "success");
           assert.equal(event.cost_basis, "policy_fixed");
           assert.equal(event.actual_cost_micros, 7, "invalid or incomplete output cannot prove free dispatched work");
-          assert.equal(event.output_tokens, null);
           const tokens = endpoint.request_format === "cohere.embed" || suffix === "_error" || suffix === "_eof" || invalidAtWorker ? null : 7;
-          assert.equal(event.input_tokens, tokens);
-          assert.equal(event.total_tokens, tokens);
+          const evidence = `${dispatch}/${endpoint.request_format}/${model.id}/${id}`;
+          // Voyage's qualified total-only receipt describes input with zero output.
+          assert.equal(event.output_tokens, endpoint.request_format === "voyage.embeddings" && tokens !== null ? 0 : null, `${evidence}: output tokens`);
+          assert.equal(event.input_tokens, tokens, `${evidence}: input tokens`);
+          assert.equal(event.total_tokens, tokens, `${evidence}: total tokens`);
           assert.doesNotMatch(JSON.stringify(event), /query fixture|first fixture|second fixture|fixture-upstream|must-not-fallback/);
         }
       }
