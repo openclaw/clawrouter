@@ -1,0 +1,24 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "protocol": "dashscope.video",
+  "source": "src/video-generation/dashscope-compatible.ts",
+  "create": {
+    "method": "POST",
+    "path": "/api/v1/services/aigc/video-generation/video-synthesis",
+    "headers": { "X-DashScope-Async": "enable", "Content-Type": "application/json" },
+    "body": { "model": "wan2.6-t2v", "input": { "prompt": "Synthetic quiet landscape" }, "parameters": { "size": "1280*720", "duration": 5, "watermark": true } },
+    "response": { "output": { "task_id": "00000000-0000-4000-8000-000000000001", "task_status": "PENDING" } }
+  },
+  "retrieve": { "method": "GET", "path": "/api/v1/tasks/${task_id}" },
+  "observations": [
+    { "native": { "task_status": "RUNNING", "video_url": "https://media.example/partial.mp4" }, "terminal": null },
+    { "native": { "task_status": "SUCCEEDED", "video_url": "https://media.example/result.mp4" }, "terminal": "succeeded" },
+    { "native": { "task_status": "FAILED", "code": "SyntheticFailure", "message": "synthetic failure" }, "terminal": "failed" },
+    { "native": { "task_status": "CANCELED" }, "terminal": "canceled" },
+    { "native": { "task_status": "UNKNOWN" }, "terminal": null, "observationUnavailable": "expired_or_unknown", "requiredControllerAction": "freeze observation loss once; retain policy_fixed; no polling or POST replay" }
+  ],
+  "cancel": { "supported": false },
+  "retention": { "taskSeconds": 86400, "resultUrlSeconds": 86400 },
+  "billing": { "unit": "model_region_resolution_duration", "actualProviderCostMicrousd": null, "referenceVideoIncludesInputDuration": true, "terminalDoesNotProveRefund": true }
+}
