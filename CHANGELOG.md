@@ -351,6 +351,7 @@
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
 
 - Preserve validated payload formats for caller-scoped manifest-only catalog routes so native embedding clients can qualify offers without enabling disabled native endpoints.
+- Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
 
 ## 0.5.0 - 2026-10-22
 
