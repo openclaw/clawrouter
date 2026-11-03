@@ -52,5 +52,41 @@ No upstream cancellation/refund is promised on disconnect.
 11.6 owns snapshot activation after the real runtime path/tests; 11.2 consumes
 `providers/_fixtures/deepgram/prerecorded.json` through the scoped bridge.
 The manifest alone must not advertise working binary dispatch. Hard upstream-dollar
-budgets stay fail-closed until a whole-upload tariff is qualified, unless an
-explicit policy_fixed fee is configured. Flux and realtime WebSockets are separate.
+budgets stay fail-closed until a whole-upload tariff is qualified. Explicit
+policy_fixed charges are a separate basis, not upstream cost proof. Flux and
+realtime WebSockets are separate.
+
+## Updated source readiness
+
+The published reference explicitly excludes legacy `keywords` from Nova-3;
+this validator now rejects it while preserving ordered repeated `keyterm` values
+without rewriting them or adding weights. The 16,384-character encoded query
+and 128-entry limits apply after defaulting `model=nova-3`, so the actual outgoing
+query cannot exceed the advertised envelope. Input query objects remain unchanged.
+Seven focused cases cover native bytes, model/query rejection, final-query bounds,
+file envelope, complete tracks, malformed/partial results and fixture framing.
+
+The existing fixture is a complete offline PCM16LE WAV at 8 kHz mono; RIFF/data
+lengths and independent decoding were verified. Its short audio and the separate
+two-track response are independent synthetic protocol examples, not a paid
+transcription or measured-duration receipt. The adapter preserves bytes and
+syntactically validates `audio/*` or `application/octet-stream`; it is not a
+decoder qualification for every audio subtype. Deepgram documents broad native
+format support, but only this WAV sample is playable-media evidence here. JSON
+URL bodies and multipart encoding remain outside this raw binary contract.
+
+Published [PR482](https://github.com/openclaw/clawrouter/pull/482) source
+`3ac58451fdccf3950ead584be49e2e835df1a726` already implements the shared
+`readBinaryUpload(request, maximum)` path and uses this exact preparer/observer.
+Its native/proxy route resolves the explicitly unpriced `deepgram/nova-3` model,
+reauthenticates after upload and preserves native Token credentials, the binary
+body, query, dispatch acknowledgment and conservative settlement. The source
+adapter therefore needs no new input ABI or competing wrapper. Source1 owns
+recomposition with this portable validator correction and final common-runtime
+proof; Source6 owns the existing route's atomic snapshot/activation integration.
+Source2's OpenAI/SenseAudio multipart client candidate does not cover Deepgram.
+
+Primary sources rechecked for this finite correction:
+[prerecorded query reference](https://developers.deepgram.com/reference/speech-to-text/listen-pre-recorded)
+and [supported audio formats](https://developers.deepgram.com/docs/supported-audio-formats).
+No model, tariff, credential, live request or provider manifest changed.

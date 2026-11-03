@@ -1,7 +1,8 @@
 // Router memory envelope; byte size never establishes billable audio duration.
 export const deepgramAudioLimit = 25_000_000;
 const booleanOptions = new Set(["smart_format", "punctuate", "diarize", "utterances", "multichannel", "numerals", "detect_entities", "sentiment", "topics", "intents", "filler_words", "paragraphs", "profanity_filter"]);
-const repeatedOptions = new Set(["keyterm", "keywords", "replace", "redact", "tag"]);
+// Nova-3 supports keyterm; legacy keywords is not a supported substitute.
+const repeatedOptions = new Set(["keyterm", "replace", "redact", "tag"]);
 const scalarOptions = new Set(["model", "language", "encoding", "sample_rate", "channels", "detect_language", "summarize", "utt_split"]);
 
 export interface DeepgramAudioRequest { body: Uint8Array; contentType: string; query: URLSearchParams }
@@ -11,6 +12,8 @@ export function prepareDeepgramPrerecorded(body: Uint8Array, contentType: string
   const mime = contentType.toLowerCase().trim();
   if (!/^audio\/[a-z0-9.+-]+$/.test(mime) && mime !== "application/octet-stream") throw new Error("Deepgram prerecorded requires binary audio");
   const query = new URLSearchParams(input);
+  // Bound the actual outgoing query, including its default selected model.
+  if (!query.has("model")) query.set("model", "nova-3");
   if (query.toString().length > 16_384 || [...query].length > 128) throw new Error("Deepgram query exceeds router bounds");
   const seen = new Set<string>();
   for (const [name, value] of query) {
@@ -21,7 +24,6 @@ export function prepareDeepgramPrerecorded(body: Uint8Array, contentType: string
     if (booleanOptions.has(name) && value !== "true" && value !== "false") throw new Error("Deepgram boolean option is invalid");
     if (["sample_rate", "channels"].includes(name) && (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)))) throw new Error("Deepgram audio format number is invalid");
   }
-  if (!query.has("model")) query.set("model", "nova-3");
   if (query.get("model") !== "nova-3") throw new Error("Deepgram prerecorded model is unqualified");
   return { body, contentType: mime, query };
 }
