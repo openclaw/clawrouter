@@ -74,6 +74,7 @@ function compileProvider(manifest, ids) {
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
     ...(endpoint.responsesLifecycle ? { responsesLifecycle: endpoint.responsesLifecycle } : {}),
+    ...(endpoint.lifecycle ? { lifecycle: structuredClone(endpoint.lifecycle) } : {}),
     ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
     ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}),
     ...(endpoint.toolPricing ? { toolPricing: structuredClone(endpoint.toolPricing) } : {}),
@@ -319,6 +320,7 @@ function validateManifest(manifest) {
       }
     }
   }
+  validatePredictionLifecycles(manifest);
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (endpoint.requestPricing) {
@@ -402,6 +404,34 @@ function validateManifest(manifest) {
     if (transport.maintenance?.quotaPoll && !(manifest.quota?.probes ?? []).some((probe) => probe.grantKinds?.includes(kind))) throw new Error(`provider ${manifest.id} grant transport ${kind} quota polling requires a matching quota probe`);
   }
   validateQuota(manifest.id, manifest.quota);
+}
+
+function validatePredictionLifecycles(manifest) {
+  const controls = new Set();
+  for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (!endpoint.lifecycle) continue;
+    const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct native Replicate prediction create/retrieve/cancel endpoints`); };
+    const incompatible = (value) => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false || Object.keys(value.query ?? {}).length;
+    const methodsMatch = (endpointId, method) => !manifest.capabilities.some(capability => capability.endpoint === endpointId && capability.methods?.some(value => value !== method));
+    if (manifest.id !== "replicate" || endpoint.lifecycle.protocol !== "replicate.predictions" || incompatible(endpoint)
+      || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST")
+      || endpoint.path !== "/v1/predictions" || (endpoint.pathParams ?? []).length
+      || endpoint.requestFormat !== "replicate.prediction_create" || endpoint.responseFormat !== "replicate.prediction"
+      || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
+    for (const action of ["retrieve", "cancel"]) {
+      const controlId = endpoint.lifecycle[action];
+      const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
+      const method = action === "retrieve" ? "GET" : "POST";
+      if (!control || controlId === id || controls.has(controlId) || control.lifecycle || incompatible(control)
+        || (control.method ?? "POST") !== method || !methodsMatch(controlId, method)
+        || control.path !== `/v1/predictions/\${prediction_id}${action === "cancel" ? "/cancel" : ""}`
+        || JSON.stringify(control.pathParams) !== '["prediction_id"]'
+        || Object.entries(control.pathParamStyles ?? {}).some(([name, style]) => name !== "prediction_id" || style !== "segment")
+        || control.requestFormat !== `replicate.prediction_${action === "retrieve" ? "get" : "cancel"}` || control.responseFormat !== "replicate.prediction"
+        || manifest.capabilities.some(capability => capability.endpoint === controlId && (action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
+      controls.add(controlId);
+    }
+  }
 }
 
 function validateQuota(providerId, quota) {

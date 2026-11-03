@@ -631,6 +631,16 @@
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
+        "lifecycle": {
+          "type": "object",
+          "required": ["protocol", "retrieve", "cancel"],
+          "additionalProperties": false,
+          "properties": {
+            "protocol": { "const": "replicate.predictions" },
+            "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "cancel": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        },
         "responsesLifecycle": {
           "type": "object",
           "required": ["retrieve", "cancel"],
