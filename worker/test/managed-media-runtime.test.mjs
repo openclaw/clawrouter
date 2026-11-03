@@ -110,7 +110,9 @@ test("fal owner/app and original credential are pinned; result failure is one bi
   assert.equal((await f.read()).status, 200); assert.equal(state.job().managed.terminal, "failed"); assert.equal(state.job().amount, 700);
   assert.ok(f.sent.every(request => request.headers.get("authorization") === "Bearer synthetic-original-key"));
   await putGrantCredentials(f.env, grantKey, { provider: "media-fixture", kind: "api_key", enabled: true, credential: "synthetic-rotated-key" });
-  const beforeRotation = f.sent.length; assert.equal((await f.read()).status, 409); assert.equal(f.sent.length, beforeRotation);
+  const beforeRotation = f.sent.length, rotated = await f.read();
+  assert.equal(rotated.status, 503); assert.equal((await rotated.json()).error.code, "response_owner_unavailable");
+  assert.equal(f.sent.length, beforeRotation);
 });
 
 test("Vydra DELETE ACK is followed by GET; terminal success wins without repeat cancellation", async t => {
@@ -140,4 +142,17 @@ test("Kie caller scopes cannot control each other's IDs; disconnected delivery s
   f.restart(); f.upstream = () => Response.json(f.terminal); f.advance(5000); await state.alarm(); await f.drain();
   assert.equal(state.job().phase, "complete"); assert.equal(state.job().managed.terminal, "succeeded");
   assert.equal((await f.events()).length, 1); assert.equal(f.sent.filter(request => request.method === "POST").length, 1);
+});
+
+test("fal PUT cancellation acknowledgement follows only bounded status/result reads", async t => {
+  const f = await mediaFixture(t, "fal.queue"), response = await f.create(), state = f.state(response);
+  let canceled = false;
+  f.upstream = request => {
+    if (request.method === "PUT") { canceled = true; const ack = f.wire.cancelAcks.find(ack => ack.httpStatus === 202); return Response.json(ack.body, { status: ack.httpStatus }); }
+    return Response.json(request.url.endsWith("/status") ? canceled ? f.terminal : f.partial : { images: [] });
+  };
+  const canceledResponse = await f.call(f.prefix + f.wire.controls.cancel.path, null, { method: "PUT" });
+  assert.equal(canceledResponse.status, 202, await canceledResponse.clone().text());
+  assert.deepEqual(f.sent.map(request => request.method), ["POST", "GET", "PUT", "GET", "GET"]);
+  assert.equal(state.job().managed.terminal, "succeeded"); assert.equal(state.job().amount, 700);
 });
