@@ -1,12 +1,16 @@
 import { falQueuePaths, parseFalCancelAcknowledgement, parseFalQueueObservation, parseFalResult, parseFalSubmission,
   prepareFalQueueSubmit, validateFalRequestId } from "./fal-queue.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
+import { isFalPromptVideoModel, prepareFalPromptVideo } from "./fal-prompt-video.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, mediaPublicPath, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
 
 function endpointId(params: Record<string, string>): string {
-  exactMediaParams(params, ["owner", "app"], ["variant"]);
-  const id = [params.owner, params.app, ...(params.variant === undefined ? [] : [params.variant])].join("/");
-  // One optional variant is the first native route slice. No encoded path injection.
+  exactMediaParams(params, ["owner", "app"], ["variant", "subvariant"]);
+  if (params.subvariant !== undefined && params.variant === undefined) throw new Error("invalid_fal_endpoint_id");
+  const id = [params.owner, params.app, ...(params.variant === undefined ? [] : [params.variant]),
+    ...(params.subvariant === undefined ? [] : [params.subvariant])].join("/");
+  // Extend the original route only for the frozen four-segment HeyGen product.
+  if (params.subvariant !== undefined && !isFalPromptVideoModel(id)) throw new Error("invalid_fal_endpoint_id");
   if (Object.values(params).some(value => !/^[a-zA-Z0-9_-]{1,64}$/.test(value))) throw new Error("invalid_fal_endpoint_id");
   falQueuePaths(id);
   return id;
@@ -18,7 +22,8 @@ export const falManagedAdapter: ManagedLifecycleAdapter = {
   prepare(body, _headers, pathParams, query) {
     if (!mediaObject(body)) throw new Error("invalid_fal_create");
     const id = endpointId(pathParams), prepared = prepareFalQueueSubmit(id, query);
-    return { body, headers: prepared.headers, requestedVersion: id, pathParams: { ...pathParams } };
+    return { body: isFalPromptVideoModel(id) ? prepareFalPromptVideo(id, body) : body,
+      headers: prepared.headers, requestedVersion: id, pathParams: { ...pathParams } };
   },
   identify(_action, pathParams, query) {
     noMediaQuery(query);
