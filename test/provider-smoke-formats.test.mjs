@@ -25,7 +25,7 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", parallel: "search", replicate: "prediction", tavily: "search" };
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", parallel: "search", replicate: "prediction", tavily: "search" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
@@ -38,7 +38,7 @@ test("bundled target selection is stable and unresolved prediction coverage stay
 });
 
 for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of [
-  ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false],
+  ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false], ["cohere", false, false, "cohere.chat"],
   ["google-gemini", false, false], ["tavily", false, false], ["firecrawl", false, false],
   ["brave", false, false], ["exa", false, false], ["parallel", false, false],
   ["openai", false, false], ["openai", false, true],
@@ -180,6 +180,9 @@ test("unified smoke eligibility uses the selected endpoint's wire contract", () 
   const cohere = renamed("cohere");
   cohere.class = "openai_compatible";
   Object.assign(cohere.adapter, { request: "openai", response: "openai" });
+  assert.equal(buildProviderSmokePlan({ providers: [cohere] }, {}).providers[0].target.kind, "openai_chat");
+  cohere.endpoints = cohere.endpoints.filter(endpoint => endpoint.request_format === "cohere.chat");
+  cohere.capabilities = cohere.capabilities.filter(capability => cohere.endpoints.some(endpoint => endpoint.id === capability.endpoint));
   assert.equal(buildProviderSmokePlan({ providers: [cohere] }, {}).providers[0].target.kind, "manifest_proxy");
   const openai = renamed("openai");
   openai.endpoints.push({ id: "unrelated", path: "/${project}/${resource}", path_params: ["project", "resource"] });
