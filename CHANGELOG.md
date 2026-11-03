@@ -3,12 +3,16 @@
 ## Unreleased
 
 - Bind native Google unary and synchronous batch embeddings to selected models and credentials, validating complete ordered vectors before delivery and retaining conservative charges on uncertain execution.
+- Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
+- Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
+- Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
 
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.
@@ -21,6 +25,7 @@
 
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
+- Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
 - Use the standard GitHub Actions runtime budget for CodeQL instead of the rollout-specific 20-minute job cap.
@@ -65,6 +70,7 @@
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
 
+- Add experimental native Voyage text embeddings with explicit Voyage 4 model rows, preserved native vector options, a bounded native smoke request and a focused input-only usage helper for runtime integration; hard-budget token pricing remains unqualified.
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Route Cohere unified Chat through its documented OpenAI compatibility API, publish dated Command A+ endpoint facts, and retain native v2 Chat/Embed and their accounting.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
@@ -155,6 +161,7 @@
 - Report caller-owned request, token, and spend totals as `usage.personal` on personal usage reads and a per-principal breakdown as `usage.principals` on admin usage, alongside the unchanged shared policy totals. Show both in the console.
 
 - Add published Fireworks GPT OSS 120B Standard and Priority token rates with conservative context bounds and preserve the pricing verification date in compiled cards. Unknown models remain unpriced.
+- Add Groq GPT-OSS 20B with sourced text limits, reasoning controls and conservative token rates. Preserve plain priced Chat and client function tools; reject unqualified hosted tools and automatic/enterprise tiers before hard-budget egress.
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
@@ -174,6 +181,7 @@
 - Decouple dashboard screenshot fixtures from the evolving provider inventory, while checking the real demo catalog and accessibility separately.
 - Add bounded native Google Live setup/frame codecs for the frozen voice models, preserving PCM, tool ownership, interruption and unknown usage without activating an unqualified WebSocket or browser-token bridge.
 - Add the frozen Mistral realtime transcription frame contract with acknowledged audio format, bounded PCM/transcripts, prevention of terminal transcript replay and conservative disconnect accounting.
+- Add frozen xAI realtime transcription codecs with raw-audio readiness, distinct chunk/utterance/session finals and conservative interrupted-session accounting.
 
 - Exercise the actual pinned OpenClaw search plugin through workerd and SQLite in secretless CI, checking scoped discovery, provider credentials, caller cancellation and policy-fixed accounting.
 - Verify catalog-selected OpenAI-format TTS and Talk through the actual OpenClaw consumer, Worker and SQLite accounting in isolated CI.
