@@ -8,7 +8,7 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "d9ca7519f7344726631c08e7dcb86eb70114ec05";
+const sourceHead = "60e29ff604075d6961e19469a60530782fb644f7";
 // Finite, activated contracts only. Bedrock and asynchronous file batches retain
 // their own runtime and consumer qualification gates.
 const modelsByFormat = {
@@ -25,15 +25,16 @@ const cases = snapshot.providers.flatMap(provider => provider.endpoints
 const successCalls = entry => entry.endpoint.request_format === "google.embed_content" ? 3 : 2;
 const inputTexts = body => body.texts ?? body.input ?? (body.requests ?? [body]).map(item => item.content.parts.filter(part => part.text).map(part => part.text).join("\n"));
 
-test("actual OpenClaw native memory consumer through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
+for (const dispatch of ["native", "manifest"]) test(`actual OpenClaw ${dispatch} memory consumer through workerd and SQLite`, { skip: !source, timeout: 300_000 }, async t => {
+  const selectedCases = cases.filter(entry => entry.dispatch === dispatch);
   for (const format of Object.keys(modelsByFormat)) assert.ok(cases.some(entry => entry.endpoint.request_format === format), `missing activated ${format}`);
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-native-memory-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(selectedCases, dispatch), upstreamFixture());
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
-    for (const { provider, model, credential } of cases) {
+    for (const { provider, model, credential } of selectedCases) {
       for (const suffix of ["", "_unpriced", "_error", "_eof", "_invalid"]) {
         const id = credential + suffix;
         await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [provider.id], models: [model.id], tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: suffix === "_unpriced" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
@@ -42,15 +43,22 @@ test("actual OpenClaw native memory consumer through workerd and SQLite", { skip
       await kv.put(`connections/${provider.id}`, JSON.stringify({ providerId: provider.id, enabled: true }));
     }
     const origin = String(await mf.ready);
+    for (const { provider, endpoint, model, credential } of selectedCases) {
+      const response = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: `Bearer clawrouter-live-${credential}-fixture-secret` } });
+      assert.equal(response.status, 200);
+      const catalog = await response.json();
+      const offered = catalog.providers.find(row => row.id === provider.id)?.offers;
+      assert.ok(offered?.some(offer => offer.endpoint === endpoint.id && offer.modelId === model.id && offer.routeKind === dispatch && offer.eligible), `${model.id}: real ${dispatch} offer must precede client execution`);
+    }
     await runOpenClawConsumer(t, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-native-embeddings-contract.test.ts", import.meta.url),
       testPath: "src/agents/worker-contract.test.ts",
-      env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases.map(({ credential, model, endpoint, dispatch }) => ({ credential, model: model.id, format: endpoint.request_format, dispatch }))) },
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_CASES: JSON.stringify(selectedCases.map(({ credential, model, endpoint, dispatch }) => ({ credential, model: model.id, format: endpoint.request_format, dispatch }))) },
     });
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
-    assert.equal(calls.length, cases.reduce((count, entry) => count + successCalls(entry) + 3, 0), "denied/aborted calls never dispatch; failed requests never replay");
-    for (const entry of cases) {
+    assert.equal(calls.length, selectedCases.reduce((count, entry) => count + successCalls(entry) + 3, 0), "denied/aborted calls never dispatch; failed requests never replay");
+    for (const entry of selectedCases) {
       const { provider, endpoint, model, credential } = entry;
       const selected = calls.filter(call => inputTexts(call.body).some(text => new RegExp(`fixture ${credential}\\b`).test(text)));
       assert.equal(selected.length, successCalls(entry) + 3, `${credential}: dispatch count`);
@@ -116,11 +124,19 @@ test("actual OpenClaw native memory consumer through workerd and SQLite", { skip
   }
 });
 
-function routerFixture() {
-  const config = Object.fromEntries(cases.flatMap(({ provider }) => provider.config_keys.map(name => [name, `fixture-upstream-${provider.id}`])));
-  const routes = cases.map(({ credential, endpoint, dispatch }) => ({ credential, endpoint: endpoint.id, dispatch }));
+function routerFixture(selectedCases, dispatch) {
+  const config = Object.fromEntries(selectedCases.flatMap(({ provider }) => provider.config_keys.map(name => [name, `fixture-upstream-${provider.id}`])));
+  const routes = selectedCases.map(({ credential, provider, endpoint, dispatch }) => ({ credential, provider: provider.id, endpoint: endpoint.id, dispatch }));
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
+import { snapshot } from "./worker/providers.ts";
 const routes = ${JSON.stringify(routes)};
+// Exercise the supported manifest-only declaration using a separate isolate.
+// The real catalog computes its offers, eligibility and billing qualifications.
+if (${JSON.stringify(dispatch)} === "manifest") for (const provider of snapshot.providers) {
+  for (const endpoint of provider.endpoints) {
+    if (routes.some(route => route.provider === provider.id && route.endpoint === endpoint.id)) endpoint.native_proxy = false;
+  }
+}
 export default { ...handler, async fetch(request, env, context) {
   const response = await handler.fetch(request, { ...env, ...${JSON.stringify(config)} }, context);
   if (new URL(request.url).pathname !== "/v1/catalog" || !response.ok) return response;

@@ -51,7 +51,7 @@ jobs:
             ref: 70fcd8cb826f1e70ee59aacaf442e4cf411c7ca4
             test: test/openclaw-speech.test.mjs
           - consumer: native-memory
-            ref: d9ca7519f7344726631c08e7dcb86eb70114ec05
+            ref: 60e29ff604075d6961e19469a60530782fb644f7
             test: test/openclaw-native-embeddings.test.mjs
           - consumer: cohere
             ref: b566e9a6b22a863bf0f1f869f106a2a91b062f16
