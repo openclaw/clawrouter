@@ -117,6 +117,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   const endpoint = input.file ? fileContract?.endpoints[input.file.action] : managed ? contract?.controls[input.action]
     : provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action as "retrieve" | "cancel"]);
   if (!endpoint) unavailable();
+  if (input.file) assertOperationConfiguration({ provider, endpoint, mode: "http" }, grant, env);
   const control = input.file ? fileContract!.adapter.control(input.file.action, endpoint, input.file.descriptor, upstream.baseUrl, input.file.state)
     : managed ? contract!.adapter.control(input.action, endpoint, id.value!, input.route.pathParams) : null;
   if (input.file && control && (!control.path.startsWith("/") || /[\\%?#\s]/.test(control.path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(control.path)

@@ -114,6 +114,10 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
       response = await operation.wait(dispatchResponseControl(env, { ...input, file: { action, descriptor: file, state } }, operation.signal), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
       if (response.status !== 200 || response.redirected) throw new HttpError(502, "managed_file_unavailable", "original file delivery failed; do not resubmit generation");
+      const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+      if (action === "download" && ![file.mimeType, "application/octet-stream", "binary/octet-stream"].includes(mime ?? "")) {
+        throw new HttpError(502, "managed_file_unavailable", "file content type does not match its original descriptor");
+      }
       response = boundedFileResponse(response, action === "metadata" ? 64 * 1024 : managedFileLimit, operation.signal);
       return response;
     };

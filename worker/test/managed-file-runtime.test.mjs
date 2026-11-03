@@ -136,7 +136,7 @@ for (const change of ["caller", "grant"]) test(`fresh ${change} revocation betwe
   assert.equal(f.sent.length, 2); assert.equal(bodyBudgetCharged(), 0);
 });
 
-for (const malformed of ["redirect", "wrong-id", "truncated", "oversized", "partial", "html", "metadata-oversized"]) test(`file ${malformed} is never delivered or used to refund generation`, async t => {
+for (const malformed of ["redirect", "wrong-id", "truncated", "oversized", "partial", "html", "wrong-mime", "metadata-oversized"]) test(`file ${malformed} is never delivered or used to refund generation`, async t => {
   const f = await fixture(t), created = await f.call(path, body({})), before = f.state(created).job(), upstream = f.upstream;
   f.upstream = request => {
     if (malformed === "redirect") return new Response(null, { status: 302, headers: { location: "https://other.example/asset" } });
@@ -144,7 +144,7 @@ for (const malformed of ["redirect", "wrong-id", "truncated", "oversized", "part
     if (malformed === "metadata-oversized") return Response.json({ name: "files/" + fileId, state: "ACTIVE", unused: "x".repeat(65536) });
     if (!request.url.includes(":download")) return upstream(request);
     if (malformed === "oversized") return new Response(new Uint8Array(managedFileLimit + 1), { headers: { "content-type": "video/mp4" } });
-    return new Response(media, { status: malformed === "partial" ? 206 : 200, headers: { "content-type": malformed === "html" ? "text/html" : "video/mp4", "content-length": malformed === "truncated" ? "999" : String(media.length) } });
+    return new Response(media, { status: malformed === "partial" ? 206 : 200, headers: { "content-type": malformed === "html" ? "text/html" : malformed === "wrong-mime" ? "video/webm" : "video/mp4", "content-length": malformed === "truncated" ? "999" : String(media.length) } });
   };
   const response = await f.fileCall(); assert.equal(response.status, 502, await response.clone().text());
   assert.deepEqual(f.state(created).job(), before); assert.equal(bodyBudgetCharged(), 0);
@@ -175,4 +175,53 @@ test("unqualified result origins keep the known job binding but expose no file o
   assert.equal(created.status, 503); const state = f.state(created);
   assert.equal(state.job().managed.upstreamId, wire.pending.id); assert.equal(state.job().managed.files, undefined);
   assert.equal((await f.fileCall()).status, 409); assert.equal(f.sent.length, 1);
+});
+
+for (const change of ["missing-wrapper", "private-base", "internal-base"]) test(`${change} fails before generation dispatch or reservation`, async t => {
+  const f = await fixture(t);
+  if (change === "missing-wrapper") override(t, "files", undefined);
+  else f.provider.base_urls.default = change === "private-base" ? "https://127.0.0.1/v1beta" : "https://service.internal/v1beta";
+  const response = await f.call(path, body({})); assert.ok([400, 409, 503].includes(response.status), await response.text());
+  assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
+});
+
+test("file grants must permit both linked endpoints before paid creation", async t => {
+  const f = await fixture(t);
+  const { grantSupports } = await import("../provider-auth.ts");
+  const create = f.provider.endpoints.find(e => e.id === "predictions");
+  f.provider.auth.grantTransports.api_key = { allowedEndpoints: ["predictions", "prediction", "prediction_cancel"], endpointPaths: {} };
+  const requirement = { provider: f.provider, endpoint: create, mode: "http", managedLifecycle: true };
+  assert.equal(grantSupports(requirement, { kind: "api_key" }), false);
+  f.provider.auth.grantTransports.api_key.allowedEndpoints.push("file", "download");
+  assert.equal(grantSupports(requirement, { kind: "api_key" }), true);
+});
+
+test("canceling returned bytes releases the bounded allocation", async t => {
+  const f = await fixture(t); await f.call(path, body({}));
+  const response = await f.fileCall(); assert.equal(response.status, 200);
+  assert.ok(bodyBudgetCharged() > 0); await response.body.cancel(); assert.equal(bodyBudgetCharged(), 0);
+});
+
+test("another valid credential in the same policy cannot claim the original caller's file", async t => {
+  const f = await fixture(t); await f.call(path, body({}));
+  await f.authority("/credentials/put", { credentialId: "other", credential: { ...f.credential } });
+  const response = await f.fileCall(undefined, { headers: { authorization: "Bearer clawrouter-live-other-fixture-secret" } });
+  assert.equal(response.status, 409, await response.clone().text()); assert.equal(f.sent.length, 1);
+});
+
+test("two owned jobs still cannot borrow each other's output descriptor", async t => {
+  const f = await fixture(t); await f.call(path, body({}));
+  const second = structuredClone(wire.completed); second.id = "v1_second";
+  second.steps.find(step => step.type === "model_output").content[0].uri = "files/second-video";
+  f.upstream = () => Response.json(second);
+  assert.equal((await f.call(path, body({}))).status, 200);
+  const response = await f.fileCall("/v1/native/replicate/files/second-video:download?alt=media");
+  assert.equal(response.status, 409); assert.equal(f.sent.length, 2);
+});
+
+test("metadata cannot reset the one file-delivery deadline", async t => {
+  const f = await fixture(t), created = await f.call(path, body({})), before = f.state(created).job();
+  f.upstream = () => { f.advance(30_000); return Response.json({ name: "files/" + fileId, state: "ACTIVE" }); };
+  const response = await f.fileCall(); assert.equal(response.status, 409);
+  assert.equal(f.sent.length, 2); assert.equal(bodyBudgetCharged(), 0); assert.deepEqual(f.state(created).job(), before);
 });
