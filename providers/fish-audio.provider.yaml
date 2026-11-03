@@ -1,0 +1,43 @@
+# Native contract checked 2026-11-03: https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech
+# UTF-8 input-byte billing is not a character or token tariff.
+schema: clawrouter.service-provider.v1
+id: fish-audio
+displayName: Fish Audio
+status: experimental
+class: rest_json
+service:
+  platform: fish-audio
+  kind: tool_provider
+  upstreamService: fish-audio
+  configKeys: [FISH_AUDIO_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.fish.audio
+routing:
+  nativePrefixes: [clawrouter-fish-audio, fish-audio]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
+endpoints:
+  speech:
+    path: /v1/tts
+    requestHeaders: [model]
+    requestFormat: fish_audio.speech
+    responseFormat: audio.binary
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
