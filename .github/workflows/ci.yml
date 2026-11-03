@@ -129,7 +129,7 @@ jobs:
           fs.accessSync(process.env.HOME, fs.constants.W_OK);
           console.log(JSON.stringify({ image, version, chromium, home: process.env.HOME, uid: process.getuid(), node: process.version }));
           NODE
-      - run: pnpm --dir admin exec playwright test
+      - run: pnpm --dir admin exec playwright test --trace on-first-retry
         id: browser
       - name: Upload browser failure output
         if: failure() && steps.browser.outcome == 'failure'
