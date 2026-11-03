@@ -126,6 +126,10 @@
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
+- Add experimental hosted Chat Completions routes for NVIDIA NIM, Cerebras, DeepInfra and Baseten Model APIs, preserving provider-specific paths and credentials without inferring pricing or local runtime parity.
+
+- Decouple dashboard screenshot fixtures from the evolving provider inventory, while checking the real demo catalog and accessibility separately.
+
 ## 0.5.0 - 2026-10-22
 
 - Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.

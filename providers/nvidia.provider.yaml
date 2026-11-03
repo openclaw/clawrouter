@@ -1,0 +1,48 @@
+# Hosted Chat API only; product boundaries: docs/hosted-inference-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.api.nvidia.com/nim/reference/llm-apis
+schema: clawrouter.service-provider.v1
+id: nvidia
+displayName: NVIDIA hosted NIM
+status: experimental
+class: openai_compatible
+service:
+  platform: nvidia
+  kind: model_provider
+  upstreamService: nvidia
+  configKeys: [NVIDIA_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://integrate.api.nvidia.com/v1
+routing:
+  nativePrefixes: [clawrouter-nvidia, nvidia]
+  modelPrefixes: [nvidia/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: nvidia/meta/llama-3.1-8b-instruct
+      upstream: meta/llama-3.1-8b-instruct
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
