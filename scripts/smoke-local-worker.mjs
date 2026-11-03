@@ -219,7 +219,10 @@ try {
     assert.equal(invalidFusion.status, 400);
     assert.equal((await invalidFusion.json()).error.code, "fusion_config_invalid");
   }
-  for (const model of ["cohere/command-a-plus-05-2026", "cloudflare-ai-gateway/auto"]) {
+  const compatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: ["cohere/command-a-plus-05-2026"] }) });
+  assert.equal(compatibleFusion.status, 200, "Cohere compatibility Chat is a qualified Fusion adviser");
+  assert.deepEqual((await compatibleFusion.json()).adviserModels, ["cohere/command-a-plus-05-2026"]);
+  for (const model of ["cohere/embed-v4.0", "cloudflare-ai-gateway/auto"]) {
     const incompatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: [model] }) });
     assert.equal(incompatibleFusion.status, 400);
     assert.equal((await incompatibleFusion.json()).error.code, "fusion_model_incompatible");

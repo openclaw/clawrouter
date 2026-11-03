@@ -96,6 +96,8 @@ test("manifest model IDs skip earlier incompatible models and resolve upstream",
 
 test("Cohere body and path share the selected native name without stripping its namespace", () => {
   const provider = structuredClone(snapshot.providers.find((entry) => entry.id === "cohere"));
+  provider.endpoints = provider.endpoints.filter((entry) => entry.request_format === "cohere.chat");
+  provider.capabilities = provider.capabilities.filter((entry) => provider.endpoints.some((endpoint) => endpoint.id === entry.endpoint));
   provider.models[0].upstream = "cohere/native-model";
   provider.endpoints.find((entry) => entry.id === "chat").path_params = ["model"];
   for (const override of [undefined, provider.models[0].id, provider.models[0].upstream]) {

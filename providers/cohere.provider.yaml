@@ -15,7 +15,7 @@ auth:
       format: "Bearer ${secret}"
       secretKind: api_key
 baseUrls:
-  default: https://api.cohere.com
+  default: https://api.cohere.ai
 routing:
   nativePrefixes: [clawrouter-cohere, cohere]
   modelPrefixes: [cohere/]
@@ -25,6 +25,10 @@ adapter:
   stream: cohere_sse
   error: cohere_error
 capabilities:
+  # Prefer the documented compatibility transport for unified Chat callers.
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
   - id: llm.chat
     endpoint: chat
     methods: [POST]
@@ -32,6 +36,14 @@ capabilities:
     endpoint: embed
     methods: [POST]
 endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /compatibility/v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    outputTokenLimit: { field: max_tokens, minimum: 1, maximum: 64000 }
+    timeoutMs: 600000
   chat:
     modelPassthrough: {}
     path: /v2/chat
@@ -50,6 +62,31 @@ models:
     - id: cohere/command-a-plus-05-2026
       upstream: command-a-plus-05-2026
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.cohere.com/docs/compatibility-api]
+          checkedAt: "2026-11-03"
+          temperature: supported
+          topP: supported
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.cohere.com/docs/compatibility-api
+              - https://docs.cohere.com/docs/command-a-plus
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 128000
+            maxOutputTokens: 64000
+          chat:
+            sources: [https://docs.cohere.com/docs/command-a-plus]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 128000
+            maxOutputTokens: 64000
       pricingRef: cohere-command-a-plus-05-2026
     - id: cohere/embed-v4.0
       upstream: embed-v4.0
