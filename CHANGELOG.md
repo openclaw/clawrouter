@@ -24,6 +24,7 @@
 - Add executable Perplexity Agent/Search wire fixtures covering native results, typed streaming failures, credential isolation and conservative billing for the provider/client integration.
 
 - Define typed Replicate prediction lifecycle links and validate the native create, retrieve and cancel endpoint contracts before compiling manifests.
+- Qualify the Deepgram prerecorded manifest format as native raw-audio transcription with Token authentication, exact endpoint/model constraints and no fabricated token tariff. Bundled discovery activation remains gated on binary dispatch integration.
 
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.

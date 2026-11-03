@@ -610,6 +610,14 @@
           "properties": { "responseFormat": { "const": "openai.responses_compact" }, "method": { "const": "POST" } },
           "not": { "anyOf": [{ "required": ["streaming"] }, { "required": ["websocket"] }, { "required": ["responsesLifecycle"] }, { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] }] }
         }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "const": "deepgram.prerecorded" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "const": "deepgram.prerecorded" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/deepgramPrerecordedEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -1507,6 +1515,34 @@
         "abstention": {
           "type": "boolean"
         }
+      }
+    },
+    "deepgramPrerecordedEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/listen" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "deepgram.prerecorded" },
+        "responseFormat": { "const": "deepgram.prerecorded" },
+        "query": { "maxProperties": 0 },
+        "headers": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": {
+        "anyOf": [
+          { "required": ["auth"] },
+          { "required": ["streaming"] },
+          { "required": ["websocket"] },
+          { "required": ["responsesLifecycle"] },
+          { "required": ["lifecycle"] },
+          { "required": ["modelPassthrough"] },
+          { "required": ["outputTokenLimit"] },
+          { "required": ["requestPricing"] },
+          { "required": ["toolPricing"] }
+        ]
       }
     },
     "parameterSupport": { "enum": ["supported", "unsupported", "requires_reasoning_none"] },

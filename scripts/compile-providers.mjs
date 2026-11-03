@@ -257,6 +257,7 @@ function validateManifest(manifest) {
   const validation = manifestValidator.validate(manifest);
   if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
+  validateDeepgramPrerecorded(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
@@ -432,6 +433,26 @@ function validatePredictionLifecycles(manifest) {
       controls.add(controlId);
     }
   }
+}
+
+function validateDeepgramPrerecorded(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) => endpoint.requestFormat.startsWith("deepgram.") || endpoint.responseFormat.startsWith("deepgram."));
+  if (manifest.id !== "deepgram" && !endpoints.length) return;
+  const fail = () => { throw new Error("deepgram.prerecorded requires the qualified raw-audio provider, Token auth, nova-3 model and unpriced transcription contract"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "deepgram" || manifest.baseUrls.default !== "https://api.deepgram.com" || endpoints.length !== 1
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header.toLowerCase() !== "authorization"
+    || scheme.format !== "Token ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "deepgram.prerecorded" || endpoint.responseFormat !== "deepgram.prerecorded") fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "audio.transcription" || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("audio.transcription"));
+  if (models.length !== 1 || models[0].upstream !== "nova-3" || models[0].capabilities.length !== 1
+    || models[0].pricing || models[0].pricingRef || Object.keys(models[0].endpointPricing ?? {}).length) fail();
 }
 
 function validateQuota(providerId, quota) {
