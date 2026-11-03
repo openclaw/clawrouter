@@ -207,3 +207,23 @@ export function nativeParams(endpoint: CompiledEndpoint, path: string): Record<s
   const match = path.match(new RegExp(`^${pattern}$`));
   return Object.fromEntries(names.map((name, index) => [name, decodePathSegment(match?.[index + 1] ?? "")]));
 }
+
+// Several native protocols can share one model-qualified path. A registered
+// model's declared capability chooses the operation, never YAML order or a
+// guessed body shape. Stateful controls retain their original-owner resolver.
+export function nativeModelEndpoint(provider: CompiledProvider, matching: CompiledEndpoint[], path: string, method: string): CompiledEndpoint | undefined {
+  const candidates = matching.filter(endpoint => endpoint.native_proxy && endpoint.methods.includes(method));
+  if (candidates.length < 2 || candidates.some(endpoint => endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket
+    || !endpoint.path_params.some(name => name === "model" || name === "deployment"))) return;
+  const qualified = candidates.filter(endpoint => {
+    const params = nativeParams(endpoint, path), value = params.model ?? params.deployment;
+    const model = provider.models.find(model => model.upstream === value);
+    // A router alias is not an upstream model assertion on an overlapping native
+    // path. Manifest routes continue to resolve their explicit router selector.
+    if (!model && provider.models.some(model => model.id === value))
+      throw new HttpError(400, "native_model_alias_unsupported", "overlapping native routes require the selected upstream model identity");
+    return model && modelSupportsEndpoint(provider, model, endpoint);
+  });
+  if (qualified.length > 1) throw new HttpError(409, "native_route_ambiguous", "native model matches multiple declared operations");
+  return qualified[0];
+}
