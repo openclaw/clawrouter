@@ -7,7 +7,7 @@ platform suffix. Accessibility checks run alongside the visual assertions.
 
 The `admin` CI job uses Ubuntu x86_64 and the Playwright version pinned in
 `admin/package.json`. Generate Linux baselines on Linux x86_64, for example
-with `mcr.microsoft.com/playwright:v1.63.0-noble` and Docker's
+with `mcr.microsoft.com/playwright:v1.64.1-noble` and Docker's
 `--platform linux/amd64 --ipc=host`. Copy the source into a scratch directory,
 excluding `.git`, `node_modules`, `admin/dist`, and previous test results, and
 mount that directory as `/repo`. Inside the container, run:

@@ -25,7 +25,7 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", "cloudflare-ai-gateway": "universal", cohere: "chat", firecrawl: "scrape", "google-gemini": "generate_content", replicate: "prediction", tavily: "search" };
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", parallel: "search", replicate: "prediction", tavily: "search" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
@@ -40,6 +40,7 @@ test("bundled target selection is stable and unresolved prediction coverage stay
 for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of [
   ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false],
   ["google-gemini", false, false], ["tavily", false, false], ["firecrawl", false, false],
+  ["brave", false, false], ["exa", false, false], ["parallel", false, false],
   ["openai", false, false], ["openai", false, true],
   ["openai", false, false, "openai.responses"], ["openai", false, false, "openai.decisions"], ["openai", false, false, "openai.embeddings"],
   ["cohere", false, false, "cohere.embed"], ["tavily", false, false, "tavily.extract"],
@@ -95,7 +96,7 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
       }
       const native = new URL(url), headers = new Headers(init.headers), body = init.body === undefined ? undefined : JSON.parse(init.body);
       assert.equal(native.origin, "https://format-upstream.example");
-      assert.equal(init.method, method ?? "POST");
+      assert.equal(init.method, method ?? endpoint.method);
       assert.equal(native.pathname, endpoint.path.replace(/\$\{([^}]+)\}/g, (_, name) => encodeURIComponent(["model", "deployment"].includes(name) ? expectedModel.upstream : target.envelope.pathParams[name])));
       for (const scheme of provider.auth.schemes) {
         if (scheme.type === "bearer") assert.equal(headers.get(scheme.header), "Bearer fixture-upstream-key");
@@ -103,9 +104,10 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         if (scheme.type === "query_api_key") assert.equal(native.searchParams.get(scheme.param), "fixture-upstream-key");
       }
       assert.ok(!JSON.stringify(body ?? {}).includes("unrelated"));
-      if (["GET", "HEAD"].includes(method)) {
+      if (["GET", "HEAD"].includes(endpoint.method)) {
         assert.equal(init.body, undefined);
         assert.deepEqual(target.envelope.body, {});
+        if (endpoint.request_format === "brave.search") assert.deepEqual(Object.fromEntries(native.searchParams), { q: "OpenClaw", count: "1" });
       } else if (endpoint.request_format === "fixture.graphql") {
         assert.deepEqual(body, { query: "{ viewer { id } }" });
       } else if (endpoint.request_format === "anthropic.messages") {
@@ -119,6 +121,10 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         assert.deepEqual(body, { contents: [{ parts: [{ text: "reply with ok" }] }] });
       } else if (endpoint.request_format === "tavily.search") {
         assert.deepEqual(body, { query: "OpenClaw", max_results: 1 });
+      } else if (endpoint.request_format === "exa.search") {
+        assert.deepEqual(body, { query: "OpenClaw", numResults: 1 });
+      } else if (endpoint.request_format === "parallel.search") {
+        assert.deepEqual(body, { search_queries: ["OpenClaw official website"], mode: "basic", max_chars_total: 1000 });
       } else if (endpoint.request_format === "tavily.extract") {
         assert.deepEqual(body, { urls: ["https://example.com"] });
       } else if (endpoint.request_format === "openai.responses") {
