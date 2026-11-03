@@ -1,4 +1,5 @@
 import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.ts";
+import { kieKlingModels, prepareKieKlingWire } from "./kie-kling.ts";
 
 export const KIE_JOB_ORIGIN = "https://api.kie.ai";
 export const KIE_CREATE_TASK_PATH = "/api/v1/jobs/createTask";
@@ -32,7 +33,14 @@ export function prepareKieTask(body: unknown): { body: Record<string, unknown>; 
     throw new Error("invalid_kie_create");
   }
   if (Object.hasOwn(body, "callBackUrl")) throw new Error("kie_polling_only");
+  if (body.model === kieKlingModels[1]) throw new Error("kie_image_binding_required");
+  if (body.model === kieKlingModels[0]) return prepareKieKlingTask(body);
   return { body, model: body.model };
+}
+
+function prepareKieKlingTask(body: Record<string, unknown>): { body: Record<string, unknown>; model: string } {
+  const prepared = prepareKieKlingWire(body);
+  return { body: prepared.body, model: prepared.model };
 }
 
 export function parseKieSubmission(text: string, httpStatus: number): { id: string } {
