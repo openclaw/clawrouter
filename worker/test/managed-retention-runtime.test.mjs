@@ -5,6 +5,7 @@ import { adapter, override } from "./managed-omni-runtime-fixture.mjs";
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { prepareSelected } = await import("../proxy.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
+const { correlateIngressRequest } = await import("../correlation.ts");
 const permission = { version: "clawrouter.upstream-retention.v1", allow: [{ providerId: "replicate", protocol: "replicate.predictions" }] };
 const id = contract.responses.succeeded.id;
 
@@ -23,6 +24,7 @@ async function setup(t, { pooled = false, policy = true, binding = true, fixed =
   const request = new Request("https://router.example" + path, { method: "POST", headers: {
     authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json",
   }, body: JSON.stringify(contract.request.body) });
+  correlateIngressRequest(request);
   const auth = await authenticateProxyKey(request.headers, f.env, [{ id: "replicate", tokenRef: "replicate" }]);
   assert.ok(!(auth instanceof Response));
   const endpoint = f.provider.endpoints.find(endpoint => endpoint.id === "predictions");
