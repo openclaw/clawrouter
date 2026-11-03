@@ -373,7 +373,7 @@ test('projection repair is throttled per grant and off when the hot cache is dis
   }
 });
 
-test('a cold admission miss overlaps the remembered grant credential load and reuses it once', async t => {
+test('a cold admission miss overlaps the remembered grant credential load and reuses it once', { timeout: 5_000 }, async t => {
   const time = clock();
   const f = await fixture(); await f.put(keyA, grant());
   t.mock.method(globalThis, 'fetch', async () => ok());
@@ -381,14 +381,14 @@ test('a cold admission miss overlaps the remembered grant credential load and re
   assert.match(warm.response.headers.get('server-timing'), /cr-credential;dur=[\d.]+;desc=miss/);
   assert.match((await f.send()).response.headers.get('server-timing'), /cr-credential;dur=[\d.]+;desc=hit/);
   time.advance(61_000); // both the admission snapshot and the credential entry expire
-  const release = Promise.withResolvers(), events = [];
+  const release = Promise.withResolvers(), admissionEntered = Promise.withResolvers(), ownerEntered = Promise.withResolvers(), events = [];
   const base = f.env.ACCESS_CONTROL.get;
-  f.env.ACCESS_CONTROL.get = id => { const stub = base(id); return { async fetch(url, init) { if (new URL(url).pathname === '/admission/resolve') { events.push('admission:start'); await release.promise; events.push('admission:end'); } return stub.fetch(url, init); } }; };
+  f.env.ACCESS_CONTROL.get = id => { const stub = base(id); return { async fetch(url, init) { if (new URL(url).pathname === '/admission/resolve') { events.push('admission:start'); admissionEntered.resolve(); await release.promise; events.push('admission:end'); } return stub.fetch(url, init); } }; };
   const ownerGet = f.env.GRANT_CREDENTIALS.get;
-  f.env.GRANT_CREDENTIALS.get = id => { const stub = ownerGet(id); return { fetch(...args) { events.push('owner'); return stub.fetch(...args); } }; };
+  f.env.GRANT_CREDENTIALS.get = id => { const stub = ownerGet(id); return { fetch(...args) { events.push('owner'); ownerEntered.resolve(); return stub.fetch(...args); } }; };
   f.reset();
   const pending = f.request();
-  await new Promise(resolve => setTimeout(resolve, 20));
+  await Promise.all([admissionEntered.promise, ownerEntered.promise]);
   assert.deepEqual([...events].sort(), ['admission:start', 'owner'], 'owner load runs while admission is still pending');
   release.resolve();
   const response = await pending; await response.text(); await Promise.all(f.pending);
@@ -513,13 +513,19 @@ test('discovery publishes only from the request that loaded and never with the h
   assert.deepEqual(off.stats, { puts: 0, matches: 0, hits: 0 });
 });
 
-test('a cold burst still coalesces while the leader reads a slow colo layer', async t => {
+test('a cold burst still coalesces while the leader reads a slow colo layer', { timeout: 5_000 }, async t => {
   const colo = fakeColo(t), match = globalThis.caches.default.match;
-  globalThis.caches.default.match = async url => { await new Promise(resolve => setTimeout(resolve, 15)); return match(url); };
   const f = await fixture(); await f.put(keyA, grant());
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  let matches = 0;
+  globalThis.caches.default.match = async url => { matches++; entered.resolve(); await release.promise; return match(url); };
   t.mock.method(globalThis, 'fetch', async () => ok());
   f.reset();
-  const responses = await Promise.all(Array.from({ length: 5 }, () => f.request()));
+  const pending = Promise.all(Array.from({ length: 5 }, () => f.request()));
+  await entered.promise;
+  assert.equal(matches, 1, 'the leader owns the held colo read');
+  release.resolve();
+  const responses = await pending;
   for (const response of responses) { assert.equal(response.status, 200); await response.text(); }
   await Promise.all(f.pending);
   assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, f.calls.join());

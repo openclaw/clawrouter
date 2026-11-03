@@ -147,8 +147,9 @@ const fourLegAuth = { policyId: "fixture", policy: { monthlyBudgetMicros: 100, d
 const budgetCost = { reserveMicros: 1, basis: "manifest_pricing" };
 const budgetConnection = { providerId: "openai", monthlyBudgetMicros: 100 };
 
-test("all budget legs overlap and retain plan order, with attempted IDs recorded before I/O", async t => {
-  const observations = [], calls = [];
+test("all budget legs overlap and retain plan order, with attempted IDs recorded before I/O", { timeout: 5_000 }, async () => {
+  const observations = [], calls = [], completed = [];
+  const gates = budgetKinds.map(() => Promise.withResolvers()), done = budgetKinds.map(() => Promise.withResolvers());
   let active = 0, peak = 0;
   const env = mockEnv(async () => assert.fail("no recovery needed"));
   env.BUDGET_LEDGER.get = name => ({ fetch: async (_url, init) => {
@@ -156,15 +157,19 @@ test("all budget legs overlap and retain plan order, with attempted IDs recorded
     calls.push(body.reservationId);
     assert.deepEqual(observations[index], [body.reservationId, "attempted"]);
     peak = Math.max(peak, ++active);
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await gates[index].promise;
     assert.equal(observations.length, 4, "every attempt precedes the first completed reserve");
     active--;
+    completed.push(body.reservationId);
+    done[index].resolve();
     return Response.json({ allowed: true, chargedMicros: 1 });
   } });
-  const start = performance.now();
-  const result = await reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, (leg, state) => observations.push([leg.request.reservationId, state]));
-  t.diagnostic(`four reserves: ${Math.round(performance.now() - start)} ms with 40 ms injected per reserve; peak in flight ${peak}`);
+  const pending = reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, (leg, state) => observations.push([leg.request.reservationId, state]));
+  assert.equal(calls.length, 4, "every reserve starts before any response is released");
   assert.equal(peak, 4);
+  for (let index = gates.length - 1; index >= 0; index--) { gates[index].resolve(); await done[index].promise; }
+  const result = await pending;
+  assert.deepEqual(completed, [...calls].reverse(), "responses complete in reverse plan order");
   assert.deepEqual(result.reservations.map(item => item.reservationId), calls);
 });
 
