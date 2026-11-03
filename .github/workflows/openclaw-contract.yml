@@ -2,16 +2,6 @@ name: OpenClaw consumer contract
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/openclaw-contract.yml'
-      - 'worker/**'
-      - 'shared/**'
-      - 'providers/**'
-      - 'test/openclaw-*.test.mjs'
-      - 'test/fixtures/openclaw-*-contract.test.ts'
-      - 'test/helpers/openclaw-consumer.mjs'
-      - 'test/helpers/workerd.mjs'
-      - 'pnpm-lock.yaml'
 
 permissions:
   contents: read
@@ -24,7 +14,27 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
+  consumer-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.select.outputs.required }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - id: select
+        run: node scripts/openclaw-contract-changes.mjs
+
   search-consumer:
+    needs: consumer-changes
+    # Keep the existing check visible on every PR. Unknown/failed selection runs
+    # the full suite; concurrency cancellation must not start another checkout.
+    if: ${{ !cancelled() && (needs.consumer-changes.result != 'success' || needs.consumer-changes.outputs.required != 'false') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
