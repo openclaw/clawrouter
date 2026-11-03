@@ -39,8 +39,9 @@ test("current Codestral and Small prices reserve a full output ceiling and bill 
     const pricing = snapshot.model_index[`mistral/${name}`].pricing;
     assert.deepEqual([pricing.inputMicrosPerMillion, pricing.cachedInputMicrosPerMillion, pricing.outputMicrosPerMillion], [input, cached, output]);
     assert.equal(pricing.defaultMaxOutputTokens, bound);
+    assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500 }, "openai.chat_completions"), null, "missing served-tier evidence retains conservative settlement");
     assert.equal(estimateModelCost(pricing, { messages: [] }, endpoint).outputTokens, bound);
-    assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500 }, "openai.chat_completions"), Math.ceil((500 * input + 500 * cached + 100 * output) / 1000000));
+    assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500, serviceTier: "default" }, "openai.chat_completions"), Math.ceil((500 * input + 500 * cached + 100 * output) / 1000000));
   }
   const small = snapshot.model_index["mistral/mistral-small-latest"].pricing;
   const image = estimateModelCost(small, { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/image.png" } }] }], max_tokens: 16 }, endpoint);

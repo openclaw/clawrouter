@@ -100,6 +100,11 @@ models:
         inputMicrosPerMillion: 300000
         cachedInputMicrosPerMillion: 30000
         outputMicrosPerMillion: 900000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 300000
+            cachedInputMicrosPerMillion: 30000
+            outputMicrosPerMillion: 900000
         # Reserve the full context when the caller omits an output limit.
         # This ceiling is not a claim about the provider's default output.
         maxInputTokens: 131072
@@ -167,6 +172,11 @@ models:
         inputMicrosPerMillion: 150000
         cachedInputMicrosPerMillion: 15000
         outputMicrosPerMillion: 600000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 150000
+            cachedInputMicrosPerMillion: 15000
+            outputMicrosPerMillion: 600000
         # Reserve the full context when the caller omits an output limit.
         # This ceiling is not a claim about the provider's default output.
         maxInputTokens: 262144
