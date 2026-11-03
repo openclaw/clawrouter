@@ -7,6 +7,7 @@
 
 - Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Add an internal one-job PixVerse byte-input receipt with original-credential upload ordering, single-attempt create claims and separate conservative upload/generation accounting; public image/upload routes remain closed.
+- Define the optional PixVerse composed-image input profile in schema, compiler metadata and catalog types while keeping image lifecycle activation and discovery projection closed.
 - Add a bounded Microsoft Edge speech request/frame codec with request-ID binding, complete-audio delivery and explicit interruption handling, without activating a route or assuming upstream cost.
 
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.

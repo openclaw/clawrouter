@@ -22,6 +22,8 @@ export interface ImageTokenPricing {
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
 export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
+  // Encoding declaration only; runtime eligibility and authority remain separate.
+  inputProfile?: "clawrouter.pixverse-image-input.v1";
   endpoint: string;
   modelId: string | null;
   transport: "http" | "websocket";
@@ -50,7 +52,7 @@ export interface ClientCatalogProvider {
   policies: string[];
   readiness: ProviderReadiness;
   connectionTypes: string[];
-  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
+  routes: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
   models: ClientCatalogModel[];
   offers: CatalogOffer[];
 }
@@ -79,7 +81,7 @@ export interface ProviderResponse { providers: ProviderRow[] }
 
 export interface RouteCatalog {
   openaiCompatible: Array<{ provider: string; models: Array<{ id: string; availability?: ModelAvailability; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
-  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; availability?: ModelAvailability; capabilities: string[] }>; streaming?: boolean | null }>;
+  manifestProxy: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; availability?: ModelAvailability; capabilities: string[] }>; streaming?: boolean | null }>;
 }
 
 export interface AccessPolicy {

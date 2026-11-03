@@ -73,6 +73,7 @@ function compileProvider(manifest, ids) {
     query: endpoint.query ?? {},
     path_params: endpoint.pathParams ?? [],
     path_param_styles: endpoint.pathParamStyles ?? {},
+    ...(endpoint.inputProfile !== undefined ? { inputProfile: endpoint.inputProfile } : {}),
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
@@ -263,6 +264,7 @@ function validateManifest(manifest) {
   const validation = manifestValidator.validate(manifest);
   if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
+  validateInputProfiles(manifest);
   validateBasetenSystemOne(manifest);
   validateGradiumSpeech(manifest);
   validateXaiSpeech(manifest);
@@ -949,6 +951,19 @@ function validateGoogleEmbeddings(manifest) {
   // not established by that fixture. No native tariff/bound is qualified yet.
   if (!models.length || models.some(model => !["gemini-embedding-001", "gemini-embedding-2"].includes(model.upstream)
     || model.capabilities.length !== 1 || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length)) fail();
+}
+
+function validateInputProfiles(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) => endpoint.inputProfile !== undefined);
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("inputProfile requires the exact PixVerse image-create contract and explicit registered video.generate models"); };
+  if (manifest.id !== "pixverse" || endpoints.length !== 1) fail();
+  const [id, endpoint] = endpoints[0], capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1" || capabilities.length !== 1
+    || capabilities[0].id !== "video.generate" || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("video.generate"));
+  if (!models.length || models.some(model => !["v6", "c1"].includes(model.upstream) || model.id !== `pixverse/${model.upstream}`
+    || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
 }
 
 function validateBedrockConverse(manifest) {
