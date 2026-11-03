@@ -106,6 +106,7 @@
 - Resolve overlapping native model paths from their registered endpoint capability, rejecting ambiguous operations while preserving original credentials, policy checks and scoped managed controls.
 - Qualify the six frozen fal Nano Banana generate/edit routes with model-specific geometry and ordered inline-reference limits, retaining partial outcomes and unknown upstream cost.
 - Add native MiniMax image-01 generation/reference codecs and fixtures with explicit partial/safety-filtered delivery, bounded image bytes and conservative regional product/accounting boundaries.
+- Add bounded prompt-only MiniMax image response validation with complete native base64 JSON and preserved MIME absence, keeping image grants, references, downloads and unknown upstream fees closed pending separate qualification.
 - Add frozen Google Veo 3.1 operation and authenticated-file codecs with bounded native fixtures, exact job identities and selected-origin credential handoffs. Shared route activation and live availability remain separately qualified.
 - Add native Interactions video and authenticated-file codecs for the documented Gemini Omni 1.1 Flash replacement, with original-job controls and conservative usage/processing boundaries. Keep retired Veo previews as historical compatibility proof only.
 
