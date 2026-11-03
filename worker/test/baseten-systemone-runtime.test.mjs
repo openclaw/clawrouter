@@ -19,6 +19,8 @@ async function setup(t, options = {}) {
   const manifest = structuredClone(source);
   manifest.capabilities.push({ id: "llm.decisions", endpoint: "systemone", methods: ["POST"] });
   manifest.endpoints.systemone = { path: "/systemone", requestFormat: "baseten.systemone", responseFormat: "baseten.systemone" };
+  // Replace the exact fixture-owned decision rows, retaining every Chat card.
+  manifest.models.entries = manifest.models.entries.filter(model => !models.includes(model.upstream));
   manifest.models.entries.push(...models.map(upstream => ({ id: `baseten/${upstream}`, upstream, capabilities: ["llm.decisions"], nativeCapabilities: {
     version: "clawrouter.native-capabilities.v1", endpoints: { systemone: { sources: ["https://docs.baseten.co/reference/inference-api/system-one"],
       checkedAt: "2026-11-03", input: ["text", "json"], inference: { chat: false, decision: structuredClone(systemOneDecision) } } },
