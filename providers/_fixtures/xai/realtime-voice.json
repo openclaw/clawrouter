@@ -1,0 +1,11 @@
+{
+  "qualification": "Synthetic native voice messages; no live audio quality, session ownership or cost proof.",
+  "query": "model=grok-voice-latest",
+  "setup": { "type": "session.update", "session": { "instructions": "Answer briefly.", "voice": "eve", "output_modalities": ["audio"], "turn_detection": { "type": "server_vad", "threshold": 0.85, "prefix_padding_ms": 333, "silence_duration_ms": 500 }, "audio": { "input": { "format": { "type": "audio/pcm", "rate": 24000 }, "transcription": { "model": "grok-transcribe" } }, "output": { "format": { "type": "audio/pcm", "rate": 24000 } } }, "tools": [{ "type": "function", "name": "weather", "description": "Look up weather.", "parameters": { "type": "object", "properties": { "city": { "type": "string" } } } }], "tool_choice": "auto", "resumption": { "enabled": true }, "reasoning": { "effort": "high" } } },
+  "ready": { "type": "session.updated" },
+  "created": { "type": "response.created", "response": { "id": "response_fixture_01" } },
+  "audio": { "type": "response.output_audio.delta", "response_id": "response_fixture_01", "item_id": "audio_fixture_01", "delta": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+  "tool": { "id": "tool_fixture_01", "type": "function_call", "status": "completed", "call_id": "call_fixture_01", "name": "weather", "arguments": "{\"city\":\"Paris\"}" },
+  "done": { "type": "response.done", "response": { "id": "response_fixture_01", "status": "completed", "output": [], "usage": { "input_tokens": 20, "output_tokens": 10 } } },
+  "inputSnapshot": { "type": "conversation.item.input_audio_transcription.completed", "item_id": "input_fixture_01", "transcript": "Is it raining?" }
+}
