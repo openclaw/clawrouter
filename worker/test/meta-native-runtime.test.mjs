@@ -179,5 +179,7 @@ test("Meta response controls require an owned create and preserve the original e
   assert.equal((await cancel.json()).status, "completed", "a cancel race may return completed, never infer a refund");
   await f.drain(); assert.equal(f.sent.length, 3);
   const ledger = f.env.BUDGET_LEDGER.get("fixture:paid").reservations();
-  assert.equal(ledger.length, 1); assert.equal(ledger[0].settled, 1); assert.equal(ledger[0].reserved_micros, 7);
+  // This fixture does not drive the durable background observer's alarm.
+  // Controls retain its reservation; they neither create a second charge nor refund it.
+  assert.equal(ledger.length, 1); assert.equal(ledger[0].settled, 0); assert.equal(ledger[0].reserved_micros, 7);
 });
