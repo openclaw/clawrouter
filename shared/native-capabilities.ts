@@ -1,5 +1,5 @@
 // Model/endpoint support, never a grant, price, or admission decision.
-export interface NativeDecisionCapabilities {
+export interface OpenAiDecisionCapabilities {
   protocol: "openai-decisions";
   reasoning?: { modes: Array<"auto"> };
   questions: {
@@ -10,6 +10,19 @@ export interface NativeDecisionCapabilities {
   confidence?: "provider-specific";
   limits: { maxQuestions: number; image?: { maxBytes: number; mimeTypes: Array<"image/png" | "image/jpeg" | "image/webp">; remoteUrls: boolean } };
 }
+export interface BasetenSystemOneDecisionCapabilities {
+  protocol: "baseten-systemone";
+  reasoning: { modes: Array<"auto"> };
+  questions: {
+    boolean: { probabilities: "boolean"; abstention: false };
+    choice: { probabilities: "provider-defined"; abstention: false; minOptions: 2; maxOptions: 255 };
+    score: { probabilities: "provider-defined"; abstention: false; minOptions: 2; maxOptions: 10 };
+  };
+  confidence: "provider-specific";
+  outputTokensPerQuestion: 1;
+  limits: { maxTotalOptions: 512; maxStateAndQuestionTokens: 16384 };
+}
+export type NativeDecisionCapabilities = OpenAiDecisionCapabilities | BasetenSystemOneDecisionCapabilities;
 export interface NativeEndpointCapabilities {
   sources: string[];
   checkedAt: string;
