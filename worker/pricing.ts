@@ -297,7 +297,10 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   }
   const google = endpoint?.request_format === "google.generate_content";
   const compact = endpoint?.request_format === "openai.responses_compact";
-  const opaque = (!endpoint || endpoint.request_format === "openai.responses" || compact) && responsesHasOpaqueInput(body);
+  // A GenerateContent continuation restores prior generated context upstream;
+  // its token and repeated original prompt do not bound that context's size.
+  const opaque = google ? googleField(body, "continuationToken", "continuation_token") != null
+    : (!endpoint || endpoint.request_format === "openai.responses" || compact) && responsesHasOpaqueInput(body);
   const opaqueLimit = opaque ? opaqueInputLimit(pricing) : null;
   if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
