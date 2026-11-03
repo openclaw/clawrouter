@@ -7,7 +7,7 @@ import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
-import { applyProxyQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
+import { applyProxyQuery, applyStreamingQuery, hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
 import { identitySelectionDenied } from "./native-request-headers.ts";
 import { assertCompactAccount } from "./responses-compact.ts";
@@ -716,6 +716,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     // incidental query of one create call. Credential/config changes still pin.
     const configuredOwnerUrl = new URL(url);
     applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
+    applyStreamingQuery(url.searchParams, selection.endpoint);
     const body = transformTransportBody(upstream.transport, selection.body);
     // The 32 MB media envelope must not coexist with whole-document transport
     // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media

@@ -7,6 +7,7 @@
 - Verify the caller-scoped catalog through native Responses streaming and usage accounting, including tool/reasoning replay, HTTP-200 terminal errors, and credential revocation. These synthetic checks do not certify live-provider or client-runtime parity.
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
+- Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
