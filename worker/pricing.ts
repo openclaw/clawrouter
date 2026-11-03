@@ -1,4 +1,5 @@
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
+import { googleImageRequest } from "./google-image-classification.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
@@ -187,9 +188,9 @@ interface Rates {
 
 export type PricingGap = "audio_upload_bound" | "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
 
-export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
+export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge, selectedUpstreamModel?: string | null): PricingGap | null {
   // Native media bounds do not qualify an image or music tariff.
-  if (requestFormat === "google.image_generate" || requestFormat === "google.music_generate") return "opaque_input_bound";
+  if (requestFormat === "google.music_generate" || googleImageRequest(selectedUpstreamModel, body, requestFormat)) return "opaque_input_bound";
   if (requestFormat === "openai.standalone_search") return "hosted_tool_usage";
   const compact = requestFormat === "openai.responses_compact";
   if (compact) requestFormat = "openai.responses";
@@ -285,10 +286,12 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
   return usageGap ? "hosted_tool_usage" : null;
 }
 
-export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit"> & Partial<Pick<CompiledEndpoint, "id">>;
+export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit"> & Partial<Pick<CompiledEndpoint, "id">> & {
+  selectedUpstreamModel?: string | null;
+};
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint, requestPricing?: OutcomeRequestPricing): CostEstimate {
-  if (endpoint?.request_format === "google.image_generate" || endpoint?.request_format === "google.music_generate")
+  if (endpoint?.request_format === "google.music_generate" || googleImageRequest(endpoint?.selectedUpstreamModel, body, endpoint?.request_format ?? ""))
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   if (requestPricing && (!qualifiedOutcome(requestPricing) || pricing.unit != null || endpoint?.request_format !== "openai.responses"))
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };

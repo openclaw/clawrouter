@@ -43,10 +43,10 @@ for (const stream of [false, true]) for (const manifest of [false, true]) test(`
   const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].cost_basis, "policy_fixed");
 });
 
-test("explicit Google image declarations remain closed until the actual qualified response wrapper is wired", async t => {
+test("unqualified Google image declarations remain closed after the response wrapper is wired", async t => {
   const f = await setup(t), endpoint = { ...f.provider.endpoints.find(item => item.id === "generate_content"), request_format: "google.image_generate", response_format: "google.image" };
   const selection = { provider: f.provider, endpoint, model: f.model, body: original, method: "POST", capability: "image.generate", pathParams: { model: f.model.upstream } };
-  assert.throws(() => validateSelectedInput(selection), error => error.code === "native_image_route_required");
+  assert.throws(() => validateSelectedInput(selection), error => error.code === "invalid_native_google_image_route");
   assert.equal(selection.nativeResponse, undefined); assert.equal(f.sent.length, 0);
 });
 

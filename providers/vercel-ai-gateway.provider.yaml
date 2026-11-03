@@ -46,7 +46,8 @@ endpoints:
     timeoutMs: 600000
   messages:
     modelPassthrough: {}
-    path: /messages
+    path: /v1/messages
+    upstreamPath: /messages
     requestHeaders: [anthropic-beta, anthropic-version]
     requestFormat: anthropic.messages
     responseFormat: anthropic.messages

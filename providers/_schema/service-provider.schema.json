@@ -693,6 +693,14 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^novita\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^novita\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/novitaModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "pattern": "^chutes\\.models" } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "pattern": "^chutes\\.models" } }, "required": ["responseFormat"] }
           ]
@@ -998,6 +1006,24 @@
         "method": { "const": "GET" }, "path": { "const": "/models" },
         "requestFormat": { "const": "arcee.models" },
         "responseFormat": { "const": "arcee.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "novitaModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "novita.models" },
+        "responseFormat": { "const": "novita.models" },
         "nativeProxy": { "const": true },
         "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
       },

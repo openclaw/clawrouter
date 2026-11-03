@@ -90,8 +90,10 @@
 - Add bounded native codecs and synthetic fixtures for the two frozen Google image models, with atomic image delivery, thought-image exclusion and explicit modality/accounting integration boundaries.
 - Qualify the two frozen Google image model declarations and native unary endpoint contract, preserving unknown image costs and requiring runtime model-aware routing before activation.
 - Keep explicit native Google image generation unpriced under hard dollar budgets instead of borrowing text or another provider’s image tariff; preserve separately labeled policy-fixed accounting.
+- Reuse shared Google image classification in direct pricing helpers with trusted selected-model context, preserving unknown image charges and ordinary text estimates.
 - Keep Google image output out of generic GenerateContent/SSE text routes and token tariffs, preserving selected-model and ProtoJSON modality evidence while the bounded native image response route is qualified.
 - Add the native Google image response wrapper with explicit MIME and container checks, bounded complete delivery and thought-image removal; shared dispatch and image-cost qualification remain separate.
+- Dispatch qualified native Google images through complete bounded response validation, preserving original credentials, capacity and reservation acknowledgments, with unknown dollar costs denied and policy-fixed charges kept separate.
 - Resolve overlapping native model paths from their registered endpoint capability, rejecting ambiguous operations while preserving original credentials, policy checks and scoped managed controls.
 - Qualify the six frozen fal Nano Banana generate/edit routes with model-specific geometry and ordered inline-reference limits, retaining partial outcomes and unknown upstream cost.
 - Add native MiniMax image-01 generation/reference codecs and fixtures with explicit partial/safety-filtered delivery, bounded image bytes and conservative regional product/accounting boundaries.
@@ -275,6 +277,8 @@
 - Add bounded Arcee native catalog codecs with original direct-credential filtering, distinct OpenRouter identities and independent unknown pricing.
 - Qualify the finite Arcee native catalog declaration with canonical original-key GET validation, exact policy identities and independent unknown price observations.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
+- Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
+- Qualify Novita native model-catalog declarations against the canonical keyed data-only contract, preserving exact caller filtering and unknown price units before runtime activation.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
@@ -284,6 +288,7 @@
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
+- Expose Vercel gateway Messages at the Anthropic SDK-compatible public path while keeping its original gateway dispatch path, credential and catalog offer.
 - Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
 - Add Synthetic native Messages and model discovery beside the preserved Chat route, with distinct dispatch paths, original credentials, qualified frozen model facts and real Worker protocol fixtures.
 
