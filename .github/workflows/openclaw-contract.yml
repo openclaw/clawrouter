@@ -53,6 +53,9 @@ jobs:
           - consumer: native-memory
             ref: 5964e1f3065337b92a733e42cc248bf5e27a5415
             test: test/openclaw-native-embeddings.test.mjs
+          - consumer: cohere
+            ref: b566e9a6b22a863bf0f1f869f106a2a91b062f16
+            test: test/openclaw-cohere.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
