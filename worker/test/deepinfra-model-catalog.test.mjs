@@ -1,6 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 const { deepinfraCatalogRequests, parseDeepInfraCatalog, readDeepInfraCatalog } = await import("../deepinfra-model-catalog.ts");
 
 const signal = () => new AbortController().signal;
@@ -12,6 +13,12 @@ const prices = (model_name = "deepseek-ai/DeepSeek-V4-Flash") => ({ model_name, 
 const list = (...data) => ({ object: "list", data });
 const json = value => new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 const invalid = e => e.status === 502 && e.code === "provider_catalog_invalid" && e.message === "DeepInfra model catalog is invalid";
+
+test("DeepInfra codec loads in native Node without the test resolver hook", () => {
+  execFileSync(process.execPath, ["--input-type=module", "--eval",
+    `const codec = await import(${JSON.stringify(new URL("../deepinfra-model-catalog.ts", import.meta.url).href)}); if (typeof codec.readDeepInfraCatalog !== "function") throw new Error("missing native catalog export");`],
+  { encoding: "utf8", timeout: 10000 });
+});
 
 // Every value is synthetic. Observed native prices are not checked in as tariffs.
 test("DeepInfra requests isolate the original credential from public metadata pricing", () => {

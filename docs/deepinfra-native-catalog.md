@@ -100,7 +100,9 @@ original credentials, metadata query isolation, known-alias denial, seed/image
 transport, errors and cancellation. Source3 owns fact/compiler support; runtime1 owns availability and
 tariff projection; client2 owns actual native client consumption; source6 owns
 snapshot serialization and end-to-end acceptance. None is replaced by these
-helper tests. No live inference, credential discovery, deployment or provisioning
+helper tests. A native Node import case also checks the leaf module without the
+test-only extension resolver, so consumer wiring can load its explicit `.ts`
+imports. No live inference, credential discovery, deployment or provisioning
 is part of this slice.
 
 ## Finite declaration limits
