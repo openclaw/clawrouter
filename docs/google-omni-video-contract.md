@@ -61,7 +61,9 @@ Reads require the original interaction ID, model and `object:interaction`.
 `failed` and `cancelled` are distinct authoritative outcomes. A cancel response
 can still be in progress or already completed: it does not imply a refund.
 `requires_action`, `requires_continuation` and `incomplete` return
-`observationUnavailable`, no terminal verdict and no follow-up. The controller
+`observationUnavailable:"expired_or_unknown"`, no terminal verdict and no
+follow-up. The exact native status is retained in `nativeStatus`; the shared
+unknown-outcome category does not assert expiry. The controller
 must stop automatic polling/continuation, retain conservative settlement and
 never issue a new paid create to resolve uncertainty.
 

@@ -66,7 +66,7 @@ test("pending and terminal interactions preserve exact identity and distinguish 
 test("continuation, action-required and incomplete statuses stop instead of creating a paid replay", async () => {
   for (const status of ["requires_action", "requires_continuation", "incomplete"]) {
     const result = await read({ ...fixture.pending, status, continuation_token: "synthetic-opaque" });
-    assert.equal(result.terminal, null); assert.equal(result.followUp, undefined); assert.equal(result.observationUnavailable, status);
+    assert.equal(result.terminal, null); assert.equal(result.followUp, undefined); assert.equal(result.observationUnavailable, "expired_or_unknown"); assert.equal(result.nativeStatus, status);
     assert.equal(result.cost, undefined); assert.equal(result.actualCostMicros, undefined);
   }
 });

@@ -5,7 +5,7 @@ import { googleOmniEnvelopeBytes, googleOmniVideos, readGoogleOmniJson, requireO
 
 export const googleOmniVideoModel = "gemini-omni-1.1-flash";
 type OmniAdapter = Omit<ManagedLifecycleAdapter, "protocol"> & { protocol: "google.omni_video" };
-export interface GoogleOmniObservation extends ManagedObservation { observationUnavailable?: "requires_action" | "requires_continuation" | "incomplete" }
+export interface GoogleOmniObservation extends ManagedObservation { observationUnavailable?: "expired_or_unknown" }
 const resolutions = new Set(["360p", "720p", "1080p", "4k"]);
 function only(value: Record<string, unknown>, keys: string[]): void { requireOmni(Object.keys(value).every(key => keys.includes(key)), "field"); }
 function text(value: unknown): void { requireOmni(typeof value === "string" && value.trim().length > 0 && value.length <= 32_000, "text"); }
@@ -80,7 +80,7 @@ export async function readGoogleOmniVideo(response: Response, context: ManagedRe
   else if (status === "cancelled") terminal = "canceled";
   if (status === "in_progress") requireOmni(flags.store, "unretrievable_job");
   const observationUnavailable = status === "incomplete" || status === "requires_action" || status === "requires_continuation" ? status : undefined;
-  return { id, nativeStatus: status, terminal, body, ...(observationUnavailable ? { observationUnavailable } : {}),
+  return { id, nativeStatus: status, terminal, body, ...(observationUnavailable ? { observationUnavailable: "expired_or_unknown" as const } : {}),
     ...(status === "in_progress" && context.action !== "retrieve" ? { followUp: "retrieve" as const } : {}) };
 }
 
