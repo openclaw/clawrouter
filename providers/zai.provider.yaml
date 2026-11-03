@@ -90,10 +90,17 @@ models:
             sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
             checkedAt: "2026-11-04"
             input: [text, image]
-    # Frozen deprecated identity; no current global eligibility or effective date inferred.
+    # Global standard API still documents this identity; no retirement or alias inferred.
     - id: zai/glm-5.1
       upstream: glm-5.1
-      capabilities: []
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.z.ai/guides/llm/glm-5.1, https://docs.z.ai/guides/overview/pricing]
+            checkedAt: "2026-11-04"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

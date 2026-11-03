@@ -12,8 +12,7 @@ const { snapshot, configuredUpstream } = await import("../providers.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const contracts = [["zai", "ZAI_API_KEY", "https://api.z.ai/api/paas/v4"]];
-const inventory = { zai: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5-turbo", "glm-5v-turbo"] };
-const unqualified = { zai: ["glm-5.1"] };
+const inventory = { zai: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5-turbo", "glm-5v-turbo", "glm-5.1"] };
 const { providers } = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", ...contracts.map(([id]) => `providers/${id}.provider.yaml`)], { encoding: "utf8" }));
 const model = "glm-5.3", frame = value => `data: ${JSON.stringify(value)}\n\n`;
@@ -32,7 +31,7 @@ async function fixture(t, id, { ownGrant = true } = {}) {
     }, BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);
   attachGrantCredentialNamespace(env, { useExistingAuthority: true, kvValues: values });
-  const policy = { enabled: true, generation: "fixture", providers: [id], models: [...inventory[id], ...unqualified[id]].map(m => `${id}/${m}`), tenantId: "fixture",
+  const policy = { enabled: true, generation: "fixture", providers: [id], models: inventory[id].map(m => `${id}/${m}`), tenantId: "fixture",
     monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false };
   await authorityCall(env, "/policies/initialize-all", [{ policyId: "paid", policy },
     { policyId: "unpriced", policy: { ...policy, requestCostMicros: null } }, { policyId: "foreign", policy: { ...policy, providers: ["zai-cn"] } }]);
@@ -59,12 +58,12 @@ for (const [id, binding, base] of contracts) {
   const frozen = inventory[id];
   test(`${id} preserves the qualified frozen identities without pricing or cross-product credential fallback`, () => {
     const provider = providers.find(p => p.id === id);
-    assert.deepEqual(provider.models.map(m => m.upstream), [...frozen, ...unqualified[id]]);
+    assert.deepEqual(provider.models.map(m => m.upstream), frozen);
     for (const m of provider.models) { assert.equal(m.id, `${id}/${m.upstream}`); assert.equal(m.pricing, null); assert.equal(m.supportedReasoningEfforts, undefined); assert.equal(m.requestParameters, undefined);
-      if (frozen.includes(m.upstream)) { const facts = m.nativeCapabilities.endpoints.chat_completions;
+      const facts = m.nativeCapabilities.endpoints.chat_completions;
         assert.deepEqual(facts.input, ["glm-5.3-flash", "glm-5v-turbo"].includes(m.upstream) ? ["text", "image"] : ["text"]);
         assert.equal(facts.contextWindow, undefined); assert.equal(facts.maxOutputTokens, undefined);
-      } else { assert.deepEqual(m.capabilities, []); assert.equal(m.availability, undefined); assert.equal(m.nativeCapabilities, undefined); } }
+      assert.deepEqual(m.capabilities, ["llm.chat"]); assert.equal(m.availability, undefined); }
     const foreign = { ZAI_CN_API_KEY: "synthetic-cn-standard", ZAI_CODING_GLOBAL_API_KEY: "synthetic-global-plan", ZAI_CODING_CN_API_KEY: "synthetic-cn-plan", Z_AI_API_KEY: "synthetic-legacy" };
     assert.throws(() => configuredUpstream(provider, null, foreign), e => e.code === "provider_not_configured");
     const selected = configuredUpstream(provider, null, { ...foreign, [binding]: "synthetic-explicit-credential" });
@@ -73,7 +72,8 @@ for (const [id, binding, base] of contracts) {
   });
 
   for (const model of frozen) for (const manifest of [false, true]) for (const stream of [false, true]) test(`${id} ${model} ${manifest ? "manifest" : "native"} ${stream ? "SSE" : "JSON"} pins region, grant, replay and one reservation`, async t => {
-    const f = await fixture(t, id), body = { model, stream, max_tokens: 256, tool_stream: true, reasoning_effort: "high", thinking: { type: "enabled", clear_thinking: false },
+    const f = await fixture(t, id), body = { model, stream, max_tokens: 256,
+      ...(model === "glm-5.1" ? { thinking: { type: "enabled" } } : { tool_stream: true, reasoning_effort: "high", thinking: { type: "enabled", clear_thinking: false } }),
       messages: [{ role: "assistant", content: null, reasoning_content: "synthetic-reasoning", tool_calls: [{ id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{}" } }] },
         { role: "tool", tool_call_id: "call_fixture", content: "synthetic-tool-result" }],
       tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }] };
@@ -156,16 +156,6 @@ for (const [id, binding, base] of contracts) {
     assert.equal(event.actual_cost_micros, outcome === "embedded-error" ? 0 : 7);
     assert.equal(event.cost_basis, outcome === "embedded-error" ? "none" : "policy_fixed");
     assert.equal(f.env.BUDGET_LEDGER.get("fixture:paid").reservations().length, 1);
-  });
-
-  test(`${id} rejects aliased, deprecated or unqualified frozen cards even when the policy permits their names`, async t => {
-    const provider = providers.find(p => p.id === id), f = await fixture(t, id);
-    assert.ok(provider.endpoints.find(e => e.id === "chat_completions").modelPassthrough);
-    for (const blocked of unqualified[id]) for (const manifest of [false, true]) {
-      const r = await f.call({ model: manifest ? `${id}/${blocked}` : blocked, messages: [] }, { manifest });
-      assert.equal(r.status, 400); assert.equal((await r.json()).error.code, "model_capability_unsupported");
-    }
-    assert.equal(f.sent.length, 0);
   });
 
   test(`${id} preserves the requested and observed serving identities separately`, async t => {

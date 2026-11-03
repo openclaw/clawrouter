@@ -13,13 +13,21 @@ is the provenance for this finite roster and per-model input modalities.
 | `glm-5.2` | text | Chat; no Coding Plan alias applied |
 | `glm-5-turbo` | text | Chat; no Coding Plan alias applied |
 | `glm-5v-turbo` | text, image | Chat |
-| `glm-5.1` | historical text | Frozen deprecated; no executable capability |
+| `glm-5.1` | text | Global standard Chat explicitly documented; no shutdown or alias inferred |
 
-The frozen deprecated label for 5.1 supplies neither a shutdown date nor current
-global account eligibility. Its known closed row prevents passthrough revival;
-no fabricated `stopped` disposition or silent replacement is declared. The
-other rows describe the assigned protocol contract, not a live entitlement or
-fresh vendor inventory observation. No new model generation is added.
+The frozen catalog marks 5.1 deprecated. The bounded global qualification on
+2026-11-04 found its [official model page](https://docs.z.ai/guides/llm/glm-5.1)
+still documenting JSON and streaming calls for exactly `glm-5.1` at
+`https://api.z.ai/api/paas/v4/chat/completions`. The
+[current global model pricing page](https://docs.z.ai/guides/overview/pricing)
+also lists GLM-5.1; no tariff is imported by this change. The
+[global release notes](https://docs.z.ai/release-notes/new-released) record its
+2026-04-07 release. The [migration guide](https://docs.z.ai/guides/overview/migrate-to-glm-new)
+recommends a newer model but supplies no GLM-5.1 standard-API shutdown or automatic
+alias. These explicit global API/listing facts qualify the native declaration;
+the frozen deprecated label alone does not deny execution. No effective retirement
+date, new model generation, account entitlement or live success is asserted.
+The other five already-qualified cards are unchanged.
 
 Previously qualified primary contracts, checked 2026-11-03, remain the
 [native Chat reference](https://docs.z.ai/api-reference/llm/chat-completion),
@@ -38,9 +46,10 @@ this provider source does not establish it from Bearer syntax or a key prefix.
 
 `worker/test/zai-global-runtime.test.mjs` compiles the actual manifest and calls
 the real Worker with synthetic authority, credential-owner and budget stores.
-It covers all five active IDs on native/manifest JSON/SSE routes, replay, original
+It covers all six active IDs on native/manifest JSON/SSE routes, replay, original
 grant selection, cached usage, one reservation/event, wrong-product isolation,
-unknown-price denial, errors, cancellation and the closed deprecated identity.
+unknown-price denial, errors, cancellation and selected/observed identity separation. The GLM-5.1 cases preserve its
+documented thinking request without copying newer model-specific controls.
 Fixtures are prepared, not locally executed: the retained checkout is CODE-ONLY.
 Source6 owns the later generated snapshot and exact functional/native consumer
 proof. No shared runtime, schema, credential, deployment or live account changes.

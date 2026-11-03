@@ -407,7 +407,7 @@
 - Add the frozen Groq Safeguard 20B identity with qualified plain-Chat token pricing and conditional tool/tier guards; record Qwen 3.6 retirement for public tiers without inventing a replacement alias.
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
-- Complete the six frozen Z.AI global standard dispositions with model-specific input facts, preserving CN/Coding Plan isolation and keeping deprecated GLM 5.1 closed without inventing a shutdown.
+- Complete the six frozen Z.AI global standard dispositions with model-specific input facts, preserving CN/Coding Plan isolation and qualifying GLM 5.1 against its explicit global standard API contract without turning a frozen deprecation into a shutdown.
 - Qualify the five frozen Moonshot Chat models and authenticated model discovery on isolated global/China credentials, preserving native replay, account-dependent K2 availability and unknown tariffs.
 - Add isolated Singapore and Beijing Qwen Token Plan Chat routes with dedicated credentials and seven frozen unpriced model identities.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
