@@ -1,3 +1,5 @@
+import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
+import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { resolveConnection } from "./authority.ts";
 import type { BackgroundAdmission } from "./background-store.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
@@ -43,6 +45,7 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
     const { managedRoute } = await import("./managed-routes.ts");
     const { adapter, controls, retained } = managedRoute(provider, create, pathParams);
     if (retained) parts.push(["managed-job-params", retained]);
+    if (adapter.prepareAdmitted) parts.push(["managed-upstream-retention", "v1"]);
     if (lifecycle.files) {
       const { managedFileRoute, managedFileBase } = await import("./managed-files.ts");
       const { endpoints } = managedFileRoute(provider, create);
@@ -145,6 +148,15 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   return new Request(url, { method: endpoint.method, headers, redirect: "manual" });
 }
 
+export function responseControlRetentionProtocol(input: ResponseControlDispatch): string | undefined {
+  return input.protocol && managedLifecycleAdapter(input.protocol)?.prepareAdmitted ? input.protocol : undefined;
+}
+export function assertResponseControlRetention(env: Env, input: ResponseControlDispatch): void {
+  const protocol = responseControlRetentionProtocol(input);
+  if (protocol && !upstreamRetentionBindingAllowed(env, input.owner, protocol))
+    throw new HttpError(403, "upstream_retention_unqualified", "the original upstream retention qualification is unavailable");
+}
+
 export async function dispatchResponseControl(env: Env, input: ResponseControlDispatch, signal: AbortSignal): Promise<Response> {
   signal.throwIfAborted();
   if (input.owner.grantKey) {
@@ -156,10 +168,11 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
   const preparation = new HttpOperation(signal, 10_000);
   try {
     const request = await preparation.wait(prepareResponseControl(env, input, null));
-    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal));
+    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input)));
     preparation.signal.throwIfAborted();
     assertControlDeadline(input);
     assertControlCallerLive(input.authorization);
+    assertResponseControlRetention(env, input);
     assertManagedDispatch(input.protocol, request);
     return fetch(request, { signal });
   } finally { preparation.stop("complete"); }

@@ -1,3 +1,4 @@
+import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import type { BackgroundJob, BackgroundRecord, ManagedAdmission } from "./background-store.ts";
 import { retentionRequired } from "./content-retention.ts";
@@ -29,8 +30,22 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   if (selection.method !== "POST"
     || hasProxyQuery(query) || new URL(request.url).search) throw new HttpError(400, "invalid_prediction_request", "managed prediction creation requires a body-only declared POST");
   if (retentionRequired(auth, selection.capability)) throw new HttpError(400, "prediction_retention_unsupported", "this managed protocol does not support required request-content retention");
+  let admittedPreparation: Awaited<ReturnType<typeof prepareSelected>> | undefined;
+  let admission: import("./upstream-retention-admission.ts").ManagedCreateAdmission | undefined;
+  if (adapter.prepareAdmitted) {
+    const fixed = policyRequestCost(auth.policy, selection.capability);
+    if (!Number.isSafeInteger(fixed) || fixed == null || fixed < 0) throw new HttpError(400, "pricing_required", "managed predictions require an explicit policy-fixed tariff before dispatch");
+    if (selection.endpoint.path_params.length || Object.keys(selection.pathParams).length || adapter.retainedParams
+      || selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4"))
+      throw new HttpError(409, "managed_admission_unsupported", "retention admission requires a qualified body-only create route");
+    admittedPreparation = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection);
+    admission = requireManagedCreateAdmission(auth.policy, env, admittedPreparation.continuation, adapter.protocol);
+  }
   let create: ManagedCreate;
-  try { create = adapter.prepare(selection.body, request.headers, selection.pathParams, new URLSearchParams());
+  try { create = adapter.prepareAdmitted
+      ? adapter.prepareAdmitted(selection.body, request.headers, selection.pathParams, new URLSearchParams(), admission!)
+      : adapter.prepare(selection.body, request.headers, selection.pathParams, new URLSearchParams());
+    if (admittedPreparation && (Object.keys(create.pathParams).length || [...create.headers].length)) throw new Error("unsupported admitted route mutation");
     managedPaths(selection.provider, selection.endpoint, managedProbeId(adapter), create.pathParams); }
   catch { throw new HttpError(400, "invalid_prediction_request", "provide a supported native managed job input and route"); }
   selection = { ...selection, body: create.body, pathParams: create.pathParams };
@@ -46,7 +61,8 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
     const existing = await backgroundCall<BackgroundRecord | null>(env, scope, { action: "managed_lookup", managed, policyGeneration: auth.policy.generation });
     if (existing) return existingPrediction(request, scope, existing, selection.provider, selection.endpoint);
   }
-  const prepared = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection);
+  const prepared = admittedPreparation ?? await prepareSelected(request, env, selection, query, auth, new Set(), true, connection);
+  if (admittedPreparation) prepared.requestBody = JSON.stringify(create.body);
   if (!prepared.continuation) throw new HttpError(503, "prediction_owner_unavailable", "prediction ownership is unavailable");
   // Qualify the selected grant before durable admission; never shop another
   // account after a product/region guard rejects it.
@@ -71,6 +87,7 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
       assertManagedDispatch(adapter.protocol, dispatchRequest);
       attempted = true;
       await background.dispatch(null);
+      if (adapter.prepareAdmitted) requireManagedCreateAdmission(auth.policy, env, prepared.continuation, adapter.protocol);
       response = await operation.wait(fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" }), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);

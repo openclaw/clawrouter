@@ -98,6 +98,7 @@ export interface AccessPolicy {
   requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
+  upstreamRetention?: import("./upstream-retention").UpstreamRetentionPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }

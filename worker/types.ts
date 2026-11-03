@@ -116,6 +116,7 @@ export interface Env {
   CLAWROUTER_LOCAL_AUTH?: string;
   CLAWROUTER_LOCAL_ADMIN_EMAIL?: string;
   CLAWROUTER_PUBLIC_ORIGIN?: string;
+  CLAWROUTER_UPSTREAM_RETENTION_BINDINGS?: string;
   CLAWROUTER_CONTENT_RETENTION_DEFAULT?: string;
   /** Isolate hot-cache max age in seconds (default 60); 0 disables admission/credential/budget caching. */
   CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS?: string;
@@ -141,6 +142,7 @@ export interface AccessPolicy {
   requestCostsMicros?: Record<string, number> | null;
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
+  upstreamRetention?: import("../shared/upstream-retention.ts").UpstreamRetentionPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }

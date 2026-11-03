@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Require explicit caller-policy and expiring original-credential configuration before managed upstream-retention admission, independently of router logging, with no automatic consent or credential fallback.
+
 - Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 
 - Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.
