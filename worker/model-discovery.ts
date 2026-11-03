@@ -34,7 +34,7 @@ export function validateDiscoveryQuery(provider: CompiledProvider, endpoint: Com
     query["lifecycle[]"] = query.lifecycle; delete query.lifecycle;
   }
   for (const [name, value] of Object.entries(query)) {
-    if (provider.id !== "anthropic" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
+    if (endpoint.request_format !== "anthropic.models" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
     if (name === "lifecycle[]") {
       const values = Array.isArray(value) ? value : [value];
       if (!values.length || values.length > 3 || values.some(v => typeof v !== "string" || !["active", "deprecated", "retired"].includes(v))) throw new HttpError(400, "invalid_model_discovery_query", "invalid model lifecycle filter");
@@ -105,10 +105,10 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       return metadataResponse(metadata, response);
     }
     if (!Array.isArray(metadata.data) || !metadata.data.every(valid)) throw malformed();
-    if (provider.id === "anthropic" && typeof metadata.has_more !== "boolean" || provider.id === "openai" && metadata.object !== "list") throw malformed();
+    if (endpoint.request_format === "anthropic.models" && typeof metadata.has_more !== "boolean" || endpoint.request_format === "openai.models" && metadata.object !== "list") throw malformed();
     if (!restricted) return metadataResponse(metadata, response);
     const data = metadata.data.filter(model => discoveryAllows(policy, provider, model.id));
-    if (provider.id === "openai") return metadataResponse({ object: "list", data }, response);
+    if (endpoint.request_format === "openai.models") return metadataResponse({ object: "list", data }, response);
     if (data.length || !metadata.has_more) return metadataResponse({ data, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null, has_more: metadata.has_more }, response);
     const before = query.before_id != null;
     const cursor = before ? metadata.first_id : metadata.last_id;
