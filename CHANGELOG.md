@@ -58,6 +58,7 @@
 - Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
+- Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
 - Refresh pinned setup-node to 7.1.0 and upload-artifact to 7.0.2, including Node installation validation and updated cache/artifact clients.

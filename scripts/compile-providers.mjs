@@ -35,6 +35,7 @@ export function compileProviderSnapshot(manifests) {
         provider: provider.id,
         upstream: model.upstream,
         capabilities: model.capabilities,
+        ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
         ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
@@ -119,6 +120,7 @@ function compileProvider(manifest, ids) {
     id: model.id,
     upstream: model.upstream,
     capabilities: model.capabilities ?? [],
+    ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
     ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
@@ -276,6 +278,7 @@ function validateManifest(manifest) {
 
 function validateModels(manifest) {
   for (const model of manifest.models?.entries ?? []) {
+    validateModelAvailability(model);
     for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
     for (const [id, parameters] of Object.entries(model.requestParameters ?? {})) {
@@ -333,6 +336,26 @@ function validateModels(manifest) {
       }
     }
   }
+}
+
+function validateModelAvailability(model) {
+  const availability = model.availability;
+  if (!availability) return;
+  const fail = message => { throw new Error(`model ${model.id} availability ${message}`); };
+  for (const date of [availability.effectiveAt, availability.checkedAt]) {
+    const time = Date.parse(`${date}T00:00:00Z`);
+    if (!Number.isFinite(time) || new Date(time).toISOString().slice(0, 10) !== date) fail("requires calendar dates");
+  }
+  if (availability.effectiveAt > availability.checkedAt) fail("must be effective by its verification date");
+  for (const source of availability.sources) {
+    const url = new URL(source);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) fail("requires public HTTPS evidence without credentials");
+  }
+  if (availability.status === "upstream_alias" && [model.id, model.upstream].includes(availability.servingModel)) fail("must name a distinct serving model");
+  // Keep the stopped identity in inventory: removing it could let an opaque
+  // model-passthrough endpoint accept the same name as an unknown live model.
+  if (availability.status === "stopped" && ((model.capabilities ?? []).length || ["pricing", "pricingRef", "endpointPricing", "nativeCapabilities", "requestParameters", "supportedReasoningEfforts", "codexModel"].some(key => Object.hasOwn(model, key))))
+    fail("stopped identities cannot declare executable capabilities, prices or request facts");
 }
 
 function validateEndpoints(manifest) {
