@@ -6,8 +6,8 @@ import type { AuthorizationSnapshot } from "./authority-contracts.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { currentLocalSession } from "./local-auth.ts";
 import { proxyCredentialFailure, proxyKeyVerification, type ProxyKeyVerification } from "./proxy-auth.ts";
-import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, safeEqual } from "./utils.ts";
+import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
+import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
 
 interface PublicControlBinding {
   credentialId: string | null;
@@ -30,7 +30,7 @@ export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseCo
     policyId: auth.policyId, policyGeneration: auth.policy.generation, tenantId: auth.policy.tenantId ?? "default", proof } };
 }
 
-export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string): Promise<void> {
+export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string): Promise<AccessPolicy | undefined> {
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
   const binding = authorization.binding, proof = binding.proof;
@@ -57,6 +57,7 @@ export async function authorizeResponseControl(env: Env, authorization: Response
     const failure = proxyCredentialFailure(credential, policy, snapshot.principalEnabled);
     if (failure) throw failure;
   } else if (snapshot.principalEnabled !== true || snapshot.policyHeld !== true) denied();
+  return policy.policy;
 }
 
 // Called synchronously after the final await and immediately before fetch.
@@ -68,3 +69,12 @@ export function assertControlCallerLive(authorization: ResponseControlAuthorizat
   if (proof.kind !== "proxy_key" && (!Number.isSafeInteger(proof.expiresAtMs) || Date.now() >= proof.expiresAtMs)) denied();
 }
 function denied(): never { throw new HttpError(403, "response_caller_unavailable", "the original response caller is no longer authorized"); }
+
+// Public proof is revalidated by authorizeResponseControl before using this
+// scope. Collection authority must never authorize a new input upload/create.
+export async function publicControlScope(authorization: ResponseControlAuthorization): Promise<string> {
+  if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
+  const { binding } = authorization;
+  return `http-continuations:${await sha256Hex(JSON.stringify([binding.proof.kind === "proxy_key" ? "proxy_key" : "access",
+    binding.tenantId, binding.policyId, binding.credentialId, binding.principalId]))}`;
+}
