@@ -8,17 +8,25 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "5964e1f3065337b92a733e42cc248bf5e27a5415";
-// The first native slice uses the already-advertised Cohere contract. Other
-// native families need their qualified runtime and catalog activation first.
+const sourceHead = "d9ca7519f7344726631c08e7dcb86eb70114ec05";
+// Finite, activated contracts only. Bedrock and asynchronous file batches retain
+// their own runtime and consumer qualification gates.
+const modelsByFormat = {
+  "cohere.embed": ["embed-v4.0"],
+  "voyage.embeddings": ["voyage-4", "voyage-4-large", "voyage-4-lite"],
+  "google.embed_content": ["gemini-embedding-001", "gemini-embedding-2"],
+  "google.batch_embed_contents": ["gemini-embedding-001", "gemini-embedding-2"],
+};
 const cases = snapshot.providers.flatMap(provider => provider.endpoints
-  .filter(endpoint => endpoint.request_format === "cohere.embed" && endpoint.response_format === "cohere.embed")
-  .flatMap(endpoint => provider.models.filter(model => model.upstream === "embed-v4.0" && model.capabilities.includes("llm.embeddings"))
-    .map(model => ({ provider, endpoint, model }))))
+  .filter(endpoint => endpoint.request_format === endpoint.response_format && modelsByFormat[endpoint.request_format])
+  .flatMap(endpoint => provider.models.filter(model => modelsByFormat[endpoint.request_format].includes(model.upstream) && model.capabilities.includes("llm.embeddings"))
+    .flatMap(model => ["native", "manifest"].map(dispatch => ({ provider, endpoint, model, dispatch })))))
   .map((entry, index) => ({ ...entry, credential: `native_embed_${index}` }));
+const successCalls = entry => entry.endpoint.request_format === "google.embed_content" ? 3 : 2;
+const inputTexts = body => body.texts ?? body.input ?? (body.requests ?? [body]).map(item => item.content.parts.filter(part => part.text).map(part => part.text).join("\n"));
 
 test("actual OpenClaw native memory consumer through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
-  assert.ok(cases.length > 0);
+  for (const format of Object.keys(modelsByFormat)) assert.ok(cases.some(entry => entry.endpoint.request_format === format), `missing activated ${format}`);
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-native-memory-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
@@ -26,7 +34,7 @@ test("actual OpenClaw native memory consumer through workerd and SQLite", { skip
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const { provider, model, credential } of cases) {
-      for (const suffix of ["", "_unpriced", "_error", "_eof"]) {
+      for (const suffix of ["", "_unpriced", "_error", "_eof", "_invalid"]) {
         const id = credential + suffix;
         await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [provider.id], models: [model.id], tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: suffix === "_unpriced" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
         await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
@@ -37,37 +45,50 @@ test("actual OpenClaw native memory consumer through workerd and SQLite", { skip
     await runOpenClawConsumer(t, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-native-embeddings-contract.test.ts", import.meta.url),
       testPath: "src/agents/worker-contract.test.ts",
-      env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases.map(({ credential, model }) => ({ credential, model: model.id }))) },
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases.map(({ credential, model, endpoint, dispatch }) => ({ credential, model: model.id, format: endpoint.request_format, dispatch }))) },
     });
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
-    assert.equal(calls.length, cases.length * 4, "unpriced hard budgets, rotation and cancellation must not dispatch; failures must not replay");
-    for (const { provider, endpoint, model, credential } of cases) {
-      const selected = calls.filter(call => call.body.model === model.upstream);
-      assert.equal(selected.length, 4);
+    assert.equal(calls.length, cases.reduce((count, entry) => count + successCalls(entry) + 3, 0), "denied/aborted calls never dispatch; failed requests never replay");
+    for (const entry of cases) {
+      const { provider, endpoint, model, credential } = entry;
+      const selected = calls.filter(call => inputTexts(call.body).some(text => new RegExp(`fixture ${credential}\\b`).test(text)));
+      assert.equal(selected.length, successCalls(entry) + 3, `${credential}: dispatch count`);
       for (const call of selected) {
-        assert.equal(call.url, provider.base_urls.default.replace(/\/$/, "") + endpoint.path);
+        const path = (endpoint.upstreamPath ?? endpoint.path).replaceAll("${model}", encodeURIComponent(model.upstream));
+        assert.equal(call.url, provider.base_urls.default.replace(/\/$/, "") + path);
         assert.equal(call.method, "POST");
-        assert.equal(call.headers.authorization, `Bearer fixture-upstream-${provider.id}`);
-        assert.deepEqual(Object.keys(call.body).sort(), ["embedding_types", "input_type", "model", "output_dimension", "texts", "truncate"]);
-        assert.equal(call.body.output_dimension, 256);
-        assert.equal(call.body.truncate, "END");
-        assert.deepEqual(call.body.embedding_types, ["float"]);
+        if (endpoint.request_format.startsWith("google.")) {
+          assert.equal(call.headers["x-goog-api-key"], `fixture-upstream-${provider.id}`);
+          assert.equal(call.headers.authorization, undefined);
+          for (const item of call.body.requests ?? [call.body]) {
+            assert.equal(item.outputDimensionality, 256);
+            if (call.body.requests) assert.equal(item.model, `models/${model.upstream}`);
+            if (model.upstream === "gemini-embedding-2") assert.equal(item.taskType, undefined);
+            else assert.equal(item.taskType, inputTexts(call.body)[0].startsWith("query fixture") ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT");
+          }
+        } else {
+          assert.equal(call.headers.authorization, `Bearer fixture-upstream-${provider.id}`);
+          assert.equal(call.body.model, model.upstream);
+          assert.equal(call.body.output_dimension, 256);
+          const query = inputTexts(call.body)[0].startsWith("query fixture");
+          assert.equal(call.body.input_type, endpoint.request_format === "cohere.embed" ? (query ? "search_query" : "search_document") : (query ? "query" : "document"));
+          if (endpoint.request_format === "cohere.embed") {
+            assert.equal(call.body.truncate, "END");
+            assert.deepEqual(call.body.embedding_types, ["float"]);
+          }
+        }
         assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
       }
-      assert.deepEqual(selected.find(call => call.body.texts[0] === "query fixture").body.texts, ["query fixture"]);
-      assert.equal(selected.find(call => call.body.texts[0] === "query fixture").body.input_type, "search_query");
-      assert.deepEqual(selected.find(call => call.body.texts[0] === "first fixture").body.texts, ["first fixture", "second fixture"]);
-      assert.equal(selected.find(call => call.body.texts[0] === "first fixture").body.input_type, "search_document");
-      for (const suffix of ["", "_error", "_eof"]) {
-        const id = credential + suffix, count = suffix ? 1 : 2;
+      for (const suffix of ["", "_error", "_eof", "_invalid"]) {
+        const id = credential + suffix, count = suffix ? 1 : successCalls(entry);
         let usage;
         for (let attempt = 0; attempt < 100; attempt++) {
           usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret` } })).json();
           if (usage.usage.events.length === count) break;
           await new Promise(resolve => setTimeout(resolve, 20));
         }
-        assert.equal(usage.usage.events.length, count);
+        assert.equal(usage.usage.events.length, count, `${id}: exactly one settlement per dispatch`);
         assert.equal(usage.budget.spentMicros, count * 7);
         for (const event of usage.usage.events) {
           assert.equal(event.provider, provider.id);
@@ -75,10 +96,16 @@ test("actual OpenClaw native memory consumer through workerd and SQLite", { skip
           assert.equal(event.credential_id, id);
           assert.equal(event.policy_id, id);
           assert.equal(event.capability, "llm.embeddings");
-          assert.equal(event.status, suffix ? "provider_error" : "success");
+          // Google validates the full vector at the Worker boundary. Other
+          // protocols leave shape validation to the actual memory consumer.
+          const invalidAtWorker = suffix === "_invalid" && endpoint.request_format.startsWith("google.");
+          assert.equal(event.status, suffix && suffix !== "_invalid" || invalidAtWorker ? "provider_error" : "success");
           assert.equal(event.cost_basis, "policy_fixed");
-          assert.equal(event.actual_cost_micros, 7, "an incomplete or embedded-error response cannot prove a free dispatched request");
-          for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(event[field], null, "billed units do not fabricate observed token counters");
+          assert.equal(event.actual_cost_micros, 7, "invalid or incomplete output cannot prove free dispatched work");
+          assert.equal(event.output_tokens, null);
+          const tokens = endpoint.request_format === "cohere.embed" || suffix === "_error" || suffix === "_eof" || invalidAtWorker ? null : 7;
+          assert.equal(event.input_tokens, tokens);
+          assert.equal(event.total_tokens, tokens);
           assert.doesNotMatch(JSON.stringify(event), /query fixture|first fixture|second fixture|fixture-upstream|must-not-fallback/);
         }
       }
@@ -91,8 +118,21 @@ test("actual OpenClaw native memory consumer through workerd and SQLite", { skip
 
 function routerFixture() {
   const config = Object.fromEntries(cases.flatMap(({ provider }) => provider.config_keys.map(name => [name, `fixture-upstream-${provider.id}`])));
+  const routes = cases.map(({ credential, endpoint, dispatch }) => ({ credential, endpoint: endpoint.id, dispatch }));
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-export default { ...handler, fetch(request, env, context) { return handler.fetch(request, { ...env, ...${JSON.stringify(config)} }, context); } };`;
+const routes = ${JSON.stringify(routes)};
+export default { ...handler, async fetch(request, env, context) {
+  const response = await handler.fetch(request, { ...env, ...${JSON.stringify(config)} }, context);
+  if (new URL(request.url).pathname !== "/v1/catalog" || !response.ok) return response;
+  const id = /^Bearer clawrouter-live-([^-]+)-/.exec(request.headers.get("authorization") ?? "")?.[1];
+  const route = routes.find(row => id === row.credential || id?.startsWith(row.credential + "_"));
+  if (!route) throw new Error("unknown fixture credential");
+  const catalog = await response.json();
+  // Restrict real, credential-scoped offers to exercise each existing transport.
+  // Never manufacture eligibility, model metadata or an unsupported endpoint.
+  for (const provider of catalog.providers) provider.offers = provider.offers.filter(offer => offer.endpoint === route.endpoint && offer.routeKind === route.dispatch);
+  return Response.json(catalog, response);
+} };`;
 }
 
 function upstreamFixture() {
@@ -100,8 +140,12 @@ function upstreamFixture() {
     if (request.url === "https://fixture.example/state") return Response.json(calls);
     const body = await request.json();
     calls.push({ url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body });
-    if (body.texts[0] === "embedded error") return Response.json({ error: { message: "Synthetic embedding failure" } });
-    if (body.texts[0] === "broken EOF") return new Response('{"embeddings":{', { headers: { "content-type": "application/json" } });
-    return Response.json({ embeddings: { float: body.texts.map((_, index) => Array.from({ length: 256 }, (_, column) => column === index ? 1 : 0)) }, meta: { billed_units: { input_tokens: 7 } } });
+    const texts = body.texts ?? body.input ?? (body.requests ?? [body]).map(item => item.content.parts.filter(part => part.text).map(part => part.text).join("\\n"));
+    if (texts.some(text => text.includes("embedded error fixture"))) return Response.json({ error: { message: "Synthetic embedding failure" } });
+    if (texts.some(text => text.includes("broken EOF fixture"))) return new Response('{"embeddings":{', { headers: { "content-type": "application/json" } });
+    const vectors = texts.map(text => Array.from({ length: text.includes("invalid vector fixture") ? 255 : 256 }, (_, column) => column === (text.includes("second fixture") ? 1 : 0) ? 1 : 0));
+    if (body.texts) return Response.json({ embeddings: { float: vectors }, meta: { billed_units: { input_tokens: 7 } } });
+    if (body.input) return Response.json({ object: "list", data: vectors.map((embedding, index) => ({ object: "embedding", index, embedding })).reverse(), usage: { total_tokens: 7 } });
+    return Response.json({ ...(body.requests ? { embeddings: vectors.map(values => ({ values })) } : { embedding: { values: vectors[0] } }), usageMetadata: { promptTokenCount: 7 } });
   } };`;
 }
