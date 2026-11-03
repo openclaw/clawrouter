@@ -16,6 +16,7 @@ auth:
       header: Authorization
       format: "Bearer ${secret}"
       secretKind: api_key
+      required: false
 baseUrls:
   default: ${base_url}
 routing:

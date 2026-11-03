@@ -16,6 +16,7 @@ auth:
       header: Authorization
       format: "Bearer ${secret}"
       secretKind: api_key
+      required: false
 baseUrls:
   default: ${base_url}
 routing:
@@ -32,6 +33,7 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - { id: llm.messages, endpoint: messages, methods: [POST] }
 endpoints:
   models_list: { method: GET, path: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   chat_completions:
@@ -41,11 +43,18 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  messages:
+    modelPassthrough: {}
+    path: /messages
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
 models:
   entries:
     - id: lmstudio/configured
       upstream: ${model}
-      capabilities: [llm.chat]
+      capabilities: [llm.chat, llm.messages]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

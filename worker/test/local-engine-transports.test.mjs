@@ -47,7 +47,7 @@ export class Upstream {
 export default {fetch(request,env){return env.UPSTREAM.get(env.UPSTREAM.idFromName('fixture')).fetch(request);}};
 `;
 
-async function fixture(t) {
+async function fixture(t, { grants = true } = {}) {
   const temporary = await mkdtemp(join(tmpdir(), "cr-local-engine-"));
   const mf = await startWorkerdFixture(temporary, router, upstream, { upstreamDurableObjects: { UPSTREAM: { className: "Upstream", useSQLite: true } } });
   t.after(async () => { await mf.dispose(); await rm(temporary, { recursive: true, force: true }); });
@@ -63,7 +63,7 @@ async function fixture(t) {
     enabled: true, policyId: "fixture", policyGeneration: "g1", secretSha256: createHash("sha256").update("fixture-key").digest("hex"),
   } }]);
   await object("/connections/initialize-all", ids.map(providerId => ({ providerId, enabled: true })));
-  for (const provider of ids) {
+  for (const provider of grants ? ids : []) {
     const response = await call("/fixture/grant", { method: "POST", body: JSON.stringify({ key: "oauth/fixture/" + provider,
       grant: { provider, kind: "api_key", enabled: true, credential: "fixture-" + provider + "-key" } }) });
     assert.equal(response.status, 200, await response.clone().text());
@@ -185,4 +185,50 @@ test("configured Ollama native tags filter the caller's model scope without infe
   const [event] = await f.events(1);
   assert.equal(event.cost_basis, "none");
   assert.equal(event.actual_cost_micros, 0);
+});
+
+
+test("configured local servers accept optional upstream auth without a placeholder key", async t => {
+  const f = await fixture(t, { grants: false });
+  for (const id of ids) {
+    await f.state([{ body: { id: "synthetic", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "synthetic answer" }, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } } }]);
+    const response = await f.call("/v1/chat/completions", { method: "POST", body: JSON.stringify({ model: `${id}/configured`, messages: [{ role: "user", content: "synthetic input" }] }) });
+    assert.equal(response.status, 200, await response.clone().text());
+    await response.text();
+    const sent = (await f.state()).calls.at(-1);
+    assert.equal(sent.headers.authorization, undefined);
+    assert.equal(sent.headers["x-api-key"], undefined);
+    assert.equal(JSON.parse(sent.body).model, "tenant/model");
+  }
+  const events = await f.events(ids.length);
+  assert.equal(events.filter(event => event.status === "success").length, ids.length);
+  assert.ok(events.every(event => event.credential_id === "fixture" && event.actual_cost_micros === 17));
+});
+
+for (const streaming of [false, true]) test(`LM Studio Messages ${streaming ? "SSE" : "JSON"} preserves native tools and usage`, async t => {
+  const f = await fixture(t);
+  const body = { model: "lmstudio/configured", max_tokens: 32, stream: streaming, messages: [{ role: "assistant", content: [{ type: "tool_use", id: "call_fixture", name: "lookup", input: { key: "value" } }] }, { role: "user", content: [{ type: "tool_result", tool_use_id: "call_fixture", content: "synthetic result" }] }], tools: [{ name: "lookup", input_schema: { type: "object", properties: {} } }] };
+  const message = { id: "msg_fixture", type: "message", role: "assistant", model: "tenant/model", content: [{ type: "text", text: "synthetic answer" }], stop_reason: "end_turn", usage: { input_tokens: 17, output_tokens: 4 } };
+  const events = [
+    { type: "message_start", message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 17, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "synthetic answer" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } },
+    { type: "message_stop" },
+  ];
+  const wire = streaming ? events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("") : JSON.stringify(message);
+  await f.state([{ wire, headers: { "content-type": streaming ? "text/event-stream" : "application/json" } }]);
+  const response = await f.call("/v1/messages", { method: "POST", body: JSON.stringify(body) });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await response.text(), wire);
+  const sent = (await f.state()).calls.at(-1);
+  assert.equal(sent.url, "https://lmstudio.example.com/v1/messages");
+  assert.equal(sent.headers.authorization, "Bearer fixture-lmstudio-key");
+  assert.deepEqual(JSON.parse(sent.body), { ...body, model: "tenant/model" });
+  const [event] = await f.events(1);
+  assert.equal(event.provider, "lmstudio");
+  assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [17, 4, 21]);
+  assert.equal(event.actual_cost_micros, 17);
+  assert.equal(event.credential_id, "fixture");
 });
