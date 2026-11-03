@@ -8,7 +8,8 @@ export type ReplicatePredictionStatus =
   | "processing"
   | "succeeded"
   | "failed"
-  | "canceled";
+  | "canceled"
+  | "aborted";
 
 export interface ReplicateObservation {
   id: string;
@@ -105,7 +106,7 @@ export function parseReplicatePrediction(text: string, expectedId?: string): Rep
   }
   const status = body.status;
   if (status !== "starting" && status !== "processing" && status !== "succeeded"
-    && status !== "failed" && status !== "canceled") {
+    && status !== "failed" && status !== "canceled" && status !== "aborted") {
     throw new Error("unsupported_replicate_prediction_status");
   }
   let version: string | null = null;
@@ -130,7 +131,7 @@ export function parseReplicatePrediction(text: string, expectedId?: string): Rep
     body,
     observation: {
       id, status, version, predictTimeSeconds,
-      terminal: status === "succeeded" || status === "failed" || status === "canceled",
+      terminal: status === "succeeded" || status === "failed" || status === "canceled" || status === "aborted",
     },
   };
 }

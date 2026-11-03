@@ -28,7 +28,7 @@ All fixture input, output, IDs, durations and policy charges are synthetic.
    content transiently; persist only `observation` and existing accounting facts.
 
 `starting` and `processing` remain open even when output exists. Only `succeeded`,
-`failed` and `canceled` are terminal in this slice. Cancel HTTP acknowledgement,
+`failed`, `canceled` and `aborted` are terminal in this slice. Cancel HTTP acknowledgement,
 client disconnect, missing output, 404 and malformed evidence are not termination.
 After uncertain cancel, observe GET first. The runtime must freeze one terminal
 receipt, preserve it through cancel/success races, and track settlement and usage
@@ -36,8 +36,9 @@ ACKs separately. Invalid evidence keeps conservative accounting.
 
 The adapter accepts ASCII IDs up to 128 characters and JSON responses up to 1 MiB.
 These are router limits. Oversized responses, unsupported statuses and incomplete
-UTF-8/JSON fail closed. The lifecycle reference also documents `aborted`; this
-initial contract deliberately leaves it unresolved rather than guessing a refund.
+UTF-8/JSON fail closed. `aborted` means the deadline elapsed before execution
+started and can omit metrics. Stop polling, but keep cost unknown unless qualified
+model/billing evidence or the frozen policy-fixed tariff determines settlement.
 
 ## Retention and billing
 

@@ -55,7 +55,7 @@ test("partial output and cancellation acknowledgement do not create terminal evi
 });
 
 test("terminal evidence preserves native runtime usage without manufacturing costs or free failures", () => {
-  for (const name of ["succeeded", "failed", "canceled"]) {
+  for (const name of ["succeeded", "failed", "canceled", "aborted"]) {
     assert.equal(parse(fixture.responses[name]).observation.terminal, true);
   }
   assert.equal(parse(fixture.responses.succeeded).observation.predictTimeSeconds, 2.5);
@@ -70,7 +70,7 @@ test("terminal evidence preserves native runtime usage without manufacturing cos
 
 test("unknown statuses and mismatched IDs cannot settle another prediction", () => {
   assert.throws(() => parse(fixture.responses.mismatchedId), /replicate_prediction_id_mismatch/);
-  for (const status of ["aborted", "completed", "SUCCEEDED", "", null, {}]) {
+  for (const status of ["completed", "SUCCEEDED", "", null, {}]) {
     assert.throws(() => parse({ ...fixture.responses.created, status }), /unsupported_replicate_prediction_status/);
   }
   for (const seconds of [-1, "2.5", {}, null]) {
@@ -79,6 +79,20 @@ test("unknown statuses and mismatched IDs cannot settle another prediction", () 
     else assert.throws(() => parse(body), /invalid_replicate_prediction_metrics/);
   }
   assert.throws(() => parseReplicatePrediction('{"id":"prediction_fixture_001","status":"succeeded","metrics":{"predict_time":1e999}}'), /invalid_replicate_prediction_metrics/);
+});
+
+test("deadline abortion without metrics closes observation without inventing a zero-cost receipt", async () => {
+  const before = parse(fixture.responses.created).observation;
+  assert.equal(before.terminal, false);
+  const after = (await readReplicatePrediction(response(fixture.responses.aborted), id)).observation;
+  assert.equal(after.status, "aborted");
+  assert.equal(after.terminal, true, "the collector must stop polling this known terminal job");
+  assert.equal(after.predictTimeSeconds, null, "absent usage is not a measured zero");
+  assert.equal(after.version, fixture.request.body.version);
+  assert.equal(Object.hasOwn(after, "actualCostMicrousd"), false);
+  assert.equal(fixture.billing.actualProviderCostMicrousd, null);
+  assert.equal(fixture.billing.basis, "policy_fixed");
+  assert.equal(fixture.billing.fixturePolicyRequestMicrousd, 700);
 });
 
 test("control paths use trusted templates and bounded IDs, never supplied URLs", () => {
