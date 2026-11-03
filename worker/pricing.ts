@@ -436,8 +436,8 @@ function contentHasUnboundedInput(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(contentHasUnboundedInput);
   if (!isObject(value)) return false;
   const kind = typeof value.type === "string" ? value.type : "";
-  if (["image", "image_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
-  if ("image_url" in value || "file_id" in value) return true;
+  if (["image", "image_url", "video_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
+  if ("image_url" in value || "video_url" in value || "file_id" in value) return true;
   return Object.values(value).some(contentHasUnboundedInput);
 }
 
