@@ -626,6 +626,14 @@
           ]
         },
         "then": { "$ref": "#/$defs/googleEmbeddingEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "const": "xai.images" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/xaiImagesEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -1756,10 +1764,59 @@
         "toolCalling": { "$ref": "#/$defs/parameterSupport" }
       }
     },
+    "xaiImagesEndpoint": {
+      "type": "object",
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "responseFormat": { "const": "xai.images" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestPricing": { "$ref": "#/$defs/imageRequestPricing" }
+      },
+      "oneOf": [
+        { "properties": { "path": { "const": "/v1/images/generations" }, "requestFormat": { "const": "xai.images_generations" } } },
+        { "properties": { "path": { "const": "/v1/images/edits" }, "requestFormat": { "const": "xai.images_edits" } } }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["auth"] }, { "required": ["streaming"] }, { "required": ["websocket"] },
+          { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+          { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] }, { "required": ["toolPricing"] }
+        ]
+      }
+    },
+    "imageRequestPricing": {
+      "type": "object",
+      "required": ["unit", "protocol", "version", "effectiveAt", "source", "receipt", "alias", "rates"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "image" }, "protocol": { "const": "xai.images" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "effectiveAt": { "type": "string", "format": "date" },
+        "source": { "const": "https://docs.x.ai/developers/pricing" },
+        "receipt": { "const": "xai.usage.cost_in_usd_ticks" },
+        "alias": {
+          "const": {
+            "selectedModel": "grok-imagine-image-quality", "servingModel": "grok-imagine-image-2.0", "quality": "low",
+            "effectiveAt": "2026-11-02", "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2"
+          }
+        },
+        "rates": {
+          "const": {
+            "grok-imagine-image": { "inputMicrosPerImage": 2000, "outputMicrosPerImage": { "1k": 20000, "2k": 20000 } },
+            "grok-imagine-image-2.0": {
+              "inputMicrosPerImage": 10000,
+              "outputMicrosPerImage": { "low": { "1k": 40000, "2k": 60000 }, "medium": { "1k": 60000, "2k": 80000 } }
+            }
+          }
+        }
+      }
+    },
     "requestPricing": {
       "oneOf": [
         { "$ref": "#/$defs/successfulRequestPricing" },
-        { "$ref": "#/$defs/outcomeRequestPricing" }
+        { "$ref": "#/$defs/outcomeRequestPricing" },
+        { "$ref": "#/$defs/imageRequestPricing" }
       ]
     },
     "outcomeRequestPricing": {
