@@ -552,7 +552,7 @@ const managedLifecycleContracts = {
     },
   },
   "fal.queue": {
-    provider: "fal", create: ["/${owner}/${app}", "/${owner}/${app}/${variant}"], request: "fal.queue_submit", response: "fal.queue_submission",
+    provider: "fal", create: ["/${owner}/${app}", "/${owner}/${app}/${variant}", "/${owner}/${app}/${variant}/${subvariant}"], request: "fal.queue_submit", response: "fal.queue_submission",
     controls: {
       retrieve: ["GET", "/${owner}/${app}/requests/${request_id}/status", "fal.queue_status", "fal.queue_status"],
       result: ["GET", "/${owner}/${app}/requests/${request_id}", "fal.queue_result", "fal.queue_result"],
@@ -573,11 +573,12 @@ const managedLifecycleContracts = {
 };
 
 function validateManagedLifecycles(manifest) {
-  const controls = new Set(), creates = new Set();
+  const controls = new Set(), creates = new Set(), controlBindings = new Map();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (!endpoint.lifecycle) continue;
     const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct qualified native create/control endpoints`); };
     const protocol = endpoint.lifecycle.protocol;
+    const fourSegmentFal = protocol === "fal.queue" && endpoint.path === "/${owner}/${app}/${variant}/${subvariant}";
     const contract = Object.hasOwn(managedLifecycleContracts, protocol) ? managedLifecycleContracts[protocol] : null;
     const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false;
     const methodsMatch = (endpointId, method) => !manifest.capabilities.some(capability => capability.endpoint === endpointId && capability.methods?.some(value => value !== method));
@@ -590,6 +591,18 @@ function validateManagedLifecycles(manifest) {
       || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
       || endpoint.requestFormat !== (contract.requestByPath?.[endpoint.path] ?? contract.request) || endpoint.responseFormat !== contract.response
       || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
+    if (fourSegmentFal) {
+      // Concrete product/segment values are checked by the registered fal codec.
+      // The new shape cannot change origin, credentials or control ownership.
+      const scheme = manifest.auth.schemes[0];
+      if (Object.values(manifest.baseUrls).some(base => base !== "https://queue.fal.run")
+        || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+        || scheme.format !== "Key ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+        || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(manifest.adapter?.injectHeaders ?? {}).length
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length || endpoint.auth || endpoint.requestHeaders?.length
+        || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+    }
     if (protocol === "dashscope.video") {
       // The bound credential comes from the shared owner, never endpoint overrides.
       if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
@@ -635,13 +648,15 @@ function validateManagedLifecycles(manifest) {
     for (const [action, [method, path, request, response, query = {}]] of Object.entries({ ...contract.controls, ...contract.files })) {
       const controlId = Object.hasOwn(contract.controls, action) ? endpoint.lifecycle[action] : endpoint.lifecycle.files[action];
       const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
-      if (!control || controlId === id || controls.has(controlId) || control.lifecycle || incompatible(control) || !parametersMatch(control)
+      const sharedFalControl = protocol === "fal.queue" && controlBindings.get(controlId) === `${protocol}:${action}`;
+      if (!control || controlId === id || controls.has(controlId) && !sharedFalControl || control.lifecycle || incompatible(control) || !parametersMatch(control)
         || Object.keys(control.query ?? {}).length !== Object.keys(query).length || Object.entries(query).some(([name, value]) => control.query?.[name] !== value)
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
-      if (["dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks", "together.video"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if ((fourSegmentFal || ["dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks", "together.video"].includes(protocol)) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
       controls.add(controlId);
+      controlBindings.set(controlId, `${protocol}:${action}`);
     }
   }
   // New managed wire formats cannot accidentally expose an unbound raw control.
