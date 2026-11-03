@@ -67,7 +67,7 @@ async function catalog(f, key = "full") {
 
 // This is synthetic Worker protocol evidence, not a live-provider or OpenClaw
 // transport certification. Follow the same scoped catalog a client consumes.
-for (const outcome of ["completed", "failed"]) test(`catalog-selected Responses stream reports ${outcome} usage under its caller`, async t => {
+for (const outcome of ["completed", "failed", "rejected"]) test(`catalog-selected Responses stream reports ${outcome} usage under its caller`, async t => {
   const f = await fixture(t), provider = await catalog(f, "limited");
   const model = provider.models.find(row => row.id === sol);
   const route = provider.routes.find(row => row.endpoint === "responses");
@@ -84,12 +84,12 @@ for (const outcome of ["completed", "failed"]) test(`catalog-selected Responses 
   ];
   const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: {} } }];
   const output = [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "synthetic-output" }] }];
-  const terminal = { type: `response.${outcome}`, response: {
-    id: "resp_fixture", model: model.upstream, status: outcome,
-    ...(outcome === "completed" ? { output, usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } }
+  const terminal = outcome === "rejected" ? { type: "error", error: { code: "server_error", message: "synthetic-rejection" } } : { type: `response.${outcome}`, response: {
+    id: "resp_fixture", model: model.upstream, status: outcome, service_tier: "default",
+    ...(outcome === "completed" ? { output, usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } }
       : { error: { code: "server_error", message: "synthetic-failure" } }),
   } };
-  const wire = `event: response.${outcome}\ndata: ${JSON.stringify(terminal)}\n\n`;
+  const wire = `event: ${terminal.type}\ndata: ${JSON.stringify(terminal)}\n\n`;
   f.upstream.mock.mockImplementation(async (url, init) => {
     assert.equal(String(url), "https://api.openai.com/v1/responses");
     assert.equal(new Headers(init.headers).get("authorization"), "Bearer synthetic-upstream-only");
@@ -128,9 +128,12 @@ for (const outcome of ["completed", "failed"]) test(`catalog-selected Responses 
     assert.equal(event.output_tokens, 20);
     assert.equal(event.total_tokens, 120);
     assert.equal(event.cost_basis, "manifest_pricing");
-    assert.ok(event.actual_cost_micros > 0, "unmetered admission still records priced usage");
-  } else {
+    assert.equal(event.actual_cost_micros, 400, "100 input and 20 output tokens at the advertised Standard rates");
+  } else if (outcome === "rejected") {
     assert.equal(event.actual_cost_micros, 0, "pre-output terminal errors are nonbillable");
+  } else {
+    assert.equal(event.cost_basis, "manifest_reservation");
+    assert.ok(event.actual_cost_micros > 0, "failed generation without usage cannot prove no billable work");
   }
   assert.doesNotMatch(JSON.stringify(event), /synthetic-reasoning|synthetic-result|synthetic-output|synthetic-upstream-only/);
   await f.call("/credentials/mutate", { operation: "revoke", scope: "admin", credentialId: "limited", actor: { auth: "admin_token", role: "admin", email: "admin@example.com" } });
