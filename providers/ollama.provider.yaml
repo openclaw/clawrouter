@@ -1,5 +1,5 @@
 # Configured server transport: docs/local-engine-transports.md.
-# Endpoint/model source checked 2026-11-03: https://docs.ollama.com/api/openai-compatibility
+# Native and compatibility contracts checked 2026-11-03: https://docs.ollama.com/api/chat
 schema: clawrouter.service-provider.v1
 id: ollama
 displayName: Ollama configured server
@@ -32,14 +32,24 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - { id: llm.chat, endpoint: native_chat, methods: [POST] }
+  - { id: models.list, endpoint: native_models, methods: [GET] }
 endpoints:
-  models_list: { method: GET, path: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  models_list: { method: GET, path: /v1/models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   chat_completions:
     modelPassthrough: {}
-    path: /chat/completions
+    path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
+    timeoutMs: 600000
+  native_models: { method: GET, path: /api/tags, requestFormat: ollama.models, responseFormat: ollama.models, timeoutMs: 30000 }
+  native_chat:
+    modelPassthrough: {}
+    path: /api/chat
+    requestFormat: ollama.chat
+    responseFormat: ollama.chat
+    streaming: ndjson
     timeoutMs: 600000
 models:
   entries:

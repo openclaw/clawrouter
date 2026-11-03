@@ -19,7 +19,7 @@ for (const provider of ${JSON.stringify(compiled.providers)}) { const index=snap
 Object.assign(snapshot.model_index,${JSON.stringify(compiled.model_index)});
 const pending = [];
 export default { ...worker, async fetch(request, env, context) {
- for (const id of ${JSON.stringify(ids)}) { const key=id.toUpperCase().replaceAll("-","_"); env[key+"_BASE_URL"]="https://"+id+".example.com/v1"; env[key+"_MODEL"]="tenant/model"; }
+ for (const id of ${JSON.stringify(ids)}) { const key=id.toUpperCase().replaceAll("-","_"); env[key+"_BASE_URL"]="https://"+id+".example.com"+(id==="ollama"?"":"/v1"); env[key+"_MODEL"]="tenant/model"; }
  const path = new URL(request.url).pathname;
  if (path === '/fixture/object') { const b = await request.json(); const ns = env[b.binding]; return ns.get(ns.idFromName(b.name)).fetch('https://authority'+b.path, {method:'POST',body:JSON.stringify(b.value)}); }
  if (path === '/fixture/grant') { const b = await request.json(); return Response.json(b.revoke ? await revokeGrantCredentials(env,b.key) : await putGrantCredentials(env,b.key,b.grant)); }
@@ -87,7 +87,7 @@ test("configured local engines route scoped discovery and stream tools through t
   for (const id of ids) {
     const catalog = { object: "list", data: [{ id: "tenant/model", object: "model", owned_by: "fixture" }] };
     await f.state([{ body: catalog }]);
-    const list = await f.call(`/v1/native/${id}/models`);
+    const list = await f.call(`/v1/native/${id}${id === "ollama" ? "/v1" : ""}/models`);
     assert.equal(list.status, 200, await list.clone().text());
     assert.deepEqual(await list.json(), catalog);
     let sent = (await f.state()).calls.at(-1);
@@ -129,7 +129,7 @@ test("local-engine filtered discovery retains OpenAI shape and hides denied mode
   for (const id of ids) {
     const allowed = { id: "tenant/model", object: "model" };
     await f.state([{ body: { object: "list", data: [allowed, { id: "private-model", object: "model" }] } }]);
-    const response = await f.call(`/v1/native/${id}/models`);
+    const response = await f.call(`/v1/native/${id}${id === "ollama" ? "/v1" : ""}/models`);
     assert.equal(response.status, 200, await response.clone().text());
     assert.deepEqual(await response.json(), { object: "list", data: [allowed] });
   }
@@ -144,4 +144,45 @@ test("local-engine unknown tariffs fail before egress under hard budgets", async
     assert.equal((await response.json()).error.code, "pricing_required");
   }
   assert.equal((await f.state()).calls.length, 0);
+});
+
+
+for (const streaming of [false, true]) for (const manifest of [false, true]) test(`configured Ollama ${manifest ? "manifest" : "native"} ${streaming ? "NDJSON" : "JSON"} keeps native tools and final counters`, async t => {
+  const f = await fixture(t);
+  const body = { model: "tenant/model", messages: [{ role: "assistant", content: "", thinking: "synthetic thinking", tool_calls: [{ function: { name: "lookup", arguments: { key: "value" } } }] }, { role: "tool", content: "synthetic result", tool_name: "lookup" }], stream: streaming, think: "high", options: { num_predict: 32 } };
+  const partial = { model: "tenant/model", message: { role: "assistant", content: "", thinking: "synthetic output", tool_calls: [{ function: { name: "lookup", arguments: { key: "value" } } }] }, done: false };
+  const final = { model: "tenant/model", message: { role: "assistant", content: "" }, done: true, prompt_eval_count: 17, prompt_eval_cached_count: 3, eval_count: 4 };
+  const wire = streaming ? [partial, final].map(value => JSON.stringify(value) + "\n").join("") : JSON.stringify(final);
+  await f.state([{ wire, headers: { "content-type": streaming ? "application/x-ndjson" : "application/json" } }]);
+  const response = await f.call(manifest ? "/v1/proxy/ollama/native_chat" : "/v1/native/ollama/api/chat", { method: "POST", body: JSON.stringify(manifest ? { body: { ...body, model: "ollama/configured" } } : body) });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(await response.text(), wire);
+  const sent = (await f.state()).calls.at(-1);
+  assert.equal(sent.url, "https://ollama.example.com/api/chat");
+  assert.equal(sent.headers.authorization, "Bearer fixture-ollama-key");
+  assert.deepEqual(JSON.parse(sent.body), body);
+  const [event] = await f.events(1);
+  assert.equal(event.provider, "ollama");
+  assert.deepEqual([event.input_tokens, event.output_tokens, event.cached_input_tokens, event.total_tokens], [17, 4, 3, 21]);
+  assert.equal(event.cost_basis, "policy_fixed");
+  assert.equal(event.actual_cost_micros, 17);
+  assert.equal(event.credential_id, "fixture");
+  assert.equal(event.grant_key, "oauth/fixture/ollama");
+  assert.doesNotMatch(JSON.stringify(event), /synthetic thinking|synthetic result|synthetic output|fixture-ollama-key/);
+});
+
+test("configured Ollama native tags filter the caller's model scope without inference charges", async t => {
+  const f = await fixture(t);
+  await f.update({ models: ["ollama/tenant/model"] });
+  const allowed = { name: "tenant/model", model: "tenant/model", details: { family: "fixture" } };
+  await f.state([{ body: { models: [allowed, { name: "private-model", model: "private-model" }] } }]);
+  const response = await f.call("/v1/native/ollama/api/tags");
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(await response.json(), { models: [allowed] });
+  const sent = (await f.state()).calls.at(-1);
+  assert.equal(sent.url, "https://ollama.example.com/api/tags");
+  assert.equal(sent.body, "");
+  const [event] = await f.events(1);
+  assert.equal(event.cost_basis, "none");
+  assert.equal(event.actual_cost_micros, 0);
 });
