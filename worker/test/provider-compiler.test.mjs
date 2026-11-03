@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 
 test("TypeScript provider compiler is deterministic and preserves the catalog contract", () => {
   const files = readdirSync("providers").filter((file) => file.endsWith(".provider.yaml")).sort().map((file) => `providers/${file}`);
@@ -353,7 +354,7 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
       const manifest = structuredClone(valid);
       mutate(manifest.models.entries[0].pricing);
       writeFileSync(path, JSON.stringify(manifest));
-      assert.throws(() => compile(path), (error) => {
+      assert.throws(() => compileCli(path), (error) => {
         assert.equal(error.stdout, "", name);
         assert.match(error.stderr, /provider deepseek invalid manifest:.*#\/models\/entries\/0\/pricing/);
         return true;
@@ -398,6 +399,10 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
 });
 
 function compile(path) {
+  return JSON.stringify(compileProviderSnapshot([parse(readFileSync(path, "utf8"))]));
+}
+
+function compileCli(path) {
   return execFileSync(process.execPath, ["scripts/compile-providers.mjs", path], { encoding: "utf8", stdio: "pipe" });
 }
 
@@ -560,7 +565,7 @@ test("free moderation request format belongs only to the OpenAI provider", () =>
     assert.equal(allowed.endpoints[0].request_format, "openai.moderations");
     manifest.id = "fixture-paid-moderation";
     writeFileSync(path, JSON.stringify(manifest));
-    assert.throws(() => compile(path), error => {
+    assert.throws(() => compileCli(path), error => {
       assert.equal(error.stdout, "", "invalid providers cannot emit a usable snapshot");
       assert.match(error.stderr, /openai\.moderations requires provider openai/);
       return true;
