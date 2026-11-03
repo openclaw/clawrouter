@@ -62,7 +62,9 @@ grant cannot borrow its permission. Server configuration may provide
 
 The fingerprint is SHA-256 of the exact UTF-8 API-key bytes. An operator must
 renew this configuration when rotating the key. Unknown fields, versions,
-regions, origins or mismatched fingerprints deny dispatch. This documentation
+regions, origins or mismatched fingerprints deny dispatch and public offer eligibility.
+The same fingerprint qualification also partitions isolate and colo discovery
+caches, so a rotated key cannot reuse an old eligible environment offer. This documentation
 does not authorize changing live secrets or granting account permissions.
 
 ## Final dispatch check

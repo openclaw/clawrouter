@@ -1,9 +1,9 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { miniMaxApiKeySecret, miniMaxEnvironmentBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
+import { miniMaxApiKeySecret, qualifyMiniMaxEnvironmentBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { HttpError } from "./utils.ts";
 
 const denied = () => new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires unchanged original credential authorization");
 function ownerIdentity(grant: UpstreamGrant): string {
@@ -40,22 +40,15 @@ export async function prepareMiniMaxMediaDispatch(
     };
   }
   if (upstream.grant !== null) throw denied();
-  const selected = miniMaxEnvironmentBinding(selection.provider, env);
-  if (!selected || headers.get("authorization") !== `Bearer ${selected.secret}`
-    || await sha256Hex(selected.secret) !== selected.fingerprint) throw denied();
+  const selected = await qualifyMiniMaxEnvironmentBinding(selection.provider, env);
+  if (!selected || headers.get("authorization") !== `Bearer ${selected.secret}`) throw denied();
   const routeIdentity = JSON.stringify(["clawrouter.minimax-media-route.v1", destination.href,
     "MINIMAX_API_KEY", selected.binding, selected.fingerprint]);
   return async signal => {
     signal.throwIfAborted();
-    const current = miniMaxEnvironmentBinding(selection.provider, env);
-    if (!current) throw denied();
-    const fingerprint = await sha256Hex(current.secret);
+    const current = await qualifyMiniMaxEnvironmentBinding(selection.provider, env);
     signal.throwIfAborted();
-    // Compare after hashing too: a test or server configuration rotation during
-    // the await cannot qualify bytes selected by the previous preparation.
-    const final = miniMaxEnvironmentBinding(selection.provider, env);
-    if (!final || final.secret !== current.secret || final.binding !== current.binding
-      || fingerprint !== current.fingerprint || routeIdentity !== JSON.stringify([
-        "clawrouter.minimax-media-route.v1", destination.href, "MINIMAX_API_KEY", final.binding, fingerprint])) throw denied();
+    if (!current || routeIdentity !== JSON.stringify([
+      "clawrouter.minimax-media-route.v1", destination.href, "MINIMAX_API_KEY", current.binding, current.fingerprint])) throw denied();
   };
 }

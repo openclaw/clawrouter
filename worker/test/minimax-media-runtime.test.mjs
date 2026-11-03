@@ -265,3 +265,43 @@ test("MiniMax admin distinguishes a paused owner's retained binding from explici
   const removed = await f.put({ enabled: false, nativeMediaAuthorization: null });
   assert.equal(removed.enabled, false); assert.equal(removed.nativeMediaBinding, null);
 });
+
+for (const cache of ["off", "isolate", "colo"]) test("MiniMax discovery matches actual fingerprint after rotation and renewal: " + cache, async t => {
+  const f = await setup(t);
+  if (cache !== "off") overrideHotCacheConfig({ maxAgeMs: 60000, freshMs: 10000 });
+  t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED));
+  const entries = new Map(), previous = globalThis.caches;
+  if (cache === "colo") {
+    globalThis.caches = { default: {
+      async put(url, response) { entries.set(String(url), await response.text()); },
+      async match(url) { const body = entries.get(String(url)); return body ? new Response(body) : undefined; },
+    } }; t.after(() => { globalThis.caches = previous; });
+  }
+  const offers = async () => {
+    const response = await f.call("/v1/catalog", null); assert.equal(response.status, 200);
+    const catalog = await response.json(); await f.drain();
+    const rows = catalog.providers.find(provider => provider.id === "minimax").offers.filter(offer => offer.endpoint === "speech" && offer.modelId === "minimax/" + wire.request.model);
+    assert.ok(rows.length > 0); return rows;
+  };
+  assert.ok((await offers()).every(offer => offer.eligible));
+  f.env.MINIMAX_API_KEY = "synthetic-replacement-key";
+  if (cache === "colo") { assert.ok(entries.size > 0); (await import("../hot-cache.ts")).clearHotCaches(); }
+  assert.ok((await offers()).every(offer => !offer.eligible && offer.reasonCode === "native_media_authorization_required"));
+  await denied(f, await f.request());
+  await f.bindEnvironment();
+  if (cache === "colo") (await import("../hot-cache.ts")).clearHotCaches();
+  assert.ok((await offers()).every(offer => offer.eligible));
+  f.upstream = request => { assert.equal(request.headers.get("authorization"), "Bearer synthetic-replacement-key"); return Response.json(result()); };
+  const response = await f.request(); assert.equal(response.status, 200, await response.clone().text()); await response.json();
+  await f.drain(); assert.equal(f.sent.length, 1);
+});
+
+test("MiniMax stored grant eligibility cannot borrow renewed environment permission", async t => {
+  const f = await setup(t, { pooled: true });
+  await f.put({ nativeMediaAuthorization: null });
+  f.env.MINIMAX_API_KEY = "synthetic-replacement-key"; await f.bindEnvironment();
+  const response = await f.call("/v1/catalog", null); assert.equal(response.status, 200);
+  const catalog = await response.json();
+  const offers = catalog.providers.find(provider => provider.id === "minimax").offers.filter(offer => offer.endpoint === "speech");
+  assert.ok(offers.length > 0); assert.ok(offers.every(offer => !offer.eligible)); await denied(f, await f.request());
+});

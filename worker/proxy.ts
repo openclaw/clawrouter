@@ -824,7 +824,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
-    const nativeMediaCheck = await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers);
+    const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
+      ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");

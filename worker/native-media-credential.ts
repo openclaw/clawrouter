@@ -1,7 +1,7 @@
 import { minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError, sha256Hex } from "./utils.ts";
 
 // This product qualifies one actual API-key slot. Generic credential fallback
 // (accessToken or the first bundle value) cannot supply native media authority.
@@ -52,4 +52,14 @@ export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env):
   const secret = env.MINIMAX_API_KEY;
   if (source !== "MINIMAX_API_KEY" || typeof secret !== "string" || !secret.length || secret.length > 8192 || /[^\x21-\x7e]/.test(secret)) return null;
   return { binding: JSON.stringify({ ...expected, credentialSha256: row.credentialSha256 }), secret, fingerprint: row.credentialSha256 };
+}
+
+
+// Both public eligibility and dispatch use the same actual fingerprint check.
+// The second read closes rotation during the asynchronous digest operation.
+export async function qualifyMiniMaxEnvironmentBinding(provider: CompiledProvider, env: Env) {
+  const selected = miniMaxEnvironmentBinding(provider, env);
+  if (!selected || await sha256Hex(selected.secret) !== selected.fingerprint) return null;
+  const current = miniMaxEnvironmentBinding(provider, env);
+  return current && current.secret === selected.secret && current.binding === selected.binding ? current : null;
 }
