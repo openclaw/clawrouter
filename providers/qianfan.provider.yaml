@@ -1,5 +1,5 @@
 # Standard API only; region and plan contracts: docs/hosted-platform-providers.md.
-# Endpoint/model source checked 2026-11-03: https://ai.baidu.com/ai-doc/WENXINWORKSHOP/4mchtzl8s
+# Frozen Chat/discovery facts and unresolved limits: docs/qianfan-native-catalog.md.
 schema: clawrouter.service-provider.v1
 id: qianfan
 displayName: Baidu Qianfan v2
@@ -27,10 +27,19 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    streaming: none
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -43,6 +52,78 @@ models:
     - id: qianfan/ernie-4.5-0.3b
       upstream: ernie-4.5-0.3b
       capabilities: [llm.chat]
+    - id: qianfan/deepseek-v4-pro
+      upstream: deepseek-v4-pro
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [high, max]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.baidu.com/doc/qianfan-docs/s/7m95lyy43]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: qianfan/ernie-5.1
+      upstream: ernie-5.1
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://cloud.baidu.com/doc/qianfan-docs/s/xm95lyys5]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.baidu.com/doc/qianfan-docs/s/7m95lyy43]
+            checkedAt: "2026-11-03"
+            input: [text]
+            maxOutputTokens: 65536
+    - id: qianfan/ernie-5.0
+      upstream: ernie-5.0
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://cloud.baidu.com/doc/qianfan-docs/s/xm95lyys5]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.baidu.com/product-s/qianfan_home]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: qianfan/deepseek-v3.2
+      upstream: deepseek-v3.2
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://cloud.baidu.com/doc/qianfan-docs/s/xm95lyys5]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.baidu.com/doc/qianfan-docs/s/7m95lyy43]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: qianfan/ernie-5.0-thinking-preview
+      upstream: ernie-5.0-thinking-preview
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://cloud.baidu.com/doc/qianfan-docs/s/xm95lyys5]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.baidu.com/product-s/qianfan_home]
+            checkedAt: "2026-11-03"
+            input: [text, image]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

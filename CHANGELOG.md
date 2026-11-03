@@ -403,6 +403,7 @@
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
+- Providers: qualify five frozen Qianfan Chat cards and keyed native model discovery; preserve model-specific thinking, tool replay and cumulative stream usage without inferred limits or prices.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
