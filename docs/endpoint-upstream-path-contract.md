@@ -16,7 +16,8 @@ chat_completions:
 ```
 
 The first qualified surface is POST Chat (`openai.chat_completions`), POST
-Messages (`anthropic.messages`) and GET model listing (`openai.models`). Both
+Messages (`anthropic.messages`) and GET model listing (`openai.models` or
+`anthropic.models`). Both
 formats must match. Model listing is bodyless and cannot stream or pass through
 inference models. A mapping cannot override a managed lifecycle, WebSocket,
 qualified request tariff or hosted-tool tariff. Other native codecs need their
@@ -43,9 +44,16 @@ the same `SYNTHETIC_API_KEY`:
 
 | Caller path | Dispatch path | Format |
 | --- | --- | --- |
-| `/v1/chat/completions` | `/openai/v1/chat/completions` | `openai.chat_completions` |
+| `/chat/completions` | `/openai/v1/chat/completions` | `openai.chat_completions` |
 | `/v1/messages` | `/anthropic/v1/messages` | `anthropic.messages` |
-| `/v1/models` | `/openai/v1/models` | `openai.models` |
+| `/models` | `/openai/v1/models` | `synthetic.models` (separate required follow-through) |
+
+Synthetic returns a data-only model envelope. It is not `openai.models` or
+`anthropic.models`. The landed `filterSyntheticModels(payload, allows)` codec in
+`worker/synthetic-model-catalog.ts` needs explicit native-format validation and
+shared metadata dispatch before this third route can activate. Keep OpenAI's
+strict decoder unchanged. A successful anonymous metadata read does not establish
+public authentication or selected-account access semantics.
 
 Declare the origin without the old `/openai/v1` base suffix when using these full
 dispatch paths. Do not combine prefixes twice, resolve against an arbitrary

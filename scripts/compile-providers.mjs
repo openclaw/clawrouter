@@ -456,15 +456,16 @@ function validateEndpoints(manifest) {
 function validateUpstreamPath(manifest, id, endpoint) {
   if (endpoint.upstreamPath === undefined) return;
   const fail = () => { throw new Error(`endpoint ${id} upstreamPath requires a literal same-format Chat, Messages or model-list path without conflicting transport overrides`); };
-  const methods = { "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.models": "GET" };
+  const methods = { "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.models": "GET", "anthropic.models": "GET" };
   const canonical = new RegExp(manifestSchema.$defs.literalUpstreamPath.pattern);
   if (!canonical.test(endpoint.path) || endpoint.path.length > 2048 || !canonical.test(endpoint.upstreamPath)
+    || [endpoint.path, endpoint.upstreamPath].some(path => path.split("/").some(segment => segment === "." || segment === ".."))
     || endpoint.pathParams?.length || Object.keys(endpoint.pathParamStyles ?? {}).length
     || !Object.hasOwn(methods, endpoint.requestFormat) || endpoint.responseFormat !== endpoint.requestFormat
     || (endpoint.method ?? "POST") !== methods[endpoint.requestFormat]
     || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== methods[endpoint.requestFormat]))
     || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.requestPricing || endpoint.toolPricing
-    || endpoint.requestFormat === "openai.models" && (endpoint.streaming || endpoint.modelPassthrough)) fail();
+    || endpoint.requestFormat.endsWith(".models") && (endpoint.streaming || endpoint.modelPassthrough)) fail();
   for (const transport of Object.values(manifest.auth.grantTransports ?? {})) {
     const path = transport.endpointPaths?.[id];
     if (path !== undefined && path !== endpoint.upstreamPath) fail();

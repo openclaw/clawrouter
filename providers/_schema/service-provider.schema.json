@@ -867,7 +867,8 @@
     },
     "literalUpstreamPath": {
       "type": "string", "maxLength": 2048,
-      "pattern": "^/[A-Za-z0-9_~-][A-Za-z0-9._~-]*(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$(?![\\s\\S])"
+      "pattern": "^(/[A-Za-z0-9._~-]+)+$(?![\\s\\S])",
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
     },
     "model": {
       "type": "object",

@@ -59,6 +59,14 @@ test("mapped declarations preserve native request bodies and selected model iden
   }
   const discovery = prepareManifestRequest(provider, provider.endpoints.find(row => row.id === "models"), {}, {}, {});
   assert.equal(discovery.model, null); assert.deepEqual(discovery.body, {});
+  const anthropic = fixture();
+  anthropic.endpoints.models.requestFormat = anthropic.endpoints.models.responseFormat = "anthropic.models";
+  anthropic.endpoints.models.upstreamPath = "/anthropic/v1/models";
+  const compiled = compile(anthropic).providers[0];
+  const endpoint = compiled.endpoints.find(row => row.id === "models");
+  assert.equal(endpoint.upstreamPath, "/anthropic/v1/models");
+  assert.equal(endpoint.request_format, "anthropic.models");
+  assert.deepEqual(prepareManifestRequest(compiled, endpoint, {}, {}, {}).body, {});
 });
 
 test("path mapping rejects URLs, normalization, queries, templates and caller path parameters", () => {
@@ -75,6 +83,8 @@ test("path mapping rejects URLs, normalization, queries, templates and caller pa
     const manifest = fixture(); Object.assign(manifest.endpoints.chat, extra);
     assert.throws(() => compile(manifest), /upstreamPath/);
   }
+  const manifest = fixture(); manifest.endpoints.models.upstreamPath = "/.well-known/model-list";
+  assert.equal(compile(manifest).providers[0].endpoints[2].upstreamPath, "/.well-known/model-list");
 });
 
 test("upstream path metadata cannot bypass qualified protocols, methods or lifecycle dispatch", () => {
@@ -82,10 +92,12 @@ test("upstream path metadata cannot bypass qualified protocols, methods or lifec
     m => { m.endpoints.chat.responseFormat = "anthropic.messages"; },
     m => { m.endpoints.chat.requestFormat = m.endpoints.chat.responseFormat = "openai.responses"; },
     m => { m.endpoints.chat.requestFormat = m.endpoints.chat.responseFormat = "unknown.protocol"; },
+    m => { m.endpoints.models.requestFormat = m.endpoints.models.responseFormat = "synthetic.models"; },
     m => { m.endpoints.chat.method = "DELETE"; }, m => { m.capabilities[0].methods.push("GET"); },
     m => { m.endpoints.chat.websocket = "openai.responses"; },
     m => { m.endpoints.chat.responsesLifecycle = { retrieve: "models", cancel: "messages" }; },
     m => { m.endpoints.models.streaming = "sse"; }, m => { m.endpoints.models.modelPassthrough = {}; },
+    m => { m.endpoints.models.requestFormat = m.endpoints.models.responseFormat = "anthropic.models"; m.endpoints.models.streaming = "sse"; },
   ]) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /upstreamPath/, String(change)); }
 });
 
