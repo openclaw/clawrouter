@@ -30,6 +30,11 @@ invented from result count. Separate extract, answer, agent and asynchronous
 task APIs are not included by these search manifests. Client capability discovery
 and a live credential-scoped result/usage probe remain separate integration gates.
 
+The smoke plan sends a one-result query for Brave and Exa, and one basic Parallel
+query with excerpts limited to 1,000 characters. Synthetic checks run the selected
+manifest transport through the real Worker and verify caller-scoped usage. These
+checks do not exercise the OpenClaw web-search consumer or certify live results.
+
 ## Remaining capability queue
 
 Each row names the missing contract rather than claiming that a generic HTTP
