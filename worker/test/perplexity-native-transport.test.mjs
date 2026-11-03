@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
+import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
 const { default: worker } = await import("../index.ts");
@@ -44,7 +45,9 @@ async function fixture(t, { body = wire.search.response, status = 200, stream = 
     async list() { return { keys: [], list_complete: true }; },
   }, USAGE_QUEUE: { send: async event => { events.push(event); } }, BUDGET_LEDGER: sqlBudgetNamespace(t) };
   const authority = createGrantAuthority(undefined, env);
-  env.ACCESS_CONTROL = { idFromName: name => name, get: () => authority };
+  const continuations = continuationAuthority(t, env);
+  env.ACCESS_CONTROL = { idFromName: name => name, get: name => name.startsWith("http-continuations:")
+    ? continuations.get(name) : authority };
   await authorityCall(env, "/policies/initialize-all", Object.entries(policies).map(([policyId, policy]) => ({ policyId, policy })));
   await authorityCall(env, "/credentials/initialize-all", await Promise.all(Object.keys(policies).map(async credentialId => ({
     credentialId, credential: { enabled: true, secretSha256: await sha256Hex("synthetic-" + credentialId), policyId: credentialId, policyGeneration: "v1" },
@@ -91,20 +94,19 @@ test("Perplexity candidate Search preserves native filters and result bytes on n
 });
 
 test("Perplexity candidate Agent supports effort-only and explicit model requests without Sonar conversion", async t => {
-  const f = await fixture(t, { body: wire.agent.response });
-  for (const input of [wire.agent.request, wire.agent.explicitModelRequest]) {
+  for (const input of [wire.agent.request, wire.agent.explicitModelRequest]) await t.test(input.model ?? input.effort, async t => {
+    const f = await fixture(t, { body: wire.agent.response });
     const response = await f.request("agent", input);
     assert.equal(response.status, 200, await response.clone().text());
     assert.deepEqual(await response.json(), wire.agent.response);
     assert.deepEqual(f.sent.at(-1).body, input);
     assert.equal(f.sent.at(-1).url, wire.transport.origin + wire.transport.agent.path);
-  }
-  await Promise.all(f.pending);
-  for (const event of f.events) {
-    assert.equal(event.actual_cost_micros, wire.billing.policyFixedMicros);
-    assert.equal(event.cost_basis, "policy_fixed");
-    assert.notEqual(event.actual_cost_micros, wire.billing.agentReportedCostMicros);
-  }
+    await Promise.all(f.pending);
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].actual_cost_micros, wire.billing.policyFixedMicros);
+    assert.equal(f.events[0].cost_basis, "policy_fixed");
+    assert.notEqual(f.events[0].actual_cost_micros, wire.billing.agentReportedCostMicros);
+  });
 });
 
 test("Perplexity candidate Agent preserves typed search-result/text/completion SSE including split UTF-8", async t => {
