@@ -28,6 +28,13 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
     if (!model) return { status: "exact-blocked", reasonCode: "pricing_required" };
     if (!Array.isArray(body) && body.model === undefined) body = { ...body, model: model.upstream };
   }
+  if (endpoint.requestPricing?.unit === "image") {
+    if (!model) return { status: "exact-blocked", reasonCode: "pricing_required" };
+    // A catalog probe is only a representative validated selection. Real image
+    // count, references, quality and resolution remain request-dependent.
+    if (!Array.isArray(body) && Object.keys(body).length === 0) body = { model: model.upstream, prompt: "catalog affordability probe", n: 1, response_format: "b64_json",
+      ...(endpoint.request_format === "xai.images_edits" ? { image: { type: "image_url", url: "https://example.com/image.png" } } : {}) };
+  }
   let cost: EstimatedCost;
   const soft = softBudgetPolicy(auth.policy);
   try {
