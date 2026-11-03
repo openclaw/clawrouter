@@ -17,8 +17,9 @@ const format = "deepseek.search", capability = "search.web";
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture() {
   const manifest = structuredClone(existing);
-  manifest.capabilities.push({ id: capability, endpoint: "search", methods: ["POST"] });
-  manifest.endpoints.search = { method: "POST", path: "/v1/tools/search", requestFormat: format, responseFormat: format };
+  if (!manifest.capabilities.some(item => item.id === capability && item.endpoint === "search"))
+    manifest.capabilities.push({ id: capability, endpoint: "search", methods: ["POST"] });
+  manifest.endpoints.search ??= { method: "POST", path: "/v1/tools/search", requestFormat: format, responseFormat: format };
   return manifest;
 }
 function selected() {

@@ -28,7 +28,17 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: search.web
+    endpoint: search
+    methods: [POST]
 endpoints:
+  search:
+    method: POST
+    path: /v1/tools/search
+    pathParams: []
+    requestFormat: deepseek.search
+    responseFormat: deepseek.search
+    timeoutMs: 120000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
