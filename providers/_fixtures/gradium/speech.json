@@ -1,0 +1,29 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/gradium/speech-provider.ts",
+  "request": {
+    "method": "POST",
+    "path": "/api/post/speech/tts",
+    "body": {
+      "text": "Synthetic café fixture",
+      "voice_id": "synthetic-voice",
+      "only_audio": true,
+      "output_format": "wav",
+      "json_config": "{\"padding_bonus\":0}"
+    }
+  },
+  "consumerOutputFormats": ["wav", "opus", "ulaw_8000"],
+  "response": {
+    "contentType": "audio/wav",
+    "base64": "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "rejection": { "status": 422, "body": { "error": "synthetic invalid voice" } },
+  "billing": {
+    "unit": "credit_per_input_character",
+    "creditsPerCharacter": 1,
+    "actualProviderCostMicrousd": null,
+    "characterNormalization": "not qualified",
+    "hardBudgetRequires": "explicit fixed policy price until native character tariff admission is qualified"
+  }
+}

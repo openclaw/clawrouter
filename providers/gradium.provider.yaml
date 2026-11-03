@@ -1,0 +1,42 @@
+# Native unary contract: https://docs.gradium.ai/guides/text-to-speech-rest
+# Plan-dependent credits are not a qualified upstream-dollar tariff.
+schema: clawrouter.service-provider.v1
+id: gradium
+displayName: Gradium
+status: experimental
+class: rest_json
+service:
+  platform: gradium
+  kind: tool_provider
+  upstreamService: gradium
+  configKeys: [GRADIUM_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: x-api-key
+      format: "${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.gradium.ai
+routing:
+  nativePrefixes: [clawrouter-gradium, gradium]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
+endpoints:
+  speech:
+    path: /api/post/speech/tts
+    requestFormat: gradium.speech
+    responseFormat: audio.binary
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
