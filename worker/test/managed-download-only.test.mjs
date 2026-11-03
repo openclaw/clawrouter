@@ -6,6 +6,7 @@ const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { readOpenRouterVideoContent } = await import("../openrouter-video.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const { managedFileRoute } = await import("../managed-files.ts");
+const { grantSupports } = await import("../provider-auth.ts");
 const id = contract.responses.succeeded.id, contentPath = `${path}/${id}/content?index=0`;
 const media = new Uint8Array([0, 255, 128, 7]), descriptor = { id, mimeType: "video/mp4" };
 
@@ -47,6 +48,11 @@ async function setup(t, options = {}) {
     : new Response(media, { headers: { "content-type": "video/mp4", "content-length": String(media.length) } });
   f.fileCall = (manifest = false, extra = {}) => f.call(manifest ? `/v1/proxy/replicate/content?prediction_id=${id}&index=0` : contentPath,
     null, { ...extra, headers: { "x-clawrouter-job-id": id, ...extra.headers } });
+  f.create = async () => {
+    const response = await f.call();
+    assert.equal(response.status, 200, response.status === 200 ? undefined : await response.clone().text());
+    return response;
+  };
   f.wrapper = wrapper; t.after(f.drain); return f;
 }
 async function read(response, status = 200) {
@@ -55,7 +61,7 @@ async function read(response, status = 200) {
 
 for (const pooled of [false, true]) for (const manifest of [false, true]) {
   test(`download-only ${pooled ? "pooled" : "environment"} ${manifest ? "manifest" : "native"} uses original succeeded job after compaction without metadata or new accounting`, { timeout: 10_000 }, async t => {
-    const f = await setup(t, { pooled }), created = await f.call(), state = f.state(created);
+    const f = await setup(t, { pooled }), created = await f.create(), state = f.state(created);
     assert.equal((await read(created)).content_url, contentPath); assert.deepEqual(state.job().managed.files, [descriptor]);
     f.loseUsageAck(); await state.alarm(); f.restart(); f.advance(30_000); await state.alarm(); await f.drain();
     assert.equal(state.job().phase, "complete"); const before = state.job(), calls = f.budgetCalls.length;
@@ -74,7 +80,7 @@ for (const pooled of [false, true]) for (const manifest of [false, true]) {
 
 for (const scenario of ["missing-job", "other-job", "other-caller", "unbound-file", "expired", "rotated-grant", "changed-route", "changed-mode"]) {
   test(`download-only ${scenario} denies before any content fetch`, { timeout: 10_000 }, async t => {
-    const f = await setup(t, { pooled: true }), created = await f.call(), state = f.state(created); await read(created);
+    const f = await setup(t, { pooled: true }), created = await f.create(), state = f.state(created); await read(created);
     let route = contentPath, headers = { "x-clawrouter-job-id": id };
     if (scenario === "missing-job") headers = {};
     if (scenario === "other-job") headers["x-clawrouter-job-id"] = "other-job";
@@ -97,7 +103,7 @@ for (const status of ["starting", "failed", "canceled", "aborted"]) {
   test(`download-only ${status} job cannot claim a completed file`, { timeout: 10_000 }, async t => {
     const f = await setup(t); f.upstream = () => Response.json({ ...contract.responses.created, id, status,
       ...(status === "failed" ? { error: "synthetic failure" } : {}) });
-    const created = await f.call(); await read(created); const state = f.state(created);
+    const created = await f.create(); await read(created); const state = f.state(created);
     assert.equal(state.job().managed.files, undefined);
     await read(await f.fileCall(), 409); assert.equal(f.sent.length, 1);
   });
@@ -118,7 +124,7 @@ test("download-only links and adapters must agree; polling cannot masquerade as 
 
 for (const failure of ["expired-content", "redirect", "mime", "range", "length", "overflow", "interrupted"]) {
   test(`download-only ${failure} leaves the frozen generation charge unchanged and never returns a prefix`, { timeout: 10_000 }, async t => {
-    const f = await setup(t), created = await f.call(), state = f.state(created); await read(created); await state.alarm(); await f.drain();
+    const f = await setup(t), created = await f.create(), state = f.state(created); await read(created); await state.alarm(); await f.drain();
     const before = state.job();
     f.upstream = () => {
       if (failure === "expired-content") return new Response("synthetic expired output", { status: 404 });
@@ -137,11 +143,24 @@ for (const failure of ["expired-content", "redirect", "mime", "range", "length",
 }
 
 test("download-only cancellation interrupts the source reader without replay or generation refund", { timeout: 10_000 }, async t => {
-  const f = await setup(t), created = await f.call(), state = f.state(created); await read(created); await state.alarm(); await f.drain();
+  const f = await setup(t), created = await f.create(), state = f.state(created); await read(created); await state.alarm(); await f.drain();
   const before = state.job(), reached = Promise.withResolvers(), abort = new AbortController(); let canceled = false;
   f.upstream = () => new Response(new ReadableStream({ start(controller) { controller.enqueue(media); reached.resolve(); }, cancel() { canceled = true; } }), { headers: { "content-type": "video/mp4" } });
   const pending = f.fileCall(false, { signal: abort.signal }); await reached.promise; abort.abort();
   const response = await pending; await response.text(); assert.ok([499, 502].includes(response.status));
   assert.equal(canceled, true); assert.equal(f.sent.length, 2); assert.deepEqual(state.job(), before);
   assert.equal((await f.events()).length, 1); assert.equal(bodyBudgetCharged(), 0);
+});
+
+test("download-only credential qualification checks actual content links and retains transport allowlists", { timeout: 10_000 }, async t => {
+  const f = await setup(t), create = f.provider.endpoints.find(endpoint => endpoint.id === "predictions");
+  const requirement = { provider: f.provider, endpoint: create, mode: "http", managedLifecycle: true };
+  const grant = { kind: "api_key" };
+  f.provider.auth.grantTransports.api_key = { allowedEndpoints: ["predictions", "prediction", "prediction_cancel", "content"] };
+  assert.equal(grantSupports(requirement, grant), true, "the mode discriminator is not an endpoint");
+  f.provider.auth.grantTransports.api_key.allowedEndpoints.pop();
+  assert.equal(grantSupports(requirement, grant), false, "the original credential must permit content delivery");
+  delete f.provider.auth.grantTransports.api_key;
+  f.provider.endpoints = f.provider.endpoints.filter(endpoint => endpoint.id !== "content");
+  assert.equal(grantSupports(requirement, null), false, "environment credentials cannot excuse a missing content link");
 });

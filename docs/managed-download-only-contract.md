@@ -23,7 +23,8 @@ The linked content endpoint is GET-only, has no capability or lifecycle of its
 own, and is distinct from the create and lifecycle control endpoints. There is
 no `metadata` link. Existing `{ metadata, download }` declarations retain their
 metadata-before-download behavior; their route digest representation is
-unchanged.
+unchanged. Credential qualification follows only the metadata/download endpoint
+links; the mode discriminator is not an endpoint or an allowlist exemption.
 
 `ManagedFileAdapter` is a discriminated union. The new variant has
 `mode: "download_only"` and no `readState`. All other existing methods keep their
