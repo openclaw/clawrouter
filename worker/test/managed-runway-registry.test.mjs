@@ -4,29 +4,32 @@ import test from "node:test";
 import { managedCreateAdapter, managedLifecycleAdapter } from "../managed-lifecycle-adapters.ts";
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/runway/lifecycle.json", import.meta.url)));
 
-test("Runway selects both native create modes by format, preserving existing protocol registrations", () => {
+test("Runway registers only text creation until original input assets are bound", () => {
   const text = managedCreateAdapter("runway.tasks", "runway.text_video");
-  const image = managedCreateAdapter("runway.tasks", "runway.image_video");
-  assert.ok(text); assert.ok(image); assert.notEqual(text, image);
+  assert.ok(text);
+  assert.equal(managedCreateAdapter("runway.tasks", "runway.image_video"), undefined);
   assert.equal(managedLifecycleAdapter("runway.tasks"), text);
   assert.equal(managedCreateAdapter("runway.tasks", "runway.video_video"), undefined);
   assert.equal(managedCreateAdapter("runway.tasks", "runway.task_get"), undefined);
-  for (const mode of ["text", "image"]) {
+  for (const mode of ["text"]) {
     const adapter = managedCreateAdapter("runway.tasks", "runway." + mode + "_video");
     const value = adapter.prepare(wire[mode].body, new Headers({ "x-runway-version": "caller-value" }), {}, new URLSearchParams());
     assert.deepEqual(value.body, wire[mode].body); assert.equal(value.headers.get("x-runway-version"), wire.version);
     assert.equal(value.headers.has("authorization"), false);
   }
   assert.throws(() => text.prepare(wire.image.body, new Headers(), {}, new URLSearchParams()));
-  assert.throws(() => image.prepare(wire.text.body, new Headers(), {}, new URLSearchParams()));
+  for (const promptImage of ["https://media.example/unowned.png", "data:image/png;base64,AAAA", "runway://foreign-upload"]) {
+    assert.throws(() => text.prepare({ ...wire.text.body, promptImage }, new Headers(), {}, new URLSearchParams()));
+  }
+  assert.throws(() => text.prepare({ ...wire.text.body, model: "gen4_turbo" }, new Headers(), {}, new URLSearchParams()), /invalid_runway_model/);
   for (const protocol of ["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs"]) {
     const adapter = managedLifecycleAdapter(protocol); assert.ok(adapter);
     for (const format of adapter.requestFormats) assert.equal(managedCreateAdapter(protocol, format), adapter);
   }
 });
 
-test("both Runway modes share the exact native identity/version and conservative deletion semantics", async () => {
-  for (const mode of ["text", "image"]) {
+test("registered Runway controls retain native identity/version and conservative deletion semantics", async () => {
+  for (const mode of ["text"]) {
     const adapter = managedCreateAdapter("runway.tasks", "runway." + mode + "_video"), id = wire.created.id;
     const context = { action: "cancel", expectedId: id, requestedVersion: wire[mode].body.model, pathParams: {} };
     assert.equal(adapter.identify("retrieve", { id }, new URLSearchParams()), id);

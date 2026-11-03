@@ -12,7 +12,7 @@ import { vydraManagedAdapter } from "./managed-vydra.ts";
 
 const adapters: readonly ManagedLifecycleAdapter[] = [
   replicateManagedAdapter, falManagedAdapter, kieManagedAdapter, vydraManagedAdapter, togetherManagedAdapter, googleOmniManagedAdapter,
-  openRouterVideoManagedAdapter, wanManagedAdapter, createPixVerseManagedAdapter("text"), createRunwayManagedAdapter("text"), createRunwayManagedAdapter("image"),
+  openRouterVideoManagedAdapter, wanManagedAdapter, createPixVerseManagedAdapter("text"), createRunwayManagedAdapter("text"),
 ];
 
 // A lifecycle declaration alone never activates an unknown protocol or format.
