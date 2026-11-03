@@ -2398,6 +2398,18 @@
         }
       }
     },
+    "deepSeekSearchRequestPricing": {
+      "type": "object",
+      "required": ["unit", "protocol", "version", "effectiveAt", "source", "successfulNonemptyRequestMicros", "emptyRequestMicros"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "request" }, "protocol": { "const": "deepseek.search" },
+        "version": { "type": "string", "pattern": "^[a-zA-Z0-9._:-]{1,128}$" },
+        "effectiveAt": { "const": "2026-11-01T00:00:00+08:00" },
+        "source": { "const": "https://api-docs.deepseek.com/guides/search/" },
+        "successfulNonemptyRequestMicros": { "const": 750 }, "emptyRequestMicros": { "const": 0 }
+      }
+    },
     "requestPricing": {
       "oneOf": [
         { "$ref": "#/$defs/successfulRequestPricing" },
