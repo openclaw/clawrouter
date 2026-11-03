@@ -93,8 +93,11 @@ for (const scenario of ["missing-job", "other-job", "other-caller", "unbound-fil
     if (scenario === "rotated-grant") await putGrantCredentials(f.env, grantKey, { provider: "replicate", kind: "api_key", enabled: true, credential: "synthetic-replacement" });
     if (scenario === "changed-route") f.provider.endpoints.find(endpoint => endpoint.id === "content").path = "/other/${prediction_id}";
     if (scenario === "changed-mode") delete f.provider.endpoints.find(endpoint => endpoint.id === "predictions").lifecycle.files.mode;
-    const response = await f.call(route, null, { headers }); await response.text();
-    assert.ok([400, 403, 404, 409, 503].includes(response.status), String(response.status));
+    const response = await f.call(route, null, { headers }), failure = await response.json();
+    if (scenario === "rotated-grant") {
+      assert.equal(response.status, 502); assert.equal(failure.error.code, "managed_file_unavailable");
+    } else assert.ok([400, 403, 404, 409, 503].includes(response.status), JSON.stringify(failure));
+    assert.doesNotMatch(JSON.stringify(failure), /synthetic-original-key|synthetic-replacement/);
     assert.equal(f.sent.length, 1); assert.equal(bodyBudgetCharged(), 0);
   });
 }
