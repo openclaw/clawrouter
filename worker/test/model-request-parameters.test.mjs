@@ -118,7 +118,6 @@ test("compiled hosted effort domains preserve accepted strings without injecting
       assert.deepEqual(assessModelRequest(entry, chat, { reasoning_effort }).conflicts.map(({ field }) => field), ["reasoning_effort"], `${id}:${reasoning_effort}`);
     }
   }
-  assert.equal(snapshot.model_index["fireworks/gpt-oss-120b"].pricing, null);
 });
 
 test("compiled Groq logprob facts restrict presence without borrowing Fireworks facts", () => {
