@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
+- Declare native Levanto Sage, Liquid AI and TypeSafe decision provider routes with isolated credentials and typed codec fixtures; runtime, catalog and DecisionV2 integration gate activation.
 
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
 
