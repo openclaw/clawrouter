@@ -64,10 +64,11 @@ import {
 type AuthMode = "proxy_key" | "access";
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
-const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits"]);
+const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits", "openrouter.audio_transcription"]);
 const mediaPaths = new Set(["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/chat/completions"]);
 const mediaEnvelope = (endpoint: { request_format: string }) => mediaFormats.has(endpoint.request_format);
-const bodyLimit = (endpoint: { request_format: string }) => mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
+const bodyLimit = (endpoint: { request_format: string }) => endpoint.request_format === "openrouter.audio_transcription"
+  ? 24 * 1024 * 1024 : mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
 // Unified paths admit the media envelope before the model resolves a format.
 const expandedTooLarge = () => errorResponse("request_too_large", `JSON request body exceeds the ${maxJsonBodyBytes} byte limit for this route`, 413);
 
@@ -418,6 +419,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return identityDenial;
   }
   if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
+  if (selection.endpoint.request_format === "openrouter.audio_transcription"
+    && (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(request.headers.get("content-type")?.trim() ?? "")
+      || ![null, "identity"].includes(request.headers.get("content-encoding"))))
+    throw new HttpError(400, "invalid_native_transcription_content_type", "native transcription requires uncompressed UTF-8 JSON");
   validateSelectedInput(selection);
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");

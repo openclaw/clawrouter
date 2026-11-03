@@ -46,6 +46,7 @@
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Add frozen OpenRouter JSON transcription codecs and fixtures with exact inline audio, silent-transcript handling and independent native duration/token/cost observations.
+- Dispatch native OpenRouter JSON transcription with authenticated bounded uploads, original grants, complete output and conservative settlement without treating duration or diagnostic cost as a tariff.
 - Add bounded native OpenRouter transcription response validation with complete JSON delivery, playable audio byte-preservation tests and conservative independent usage; shared ingress, dispatch and actual consumer activation remain separately qualified.
 - Qualify finite OpenRouter JSON transcription declarations with the existing API base, exact model and original Bearer credential, keeping byte bounds separate from unknown upstream prices.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
