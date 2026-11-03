@@ -12,31 +12,6 @@
   gap: 12px;
 }
 
-.usageLayout {
-  grid-template-columns: minmax(0, 1fr) minmax(286px, 318px);
-}
-
-.usageMainPane {
-  min-height: calc(100vh - var(--header-height) - 1px);
-}
-
-.usageMainPane .overviewStrip {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.usageMainPane .tableRow {
-  min-height: 54px;
-}
-
-.usageMainPane .entityTable {
-  overflow-x: auto;
-}
-
-.usageMainPane .tableHead,
-.usageMainPane .tableRow {
-  min-width: 940px;
-}
-
 .auditTime {
   color: var(--muted);
   font-family: var(--font-mono);
@@ -225,10 +200,6 @@
   background: var(--bad);
 }
 
-.usageInspector {
-  gap: 14px;
-}
-
 .attentionGrid {
   display: grid;
   gap: 7px;
@@ -289,104 +260,6 @@
   color: var(--ok);
 }
 
-/* Ranked share readout: each provider gets a copper share bar scaled to the
-   busiest provider, with request numerals and a mono meta line. */
-.providerShareList {
-  display: grid;
-  border-top: 1px solid var(--line);
-}
-
-.providerShare {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  gap: 10px;
-  align-items: start;
-  border-bottom: 1px solid var(--line);
-  padding: 10px 0;
-}
-
-.providerShareMark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-tag);
-  background: var(--surface-raised);
-}
-
-.providerShareMark svg,
-.providerShareMark img {
-  width: 14px;
-  height: 14px;
-}
-
-.providerShareBody {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-}
-
-.providerShareHead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.providerShareHead strong {
-  overflow: hidden;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 560;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.providerShareHead em {
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-
-.providerShareTrack {
-  display: block;
-  height: 5px;
-  overflow: hidden;
-  background: var(--track);
-}
-
-.providerShareTrack > span {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent-hover), var(--accent));
-}
-
-.providerShareMeta {
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.providerShareMeta i {
-  color: var(--warn);
-  font-style: normal;
-  font-weight: 600;
-}
-
-.providerShareList > p {
-  color: var(--muted);
-  font-size: 10px;
-}
-
 .retainedContent {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -406,16 +279,4 @@
   font-size: 11px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-@media (max-width: 1180px) {
-  .usageMainPane {
-    min-height: 0;
-  }
-}
-
-@media (max-width: 980px) {
-  .usageMainPane .overviewStrip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }

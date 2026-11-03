@@ -109,13 +109,6 @@
   font-weight: 440;
 }
 
-.entityIcon {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-  color: var(--faint);
-}
-
 .entityMark {
   display: inline-flex;
   align-items: center;
