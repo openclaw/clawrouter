@@ -57,13 +57,6 @@ test("compiled native image contracts preserve codec paths, selected aliases, se
     });
     const model = snapshot.model_index[`xai/${request.model}`];
     assert.equal(model.pricing, null);
-    const estimate = estimateCost(model, request.body, null, "image.generate", endpoint);
-    assert.throws(() => validateBudgetReservation("image.generate", estimate, 1_000_000), error => error.code === "pricing_required", "generic admission cannot activate an unsupported tariff");
-    for (const fixed of [0, 50_000]) {
-      const explicit = estimateCost(model, request.body, fixed, "image.generate", endpoint);
-      assert.equal(explicit.basis, "policy_fixed"); assert.equal(explicit.reserveMicros, fixed);
-      assert.equal(validateBudgetReservation("image.generate", explicit, 1_000_000), true);
-    }
   }
   const baseline = compile(original);
   for (const endpoint of baseline.providers[0].endpoints.filter(row => !contracts.some(([id]) => row.id === id))) assert.deepEqual(provider.endpoints.find(value => value.id === endpoint.id), endpoint);
@@ -151,5 +144,17 @@ test("compiler freezes published per-image rates and alias semantics while prese
     p => { p.rates["grok-imagine-image-quality"] = p.rates["grok-imagine-image-2.0"]; },
   ]) { const manifest = fixture(); change(manifest.endpoints.images_edits.requestPricing); assert.throws(() => compile(manifest), /invalid manifest/); }
   const unpriced = fixture(); for (const [id] of contracts) delete unpriced.endpoints[id].requestPricing;
-  assert.ok(compile(unpriced).providers[0].endpoints.filter(endpoint => endpoint.response_format === "xai.images").every(endpoint => endpoint.requestPricing === undefined));
+  const provider = compile(unpriced).providers[0];
+  for (const [id, , mode] of contracts) {
+    const endpoint = provider.endpoints.find(row => row.id === id), request = prepare(mode);
+    const model = provider.models.find(row => row.upstream === request.model);
+    assert.equal(endpoint.requestPricing, undefined);
+    const estimate = estimateCost(model, request.body, null, "image.generate", endpoint);
+    assert.throws(() => validateBudgetReservation("image.generate", estimate, 1_000_000), error => error.code === "pricing_required");
+    for (const fixed of [0, 50_000]) {
+      const explicit = estimateCost(model, request.body, fixed, "image.generate", endpoint);
+      assert.equal(explicit.basis, "policy_fixed"); assert.equal(explicit.reserveMicros, fixed);
+      assert.equal(validateBudgetReservation("image.generate", explicit, 1_000_000), true);
+    }
+  }
 });
