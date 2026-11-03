@@ -71,7 +71,8 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
   if (rawRoute) {
     if (endpoint.method !== "POST" || endpoint.path !== "/v1/listen" || endpoint.response_format !== "deepgram.prerecorded"
       || endpoint.path_params.length || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.streaming || endpoint.websocket
-      || endpoint.modelPassthrough || Object.keys(endpoint.query).length) throw new HttpError(400, "transcription_route_unsupported", "raw transcription requires a qualified synchronous native route");
+      || endpoint.modelPassthrough || Object.keys(endpoint.query).length
+      || !provider.capabilities.some(item => item.id === "audio.transcription" && item.endpoint === endpoint.id && item.methods.includes("POST"))) throw new HttpError(400, "transcription_route_unsupported", "raw transcription requires a qualified synchronous native route");
     const { deepgramAudioLimit, prepareDeepgramPrerecorded } = await import("./deepgram-prerecorded.ts");
     const bytes = await readBinaryUpload(request, deepgramAudioLimit);
     let prepared;

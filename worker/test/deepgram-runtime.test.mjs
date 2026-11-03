@@ -97,6 +97,18 @@ for (const cause of ["deadline", "cancel"]) test("raw upload " + cause + " stops
   assert.equal(response.status, cause === "deadline" ? 408 : 400); assert.equal(canceled, 1); assert.equal(f.admissions.length, 1); assert.equal(f.events.length, 0);
 });
 
+for (const scenario of ["capability", "stream", "lifecycle", "query", "passthrough"]) test("raw format requires a qualified synchronous declaration: " + scenario, async t => {
+  const f = fixture(t);
+  if (scenario === "capability") f.provider.capabilities = [{ id: "audio.other", endpoint: "listen", methods: ["POST"] }];
+  if (scenario === "stream") f.endpoint.streaming = "sse";
+  if (scenario === "lifecycle") f.endpoint.lifecycle = { protocol: "replicate.predictions", retrieve: "listen" };
+  if (scenario === "query") f.endpoint.query = { callback: "https://callback.example" };
+  if (scenario === "passthrough") f.endpoint.modelPassthrough = {};
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("unqualified route escaped"); });
+  const response = await f.call(); assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "transcription_route_unsupported");
+  assert.equal(upstream.mock.callCount(), 0); assert.equal(f.events.length, 0);
+});
+
 for (const scenario of ["model-missing", "model-denied", "policy-revoked", "credential-revoked", "grant-denied"]) test("raw upload re-admission closes " + scenario + " before egress", async t => {
   const f = fixture(t); if (scenario === "model-missing") f.provider.models = [];
   f.editAuthority(value => {
