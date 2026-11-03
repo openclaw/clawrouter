@@ -44,12 +44,12 @@ for (const stream of [false, true]) for (const manifest of [false, true]) test(`
   const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].cost_basis, "policy_fixed");
 });
 
-test("explicit audio formats stay closed until their actual native wrappers are wired", async t => {
+test("unqualified explicit audio selections cannot bypass their native wrapper guards", async t => {
   const f = await setup(t), base = f.provider.endpoints.find(value => value.id === "generate_content");
   for (const format of ["google.music_generate", "google.speech_generate_content", "google.speech_interactions"]) {
     const selection = { provider: f.provider, endpoint: { ...base, request_format: format }, model: f.model,
       body: original, method: "POST", capability: "audio.generate", pathParams: { model: f.model.upstream } };
-    assert.throws(() => validateSelectedInput(selection), error => error.code === "native_audio_route_required");
+    assert.throws(() => validateSelectedInput(selection), error => error.code === (format === "google.music_generate" ? "invalid_native_google_music_route" : "native_audio_route_required"));
     assert.equal(selection.nativeResponse, undefined);
   }
   assert.equal(f.sent.length, 0);
