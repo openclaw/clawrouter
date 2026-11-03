@@ -43,8 +43,8 @@ async function fixture(t, options = {}) {
   snapshot.providers = original.map(row => row.id === provider.id ? provider : row);
   t.after(() => { snapshot.providers = original; });
   const policy = { enabled: true, generation: "v1", providers: ["xai"], models: null, tenantId: "fixture",
-    monthlyBudgetMicros: options.limit ?? 2000000, requestCostMicros: options.fixed ?? null, retainRequestContent: false };
-  const records = new Map(), events = [], pending = [], sent = [], ledgerNames = new Set();
+    monthlyBudgetMicros: options.limit ?? 2000000, ...(options.soft ? { budgetMode: "soft" } : {}), requestCostMicros: options.fixed ?? null, retainRequestContent: false };
+  const records = new Map(), events = [], pending = [], sent = [], charges = [], ledgerNames = new Set();
   const budgets = sqlBudgetNamespace(t);
   const env = { XAI_API_KEY: "synthetic-upstream-key", POLICY_KV: {
     async get(key, type) {
@@ -54,7 +54,15 @@ async function fixture(t, options = {}) {
     async put(key, value) { records.set(key, JSON.parse(value)); },
     async list() { return { keys: [], list_complete: true }; },
   }, USAGE_QUEUE: { send: async event => events.push(event) }, BUDGET_LEDGER: {
-    idFromName: name => name, get(name) { ledgerNames.add(name); return budgets.get(name); },
+    idFromName: name => name, get(name) {
+      ledgerNames.add(name);
+      return { fetch(url, init) {
+        const path = new URL(url).pathname;
+        if (options.soft && path === "/status") return Promise.resolve(Response.json({ spentMicros: policy.monthlyBudgetMicros }));
+        if (path === "/charge") charges.push(JSON.parse(init.body));
+        return budgets.get(name).fetch(url, init);
+      } };
+    },
   } };
   const authority = createGrantAuthority(undefined, env), continuations = continuationAuthority(t, env);
   env.ACCESS_CONTROL = { idFromName: name => name, get: name => name.startsWith("http-continuations:") ? continuations.get(name) : authority };
@@ -65,7 +73,7 @@ async function fixture(t, options = {}) {
   t.mock.method(globalThis, "fetch", async (url, init) => {
     sent.push({ url: String(url), headers: new Headers(init.headers), body: await new Response(init.body).json(), redirect: init.redirect });
     const rows = [...ledgerNames].flatMap(name => budgets.get(name).reservations());
-    if (options.fixed === undefined) assert.ok(rows.some(row => row.reserved_micros > 50000), "inference plus outcome fee must be reserved before fetch");
+    if (options.fixed === undefined && !options.soft) assert.ok(rows.some(row => row.reserved_micros > 50000), "inference plus outcome fee must be reserved before fetch");
     options.dispatched?.(provider);
     return options.fetch ? options.fetch(url, init) : Response.json(options.response ?? receipt(), { status: options.status ?? 200 });
   });
@@ -75,7 +83,7 @@ async function fixture(t, options = {}) {
       body: JSON.stringify(native ? body : { body }),
     }), env, { waitUntil: promise => pending.push(promise) });
   t.after(async () => { await Promise.all(pending); });
-  return { request, sent, events, pending, endpoint, model, provider,
+  return { request, sent, events, pending, endpoint, model, provider, charges,
     catalog: () => worker.fetch(new Request("https://router.example/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-tariff-synthetic-tariff" } }), env, { waitUntil: promise => pending.push(promise) }), rows: () => [...ledgerNames].flatMap(name => budgets.get(name).reservations()) };
 }
 
@@ -298,4 +306,16 @@ test("successful-request selection freezes one native price and rejects cheap ma
   endpoint.requestPricing.parameterRates.rates.fast = 999;
   assert.equal(selected.micros, 1000);
   assert.throws(() => selectRequestTariff({ ...endpoint, streaming: "sse" }, {}), error => error.code === "request_tariff_unqualified");
+});
+
+
+test("a soft-budget denial after dispatch retains the original uncertainty charge exactly once", async t => {
+  const f = await fixture(t, { soft: true });
+  const response = await f.request(); assert.equal(response.status, 402, await response.clone().text());
+  await response.arrayBuffer(); await Promise.all(f.pending);
+  assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1); assert.equal(f.charges.length, 1);
+  assert.equal(f.events[0].cost_basis, "manifest_request_reservation");
+  assert.ok(f.events[0].actual_cost_micros > 50000);
+  assert.equal(f.charges[0].amountMicros, f.events[0].actual_cost_micros);
+  assert.equal(f.events[0].reserved_cost_micros, 0, "soft accounting does not claim a hard hold");
 });

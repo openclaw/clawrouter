@@ -614,7 +614,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (soft?.denial) {
       operation.stop("upstream", soft.denial);
       void response?.body?.cancel().catch(() => undefined);
-      accounting.fail(402, "denied", undefined, content, !!cost.requestTariff && dispatched);
+      accounting.fail(402, "denied", cost.requestTariff ? reservation : undefined, content, !!cost.requestTariff && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
     operation.stop("upstream", error);
