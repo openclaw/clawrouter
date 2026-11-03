@@ -9,10 +9,10 @@ const adapter = managedFileAdapter(fixture.protocol), file = fixture.descriptor,
 const observation = body => ({ id: body.id, nativeStatus: body.status, terminal: "succeeded", body });
 const withUri = uri => { const body = structuredClone(wire.completed); body.steps[2].content[0].uri = uri; return body; };
 
-test("the factory supplies only the qualified file protocol without enabling a live lifecycle route", () => {
+test("the registered lifecycle supplies only the qualified file protocol", () => {
   assert.equal(adapter.protocol, "google.omni_video");
   assert.equal(managedFileAdapter("google.veo"), undefined);
-  assert.equal(managedLifecycleAdapter("google.omni_video"), undefined);
+  assert.equal(managedLifecycleAdapter("google.omni_video").files, adapter);
   assert.equal(fixture.qualification.rawIdAuthorizesAccess, false);
 });
 

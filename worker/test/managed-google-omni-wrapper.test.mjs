@@ -7,9 +7,9 @@ import { managedLifecycleAdapter } from "../managed-lifecycle-adapters.ts";
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/google-omni/video.json", import.meta.url)));
 const params = (background, store) => ({ background: String(background), store: String(store) });
 
-test("actual optional files contract attaches the source factory without activating the registry", () => {
+test("registered Omni wrapper attaches the actual file factory and retained control flags", () => {
   assert.equal(adapter.files, managedFileAdapter("google.omni_video"));
-  assert.equal(managedLifecycleAdapter("google.omni_video"), undefined);
+  assert.equal(managedLifecycleAdapter("google.omni_video"), adapter);
   assert.deepEqual(adapter.retainedParams, ["background", "store"]);
   assert.deepEqual(adapter.allowedControls(params(false, false)), []);
   assert.deepEqual(adapter.allowedControls(params(false, true)), ["retrieve"]);
