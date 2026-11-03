@@ -5,10 +5,12 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { snapshot } = await import("../providers.ts");
 const { sha256Hex } = await import("../utils.ts");
+const { putGrantCredentials } = await import("../grant-credentials.ts");
 
 // Compile this source manifest independently of the serialized shared snapshot.
 const { providers: [meta] } = JSON.parse(execFileSync(process.execPath,
@@ -149,14 +151,18 @@ test("Meta streaming disconnect cancels transport without claiming upstream exec
 
 test("Meta model discovery preserves the OpenAI envelope and filters the caller's model scope", async t => {
   const f = await fixture(t, [`meta/${model}`]);
+  attachGrantCredentialNamespace(f.env, { useExistingAuthority: true });
+  await putGrantCredentials(f.env, "oauth/paid/meta", { provider: "meta", kind: "api_key", enabled: true, credential: "synthetic-meta-grant" });
   f.reply = request => {
     assert.equal(request.url, "https://api.meta.ai/v1/models");
-    assert.equal(request.headers.get("authorization"), "Bearer synthetic-meta-key");
+    assert.equal(request.headers.get("authorization"), "Bearer synthetic-meta-grant");
     return Response.json({ object: "list", data: [{ id: model, object: "model" }, { id: "muse-spark-1.3-contributor", object: "model" }] });
   };
   const r = await f.call("/v1/native/meta/models"); assert.equal(r.status, 200, await r.clone().text());
   assert.deepEqual(await r.json(), { object: "list", data: [{ id: model, object: "model" }] });
-  await f.drain(); assert.equal(f.env.BUDGET_LEDGER.get("fixture:paid").reservations().length, 0);
+  await f.drain();
+  for (const reservation of f.env.BUDGET_LEDGER.get("fixture:paid").reservations()) assert.equal(reservation.reserved_micros, 0);
+  const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(event.actual_cost_micros, 0);
 });
 
 test("Meta response controls require an owned create and preserve the original endpoint and key", async t => {
