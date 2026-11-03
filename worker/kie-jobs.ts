@@ -1,6 +1,9 @@
 import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.ts";
 import { kieKlingModels, prepareKieKlingWire } from "./kie-kling.ts";
 import { kieGrokModels, prepareKieGrokWire } from "./kie-grok.ts";
+import { kieWanModels, prepareKieWanWire } from "./kie-wan.ts";
+import { kieHailuoModels, prepareKieHailuoWire } from "./kie-hailuo.ts";
+import { KIE_SEEDANCE_FROZEN_MODEL } from "./kie-seedance.ts";
 
 export const KIE_JOB_ORIGIN = "https://api.kie.ai";
 export const KIE_CREATE_TASK_PATH = "/api/v1/jobs/createTask";
@@ -34,11 +37,24 @@ export function prepareKieTask(body: unknown): { body: Record<string, unknown>; 
     throw new Error("invalid_kie_create");
   }
   if (Object.hasOwn(body, "callBackUrl")) throw new Error("kie_polling_only");
+  // A redirecting product page does not qualify the old model or authorize an
+  // alias. Keep original-job retrieval independent of this create-only denial.
+  if (body.model === KIE_SEEDANCE_FROZEN_MODEL) throw new Error("kie_seedance_native_contract_unqualified");
   if (body.model === kieKlingModels[1]) throw new Error("kie_image_binding_required");
   if (body.model === kieKlingModels[0]) return prepareKieKlingTask(body);
   if (body.model === kieGrokModels[1]) throw new Error("kie_image_binding_required");
   if (body.model === kieGrokModels[0]) {
     const prepared = prepareKieGrokWire(body);
+    return { body: prepared.body, model: prepared.model };
+  }
+  if (body.model === kieWanModels[1]) throw new Error("kie_image_binding_required");
+  if (body.model === kieWanModels[0]) {
+    const prepared = prepareKieWanWire(body);
+    return { body: prepared.body, model: prepared.model };
+  }
+  if ((kieHailuoModels as readonly string[]).includes(body.model)) {
+    const prepared = prepareKieHailuoWire(body);
+    if (prepared.mode === "image") throw new Error("kie_image_binding_required");
     return { body: prepared.body, model: prepared.model };
   }
   return { body, model: body.model };

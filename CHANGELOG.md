@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
+- Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
+
+- Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.
 
 - Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.
 - Recognize fal’s canonical FAL_KEY binding for native Key authentication, preserving original managed-job credentials and rejecting malformed values without exposing them.
@@ -64,6 +67,7 @@
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
+- Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
 
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
 - Register Together video with the existing scoped media controller, validating original-origin dispatch and complete native responses while keeping unsupported cancellation and unknown upstream costs closed.
@@ -77,6 +81,7 @@
 
 
 - Add bounded Kie Market job helpers and executable wire/result fixtures that reject HTTP-200 API errors, preserve partial-job state and keep credit usage distinct from dollar settlement. Runtime activation remains separately qualified.
+- Validate the frozen Kie Wan 2.6 native text/image wire contracts, enforcing explicit text resolution and native string duration while keeping unbound image dispatch and unknown upstream costs closed.
 - Validate frozen Kie Kling 2.6 text inputs in the registered job adapter, preserve native sound/duration semantics and keep image execution closed pending original-credential asset binding.
 - Add a bounded Wan video lifecycle adapter and synthetic native fixtures, preserving model-specific inputs, regional credential boundaries and expired observations. Shared durable route activation remains separately qualified.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
@@ -85,6 +90,7 @@
 - Qualify the explicit four-segment fal submit template and shared owner/app control links against native HeyGen and Seedance fixtures; retain exact product admission, original credentials and unknown-cost boundaries.
 - Qualify the three native xAI video create formats and shared original-job retrieve link; reject unbound controls, credential overrides and fabricated token prices before activation.
 - Validate the model-less Gradium native unary speech declaration, preserving original API-key routing and native settings while rejecting format aliases and invented tariffs before activation.
+- Qualify Baseten SystemOne decision metadata and exact native endpoint links for the three frozen models, preserving option/question usage bounds and separation from Chat and unqualified tariffs.
 - Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
@@ -245,6 +251,8 @@
 
 - Verify actual OpenClaw memory embedding batch ordering, credential refresh and usage through workerd for concrete OpenAI-format models. Native embedding formats and deployment placeholders remain separately qualified.
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
+- Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
+- Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
 
 ## 0.5.0 - 2026-10-22
 
