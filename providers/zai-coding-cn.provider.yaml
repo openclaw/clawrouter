@@ -1,0 +1,50 @@
+# Frozen endpoint variants and model dispositions: docs/zai-regional-contracts.md.
+# Primary endpoint checked 2026-11-03; no standard API or cross-region key fallback.
+schema: clawrouter.service-provider.v1
+id: zai-coding-cn
+displayName: Z.AI Coding Plan (China)
+status: experimental
+class: openai_compatible
+service:
+  platform: zai
+  kind: model_provider
+  upstreamService: zai-coding-cn
+  configKeys: [ZAI_CODING_CN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://open.bigmodel.cn/api/coding/paas/v4
+routing:
+  nativePrefixes: [clawrouter-zai-coding-cn, zai-coding-cn]
+  modelPrefixes: [zai-coding-cn/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: zai-coding-cn/glm-5.3
+      upstream: glm-5.3
+      capabilities: [llm.chat]
+    - id: zai-coding-cn/glm-5.3-flash
+      upstream: glm-5.3-flash
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
