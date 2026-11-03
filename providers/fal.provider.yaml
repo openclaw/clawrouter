@@ -12,7 +12,7 @@ service:
   configKeys: [FAL_KEY]
 auth:
   schemes:
-    - type: api_key
+    - type: bearer
       header: Authorization
       format: "Key ${secret}"
       secretKind: api_key

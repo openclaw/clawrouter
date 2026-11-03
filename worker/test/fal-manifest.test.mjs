@@ -18,7 +18,7 @@ test("fal declaration selects the actual managed registry without publishing raw
   assert.deepEqual(Object.keys(resolved.controls).sort(), ["cancel", "result", "retrieve"]);
   assert.equal(provider.base_urls.default, "https://queue.fal.run");
   assert.deepEqual(source.service.configKeys, ["FAL_KEY"]);
-  assert.deepEqual(source.auth.schemes, [{ type: "api_key", header: "Authorization", format: "Key ${secret}", secretKind: "api_key" }]);
+  assert.deepEqual(source.auth.schemes, [{ type: "bearer", header: "Authorization", format: "Key ${secret}", secretKind: "api_key" }]);
   assert.deepEqual(Object.keys(snapshot.capability_index), ["media.predict"]);
   assert.deepEqual(snapshot.model_index, {});
   assert.equal(source.pricing, undefined); assert.equal(source.requestPricing, undefined);
