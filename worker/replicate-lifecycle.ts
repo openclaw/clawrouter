@@ -1,5 +1,8 @@
+import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.ts";
+
 // Protocol helpers only. The runtime owns admission, scoped binding and settlement.
 export const REPLICATE_MAX_PREDICTION_BYTES = 1024 * 1024;
+const parseEnvelope = createJobEnvelopeParser(REPLICATE_MAX_PREDICTION_BYTES, "replicate_prediction_too_large", "invalid_replicate_prediction");
 export const REPLICATE_MAX_CANCEL_AFTER_SECONDS = 600;
 export const REPLICATE_OBSERVATION_WINDOW_SECONDS = 3600;
 
@@ -23,10 +26,6 @@ export interface ReplicatePrediction {
   // Transient response content: never persist this in the job or receipt.
   body: Record<string, unknown>;
   observation: ReplicateObservation;
-}
-
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function validateReplicatePredictionId(value: unknown): string {
@@ -89,17 +88,7 @@ export function prepareReplicateCreate(body: unknown, callerHeaders = new Header
 }
 
 export function parseReplicatePrediction(text: string, expectedId?: string): ReplicatePrediction {
-  if (text.length > REPLICATE_MAX_PREDICTION_BYTES
-    || new TextEncoder().encode(text).byteLength > REPLICATE_MAX_PREDICTION_BYTES) {
-    throw new Error("replicate_prediction_too_large");
-  }
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    throw new Error("invalid_replicate_prediction");
-  }
-  if (!record(body)) throw new Error("invalid_replicate_prediction");
+  const body = parseEnvelope(text);
   const id = validateReplicatePredictionId(body.id);
   if (expectedId !== undefined && id !== validateReplicatePredictionId(expectedId)) {
     throw new Error("replicate_prediction_id_mismatch");
