@@ -25,13 +25,13 @@ export function proxyAdmission(identity: AuthorizedIdentity): AdmissionResult | 
 export function proxySessionHash(identity: AuthorizedIdentity): string | undefined { return sessionHashes.get(identity); }
 export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
-export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection): Promise<AuthorizedIdentity | Response> {
+export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached"): Promise<AuthorizedIdentity | Response> {
   const admissionStart = performance.now();
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
   const secretSha256 = await sha256Hex(parsed.secret);
   const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
-  const { admission, cache } = await resolveAdmission(env, { credentialId: parsed.kid, secretSha256, providers, allConnections, selection: selection ? { ...selection, sessionHash } : undefined });
+  const { admission, cache } = await resolveAdmission(env, { credentialId: parsed.kid, secretSha256, providers, allConnections, selection: selection ? { ...selection, sessionHash } : undefined }, freshness);
   const credentialEntry = admission.credential;
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
   if (!safeEqual(secretSha256, credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);

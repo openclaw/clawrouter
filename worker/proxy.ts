@@ -4,6 +4,7 @@ import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-sessio
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
 import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
+import { nativeRawFormat, readNativeRawInput } from "./native-raw-input.ts";
 import { GoogleContinuation, googleContinuationRequested, googleContinuationRoute } from "./google-continuation.ts";
 import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
@@ -59,7 +60,7 @@ import {
 } from "./providers";
 import { assertOperationConfiguration, grantSupports } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
-import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
   errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
@@ -277,6 +278,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
+  if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, mode, provider, endpoint);
   let preauthenticated: AuthorizedIdentity | Response | null = null;
   const fileControls = responsesFileControls(provider, endpoint);
   if (fileControls.length) {
@@ -350,6 +352,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint || !endpoint.native_proxy) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
+  if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, "proxy_key", provider, endpoint);
   const controlEndpoints = matching.filter(candidate => candidate.native_proxy && candidate.methods.includes(method));
   const fileControls = controlEndpoints.flatMap(candidate => responsesFileControls(provider, candidate).map(control => ({ ...control, endpoint: candidate, pathParams: nativeParams(candidate, match[2]) })));
   if (fileControls.length) {
@@ -414,6 +417,22 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     if (preauthenticated instanceof Response) return preauthenticated;
     return await proxySelected(request, env, context, "proxy_key", selection, isModelDiscovery(endpoint) ? discoveryQuery(new URL(request.url).searchParams) : new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
   } finally { admission.finish(context); }
+}
+
+async function proxyNativeRaw(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, provider: CompiledProvider, endpoint: CompiledEndpoint): Promise<Response> {
+  const initial = await preauthenticate(request, env, mode, provider.id);
+  if (initial instanceof Response) return initial;
+  if (!initial) throw new HttpError(401, "invalid_proxy_key", "native upload requires an authenticated caller");
+  const selection: ProxySelection = { provider, endpoint, model: null, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id,
+    body: {}, pathParams: {}, method: request.method };
+  assertPolicyModel(initial.policy, selection);
+  await assertProviderAccess(provider, initial, env);
+  await readNativeRawInput(request, selection);
+  const fresh = await preauthenticate(request, env, mode, provider.id, undefined, selection, "authoritative");
+  if (fresh instanceof Response) return fresh;
+  if (!fresh || initial.credentialId !== fresh.credentialId || initial.principalId !== fresh.principalId || initial.policyId !== fresh.policyId
+    || initial.policy.tenantId !== fresh.policy.tenantId) throw new HttpError(403, "native_upload_owner_changed", "upload caller ownership changed before dispatch");
+  return proxySelected(request, env, context, mode, selection, {}, fresh);
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
@@ -771,7 +790,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -887,7 +906,7 @@ async function auditSelectionFailure(request: Request, env: Env, context: Execut
   createProxyAccounting({ context, env, auth, selection, request, compound }).fail(statusCode, status);
 }
 
-async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement, selection?: ProxySelection): Promise<AuthorizedIdentity | Response | null> {
+async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement, selection?: ProxySelection, freshness: "cached" | "authoritative" = "cached"): Promise<AuthorizedIdentity | Response | null> {
   if (mode === "proxy_key") {
     // Continuations select their recorded owner later. Invalid operations must
     // retain their existing error precedence without incrementing counters.
@@ -898,7 +917,7 @@ async function preauthenticate(request: Request, env: Env, mode: AuthMode, provi
       if (selection && googleContinuationRequested(selection)) selection = undefined;
     }
     const provider = providerId ? providerById(providerId) : null;
-    return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId, selection ? { providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "http", model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null, capability: selection.capability } : undefined);
+    return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId, selection ? { providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "http", model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null, capability: selection.capability } : undefined, freshness);
   }
   return providerId ? accessIdentity(request, env, providerId, requirement) : null;
 }
