@@ -67,8 +67,10 @@ for (const format of ["wav", "opus"]) for (const manifest of [false, true]) for 
     assert.equal(request.headers.get("authorization"), null);
     assert.equal(request.headers.get("x-api-key"), pooled ? "synthetic-original-key" : "synthetic-gradium-environment-key");
     assert.equal(f.dispatched.capacity, capacity, "binary capacity precedes fetch");
-    assert.ok(f.dispatched.paths.includes("/dispatch"), "dispatch acknowledgment precedes fetch");
-    assert.ok(f.dispatched.rows.length > 0 && f.dispatched.rows.every(row => row.reserved_micros === 700));
+    assert.equal(f.dispatched.paths.filter(path => path === "/reserve").length, 2);
+    assert.equal(f.dispatched.rows.length, 2);
+    assert.ok(f.dispatched.rows.every(row => row.dispatch_started === 1 && row.settled === 0 && row.reserved_micros === 700),
+      "combined reserve/dispatch acknowledgment precedes fetch");
     const event = await settled(f); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.model, null);
     assert.equal(event.provider, "gradium"); assert.equal(event.capability, "audio.speech");
     assert.equal(f.budgetCalls.filter(call => call.path === "/reserve").length, 2);
@@ -150,11 +152,24 @@ test("Gradium shared capacity denial is known-unsent and releases the fixed rese
   await settled(f, 0); assert.equal(f.sent.length, 0);
 });
 
-test("Gradium dispatch-ack loss cannot turn a reservation into an upstream attempt", { timeout: 10_000 }, async t => {
+test("Gradium missing dispatch acknowledgments cannot turn a reservation into an upstream attempt", { timeout: 10_000 }, async t => {
   const f = await setup(t), ledger = f.env.BUDGET_LEDGER;
-  f.env.BUDGET_LEDGER = { idFromName: name => name, get: name => ({ fetch(url, init) {
-    return new URL(url).pathname === "/dispatch" ? Response.json({ error: "synthetic lost dispatch ACK" }, { status: 503 }) : ledger.get(name).fetch(url, init);
+  let combined = 0, fallback = 0;
+  f.env.BUDGET_LEDGER = { idFromName: name => name, get: name => ({ async fetch(url, init) {
+    const path = new URL(url).pathname;
+    if (path === "/dispatch") {
+      fallback++;
+      return Response.json({ error: "synthetic lost dispatch ACK" }, { status: 503 });
+    }
+    const response = await ledger.get(name).fetch(url, init);
+    if (path !== "/reserve") return response;
+    if (JSON.parse(init.body).dispatched === true) combined++;
+    // The reserve receipt survives but its dispatch acknowledgment does not.
+    // The existing fallback must obtain that acknowledgment before paid egress.
+    const receipt = await response.json(); delete receipt.dispatched;
+    return Response.json(receipt, { status: response.status });
   } }) };
   assert.equal((await error(await f.request(), 503)).code, "accounting_unavailable");
   await settled(f, 0); assert.equal(f.sent.length, 0);
+  assert.equal(combined, 2); assert.equal(fallback, 2);
 });
