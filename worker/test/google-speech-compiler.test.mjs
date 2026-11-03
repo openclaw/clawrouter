@@ -18,12 +18,14 @@ test.beforeEach(t => t.mock.method(Date, "now", () => now));
 function fixture() {
   const manifest = structuredClone(existing);
   for (const [id, interactions] of [["speech_generate_content", false], ["speech_interactions", true]]) {
-    manifest.capabilities.push({ id: "audio.speech", endpoint: id, methods: ["POST"] });
-    manifest.endpoints[id] = { method: "POST", path: interactions ? "/v1beta/interactions" : "/v1beta/models/${model}:generateContent",
+    if (!manifest.capabilities.some(value => value.id === "audio.speech" && value.endpoint === id))
+      manifest.capabilities.push({ id: "audio.speech", endpoint: id, methods: ["POST"] });
+    manifest.endpoints[id] ??= { method: "POST", path: interactions ? "/v1beta/interactions" : "/v1beta/models/${model}:generateContent",
       pathParams: interactions ? [] : ["model"], requestFormat: `google.${id}`, responseFormat: `google.${id}`,
       ...(interactions ? { nativeProxy: false } : {}) };
   }
-  for (const upstream of ids) manifest.models.entries.push({ id: `google/${upstream}`, upstream, capabilities: ["audio.speech"] });
+  for (const upstream of ids) if (!manifest.models.entries.some(value => value.id === `google/${upstream}`))
+    manifest.models.entries.push({ id: `google/${upstream}`, upstream, capabilities: ["audio.speech"] });
   return manifest;
 }
 function selection(provider, model, endpoint) {

@@ -281,6 +281,7 @@
 - Dispatch qualified Google unary speech through its complete-response wrapper, preserving original credentials, transport-specific model eligibility, preview expiry and conservative audio settlement.
 - Reuse shared Google output-audio classification in pricing and keep both native speech formats unpriced at admission and settlement, preserving policy-fixed charges and frozen preview qualification.
 - Qualify the frozen Google speech declaration formats and unpriced model identities, preserving shared transport/expiry eligibility and keeping ambiguous native Interactions discovery closed.
+- Declare the five frozen Google unary speech models on their qualified GenerateContent or manifest-only Interactions routes, retaining preview expiry and unknown audio-dollar costs.
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
 - Add the native Lyria response wrapper with explicit audio MIME, complete MP3/WAV framing, bounded delivery and thought exclusion; shared music routing and cost admission remain separately qualified.
 - Keep explicit native Lyria music unpriced at admission and settlement, rejecting borrowed token/image tariffs under hard-dollar budgets while preserving separately labeled policy charges.
