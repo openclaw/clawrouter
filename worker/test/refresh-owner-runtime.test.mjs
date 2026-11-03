@@ -18,7 +18,7 @@ const router = `
   import { sha256Hex } from "./worker/utils.ts";
   import { providerById } from "./worker/providers.ts";
   providerById("anthropic").auth.authorization = { authorizeUrl: "https://fixture/authorize", tokenUrl: "https://fixture/token", clientId: "fixture-client", grantKind: "subscription", scopes: ["inference"], extraAuthorizeParams: {}, extraTokenParams: {}, accountIdJsonPointer: null, subscriptionPlanJsonPointer: null };
-  let clock = ${now}; Date.now = () => clock;
+  let clock = ${now}, reconnectStarted = false; Date.now = () => clock;
   export class GrantCredentialObject extends Owner {
     constructor(state, env) {
       const storage = new Proxy(state.storage, { get(target, name) {
@@ -52,6 +52,8 @@ const router = `
     if (path === "/fixture/json-legacy") { const { corrupt } = await request.json(); await env.POLICY_KV.put("oauth/legacy/json", corrupt ? "{broken" : JSON.stringify({ provider: "anthropic", kind: "subscription", accessToken: "fixture-legacy-access", refreshToken: "fixture-legacy-refresh" })); return new Response("ok"); }
     if (path === "/fixture/raw-legacy") { await env.POLICY_KV.put("oauth/legacy/raw", "fixture-raw-access"); return new Response("ok"); }
     if (path === "/fixture/provider") return fetch("https://fixture/control", request);
+    if (path === "/fixture/reconnect-started") return Response.json(reconnectStarted);
+    if (path === "/v1/admin/upstream-grants/policies/pool/claude" && request.method === "PUT" && new URL(request.url).searchParams.get("mode") === "replace") reconnectStarted = true;
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
     if (path === "/fixture/fail-write") { await env.POLICY_KV.put("fixture/fail-write", "yes"); return new Response("ok"); }
     if (path === "/fixture/clear-index") return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("clawrouter:refresh-ownership:v1")).fetch(request);
@@ -59,35 +61,52 @@ const router = `
     return handler.fetch(request, env, ctx);
   }};
 `;
+// A Durable Object keeps held egress alive across separate control requests.
 const upstream = `
-  let config = {}, calls = 0;
-  export default { async fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/control") { if (request.method === "POST") { config = await request.json(); calls = 0; } return Response.json({ calls }); }
-    if (!path.endsWith("/token")) return config.quota401 ? new Response(null, { status: 401 }) : Response.json({});
-    calls++;
-    if (config.delay) await new Promise(resolve => setTimeout(resolve, config.delay));
-    if (config.lost) return new Response(new ReadableStream({ start(controller) { controller.error(new Error("fixture lost response")); } }));
-    if (config.malformed) return new Response("fixture-private-body");
-    if (config.status) return Response.json({ error: config.code ?? "server_error", error_description: "fixture-private-body" }, { status: config.status, headers: config.retry ? { "retry-after": config.retry } : {} });
-    return Response.json({ access_token: "fixture-rotated", refresh_token: "fixture-rotated-refresh", expires_in: 3600 });
-  }};
+  export class Upstream {
+    config = {}; calls = 0; release;
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/control") {
+        if (request.method === "POST") {
+          const next = await request.json();
+          if (next.release) { const resume = this.release; this.release = undefined; resume?.(); return Response.json({ released: !!resume }); }
+          this.config = next; this.calls = 0;
+        }
+        return Response.json({ calls: this.calls });
+      }
+      if (!path.endsWith("/token")) return this.config.quota401 ? new Response(null, { status: 401 }) : Response.json({});
+      this.calls++;
+      if (this.config.hold) await new Promise(resolve => { this.release = resolve; });
+      if (this.config.lost) return new Response(new ReadableStream({ start(controller) { controller.error(new Error("fixture lost response")); } }));
+      if (this.config.malformed) return new Response("fixture-private-body");
+      if (this.config.status) return Response.json({ error: this.config.code ?? "server_error", error_description: "fixture-private-body" }, { status: this.config.status, headers: this.config.retry ? { "retry-after": this.config.retry } : {} });
+      return Response.json({ access_token: "fixture-rotated", refresh_token: "fixture-rotated-refresh", expires_in: 3600 });
+    }
+  }
+  export default { fetch(request, env) { return env.UPSTREAM.get(env.UPSTREAM.idFromName("fixture")).fetch(request); } };
 `;
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), "clawrouter-owner-"));
   const logs = [];
   class FixtureLog extends Log { log(message) { logs.push(message); } }
   const log = new FixtureLog(LogLevel.VERBOSE);
-  let mf = await startWorkerdFixture(dir, router, upstream, { persistencePath: join(dir, "state"), log });
+  const options = { persistencePath: join(dir, "state"), log, upstreamDurableObjects: { UPSTREAM: { className: "Upstream", useSQLite: true } } };
+  let mf = await startWorkerdFixture(dir, router, upstream, options);
   t.after(async () => { await mf.dispose(); await rm(dir, { recursive: true, force: true }); assert.doesNotMatch(logs.join("\n"), /fixture-(?:access|refresh|rotated|private)|fingerprint|[a-f0-9]{64}/, "no token, private provider body or fingerprint in runtime logs"); });
   const request = (path, method = "GET", body, headers = {}) => mf.dispatchFetch(`https://router.example${path}`, { method, headers: { authorization: "Bearer fixture-admin", "content-type": "application/json", origin: "https://router.example", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const base = "/v1/admin/upstream-grants/policies/pool/claude";
   const grant = { provider: "anthropic", kind: "subscription", accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresAt: new Date(now + 300000).toISOString(), maintenance: { keepWarm: false } };
   const put = await request(base, "PUT", grant); assert.equal(put.status, 200, await put.clone().text());
   const row = async () => { const response = await request("/v1/admin/upstream-grants"); assert.equal(response.status, 200); const text = await response.text(); assert.doesNotMatch(text, /fixture-(?:access|refresh|rotated|private)|fingerprint|[a-f0-9]{64}/); return JSON.parse(text).grants.find(g => g.tokenRef === "claude"); };
-  return { request, base, grant, row, state: async () => (await request("/fixture/state", "POST")).json(), configure: config => request("/fixture/provider", "POST", config), calls: async () => (await (await request("/fixture/provider")).json()).calls, rotate: () => request(base + "/refresh", "POST"), restart: async () => { await mf.dispose(); mf = await startWorkerdFixture(dir, router, upstream, { persistencePath: join(dir, "state"), log }); }, http: () => mf.ready };
+  return { request, base, grant, row, state: async () => (await request("/fixture/state", "POST")).json(), configure: config => request("/fixture/provider", "POST", config), release: async () => { const response = await request("/fixture/provider", "POST", { release: true }); assert.equal((await response.json()).released, true, "provider response was held until release"); }, calls: async () => (await (await request("/fixture/provider")).json()).calls, rotate: () => request(base + "/refresh", "POST"), restart: async () => { await mf.dispose(); mf = await startWorkerdFixture(dir, router, upstream, options); }, http: () => mf.ready };
 }
-async function sent(f) { for (let i = 0; i < 100; i++) { if (await f.calls()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail("provider request not sent"); }
+async function until(check, message) {
+  const deadline = Date.now() + 5000;
+  do { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 10)); } while (Date.now() < deadline);
+  assert.fail(message);
+}
+async function sent(f) { await until(async () => await f.calls() > 0, "provider request not sent"); }
 
 test("workerd refuses the same refresh authority across policy and tenant scopes without leaking its fingerprint", { timeout: 60000 }, async t => {
   const f = await fixture(t);
@@ -100,18 +119,20 @@ test("workerd refuses the same refresh authority across policy and tenant scopes
 });
 
 test("workerd stale refresh settlement cannot overwrite a newer durable generation", { timeout: 60000 }, async t => {
-  const f = await fixture(t); await f.configure({ delay: 300 });
+  const f = await fixture(t); await f.configure({ hold: true });
   const rotation = f.rotate(); await sent(f);
-  await f.request("/fixture/newer", "POST"); await rotation;
+  await f.request("/fixture/newer", "POST"); await f.release(); assert.equal((await rotation).status, 200);
   assert.equal((await f.state()).accessToken, "fixture-reconnected");
 });
 
 test("workerd caller disconnect does not lose an already-started rotated pair", { timeout: 60000 }, async t => {
-  const f = await fixture(t); await f.configure({ delay: 300 });
+  const f = await fixture(t); await f.configure({ hold: true });
   const controller = new AbortController();
-  const response = fetch(new URL(f.base + "/refresh", await f.http()), { method: "POST", headers: { authorization: "Bearer fixture-admin" }, signal: controller.signal }).catch(() => null);
-  await sent(f); controller.abort(); await response;
-  await new Promise(resolve => setTimeout(resolve, 500));
+  const response = fetch(new URL(f.base + "/refresh", await f.http()), { method: "POST", headers: { authorization: "Bearer fixture-admin" }, signal: controller.signal }).catch(error => error);
+  await sent(f); controller.abort();
+  assert.equal((await response).name, "AbortError", "caller disconnected before the provider response");
+  await f.release();
+  await until(async () => (await f.state()).accessToken === "fixture-rotated", "rotation did not persist after caller disconnect");
   assert.equal((await f.state()).accessToken, "fixture-rotated");
   assert.ok((await f.row()).refreshDiagnosis.lastSuccessfulRefreshAt);
 });
@@ -231,8 +252,8 @@ test("workerd abandoned pre-send fence becomes an at-risk diagnosis after owner 
 });
 
 test("workerd stale permanent failure cannot condemn a newer durable credential", { timeout: 60000 }, async t => {
-  const f = await fixture(t); await f.configure({ delay: 300, status: 400, code: "invalid_grant" });
-  const rotation = f.rotate(); await sent(f); await f.request("/fixture/newer", "POST"); await rotation;
+  const f = await fixture(t); await f.configure({ hold: true, status: 400, code: "invalid_grant" });
+  const rotation = f.rotate(); await sent(f); await f.request("/fixture/newer", "POST"); await f.release(); assert.equal((await rotation).status, 200);
   const row = await f.row();
   assert.equal(row.credentialStatus, "active"); assert.equal(row.refreshDiagnosis, null);
   assert.equal((await f.state()).accessToken, "fixture-reconnected");
@@ -265,9 +286,11 @@ test("workerd removing or revoking an ambiguous token does not make its consumed
 
 
 test("workerd public reconnect overlapping a refresh wins after serialized settlement", { timeout: 60000 }, async t => {
-  const f = await fixture(t); await f.configure({ delay: 300 });
+  const f = await fixture(t); await f.configure({ hold: true });
   const rotation = f.rotate(); await sent(f);
   const reconnect = f.request(f.base + "?mode=replace", "PUT", { ...f.grant, accessToken: "fixture-reconnected", refreshToken: "fixture-new-login" });
+  await until(async () => (await f.request("/fixture/reconnect-started")).json(), "public reconnect did not arrive while refresh was held");
+  await f.release();
   assert.equal((await rotation).status, 200);
   assert.equal((await reconnect).status, 200);
   assert.equal((await f.state()).accessToken, "fixture-reconnected");
