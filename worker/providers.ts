@@ -1,4 +1,4 @@
-import { createRouteCatalog, modelSupportsEndpoint } from "../shared/route-catalog.ts";
+import { createRouteCatalog } from "../shared/route-catalog.ts";
 export { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantStickyInput } from "./grant-sticky.ts";

@@ -1,6 +1,6 @@
 import type { ProviderRow, RouteCatalog } from "./contracts.ts";
 
-export interface CatalogProvider extends ProviderRow {
+export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   capabilities: Array<{ id: string; endpoint: string }>;
   routing: { modelPrefixes?: string[] };
   models: Array<{ id: string; capabilities: string[] }>;

@@ -1,8 +1,8 @@
 import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
-import { createRouteCatalog, type CatalogProvider } from "../../shared/route-catalog.ts";
+import { createRouteCatalog, type CatalogProvider } from "../../shared/route-catalog";
 import type { ProviderRow, RouteCatalog } from "./ui-types";
 
-const catalogSnapshot = snapshot as unknown as { providers: Array<CatalogProvider & { auth: NonNullable<ProviderRow["auth"]> }> };
+const catalogSnapshot = snapshot as unknown as { providers: Array<CatalogProvider & ProviderRow & { auth: NonNullable<ProviderRow["auth"]> }> };
 
 export function demoCatalog(): { providers: ProviderRow[]; routes: RouteCatalog } {
   const providers: ProviderRow[] = catalogSnapshot.providers.map((provider) => ({
