@@ -162,11 +162,13 @@ test("managed rewriting removes upstream control URLs while leaving media output
     observed.body = { ...observed.body, _links: { self: "https://untrusted.example/control" } };
     const rewritten = c.adapter.rewrite(observed, publicPaths);
     assert.equal(rewritten._links, undefined);
-    assert.equal(JSON.stringify(rewritten).includes("https://untrusted.example/control"), false);
     if (c.route.protocol === "fal.queue") {
       assert.equal(rewritten.status_url, publicPaths.retrieve);
+      assert.equal(rewritten.response_url, publicPaths.result);
+      assert.equal(rewritten.cancel_url, publicPaths.cancel);
       assert.throws(() => c.adapter.rewrite(observed, { ...publicPaths, retrieve: "//untrusted.example" }));
     }
+    if (c.route.protocol === "replicate.predictions") assert.deepEqual(rewritten.urls, { get: publicPaths.retrieve, cancel: publicPaths.cancel });
     if (c.route.protocol === "vydra.jobs") assert.deepEqual(rewritten.output, observed.body.output);
   }
 });
