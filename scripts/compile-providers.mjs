@@ -265,6 +265,7 @@ function validateManifest(manifest) {
   validateDeepgramPrerecorded(manifest);
   validateGoogleEmbeddings(manifest);
   validateXaiImages(manifest);
+  validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
@@ -456,7 +457,7 @@ function validateEndpoints(manifest) {
 function validateUpstreamPath(manifest, id, endpoint) {
   if (endpoint.upstreamPath === undefined) return;
   const fail = () => { throw new Error(`endpoint ${id} upstreamPath requires a literal same-format Chat, Messages or model-list path without conflicting transport overrides`); };
-  const methods = { "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.models": "GET", "anthropic.models": "GET" };
+  const methods = { "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.models": "GET", "anthropic.models": "GET", "synthetic.models": "GET" };
   const canonical = new RegExp(manifestSchema.$defs.literalUpstreamPath.pattern);
   if (!canonical.test(endpoint.path) || endpoint.path.length > 2048 || !canonical.test(endpoint.upstreamPath)
     || [endpoint.path, endpoint.upstreamPath].some(path => path.split("/").some(segment => segment === "." || segment === ".."))
@@ -470,6 +471,28 @@ function validateUpstreamPath(manifest, id, endpoint) {
     const path = transport.endpointPaths?.[id];
     if (path !== undefined && path !== endpoint.upstreamPath) fail();
   }
+}
+
+function validateSyntheticModels(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("synthetic.")));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("synthetic.models upstreamPath requires the qualified Synthetic GET metadata route and original Bearer API-key binding"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "synthetic" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://api.synthetic.new")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(adapter?.injectHeaders ?? {}).length
+    || Object.keys(adapter?.injectQuery ?? {}).length || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  if (endpoint.requestFormat !== "synthetic.models" || endpoint.responseFormat !== "synthetic.models"
+    || endpoint.method !== "GET" || endpoint.path !== "/models" || endpoint.upstreamPath !== "/openai/v1/models"
+    || endpoint.auth || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["accept", "content-type"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "models.list"
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "GET") fail();
 }
 
 function validateGrantTransports(manifest) {

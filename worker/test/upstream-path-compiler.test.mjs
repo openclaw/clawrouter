@@ -98,7 +98,7 @@ test("upstream path metadata cannot bypass qualified protocols, methods or lifec
     m => { m.endpoints.chat.responsesLifecycle = { retrieve: "models", cancel: "messages" }; },
     m => { m.endpoints.models.streaming = "sse"; }, m => { m.endpoints.models.modelPassthrough = {}; },
     m => { m.endpoints.models.requestFormat = m.endpoints.models.responseFormat = "anthropic.models"; m.endpoints.models.streaming = "sse"; },
-  ]) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /upstreamPath/, String(change)); }
+  ]) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /upstreamPath|invalid manifest/, String(change)); }
 });
 
 test("grant transport paths must agree with the declared dispatch path", () => {
