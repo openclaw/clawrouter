@@ -16,7 +16,7 @@ const cases = snapshot.providers.flatMap(provider => provider.endpoints
   .filter(endpoint => knownFormats.has(endpoint.request_format) && endpoint.response_format === endpoint.request_format)
   .map(endpoint => ({ provider, endpoint })));
 
-test("actual OpenClaw search registration through Worker admission, upstream and SQLite settlement", { skip: !source, timeout: 180_000 }, async t => {
+test("actual OpenClaw search registration through Worker admission, upstream and SQLite settlement", { skip: !source, timeout: 300_000 }, async t => {
   assert.equal(process.env.CI, "true", "the public client receives its own native install in ephemeral CI only");
   assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(), sourceHead);
   assert.ok(cases.length > 0);
@@ -41,7 +41,8 @@ test("actual OpenClaw search registration through Worker admission, upstream and
     const origin = String(await mf.ready);
     const started = performance.now();
     const result = await promisify(execFile)("pnpm", ["test", "extensions/clawrouter/worker-contract.test.ts", "--maxWorkers=1"], {
-      cwd: source, timeout: 120_000, maxBuffer: 2 * 1024 * 1024,
+      // The native runner compiles its own SDK worker graph on a cold CI host.
+      cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
       env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", CLAWROUTER_CONTRACT_ORIGIN: origin.replace(/\/$/, ""), CLAWROUTER_CONTRACT_PROVIDERS: cases.map(({ provider }) => provider.id).join(",") },
     });
     t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
