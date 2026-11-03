@@ -197,6 +197,14 @@ test("manifest controls use the same binding and undeclared prediction endpoints
   assert.equal(response.status, 200, await response.clone().text());
   const polled = await get(f, `/v1/proxy/replicate/prediction?prediction_id=${contract.responses.created.id}`); assert.equal(polled.status, 200);
   const canceled = await f.call("/v1/proxy/replicate/prediction_cancel", { body: {}, pathParams: { prediction_id: contract.responses.created.id } }); assert.equal(canceled.status, 200, await canceled.clone().text());
-  const count = f.sent.length; delete f.provider.endpoints.find(endpoint => endpoint.id === "predictions").lifecycle;
+  const count = f.sent.length;
+  for (const declared of [true, false]) {
+    if (!declared) delete f.provider.endpoints.find(endpoint => endpoint.id === "predictions").lifecycle;
+    const missing = await get(f, "/v1/proxy/replicate/prediction");
+    assert.equal(missing.status, 400); assert.equal((await missing.json()).error.code, "missing_path_param");
+    const unknown = await get(f, "/v1/proxy/replicate/prediction?prediction_id=unowned");
+    assert.equal(unknown.status, 409); assert.equal((await unknown.json()).error.code, "response_owner_unavailable");
+    assert.equal(f.sent.length, count);
+  }
   assert.ok((await f.call()).status >= 400); assert.ok((await get(f)).status >= 400); assert.equal(f.sent.length, count);
 });
