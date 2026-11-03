@@ -157,7 +157,7 @@ jobs:
           node -e 'if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Expected Darwin ARM64"); console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch }))'
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin build
-      - run: pnpm --dir admin exec playwright install chromium
+      - run: pnpm --dir admin exec playwright install --only-shell chromium
       - name: Check Fusion mobile screenshot and accessibility
         id: browser
         run: >-
