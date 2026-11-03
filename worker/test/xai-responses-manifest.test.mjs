@@ -60,7 +60,9 @@ for (const proxy of [false, true]) test(`declared xAI ${proxy ? "manifest" : "na
   assert.equal(f.sent[0].url, "https://api.x.ai/v1/responses"); assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-upstream-key");
   assert.equal(f.sent[0].headers.get("x-api-key"), null); assert.equal(f.sent[0].redirect, "manual");
   assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 16); assert.equal(f.events[0].cost_basis, "provider_reported");
-  assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros > 50000));
+  assert.ok(f.events[0].reserved_cost_micros > 50000);
+  assert.equal(f.events[0].reserved_output_tokens, 500000);
+  assert.ok(f.rows().length > 0 && f.rows().every(row => row.settled === 1 && row.reserved_micros === 16));
 });
 
 test("declared xAI hosted tools stay zero-egress under hard-dollar budgets independently of the outcome tariff", async t => {

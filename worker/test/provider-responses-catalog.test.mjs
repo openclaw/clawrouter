@@ -9,6 +9,8 @@ function compile(id) {
 test("xAI advertises Responses only on the sourced Grok row and retains the request-fee gap", () => {
   const snapshot = compile("xai");
   const provider = snapshot.providers[0];
+  assert.equal(provider.models[0].upstream, "grok-4.3", "the existing Chat default remains unchanged");
+  assert.equal(provider.endpoints[0].request_format, "openai.chat_completions");
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === "responses");
   assert.equal(endpoint.path, "/v1/responses");
   assert.equal(endpoint.streaming, "sse");
@@ -33,6 +35,7 @@ test("xAI advertises Responses only on the sourced Grok row and retains the requ
 
 test("qualified OpenRouter Responses metadata cannot certify auto or Azure deployments", () => {
   const snapshot = compile("openrouter");
+  assert.equal(snapshot.providers[0].models[0].upstream, "openrouter/auto", "the new named row does not replace dynamic Chat selection");
   const terra = snapshot.model_index["openrouter/openai/gpt-6.1-terra"];
   assert.equal(terra.upstream, "openai/gpt-6.1-terra");
   assert.ok(terra.capabilities.includes("llm.responses"));

@@ -8,6 +8,9 @@ Checked 2026-11-03. These are sourced catalog facts, not live runtime certificat
 | OpenRouter | The public model API explicitly lists Responses for `openai/gpt-6.1-terra`; the manifest advertises that exact model. | Prove the selected credential and upstream route, usage and plugin/routing costs. The row remains unpriced. |
 | Azure OpenAI | The Responses endpoint is declared; no generic deployment is certified as a Responses model. | Supply an existing deployment's model/version, region and pricing contract, then prove credential-scoped discovery and inference. Deployment names are account configuration, not global model IDs. |
 
+The existing Grok 4.3 Chat default and OpenRouter auto default remain unchanged.
+The new named offers do not replace those caller selections.
+
 xAI recommends Responses for reasoning models. With `store: false`, callers must
 send all output items back unchanged, including `reasoning.encrypted_content` and
 function calls. The manifest does not claim retrieve/cancel or WebSocket support.

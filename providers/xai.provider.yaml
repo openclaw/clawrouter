@@ -25,13 +25,20 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
-  - id: llm.responses
-    endpoint: responses
-    methods: [POST]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
 endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
   responses:
     path: /v1/responses
     requestFormat: openai.responses
@@ -46,15 +53,25 @@ endpoints:
       receipt: xai.usage.cost_in_usd_ticks
     streaming: sse
     timeoutMs: 600000
-  chat_completions:
-    modelPassthrough: {}
-    path: /v1/chat/completions
-    requestFormat: openai.chat_completions
-    responseFormat: openai.chat_completions
-    streaming: sse
-    timeoutMs: 600000
 models:
   entries:
+    - id: xai/grok-4.3
+      upstream: grok-4.3
+      capabilities: [llm.chat]
+      pricingRef: xai-grok-4-3-standard-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://api.x.ai/v1/models/grok-4.3
+        inputMicrosPerMillion: 1250000
+        cachedInputMicrosPerMillion: 200000
+        outputMicrosPerMillion: 2500000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 131072
+        longContext:
+          thresholdInputTokens: 200000
+          inputMicrosPerMillion: 2500000
+          cachedInputMicrosPerMillion: 400000
+          outputMicrosPerMillion: 5000000
     - id: xai/grok-4.7
       upstream: grok-4.7
       capabilities: [llm.responses]
@@ -111,23 +128,6 @@ models:
               inputMicrosPerMillion: 8000000
               cachedInputMicrosPerMillion: 2000000
               outputMicrosPerMillion: 24000000
-    - id: xai/grok-4.3
-      upstream: grok-4.3
-      capabilities: [llm.chat]
-      pricingRef: xai-grok-4-3-standard-2026-06-21
-      pricing:
-        effectiveAt: "2026-06-21"
-        source: https://api.x.ai/v1/models/grok-4.3
-        inputMicrosPerMillion: 1250000
-        cachedInputMicrosPerMillion: 200000
-        outputMicrosPerMillion: 2500000
-        maxInputTokens: 1000000
-        defaultMaxOutputTokens: 131072
-        longContext:
-          thresholdInputTokens: 200000
-          inputMicrosPerMillion: 2500000
-          cachedInputMicrosPerMillion: 400000
-          outputMicrosPerMillion: 5000000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
