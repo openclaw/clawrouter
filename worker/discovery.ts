@@ -127,6 +127,19 @@ function supportsHostedSearch(provider: CompiledProvider, model: CompiledModel, 
     && typeof facts.checkedAt === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(facts.checkedAt);
 }
 
+function projectCatalogModel(provider: CompiledProvider, model: CompiledModel, capabilities: string[], visibleEndpoints: ReadonlySet<string>): CompiledModel {
+  const { nativeCapabilities, requestParameters, ...base } = model;
+  const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)).map(([id, facts]) => {
+    const { hostedTools, ...baseFacts } = facts;
+    return [id, { ...baseFacts, ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
+  }));
+  const parameters = Object.fromEntries(Object.entries(requestParameters ?? {}).filter(([id]) => visibleEndpoints.has(id)));
+  return { ...base, capabilities,
+    ...(nativeCapabilities && Object.keys(nativeEndpoints).length ? { nativeCapabilities: { version: nativeCapabilities.version, endpoints: nativeEndpoints } } : {}),
+    ...(Object.keys(parameters).length ? { requestParameters: parameters } : {}),
+  };
+}
+
 function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
@@ -409,16 +422,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       const visibleEndpoints = new Set(inventoryContexts.filter(context => modelSupportsEndpoint(provider, model, context.endpoint)
         && provider.capabilities.some(item => item.endpoint === context.endpoint.id && capabilities.includes(item.id))
         && eligibility(context, model, provider.capabilities.find(item => item.endpoint === context.endpoint.id)!.id, true).status !== "exact-blocked").map(context => context.endpoint.id));
-      const { nativeCapabilities, requestParameters, ...base } = model;
-      const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)).map(([id, facts]) => {
-        const { hostedTools, ...baseFacts } = facts;
-        return [id, { ...baseFacts, ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
-      }));
-      const parameters = Object.fromEntries(Object.entries(requestParameters ?? {}).filter(([id]) => visibleEndpoints.has(id)));
-      return [{ ...base, capabilities,
-        ...(nativeCapabilities && Object.keys(nativeEndpoints).length ? { nativeCapabilities: { version: nativeCapabilities.version, endpoints: nativeEndpoints } } : {}),
-        ...(Object.keys(parameters).length ? { requestParameters: parameters } : {}),
-      }];
+      return [projectCatalogModel(provider, model, capabilities, visibleEndpoints)];
     });
     const inventoryEndpoints = { http: new Set<string>(), websocket: new Set<string>() };
     for (const context of inventoryContexts) {
