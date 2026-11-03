@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import test from "node:test";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
+import { continuationAuthority } from "./continuation-authority.mjs";
 
 const { default: worker } = await import("../index.ts");
 const { sha256Hex } = await import("../utils.ts");
@@ -26,7 +27,10 @@ async function fixture(t) {
     async list() { return { keys: [], list_complete: true }; },
   }, USAGE_QUEUE: { send: async event => events.push(event) }, BUDGET_LEDGER: { get() { throw new Error("unmetered catalog must not reserve or observe budgets"); } } };
   const authority = createGrantAuthority(undefined, env);
-  env.ACCESS_CONTROL = { idFromName: name => name, get: () => ({ fetch(url, init) { calls.push(new URL(url).pathname); return authority.fetch(url, init); } }) };
+  const continuations = continuationAuthority(t, env);
+  env.ACCESS_CONTROL = { idFromName: name => name, get: name => name.startsWith("http-continuations:")
+    ? continuations.get(name)
+    : { fetch(url, init) { calls.push(new URL(url).pathname); return authority.fetch(url, init); } } };
   const call = (path, body) => authorityCall(env, path, body);
   await call("/policies/initialize-all", [{ policyId: "full", policy }, { policyId: "limited", policy: limited }]);
   await call("/credentials/initialize-all", credentials);
