@@ -1,3 +1,4 @@
+import { readGoogleJson } from "./google-json.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const googleUnderstandingModel = "gemini-3-flash-preview";
@@ -58,27 +59,7 @@ export function observeGoogleUnderstanding(body: unknown, complete: boolean): { 
 }
 
 export async function readGoogleUnderstanding(response: Response, signal: AbortSignal): Promise<ReturnType<typeof observeGoogleUnderstanding>> {
-  if (signal.aborted || response.redirected || response.status !== 200 || !response.body
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || Number(response.headers.get("content-length")) > maxResponse) {
-    void response.body?.cancel().catch(() => undefined); fail();
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", abort, { once: true });
-  let text = "", bytes = 0;
-  try {
-    for (;;) {
-      const part = await reader.read();
-      if (signal.aborted) fail();
-      if (part.done) break;
-      bytes += part.value.byteLength;
-      if (bytes > maxResponse) fail();
-      text += decoder.decode(part.value, { stream: true });
-    }
-    text += decoder.decode(); return observeGoogleUnderstanding(JSON.parse(text), true);
-  } catch { void reader.cancel().catch(() => undefined); fail(); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  return readGoogleJson(response, signal, maxResponse, body => observeGoogleUnderstanding(body, true), fail);
 }
 
 function object(value: unknown): Record<string, unknown> { if (!mediaObject(value)) fail(); return value; }
