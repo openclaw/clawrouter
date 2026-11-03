@@ -57,6 +57,15 @@ test("one bounded URL descriptor keeps MIME, advisory length and unsafe destinat
   assert.throws(() => observeFalMusic({ audio: { ...wire.responses[1].audio, content_type: "text/html" } }, prepare(1)));
   assert.equal(observeFalMusic(wire.responses[2], prepare(2)).audio.mimeType, null);
 });
+test("native File content_type must be a scalar MIME string before qualifying an audio descriptor", () => {
+  for (const [index, mime] of [[0, "audio/mpeg"], [1, "audio/wav"]]) {
+    const audio = wire.responses[index].audio;
+    assert.equal(observeFalMusic({ audio: { ...audio, content_type: mime } }, prepare(index)).audio.mimeType, mime);
+    for (const content_type of [[mime], { mime }, true, 1]) {
+      assert.throws(() => observeFalMusic({ audio: { ...audio, content_type } }, prepare(index)), /mime/);
+    }
+  }
+});
 test("strict complete JSON delivery rejects redirects, range/truncation and local cancellation without replay or a free-cost claim", async () => {
   assert.equal((await readFalMusic(Response.json(wire.responses[0]), prepare(0), new AbortController().signal)).upstreamCostMicros, null);
   for (const response of [

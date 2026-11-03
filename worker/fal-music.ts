@@ -55,7 +55,8 @@ export function observeFalMusic(value: unknown, prepared: FalMusicRequest): FalM
     || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(url.hostname) || /^[\d.]+$/.test(url.hostname)
     || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(url.hostname)) fail("audio_url");
   const mime = audio.content_type ?? null, size = audio.file_size ?? null;
-  if (mime !== null && !(prepared.format === "mp3" ? ["audio/mpeg", "audio/mp3"] : ["audio/wav", "audio/x-wav", "audio/wave"]).includes(String(mime))) fail("mime");
+  if (mime !== null && (typeof mime !== "string"
+    || !(prepared.format === "mp3" ? ["audio/mpeg", "audio/mp3"] : ["audio/wav", "audio/x-wav", "audio/wave"]).includes(mime))) fail("mime");
   if (size !== null && (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0 || size > maxAudio)) fail("size");
   if (value.lyrics !== undefined) text(value.lyrics, 0, 32768);
   if (value.tags !== undefined) text(value.tags, 0, 8192);
