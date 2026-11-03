@@ -96,7 +96,7 @@ test("opt-in outcome admission preserves the full output bound despite visible-o
   }
   assert.equal(estimateModelCost(pricing, {}, { request_format: "openai.chat_completions" }, tariff).pricingAvailable, false);
   assert.equal(estimateModelCost(pricing, {}, endpoint, { ...tariff, maximumAdditionalMicros: 0 }).pricingAvailable, false);
-  const overflow = { ...pricing, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER, outputMicrosPerMillion: Number.MAX_SAFE_INTEGER };
+  const overflow = { ...pricing, defaultMaxOutputTokens: 1_000_000, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER, outputMicrosPerMillion: Number.MAX_SAFE_INTEGER };
   assert.equal(estimateModelCost(overflow, {}, endpoint, tariff).pricingAvailable, false);
 });
 
