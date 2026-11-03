@@ -83,21 +83,27 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
   const operation = new HttpOperation(request.signal, 30_000), deadline = Date.now() + 30_000, lease = new BodyLease();
   let response: Response | undefined, handedOff = false;
   try {
-    const first = matches[0], protocol = first?.create.lifecycle?.protocol;
-    if (!first || !protocol || matches.some(match => match.action !== first.action || match.create.lifecycle?.protocol !== protocol)) unavailable();
+    const query = new URLSearchParams(); applyProxyQuery(query, queryInput);
+    // A broad /files/${id} template also matches /files/${id}:download.
+    // Only the wrapper's exact native selector can distinguish these actions.
+    const candidates = matches.flatMap(match => {
+      const { adapter } = managedFileRoute(provider, match.create);
+      try { return [{ ...match, fileId: adapter.identify(match.action, match.pathParams, new URLSearchParams(query)) }]; }
+      catch { return []; }
+    });
+    const first = candidates[0], protocol = first?.create.lifecycle?.protocol;
+    if (!first) throw new HttpError(400, "managed_file_invalid", "provide the exact declared file path and query");
+    if (!protocol || candidates.some(match => match.action !== first.action || match.create.lifecycle?.protocol !== protocol || match.fileId !== first.fileId)) unavailable();
     const nativeId = request.headers.get("x-clawrouter-job-id");
     // This selector is not authority. Resolve only the authenticated scope.
     const lifecycle = managedRoute(provider, first.create).adapter;
     let jobId: string;
     try { jobId = lifecycle.validateId(nativeId); } catch { unavailable(); }
     const binding = await resolveResponseControlOwner(env, identities, await managedJobKey(protocol, provider.id, jobId), operation,
-      provider.id, matches.map(match => ({ createId: match.create.id, pathParams: match.pathParams })));
+      provider.id, candidates.map(match => ({ createId: match.create.id, pathParams: match.pathParams })));
     if (!binding.background) unavailable();
-    const match = matches.find(candidate => candidate.create.id === binding.owner.endpointId)!;
-    const { adapter } = managedFileRoute(provider, match.create), query = new URLSearchParams();
-    applyProxyQuery(query, queryInput);
-    let fileId: string;
-    try { fileId = adapter.identify(match.action, match.pathParams, query); } catch { throw new HttpError(400, "managed_file_invalid", "provide the exact declared file path and query"); }
+    const match = candidates.find(candidate => candidate.create.id === binding.owner.endpointId)!;
+    const { adapter } = managedFileRoute(provider, match.create), fileId = match.fileId;
     const job = await operation.wait(backgroundCall<BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }));
     const managed = job?.managed, file = managed?.files?.find(file => file.id === fileId);
     if (!job || !managed || managed.protocol !== protocol || managed.providerId !== provider.id || managed.upstreamId !== jobId
