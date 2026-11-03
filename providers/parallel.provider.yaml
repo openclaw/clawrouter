@@ -1,0 +1,42 @@
+# Native contract checked 2026-11-03: https://docs.parallel.ai/api-reference/search/search
+# Request telemetry only; upstream search/contents fees are not qualified prices.
+schema: clawrouter.service-provider.v1
+id: parallel
+displayName: Parallel
+status: experimental
+class: rest_json
+service:
+  platform: parallel
+  kind: tool_provider
+  upstreamService: parallel
+  configKeys: [PARALLEL_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: x-api-key
+      secretKind: api_key
+baseUrls:
+  default: https://api.parallel.ai
+routing:
+  nativePrefixes: [clawrouter-parallel, parallel]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: web.search
+    endpoint: search
+    methods: [POST]
+endpoints:
+  search:
+    path: /v1/search
+    method: POST
+    requestFormat: parallel.search
+    responseFormat: parallel.search
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request

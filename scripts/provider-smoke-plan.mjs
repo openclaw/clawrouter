@@ -318,7 +318,7 @@ function smokeTarget(provider, env) {
     envelope: {
       method: upstreamMethod,
       pathParams,
-      query: {},
+      query: endpoint.request_format === "brave.search" ? { q: "OpenClaw", count: "1" } : {},
       body: body ?? {},
     },
   };
@@ -592,6 +592,12 @@ function sampleBody(provider, endpoint, method, model, env) {
   if (graphql) return { query: "{ viewer { id } }" };
   if (format === "tavily.search") {
     return { query: "OpenClaw", max_results: 1 };
+  }
+  if (format === "exa.search") {
+    return { query: "OpenClaw", numResults: 1 };
+  }
+  if (format === "parallel.search") {
+    return { search_queries: ["OpenClaw official website"], mode: "basic", max_chars_total: 1000 };
   }
   if (format === "tavily.extract") {
     return { urls: ["https://example.com"] };
