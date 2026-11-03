@@ -270,6 +270,7 @@ function validateManifest(manifest) {
   validateGoogleEmbeddings(manifest);
   validateGoogleUnaryMedia(manifest, "image", "image.generate", ["gemini-3.1-flash-image", "gemini-3-pro-image"]);
   validateGoogleUnaryMedia(manifest, "music", "audio.generate", ["lyria-3-clip-preview", "lyria-3-pro-preview"]);
+  validateGoogleSpeech(manifest);
   validateXaiImages(manifest);
   validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
   validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
@@ -809,6 +810,41 @@ function validateGoogleUnaryMedia(manifest, kind, capabilityId, upstreams) {
     || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
   const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes(capabilityId));
   // Media counters and bounded bytes cannot qualify a text-token price card.
+  if (!models.length || models.some(model => !upstreams.includes(model.upstream)
+    || model.id !== `google/${model.upstream}` || model.capabilities.length !== 1 || model.availability?.status === "upstream_alias"
+    || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
+}
+
+function validateGoogleSpeech(manifest) {
+  const formats = ["google.speech_generate_content", "google.speech_interactions"];
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith("google.speech"))
+    || manifest.id === "google-gemini" && manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "audio.speech"));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("Google speech requires its paired unary transports, canonical API-key origin and unpriced frozen models"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "google-gemini" || endpoints.length !== 2 || new Set(endpoints.map(([, endpoint]) => endpoint.requestFormat)).size !== 2
+    || Object.values(manifest.baseUrls).some(base => base !== "https://generativelanguage.googleapis.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "api_key" || scheme.header?.toLowerCase() !== "x-goog-api-key"
+    || scheme.secretKind !== "api_key" || scheme.required === false || scheme.format !== undefined
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  for (const [id, endpoint] of endpoints) {
+    const interactions = endpoint.requestFormat === "google.speech_interactions";
+    if (!formats.includes(endpoint.requestFormat) || endpoint.responseFormat !== endpoint.requestFormat || endpoint.method !== "POST"
+      || endpoint.path !== (interactions ? "/v1beta/interactions" : "/v1beta/models/${model}:generateContent")
+      || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
+      || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")
+      || Object.entries(endpoint.pathParamStyles ?? {}).some(([name, style]) => interactions || name !== "model" || style !== "segment")) fail();
+    const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+    if (capabilities.length !== 1 || capabilities[0].id !== "audio.speech"
+      || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
+  }
+  const upstreams = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"];
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("audio.speech"));
+  // The shared nativeModelEligible contract owns transport eligibility and expiry;
+  // declaration compilation preserves identities without freezing a clock verdict.
   if (!models.length || models.some(model => !upstreams.includes(model.upstream)
     || model.id !== `google/${model.upstream}` || model.capabilities.length !== 1 || model.availability?.status === "upstream_alias"
     || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
