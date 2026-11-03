@@ -94,7 +94,8 @@ test("Firecrawl candidate Search preserves native HTTP-200 and HTTP-429 failures
     assert.equal(response.status, status);
     assert.deepEqual(await response.json(), wire.failure);
     await Promise.all(f.pending);
-    assert.equal(f.events[0].status, "provider_error");
+    // The shared accounting taxonomy records upstream HTTP 4xx as client_error.
+    assert.equal(f.events[0].status, status === 429 ? "client_error" : "provider_error");
   });
 });
 
