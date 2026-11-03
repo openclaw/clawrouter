@@ -43,7 +43,7 @@ test("Gemini audio ceilings preserve published served-tier cache rates, includin
       const media = { contents: [{ parts: [{ inlineData: { mimeType: "audio/wav", data: "Zml4dHVyZQ==" } }] }],
         serviceTier, generationConfig: { maxOutputTokens: 100, candidateCount: 2 } };
       const estimate = estimateCost(model, media, null, "llm.generate", endpoint);
-      assert.equal(estimate.basis, "manifest_rate_upper_bound");
+      assert.equal(estimate.basis, "manifest_pricing");
       assert.equal(estimate.inputTokens, 1048576); assert.equal(estimate.outputTokens, 200);
       const actual = actualModelCost(model.pricing, { ...tokens, input: 1048576, cached: 0, output: 200, serviceTier }, endpoint.request_format);
       assert.ok(actual !== null && estimate.reserveMicros >= actual);
