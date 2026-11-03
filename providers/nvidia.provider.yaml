@@ -1,5 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-inference-providers.md.
-# Endpoint/model source checked 2026-11-03: https://docs.api.nvidia.com/nim/reference/llm-apis
+# Hosted Chat API only; finite catalog qualification: docs/nvidia-model-catalog.md.
 schema: clawrouter.service-provider.v1
 id: nvidia
 displayName: NVIDIA hosted NIM
@@ -32,7 +31,6 @@ capabilities:
     methods: [POST]
 endpoints:
   chat_completions:
-    modelPassthrough: {}
     path: /chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
@@ -40,8 +38,17 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: nvidia/meta/llama-3.1-8b-instruct
-      upstream: meta/llama-3.1-8b-instruct
+    - id: nvidia/nvidia/nemotron-3-ultra-550b-a55b
+      upstream: nvidia/nemotron-3-ultra-550b-a55b
+      capabilities: [llm.chat]
+    - id: nvidia/nvidia/nemotron-3.5-lightning-30b-a3b
+      upstream: nvidia/nemotron-3.5-lightning-30b-a3b
+      capabilities: [llm.chat]
+    - id: nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b
+      upstream: nvidia/nemotron-3.5-super-vl-120b-a12b
+      capabilities: [llm.chat]
+    - id: nvidia/moonshotai/kimi-k2.6
+      upstream: moonshotai/kimi-k2.6
       capabilities: [llm.chat]
 billing:
   meter: clawrouter.tokens

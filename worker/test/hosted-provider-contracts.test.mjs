@@ -15,7 +15,7 @@ const contracts = [
   ["chutes", "CHUTES_API_KEY", "https://llm.chutes.ai/v1/chat/completions", "deepseek-ai/DeepSeek-V4-Flash-0731-TEE"],
   ["featherless", "FEATHERLESS_API_KEY", "https://api.featherless.ai/v1/chat/completions", "GalrionSoftworks/Margnum-12B-v1"],
   ["venice", "VENICE_API_KEY", "https://api.venice.ai/api/v1/chat/completions", "zai-org-glm-5-2"],
-  ["nvidia", "NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-8b-instruct"],
+  ["nvidia", "NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/nemotron-3-ultra-550b-a55b"],
   ["cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1/chat/completions", "qwen-3.8-27b"],
   ["deepinfra", "DEEPINFRA_API_KEY", "https://api.deepinfra.com/v1/openai/chat/completions", "Qwen/Qwen3.8-27B"],
   ["baseten", "BASETEN_API_KEY", "https://inference.baseten.co/v1/chat/completions", "zai-org/GLM-5.3"],
@@ -90,11 +90,15 @@ for (const [id, binding, url, upstream, catalogId = upstream] of contracts) {
     const known = providerModel(provider, `${id}/${catalogId}`, endpoint);
     assert.equal(known.upstream, upstream);
     assert.equal(known.pricing, null);
-    const dynamic = providerModel(provider, `${id}/tenant-model`, endpoint);
-    assert.equal(dynamic.upstream, "tenant-model");
-    assert.equal(dynamic.pricing, null);
-    assert.equal(dynamic.nativeCapabilities, undefined);
-    assert.equal(providerModel(provider, `${id}/opaque`, endpoint, true).upstream, `${id}/opaque`);
+    if (id === "nvidia") {
+      assert.equal(providerModel(provider, `${id}/tenant-model`, endpoint), null);
+    } else {
+      const dynamic = providerModel(provider, `${id}/tenant-model`, endpoint);
+      assert.equal(dynamic.upstream, "tenant-model");
+      assert.equal(dynamic.pricing, null);
+      assert.equal(dynamic.nativeCapabilities, undefined);
+      assert.equal(providerModel(provider, `${id}/opaque`, endpoint, true).upstream, `${id}/opaque`);
+    }
     const body = { model: known.upstream, stream: true, stream_options: { include_usage: true },
       messages: [{ role: "assistant", content: null, reasoning_content: "fixture-reasoning",
         tool_calls: [{ id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{}" } }] },
