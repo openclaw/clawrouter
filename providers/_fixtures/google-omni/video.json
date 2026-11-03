@@ -1,0 +1,23 @@
+{
+  "source": "https://aistudio.google.com/docs/omni",
+  "checkedAt": "2026-11-03",
+  "requests": [
+    { "model": "gemini-omni-1.1-flash", "input": "Synthetic paper boat on a pond", "response_format": { "type": "video", "aspect_ratio": "16:9", "resolution": "720p", "delivery": "uri" } },
+    { "model": "gemini-omni-1.1-flash", "input": [{ "type": "image", "data": "AP+A", "mime_type": "image/png" }, { "type": "text", "text": "Synthetic image animation" }], "generation_config": { "video_config": { "task": "image_to_video" } }, "response_format": { "type": "video", "resolution": "1080p" } },
+    { "model": "gemini-omni-1.1-flash", "input": [{ "type": "video", "data": "AP+A", "mime_type": "video/mp4" }, { "type": "text", "text": "Synthetic video continuation" }], "generation_config": { "video_config": { "task": "extend" } }, "background": true, "store": true }
+  ],
+  "pending": { "id": "v1_fixture", "object": "interaction", "model": "gemini-omni-1.1-flash", "status": "in_progress", "steps": [] },
+  "completed": {
+    "id": "v1_fixture", "object": "interaction", "model": "gemini-omni-1.1-flash", "status": "completed",
+    "steps": [
+      { "type": "user_input", "content": [{ "type": "text", "text": "Synthetic paper boat" }] },
+      { "type": "thought", "content": [{ "type": "thought", "text": "Synthetic thought fixture" }] },
+      { "type": "model_output", "content": [{ "type": "video", "mime_type": "video/mp4", "uri": "https://generativelanguage.googleapis.com/v1beta/files/fixture-video:download?alt=media" }] }
+    ],
+    "usage": { "total_input_tokens": 18, "total_output_tokens": 120, "total_cached_tokens": 2, "total_thought_tokens": 4, "total_tokens": 142, "input_tokens_by_modality": [{ "modality": "text", "tokens": 18 }], "output_tokens_by_modality": [{ "modality": "video", "tokens": 100 }, { "modality": "audio", "tokens": 20 }] }
+  },
+  "retrieved": { "id": "v1_fixture", "object": "interaction", "model": "gemini-omni-1.1-flash", "status": "completed", "steps": [{ "type": "model_output", "content": [{ "type": "video", "mime_type": "video/mp4", "data": "AP+A" }] }] },
+  "processing": { "name": "files/fixture-video", "mimeType": "video/mp4", "state": "PROCESSING" },
+  "active": { "name": "files/fixture-video", "mimeType": "video/mp4", "state": "ACTIVE" },
+  "fileFailed": { "name": "files/fixture-video", "mimeType": "video/mp4", "state": "FAILED", "error": { "code": 3, "message": "Synthetic processing failure" } }
+}
