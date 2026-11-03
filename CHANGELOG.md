@@ -169,6 +169,7 @@
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
 - Add finite native Bedrock embedding codecs and complete synthetic vector fixtures for Titan, Cohere, Nova and version-specific Marengo requests. Shared model routing, native client fixes and tariff qualification remain separate integration work.
 - Add bounded native Bedrock embedding response validation with original regional destination binding, complete vector delivery and qualified Titan input counts; shared signing, dispatch and memory acceptance remain separately qualified.
+- Dispatch qualified native Bedrock embeddings with original regional SigV4 credentials, unchanged model-specific input, complete bounded vectors and conservative accounting without inferred tariffs.
 - Qualify typed Sage, Liquid/TypeSafe SystemOne and SubQ decision metadata against closed provider/wire contracts without inventing context, prices or client compatibility.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 - Observe native Radius Pi event usage and errors without rewriting SSE bytes or native tool/reasoning payloads. Preserve cancellation and conservative fixed-policy settlement when terminal evidence is incomplete.

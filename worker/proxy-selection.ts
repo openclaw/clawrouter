@@ -10,7 +10,7 @@ import { prepareNativeGradiumSpeech } from "./native-gradium-speech.ts";
 import { prepareNativeGoogleImage } from "./native-google-images.ts";
 import type { NativeResponse } from "./native-response.ts";
 import type { NativeQueryBinding } from "./native-query.ts";
-import { nativeEmbeddingMode, prepareNativeEmbedding } from "./native-embeddings.ts";
+import { nativeEmbeddingInput, prepareNativeEmbedding } from "./native-embeddings.ts";
 import { selectRequestTariff } from "./request-tariff.ts";
 import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
@@ -133,7 +133,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   }
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
   if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
-  const embedding = nativeEmbeddingMode(endpoint.request_format);
+  const embedding = nativeEmbeddingInput(provider, endpoint);
   // Native models/foo is a wire assertion, not a second router selector.
   const modelId = !embedding && typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
