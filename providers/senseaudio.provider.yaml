@@ -35,9 +35,10 @@ endpoints:
     responseFormat: senseaudio.transcription
     timeoutMs: 120000
 models:
-  - id: senseaudio/senseaudio-asr-pro-1.5-260319
-    upstream: senseaudio-asr-pro-1.5-260319
-    capabilities: [audio.transcription]
+  entries:
+    - id: senseaudio/senseaudio-asr-pro-1.5-260319
+      upstream: senseaudio-asr-pro-1.5-260319
+      capabilities: [audio.transcription]
 billing:
   meter: clawrouter.requests
   dimensions: [provider, endpoint, key, service, subject]
