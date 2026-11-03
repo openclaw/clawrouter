@@ -157,6 +157,7 @@
 - Report caller-owned request, token, and spend totals as `usage.personal` on personal usage reads and a per-principal breakdown as `usage.principals` on admin usage, alongside the unchanged shared policy totals. Show both in the console.
 
 - Add published Fireworks GPT OSS 120B Standard and Priority token rates with conservative context bounds and preserve the pricing verification date in compiled cards. Unknown models remain unpriced.
+- Add Groq GPT-OSS 20B with sourced text limits, reasoning controls and conservative token rates. Preserve plain priced Chat and client function tools; reject unqualified hosted tools and automatic/enterprise tiers before hard-budget egress.
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
