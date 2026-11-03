@@ -1,5 +1,5 @@
-import type { ClientCatalogModel, ModelPricing, GrantRoutingPolicy, GrantAccount, GrantExtraUsage } from "../shared/contracts";
-export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane } from "../shared/contracts";
+import type { ClientCatalogModel, ModelPricing, GrantRoutingPolicy, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride } from "../shared/contracts";
+export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride, PolicyBinding } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
 
 export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
@@ -169,14 +169,6 @@ export interface ProviderHealth {
   error?: string | null;
 }
 
-export interface BudgetOverride {
-  dailyBudgetMicros?: number | null;
-  weeklyBudgetMicros?: number | null;
-  monthlyBudgetMicros?: number | null;
-  updatedBy: string;
-  updatedAt: string;
-}
-
 export interface AccessUserRecord {
   budgetOverrides?: Record<string, BudgetOverride>;
   role?: "admin" | "user";
@@ -202,14 +194,6 @@ export interface AccessSession {
   tenantId: string;
   groups: string[];
   contentRetentionDisabled: boolean;
-}
-
-export interface PolicyBinding {
-  policyId: string;
-  principalType: "user" | "group";
-  principalId: string;
-  enabled: boolean;
-  priority: number;
 }
 
 export interface OAuthState {
@@ -269,7 +253,6 @@ export interface UpstreamGrant {
   updatedAt?: string | null;
   revokedAt?: string | null;
 }
-
 
 export interface GrantQuotaWindow {
   observedAt?: string;
