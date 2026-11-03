@@ -32,13 +32,13 @@ export interface UsageEventGroup {
 
 export function usageEventGroups(events: UsageAuditEvent[]): UsageEventGroup[] {
   const grouped = new Map<string, UsageAuditEvent[]>();
-  const order: string[] = [];
   for (const event of events) {
     const key = event.compound_request_id ? `compound:${event.compound_request_id}` : `event:${event.id}`;
-    if (!grouped.has(key)) order.push(key);
-    grouped.set(key, [...(grouped.get(key) ?? []), event]);
+    const group = grouped.get(key);
+    if (group) group.push(event);
+    else grouped.set(key, [event]);
   }
-  return order.map((key) => summarizeUsageEvents(key, grouped.get(key) ?? []));
+  return Array.from(grouped, ([key, group]) => summarizeUsageEvents(key, group));
 }
 
 function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEventGroup {
