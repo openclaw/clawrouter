@@ -87,6 +87,7 @@
 - Qualify the six frozen fal Seedance input contracts and lifecycle fixtures with native duration/resolution rules and bounded multimodal references; scoped dotted-route activation remains separately qualified.
 - Add bounded native codecs and synthetic fixtures for the two frozen Google image models, with atomic image delivery, thought-image exclusion and explicit modality/accounting integration boundaries.
 - Keep explicit native Google image generation unpriced under hard dollar budgets instead of borrowing text or another provider’s image tariff; preserve separately labeled policy-fixed accounting.
+- Keep Google image output out of generic GenerateContent/SSE text routes and token tariffs, preserving selected-model and ProtoJSON modality evidence while the bounded native image response route is qualified.
 - Add the native Google image response wrapper with explicit MIME and container checks, bounded complete delivery and thought-image removal; shared dispatch and image-cost qualification remain separate.
 - Qualify the six frozen fal Nano Banana generate/edit routes with model-specific geometry and ordered inline-reference limits, retaining partial outcomes and unknown upstream cost.
 - Add native MiniMax image-01 generation/reference codecs and fixtures with explicit partial/safety-filtered delivery, bounded image bytes and conservative regional product/accounting boundaries.

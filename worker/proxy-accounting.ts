@@ -1,4 +1,5 @@
 import { nativeEmbeddingMode } from "./native-embeddings.ts";
+import { googleImageRequest } from "./google-image-classification.ts";
 import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
@@ -50,6 +51,9 @@ export interface AccountingFacts {
   startedAtMs: number;
   hostedSearchPrice?: HostedSearchPrice;
   anthropicWebPrice?: AnthropicWebPrice;
+  // Freeze the admission classification; an output token counter cannot price
+  // image generation, including generic GenerateContent and soft budgets.
+  googleImage?: boolean;
 }
 
 export interface AccountingOutcome {
@@ -76,6 +80,12 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
+  if (facts.googleImage && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: billable ? reservation.reservedMicros : 0,
+    cost_basis: billable ? "unpriced_usage" : "none", input_tokens: null, output_tokens: null, total_tokens: null,
+    pricing_ref: null, pricing_effective_at: null,
+    cached_input_tokens: null, cache_write_input_tokens: null, duration_ms: outcome.occurredAtMs - facts.startedAtMs,
+    content_retained: !!contentRef, content_ref: contentRef };
   if (cost.requestTariff && fixed == null) {
     const knownReceipt = outcome.requestCostReceipt?.pricingVersion === cost.requestTariff.version ? outcome.requestCostReceipt : undefined;
     const settled = cost.requestTariff.kind === "successful_request" ? settleRequestTariff(cost.requestTariff, outcome.requestTariffOutcome ?? "unknown")
@@ -141,6 +151,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const requestId = correlation.requestId;
   const started = options.startedAtMs ?? Date.now();
   const facts: AccountingFacts = {
+    googleImage: googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
@@ -203,6 +214,11 @@ export function createProxyAccounting(options: AccountingContext) {
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  // Classify with trusted routing context, then consume the source-owned image
+  // pricing guard. This changes no wire format and clears no other price gap.
+  const imageGap = googleImageRequest(model?.upstream, body, endpoint.request_format)
+    ? requestPricingGap(model?.pricing, Array.isArray(body) ? {} : body, "google.image_generate") : null;
+  if (imageGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: imageGap, inputTokens: null, outputTokens: null };
   // Native embedding shape/byte bounds are not qualified whole-request dollar bounds.
   if (nativeEmbeddingMode(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   const requestTariff = preparedTariff ?? selectRequestTariff(endpoint, body);
@@ -223,7 +239,10 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
     : { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const qualified = endpoint.request_format === "anthropic.messages" ? anthropicPricing(pricing, model?.upstream, anthropicModifiers(body)) : pricing;
   if (!qualified) return { reserveMicros: 0, basis: "unpriced_modifier", inputTokens: null, outputTokens: null };
-  const estimate = estimateModelCost(qualified, body, endpoint, outcomePricing);
+  // Source-owned pricing can consume this selected model context without
+  // interpreting body.model as caller authority or conflating router aliases.
+  const pricingEndpoint = { ...endpoint, selectedUpstreamModel: model?.upstream ?? null };
+  const estimate = estimateModelCost(qualified, body, pricingEndpoint, outcomePricing);
   return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : requestTariff ? "manifest_request" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens, ...(requestTariff ? { requestTariff } : {}) };
 }
 
