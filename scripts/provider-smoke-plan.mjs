@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parse } from "yaml";
+import { compileProviderSnapshot as compileManifests } from "./compile-providers.mjs";
 import { runWithinDeadline } from "./smoke-readiness.mjs";
 
 export class SmokeKeyInspectionUnavailableError extends Error {}
@@ -244,18 +245,7 @@ export function compileProviderSnapshot() {
     .filter((file) => file.endsWith(".provider.yaml"))
     .sort()
     .map((file) => `providers/${file}`);
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/compile-providers.mjs", ...providerFiles],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-    },
-  );
-  if (result.status !== 0) {
-    throw new Error("provider snapshot compile failed");
-  }
-  return JSON.parse(result.stdout);
+  return compileManifests(providerFiles.map(path => parse(readFileSync(path, "utf8"))));
 }
 
 export function summarizePlan(plan) {
