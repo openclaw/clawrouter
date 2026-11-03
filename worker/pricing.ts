@@ -1,3 +1,4 @@
+import type { DeepSeekSearchRequestPricing } from "../shared/request-pricing.ts";
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -66,8 +67,21 @@ export interface OutcomeRequestPricing {
 
 export interface RequestCostReceipt {
   costMicros: number;
-  basis: "provider_reported";
+  basis: "provider_reported" | "manifest_request";
   pricingVersion: string;
+}
+
+// One qualified native Search dispatch can incur this fee regardless of count.
+// This pure bound does not register admission or observe a billable outcome.
+export function deepSeekSearchReserve(pricing: Readonly<DeepSeekSearchRequestPricing>): number | null {
+  if (!isObject(pricing) || Object.keys(pricing).some(key => ![
+    "unit", "protocol", "version", "effectiveAt", "source", "successfulNonemptyRequestMicros", "emptyRequestMicros",
+  ].includes(key)) || pricing.unit !== "request" || pricing.protocol !== "deepseek.search"
+    || typeof pricing.version !== "string" || !/^[a-zA-Z0-9._:-]{1,128}$/.test(pricing.version)
+    || pricing.effectiveAt !== "2026-11-01T00:00:00+08:00"
+    || pricing.source !== "https://api-docs.deepseek.com/guides/search/"
+    || pricing.successfulNonemptyRequestMicros !== 750 || pricing.emptyRequestMicros !== 0) return null;
+  return pricing.successfulNonemptyRequestMicros;
 }
 
 export interface ImageRequestPricing {
