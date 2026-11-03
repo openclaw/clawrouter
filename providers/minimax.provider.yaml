@@ -38,6 +38,40 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: minimax/MiniMax-M3.1-Flash
+      upstream: MiniMax-M3.1-Flash
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://platform.minimax.io/docs/api-reference/text-openai-api
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: max
+          temperature: unsupported
+          topP: unsupported
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://platform.minimax.io/docs/api-reference/text-openai-api
+            checkedAt: "2026-11-03"
+            input: [text, image, video]
+            contextWindow: 1000000
+      pricingRef: minimax-m3-1-flash-standard-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://platform.minimax.io/docs/pricing/overview
+        inputMicrosPerMillion: 150000
+        cachedInputMicrosPerMillion: 15000
+        outputMicrosPerMillion: 600000
+        maxInputTokens: 1000000
+        # Full context is a conservative reservation ceiling, not a documented
+        # default output limit. Explicit max_completion_tokens includes thinking.
+        defaultMaxOutputTokens: 1000000
+        # M3.1-Flash does not support service_tier; do not inherit M3's tiers.
     - id: minimax/MiniMax-M2.7
       upstream: MiniMax-M2.7
       capabilities: [llm.chat]
