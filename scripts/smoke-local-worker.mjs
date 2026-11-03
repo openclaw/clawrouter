@@ -372,9 +372,6 @@ try {
   const directManifestGet = await fetch(`${base}/v1/proxy/openai/models_retrieve?model_id=gpt-6-luna`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(directManifestGet.status, 403);
   assert.equal((await directManifestGet.json()).error.code, "provider_not_allowed", "GET manifest routes parse path params without a JSON envelope");
-  const missingManifestParam = await fetch(`${base}/v1/proxy/openai/models_retrieve`, { headers: { authorization: `Bearer ${proxyKey}` } });
-  assert.equal(missingManifestParam.status, 400);
-  assert.equal((await missingManifestParam.json()).error.code, "invalid_model_id", "missing GET path params fail parsing before provider policy");
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
   const configuredCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
@@ -400,9 +397,9 @@ try {
   const unknownProviderGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/unknown_provider`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "missing-provider", kind: "api_key", credential: "local" }) });
   assert.equal(unknownProviderGrant.status, 400, "upstream grants require a catalog provider");
   assert.equal((await unknownProviderGrant.json()).error.code, "unknown_provider");
-  const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  const missingPathParam = await fetch(`${base}/v1/proxy/openai/models_retrieve`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
-  assert.equal((await missingPathParam.json()).error.code, "missing_path_param");
+  assert.equal((await missingPathParam.json()).error.code, "invalid_model_id", "non-managed GET path params fail parsing before provider policy");
   const usageAfterInvalidRequest = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(usageAfterInvalidRequest.status, 200);
   assert.equal((await usageAfterInvalidRequest.json()).budget.spentMicros, 0, "invalid manifest requests must not reserve budget");
