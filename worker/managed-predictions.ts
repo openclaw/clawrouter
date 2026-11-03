@@ -6,6 +6,7 @@ import { backgroundCall, HttpBackground } from "./http-background.ts";
 import { continuationScope } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { captureGrantRuntime, prepareSelected } from "./proxy.ts";
+import { assertProviderAccess } from "./providers.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -18,6 +19,7 @@ import { errorResponse, HttpError, json, sha256Hex } from "./utils.ts";
 // not pay for durable admission, local idempotency or background collection.
 export async function proxyManagedPrediction(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
   selection: ProxySelection, query: ProxyQuery): Promise<Response> {
+  const connection = await assertProviderAccess(selection.provider, auth, env);
   if (selection.endpoint.lifecycle?.protocol !== "replicate.predictions" || selection.method !== "POST"
     || hasProxyQuery(query) || new URL(request.url).search) throw new HttpError(400, "invalid_prediction_request", "managed prediction creation requires a body-only declared POST");
   if (retentionRequired(auth, selection.capability)) throw new HttpError(400, "prediction_retention_unsupported", "this managed protocol does not support required request-content retention");
@@ -36,7 +38,7 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
     const existing = await backgroundCall<BackgroundRecord | null>(env, scope, { action: "managed_lookup", managed, policyGeneration: auth.policy.generation });
     if (existing) return existingPrediction(request, scope, existing, selection.provider.id);
   }
-  const prepared = await prepareSelected(request, env, selection, query, auth);
+  const prepared = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection);
   if (!prepared.continuation) throw new HttpError(503, "prediction_owner_unavailable", "prediction ownership is unavailable");
   const cost = { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   const accounting = createProxyAccounting({ request, env, context, auth, selection, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });

@@ -16,6 +16,10 @@ const router = `
   const url = new URL(request.url);
   if (url.pathname === "/fixture/setup") {
    const options = await request.json();
+   // Generic query transport needs a bodyless, non-job fixture. Prediction IDs
+   // now require durable ownership and cannot serve as unscoped passthrough.
+   const provider = providerById("openai"), template = provider.endpoints.find(endpoint => endpoint.id === "models_retrieve");
+   provider.endpoints.push({...template,id:"query_fixture",path:"/v1/fixture/\${item_id}",path_params:["item_id"],path_param_styles:{},request_format:"fixture.query",response_format:"fixture.query"});
    if (options.queryCredential) { const provider = providerById("openai"); provider.auth.schemes = [{type:"query_api_key",param:"api_key",secretKind:"api_key"}]; provider.adapter.injectQuery.region = "operator-region"; }
    const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
    for (const [path, body] of [
@@ -66,27 +70,27 @@ const query = "group_by%5B%5D=project&marker=one&group_by%5B%5D=&marker=two&grou
 
 test("workerd native GET retains repeated keys, interleaving and empty values on the exact upstream URL", {timeout:60000}, async t => {
  const f = await fixture(t);
- const result = await wire(await f.call("/v1/native/replicate/v1/predictions/pred-fixture?"+query));
- assert.equal(result.url,"https://api.replicate.com/v1/predictions/pred-fixture?"+query);
+ const result = await wire(await f.call("/v1/native/openai/v1/fixture/item-fixture?"+query));
+ assert.equal(result.url,"https://api.openai.com/v1/fixture/item-fixture?"+query);
  assert.equal(result.method,"GET"); assert.equal(result.body,"");
- assert.equal(result.authorization,"Bearer fixture-replicate-key");
+ assert.equal(result.authorization,"Bearer fixture-upstream-key");
  assert.equal((await f.calls()).length,1);
 });
 
 test("workerd direct manifest GET removes path selectors without regrouping the remaining query", {timeout:60000}, async t => {
  const f = await fixture(t);
- const result = await wire(await f.call("/v1/proxy/replicate/prediction?prediction_id=pred-fixture&"+query+"&prediction_id=ignored"));
- assert.equal(result.url,"https://api.replicate.com/v1/predictions/pred-fixture?"+query);
+ const result = await wire(await f.call("/v1/proxy/openai/query_fixture?item_id=item-fixture&"+query+"&item_id=ignored"));
+ assert.equal(result.url,"https://api.openai.com/v1/fixture/item-fixture?"+query);
  assert.equal(result.method,"GET"); assert.equal(result.body,"");
- const missing = await f.call("/v1/proxy/replicate/prediction?"+query);
+ const missing = await f.call("/v1/proxy/openai/query_fixture?"+query);
  assert.equal(missing.status,400); await missing.text();
  assert.equal((await f.calls()).length,1,"missing required path parameters never dispatch");
 });
 
 test("workerd manifest query arrays become repeated values rather than comma-joined scalars", {timeout:60000}, async t => {
  const f = await fixture(t);
- const result = await wire(await f.call("/v1/proxy/replicate/prediction", {method:"GET",pathParams:{prediction_id:"pred-fixture"},query:{"group_by[]":["project","","model"],empty:"",limit:0,enabled:false,omit:null,noPairs:[]},body:{}}));
- assert.equal(result.url,"https://api.replicate.com/v1/predictions/pred-fixture?group_by%5B%5D=project&group_by%5B%5D=&group_by%5B%5D=model&empty=&limit=0&enabled=false");
+ const result = await wire(await f.call("/v1/proxy/openai/query_fixture", {method:"GET",pathParams:{item_id:"item-fixture"},query:{"group_by[]":["project","","model"],empty:"",limit:0,enabled:false,omit:null,noPairs:[]},body:{}}));
+ assert.equal(result.url,"https://api.openai.com/v1/fixture/item-fixture?group_by%5B%5D=project&group_by%5B%5D=&group_by%5B%5D=model&empty=&limit=0&enabled=false");
  assert.equal(result.method,"GET"); assert.equal(result.body,"");
  assert.equal((await f.calls()).length,1);
 });
@@ -94,7 +98,7 @@ test("workerd manifest query arrays become repeated values rather than comma-joi
 test("workerd rejects structured manifest query values before dispatch", {timeout:60000}, async t => {
  const f = await fixture(t);
  for (const value of [{nested:"unsupported"},["ok",{nested:"unsupported"}],[["nested"]],[null]]) {
-  const rejected = await f.call("/v1/proxy/replicate/prediction",{method:"GET",pathParams:{prediction_id:"pred-fixture"},query:{option:value}});
+  const rejected = await f.call("/v1/proxy/openai/query_fixture",{method:"GET",pathParams:{item_id:"item-fixture"},query:{option:value}});
   assert.equal(rejected.status,400); assert.equal((await rejected.json()).error.code,"invalid_request_body");
  }
  assert.equal((await f.calls()).length,0);
@@ -162,10 +166,10 @@ test("workerd queries cannot override credential or provider authorization", {ti
  for (const [setup,headers,code] of [
   [{},{authorization:"Bearer invalid"},"invalid_proxy_key"],
   [{revoked:true},{},"proxy_key_revoked"],
-  [{providers:["openai"]},{},"provider_not_allowed"],
+  [{providers:["anthropic"]},{},"provider_not_allowed"],
  ]) {
   const f = await fixture(t,setup);
-  const response = await f.call("/v1/native/replicate/v1/predictions/pred-fixture?policyId=other&provider=openai&"+query,undefined,headers);
+  const response = await f.call("/v1/native/openai/v1/fixture/item-fixture?policyId=other&provider=openai&"+query,undefined,headers);
   assert.equal(response.status,code === "invalid_proxy_key" ? 401 : 403);
   assert.equal((await response.json()).error.code,code);
   assert.equal((await f.calls()).length,0);

@@ -161,6 +161,8 @@ test("unknown price, malformed IDs, query overrides and webhook creation fail be
   const f = await fixture(t, { fixed: null });
   const denied = await f.call(); assert.equal(denied.status, 400); assert.equal((await denied.json()).error.code, "pricing_required");
   assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
+  await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, providers: ["openai"] } });
+  assert.equal((await f.call()).status, 403, "provider policy denial precedes protocol validation");
   await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, requestCostMicros: 700 } });
   for (const route of [`${path}/invalid%3Fid`, `${control}?token=other`, `${path}?version=other`]) {
     const response = route.includes("/prediction_fixture") || route.includes("invalid") ? await get(f, route) : await f.call(route);
