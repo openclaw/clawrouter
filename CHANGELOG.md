@@ -38,6 +38,7 @@
 - Support validated endpoint dispatch paths while preserving caller routes, original credentials and same-origin configuration for Chat, Messages and model discovery.
 - Qualify literal POST Responses dispatch mappings while preserving the caller route and original account credential, without widening lifecycle, query or WebSocket routing.
 - Qualify literal POST Responses upstream-path mappings while preserving caller-route authorization, original credentials and strict query, WebSocket and path validation.
+- Bind OpenCode conversation headers to the authenticated caller, native origin and original credential owner, isolating standalone calls and replacing untrusted session overrides.
 - Dispatch Synthetic model discovery through its native data-only codec and scoped mapped route, preserving strict OpenAI decoding and original caller/grant filtering.
 - Add frozen OpenRouter custom-host Chat image codecs with explicit host qualification, reused image validation and honest partial-count delivery.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
