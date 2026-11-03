@@ -99,6 +99,7 @@
 - Add a bounded unary Bedrock Converse response wrapper with explicit selected-model and regional-origin binding, complete validation and cache-inclusive usage; common dispatch and SigV4 integration remain separately qualified.
 - Add bounded complete-response quarantine for native Bedrock ConverseStream, validating every frame and terminal event before releasing original bytes; common dispatch, signing and route activation remain separately qualified.
 - Qualify unary Bedrock Converse declarations with explicit model binding and regional SigV4 constraints; keep streaming, tariffs and provider activation closed.
+- Qualify the distinct buffered Bedrock ConverseStream compiler contract alongside unary Converse, preserving explicit Chat selection, regional SigV4 binding and unknown-price denial.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.

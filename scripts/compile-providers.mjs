@@ -956,19 +956,25 @@ function validateBedrockConverse(manifest) {
     [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("aws_bedrock.converse"))
     || manifest.id === "aws-bedrock" && /\/converse(?:[-/]|$)/.test(endpoint.path));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error("aws_bedrock.converse requires a selected unary Chat model, original regional SigV4 route and unpriced native contract"); };
+  const fail = () => { throw new Error("aws_bedrock.converse requires an explicitly selected Chat model, original regional SigV4 route and qualified unary or buffered EventStream contract"); };
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
-  if (manifest.id !== "aws-bedrock" || manifest.class !== "custom_adapter" || endpoints.length !== 1
+  if (manifest.id !== "aws-bedrock" || manifest.class !== "custom_adapter" || endpoints.length > 2
+    || new Set(endpoints.map(([, endpoint]) => endpoint.requestFormat)).size !== endpoints.length
     || Object.values(manifest.baseUrls).some(base => base !== "https://bedrock-runtime.${region}.amazonaws.com")
     || manifest.auth.schemes.length !== 1 || scheme.type !== "sig_v4" || scheme.service !== "bedrock" || scheme.regionParam !== "region" || scheme.required === false
     || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
     || adapter?.request !== "aws_bedrock" || adapter?.response !== "aws_bedrock"
     || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
     || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
-  const [id, endpoint] = endpoints[0], capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
-  if (capabilities.length !== 1 || capabilities[0].id !== "llm.chat" || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST"
-    || endpoint.requestFormat !== "aws_bedrock.converse" || endpoint.responseFormat !== "aws_bedrock.converse"
-    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+  for (const [id, endpoint] of endpoints) {
+    const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+    const stream = endpoint.requestFormat === "aws_bedrock.converse_stream";
+    if (capabilities.length !== 1 || capabilities[0].id !== "llm.chat" || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST"
+      || !["aws_bedrock.converse", "aws_bedrock.converse_stream"].includes(endpoint.requestFormat)
+      || endpoint.responseFormat !== (stream ? "aws_bedrock.converse_eventstream" : "aws_bedrock.converse")
+      || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase())
+        || value !== (stream && name.toLowerCase() === "accept" ? "application/vnd.amazon.eventstream" : "application/json"))) fail();
+  }
   const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("llm.chat"));
   if (!models.length || models.some(model => !model.upstream || model.upstream.length > 2048 || /[\x00-\x1f\x7f]/.test(model.upstream)
     || model.upstream.includes("${") || model.availability?.status === "upstream_alias" || model.pricing
