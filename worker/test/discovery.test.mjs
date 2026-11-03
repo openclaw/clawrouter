@@ -544,7 +544,7 @@ test("Fusion shares selected-policy model eligibility across key and session dis
     }
   }
   await compare(true); // A missing adviser never hides a usable final route.
-  config.adviserModels = ["fireworks/gpt-oss-120b"];
+  config.adviserModels = ["fireworks/fixture-unpriced"];
   env.FIREWORKS_API_KEY = "fixture-fireworks-key";
   await compare(true); // The same measured-pricing guard applies to advisers.
   policy.monthlyBudgetMicros = null;
@@ -565,7 +565,7 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   await compare(false);
   connection.monthlyBudgetMicros = null;
 
-  for (const model of ["openai/fixture-prefix-model", "fireworks/gpt-oss-120b"]) {
+  for (const model of ["openai/fixture-prefix-model", "fireworks/fixture-unpriced"]) {
     config.aggregatorModel = model;
     if (model.startsWith("fireworks/")) env.FIREWORKS_API_KEY = "fixture-fireworks-key";
     for (const [policyLimit, providerLimit, fixed, expected] of [[100, null, null, false], [null, 100, null, false], [null, null, null, true], [100, 100, 7, true]]) {

@@ -192,6 +192,7 @@ function normalizePricing(pricing) {
   if (pricing.unit === "character") return { unit: pricing.unit, effectiveAt: pricing.effectiveAt, source: pricing.source, inputMicrosPerMillionCharacters: pricing.inputMicrosPerMillionCharacters, maxInputCharacters: pricing.maxInputCharacters };
   return {
     effectiveAt: pricing.effectiveAt,
+    ...(pricing.checkedAt ? { checkedAt: pricing.checkedAt } : {}),
     source: pricing.source,
     ...normalizeRates(pricing),
     maxInputTokens: pricing.maxInputTokens,

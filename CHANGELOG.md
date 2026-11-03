@@ -59,6 +59,8 @@
 - Soft budgets deny a scope observed exhausted in the last 10 s before dispatch, without a ledger round trip; concurrent requests can overspend a soft cap by in-flight work. New policies created through the admin API or console default to `budgetMode: "soft"`; stored policies keep their mode, and an omitted mode still means reserve.
 - Report caller-owned request, token, and spend totals as `usage.personal` on personal usage reads and a per-principal breakdown as `usage.principals` on admin usage, alongside the unchanged shared policy totals. Show both in the console.
 
+- Add published Fireworks GPT OSS 120B Standard and Priority token rates with conservative context bounds and preserve the pricing verification date in compiled cards. Unknown models remain unpriced.
+
 ## 0.5.0 - 2026-10-22
 
 - Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.
