@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
+
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.

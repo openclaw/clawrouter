@@ -14,12 +14,14 @@ export interface UsageTokens {
   cacheWrite5m: number | null;
   cacheWrite1h: number | null;
   billable?: false;
+  billedTokens?: { input: number | null; output: number | null };
 }
 
 export function extractUsageTokens(value: unknown): UsageTokens | null {
   const root = record(value);
   if (root && ("usageMetadata" in root || "usage_metadata" in root)) return googleUsageTokens(googleField(root, "usageMetadata", "usage_metadata"));
-  const usage = usageRecord(root);
+  const usage = root?.type === "message-end" ? record(record(root.delta)?.usage) : usageRecord(root);
+  if (usage && ("tokens" in usage || "billed_units" in usage)) return cohereUsageTokens(usage);
   if (!usage) return null;
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
@@ -44,6 +46,17 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   const serviceTier = modifiers.serviceTier !== undefined ? modifiers.serviceTier : extractServiceTier(record(root?.response) ?? root);
   const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
   return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+}
+
+// Cohere reports observed context separately from the units it bills. Missing
+// billed counters cannot borrow observed counts or imply a free response.
+function cohereUsageTokens(usage: Record<string, unknown>): UsageTokens {
+  const observed = record(usage.tokens), billed = record(usage.billed_units);
+  const count = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const input = count(observed?.input_tokens), output = count(observed?.output_tokens);
+  const total = input !== null && output !== null && Number.isSafeInteger(input + output) ? input + output : null;
+  return { input, output, total, cached: null, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null,
+    billedTokens: { input: count(billed?.input_tokens), output: count(billed?.output_tokens) } };
 }
 
 function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null): number | null {
@@ -84,6 +97,10 @@ export function responseOutcome(value: unknown): ResponseOutcome {
   const root = record(value);
   if (!root) return null;
   if (root.error || root.type === "error" || root.type === "response.failed" || root.type === "response.cancelled") return "provider_error";
+  if (root.type === "message-end") {
+    const reason = record(root.delta)?.finish_reason;
+    return typeof reason === "string" && ["COMPLETE", "STOP_SEQUENCE", "MAX_TOKENS", "TOOL_CALL"].includes(reason) ? "success" : "provider_error";
+  }
   if (root.type === "response.completed" || root.type === "response.incomplete") return "success";
   const response = record(root.response) ?? (root.object === "response" ? root : null);
   return response?.status === "failed" || response?.status === "cancelled" ? "provider_error" : response?.status === "completed" || response?.status === "incomplete" ? "success" : null;
@@ -168,7 +185,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   let found: UsageTokens | null = null, terminalTokens: UsageTokens | null = null;
   let message: Record<string, unknown> | null = null, messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false, uncertain = false;
-  let protocol: "message" | "response" | "chat" | null = null;
+  let protocol: "message" | "response" | "chat" | "cohere" | null = null;
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
   function accept(evidence: SseUsageEvidence) {
     const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
@@ -188,7 +205,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
     }
     if (outcome !== null) return;
     if (evidence.kind === "done") {
-      if (protocol === "message" || protocol === "response") { outcome = "provider_error"; return; }
+      if (protocol === "message" || protocol === "response" || protocol === "cohere") { outcome = "provider_error"; return; }
       outcome = "success";
       terminalTokens = found && chatTier ? { ...found, serviceTier: chatTier } : found;
       return;
@@ -198,6 +215,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
     const terminal = responseOutcome(root);
     if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root); return; }
     if (typeof root.type === "string" && root.type.startsWith("response.")) protocol = "response";
+    if (typeof root.type === "string" && /^(message|content|tool-call|tool-plan|citation)-/.test(root.type)) protocol = "cohere";
     if (root.object === "chat.completion.chunk") {
       protocol = "chat";
       chatTier = extractServiceTier(root) ?? chatTier;
