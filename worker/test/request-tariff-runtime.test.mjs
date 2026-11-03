@@ -267,3 +267,27 @@ test("a lost delivery after the terminal frame retains one charged reservation",
   assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
   assert.equal(f.events[0].cost_basis, "manifest_request_reservation");
 });
+
+test("successful-request selection freezes one native price and rejects cheap malformed defaults", () => {
+  const endpoint = { method: "POST", path: "/search", request_format: "perplexity.search", response_format: "perplexity.search", query: {},
+    requestPricing: { unit: "request", version: "perplexity-search-2026-11-03", effectiveAt: "2026-11-03",
+      source: "https://docs.perplexity.ai/docs/getting-started/pricing", successfulResponseMicros: 5000,
+      parameterRates: { parameter: "search_type", rates: { web: 5000, fast: 1000 } } } };
+  for (const [body, micros] of [[{ query: "synthetic" }, 5000], [{ query: ["one", "two"], search_type: "fast" }, 1000],
+    [{ query: "synthetic", search_type: "web", max_results: 100 }, 5000], [{ query: { search_type: "fast" } }, 5000]]) {
+    const cost = estimateCost(null, body, null, "web.search", endpoint);
+    assert.equal(cost.reserveMicros, micros); assert.equal(cost.inputTokens, null);
+    const facts = { event: {}, model: null, fixed: null, cost, requestFormat: "perplexity.search", startedAtMs: 1 };
+    const event = accountingReceipt(facts, { occurredAtMs: 2, statusCode: 422, status: "client_error", billable: false,
+      tokens: null, reservation: { reservedMicros: micros }, contentRef: null });
+    assert.equal(event.actual_cost_micros, micros, "HTTP status alone cannot attest free work");
+    assert.equal(event.cost_basis, "manifest_request_reservation");
+  }
+  for (const value of [null, undefined, false, 0, [], {}, "unknown", "FAST", "__proto__"]) {
+    assert.throws(() => selectRequestTariff(endpoint, { query: "synthetic", search_type: value }), error => error.code === "invalid_request_tariff_parameter");
+  }
+  const selected = selectRequestTariff(endpoint, { search_type: "fast" });
+  endpoint.requestPricing.parameterRates.rates.fast = 999;
+  assert.equal(selected.micros, 1000);
+  assert.throws(() => selectRequestTariff({ ...endpoint, streaming: "sse" }, {}), error => error.code === "request_tariff_unqualified");
+});
