@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Keep native SystemOne decision cards out of OpenAI Decisions discovery while preserving their exact native limits, observed usage contract and caller-scoped provider routes.
 
+- Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
 
 - Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.
@@ -230,6 +230,7 @@
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Add focused Baseten SystemOne decision codecs and typed fixtures, preserving frozen model identities, native probability/legend semantics and independently validated per-question output usage.
+- Keep native SystemOne decision cards out of OpenAI Decisions discovery while preserving their exact native limits, observed usage contract and caller-scoped provider routes.
 - Add experimental Arcee Platform, Chutes API-key, Featherless and Venice Chat Completions routes with independent credentials, unpriced model passthrough and explicit product boundaries.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
