@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-catalog-providers.md.
+# Direct hosted Chat only; frozen cards and boundaries: docs/arcee-native-chat.md.
 # Endpoint/model source checked 2026-11-03: https://docs.arcee.ai/api-reference/your-first-api-call
 schema: clawrouter.service-provider.v1
 id: arcee
@@ -43,6 +43,48 @@ models:
     - id: arcee/trinity-mini
       upstream: trinity-mini
       capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://www.arcee.ai/trinity, https://docs.arcee.ai/capabilities/function-calling]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/arcee/models.ts, https://www.arcee.ai/trinity]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: arcee/trinity-large-preview
+      upstream: trinity-large-preview
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://www.arcee.ai/trinity, https://docs.arcee.ai/capabilities/function-calling]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/arcee/models.ts, https://www.arcee.ai/trinity]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: arcee/trinity-large-thinking
+      upstream: trinity-large-thinking
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://www.arcee.ai/trinity, https://docs.arcee.ai/capabilities/reasoning-traces]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/arcee/models.ts, https://www.arcee.ai/trinity]
+            checkedAt: "2026-11-03"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
