@@ -9,12 +9,14 @@ The first runtime slice accepts `openai.chat_completions`, `anthropic.messages`,
 `openai.models` and `anthropic.models`. Request and response formats must match;
 Chat/Messages use POST and metadata uses GET. WebSockets, lifecycle endpoints,
 path parameters and other native formats are not qualified by this field.
-Mapping does not translate request or response formats.
+Mapping does not translate request or response formats. Model listing cannot
+stream or enable inference-model passthrough. Request and hosted-tool tariffs
+need their own path qualification and cannot combine with this first mapping.
 
-The value is a literal path of at most 2,048 characters. Each nonempty segment
+Both caller and dispatch paths are literal paths of at most 2,048 characters. Each nonempty segment
 contains only ASCII letters, digits, `.`, `_`, `~` or `-`; `.` and `..` segments
 are forbidden. URLs, double slashes, trailing slashes, percent escapes,
-backslashes, query strings, fragments and templates are rejected. No caller
+backslashes, query strings, fragments, CR/LF endings and templates are rejected. No caller
 input supplies or substitutes this value. A configured grant transport may omit
 its endpoint override or repeat exactly the same path; a conflicting override
 fails before egress.

@@ -8,6 +8,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
 const { snapshot, upstreamPath, configuredUpstream } = await import("../providers.ts");
 const { configuredEndpointPath } = await import("../endpoint-path.ts");
+const { assertOperationConfiguration } = await import("../provider-auth.ts");
 const { authorityCall } = await import("../authority.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const { sha256Hex } = await import("../utils.ts");
@@ -66,10 +67,10 @@ async function fixture(t, { pooled = true, models = ["mapped/allowed"] } = {}) {
         ...(endpoint.method === "POST" ? { body: JSON.stringify(manifest ? { body } : body) } : {}) }), env, { waitUntil: p => pending.push(p) });
     }, async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
   };
-  t.after(f.drain); return f;
+  t.after(f.drain, { timeout: 10000 }); return f;
 }
 
-for (const pooled of [false, true]) test(`mapped native and manifest routes keep their ${pooled ? "original grant" : "environment credential"}, wire and policy accounting`, async t => {
+for (const pooled of [false, true]) test(`mapped native and manifest routes keep their ${pooled ? "original grant" : "environment credential"}, wire and policy accounting`, { timeout: 10000 }, async t => {
   const f = await fixture(t, { pooled });
   for (const [id, method, path, upstream] of definitions) for (const manifest of [false, true]) {
     const before = f.sent.length, response = await f.call(id, { manifest });
@@ -90,7 +91,7 @@ for (const pooled of [false, true]) test(`mapped native and manifest routes keep
   assert.ok(usage.every(e => e.provider === "mapped" && e.actual_cost_micros === (e.capability === "models.list" ? 0 : 7)));
 });
 
-test("mapped routes do not become alternate caller paths or query-selected targets", async t => {
+test("mapped routes do not become alternate caller paths or query-selected targets", { timeout: 10000 }, async t => {
   const f = await fixture(t);
   for (const options of [{ path: "/v1/native/mapped/openai/v1/chat/completions" }, { query: "?upstreamPath=/other" }, { manifest: true, query: "?url=https://other.example" }]) {
     const response = await f.call("chat", options); assert.ok(response.status >= 400); await response.text();
@@ -101,17 +102,17 @@ test("mapped routes do not become alternate caller paths or query-selected targe
   assert.equal(f.sent[0].request.url, "https://mapped.example/anthropic/v1/models?limit=2&after_id=allowed");
 });
 
-test("mapped inference retains caller model denial", async t => {
+test("mapped inference retains caller model denial", { timeout: 10000 }, async t => {
   const denied = await fixture(t, { models: ["mapped/other"] });
   const response = await denied.call("chat"); assert.equal(response.status, 403); await response.text(); assert.equal(denied.sent.length, 0);
 });
 
-test("mapped dispatch cannot revive a revoked original grant with the environment key", async t => {
+test("mapped dispatch cannot revive a revoked original grant with the environment key", { timeout: 10000 }, async t => {
   const f = await fixture(t); await revokeGrantCredentials(f.env, f.grantKey);
   const response = await f.call("messages"); assert.ok(response.status >= 400); await response.text(); assert.equal(f.sent.length, 0);
 });
 
-test("invalid configured mappings fail before egress without echoing their value", async t => {
+test("invalid configured mappings fail before egress without echoing their value", { timeout: 10000 }, async t => {
   const f = await fixture(t), endpoint = f.provider.endpoints[0];
   for (const path of ["https://other.example/private", "//other.example", "/a/../private", "/a/%2e%2e/private", "/a\\private", "/a?secret=fixture", "/a#fragment", "/${secret}", "/a//b", "/a/", "", null]) {
     endpoint.upstreamPath = path;
@@ -120,13 +121,31 @@ test("invalid configured mappings fail before egress without echoing their value
   }
 });
 
-test("path preflight and dispatch share exact validation while legacy transport paths remain unchanged", async t => {
+test("trailing CR, LF and CRLF fail preflight, path dispatch and native/manifest requests", { timeout: 10000 }, async t => {
+  const f = await fixture(t), endpoint = f.provider.endpoints[0], auth = configuredUpstream(f.provider, null, f.env);
+  const original = endpoint.upstreamPath;
+  for (const ending of ["\r", "\n", "\r\n"]) {
+    endpoint.upstreamPath = original + ending;
+    assert.throws(() => configuredEndpointPath(endpoint), /not qualified/);
+    assert.throws(() => assertOperationConfiguration({ provider: f.provider, endpoint, mode: "http" }, null, f.env), /not qualified/);
+    assert.throws(() => upstreamPath(f.provider, endpoint, {}, f.env, auth), /not qualified/);
+    for (const manifest of [false, true]) {
+      const response = await f.call("chat", { manifest }); assert.ok(response.status >= 400); await response.text();
+      assert.equal(f.sent.length, 0);
+    }
+    assert.throws(() => configuredEndpointPath({ ...endpoint, upstreamPath: original, path: endpoint.path + ending }), /not qualified/);
+  }
+});
+
+test("path preflight and dispatch share exact validation while legacy transport paths remain unchanged", { timeout: 10000 }, async t => {
   const f = await fixture(t), endpoint = f.provider.endpoints[0];
   const auth = configuredUpstream(f.provider, null, f.env);
   assert.equal(upstreamPath(f.provider, endpoint, {}, f.env, auth), "/openai/v1/chat/completions");
   assert.equal(configuredEndpointPath(endpoint, endpoint.upstreamPath, "https://mapped.example/prefix"), endpoint.upstreamPath);
-  for (const changes of [{ path_params: ["model"] }, { request_format: "openai.responses" }, { response_format: "anthropic.messages" }, { method: "DELETE" }, { websocket: "openai.responses" }, { lifecycle: {} }, { responsesLifecycle: {} }])
+  for (const changes of [{ path_params: ["model"] }, { path_param_styles: { model: "segment" } }, { path: "/a/../b" }, { request_format: "openai.responses" }, { response_format: "anthropic.messages" }, { method: "DELETE" }, { websocket: "openai.responses" }, { lifecycle: {} }, { responsesLifecycle: {} }, { requestPricing: {} }, { toolPricing: {} }])
     assert.throws(() => configuredEndpointPath({ ...endpoint, ...changes }), /not qualified/);
+  const metadata = f.provider.endpoints.find(e => e.id === "models");
+  for (const changes of [{ streaming: "sse" }, { modelPassthrough: {} }]) assert.throws(() => configuredEndpointPath({ ...metadata, ...changes }), /not qualified/);
   for (const base of ["https://mapped.example?next=", "https://mapped.example#fragment", "https://user:fixture@mapped.example", "file:///tmp"])
     assert.throws(() => configuredEndpointPath(endpoint, undefined, base), /not qualified/);
   assert.throws(() => upstreamPath(f.provider, endpoint, {}, f.env, { ...auth, transportPaths: { chat: "/other" } }), /not qualified/);
