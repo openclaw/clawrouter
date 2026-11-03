@@ -1,6 +1,6 @@
 import type { CompiledEndpoint } from "./types.ts";
 
-export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video";
+export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video";
 export type ManagedObservationLoss = "expired_or_unknown" | "deleted" | "canceled_or_deleted";
 export type ManagedTerminal = "succeeded" | "failed" | "canceled" | "aborted";
 export type ManagedControlAction = "retrieve" | "result" | "cancel";
@@ -37,7 +37,7 @@ export interface ManagedObservation {
 }
 
 export interface ManagedPublicPaths {
-  retrieve: string;
+  retrieve?: string;
   result?: string;
   cancel?: string;
 }
@@ -49,6 +49,10 @@ export interface ManagedLifecycleAdapter {
   requestFormats: readonly string[];
   supportsResult: boolean;
   supportsCancel: boolean;
+  // Non-secret per-job flags retained beside URL parameters, never caller authority.
+  retainedParams?: readonly string[];
+  // Restrict declared controls using only the original validated job flags.
+  allowedControls?(pathParams: Record<string, string>): readonly ManagedControlAction[];
   validateId(value: unknown): string;
   // A valid, non-secret ID for checking declared route templates, never egress.
   identityProbe?: string;

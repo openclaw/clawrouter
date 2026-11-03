@@ -62,7 +62,7 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
       if (job.managed.observationUnavailable) { operation.stop("complete"); return managedObservationUnavailable(); }
       const route = job.managed.route ?? retainedResponseRoute({}, request.headers);
       const { managedRoute } = await import("./managed-routes.ts");
-      const endpoint = managedRoute(provider, create).controls[action];
+      const endpoint = managedRoute(provider, create, route.pathParams).controls[action];
       if (!endpoint || create.path_params.some(name => endpoint.path_params.includes(name) && pathParams[name] !== route.pathParams[name])) {
         throw new HttpError(409, "response_owner_unavailable", "control path does not match the original managed route");
       }
