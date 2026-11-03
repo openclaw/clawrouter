@@ -28,13 +28,13 @@ async function fixture(t, options = {}) {
   t.after(() => { snapshot.providers = original; });
   const policy = { enabled: true, generation: "v1", providers: [provider.id], models: options.models ?? null, tenantId: "fixture", monthlyBudgetMicros: options.limit ?? 10000,
     requestCostMicros: options.unpriced ? null : 17, retainRequestContent: false };
-  const records = new Map(), events = [], pending = [], sent = [], charges = [], names = new Set(), budgets = sqlBudgetNamespace(t);
+  const records = new Map(), events = [], pending = [], sent = [], settlements = [], names = new Set(), budgets = sqlBudgetNamespace(t);
   const env = { GOOGLE_API_KEY: "synthetic-google-key", POLICY_KV: {
     async get(key, type) { const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
     async put(key, value) { records.set(key, JSON.parse(value)); }, async list() { return { keys: [], list_complete: true }; },
   }, USAGE_QUEUE: { send: async event => events.push(event) }, BUDGET_LEDGER: {
     idFromName: name => name, get(name) { names.add(name); return { fetch(url, init) {
-      if (new URL(url).pathname === "/charge") charges.push(JSON.parse(init.body));
+      if (new URL(url).pathname === "/settle") settlements.push(JSON.parse(init.body));
       return budgets.get(name).fetch(url, init);
     } }; },
   } };
@@ -59,7 +59,7 @@ async function fixture(t, options = {}) {
     }), env, { waitUntil: promise => pending.push(promise) });
   };
   t.after(async () => { await Promise.all(pending); });
-  return { request, sent, events, pending, charges };
+  return { request, sent, events, pending, settlements, rows: () => [...names].flatMap(name => budgets.get(name).reservations()) };
 }
 
 for (const mode of ["unary", "batch"]) for (const manifest of [false, true]) test(`Google ${mode} ${manifest ? "manifest" : "native"} preserves wire and settles once`, async t => {
@@ -73,7 +73,7 @@ for (const mode of ["unary", "batch"]) for (const manifest of [false, true]) tes
   assert.equal(f.sent[0].url, `https://generativelanguage.googleapis.com/v1beta/models/${wire[mode].model}:${contracts[mode][1]}`);
   assert.equal(f.sent[0].headers.get("x-goog-api-key"), "synthetic-google-key"); assert.equal(f.sent[0].headers.get("authorization"), null);
   assert.equal(f.sent[0].redirect, "manual");
-  assert.equal(f.events.length, 1); assert.equal(f.charges.length, 1);
+  assert.equal(f.events.length, 1); assert.equal(f.settlements.length, 1); assert.equal(f.settlements[0].actualCostMicros, 17); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 17));
   assert.equal(f.events[0].actual_cost_micros, 17); assert.equal(f.events[0].cost_basis, "policy_fixed");
   assert.equal(f.events[0].input_tokens, wire[mode].response.usageMetadata?.promptTokenCount ?? null);
   assert.equal(f.events[0].output_tokens, null); assert.equal(bodyBudgetCharged(), 0);
@@ -120,7 +120,7 @@ for (const kind of ["malformed", "utf8", "mime", "redirect", "rejected", "oversi
     return new Response(new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(JSON.stringify(wire.unary.response))); if (kind === "eof") controller.error(new Error("synthetic transport loss")); }, cancel() { canceled = true; } }), { headers });
   } });
   const response = await f.request(); assert.equal(response.status, 502); await response.text(); await Promise.all(f.pending);
-  assert.equal(f.events.length, 1); assert.equal(f.charges.length, 1); assert.equal(f.events[0].actual_cost_micros, 17);
+  assert.equal(f.events.length, 1); assert.equal(f.settlements.length, 1); assert.equal(f.settlements[0].actualCostMicros, 17); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 17)); assert.equal(f.events[0].actual_cost_micros, 17);
   assert.equal(f.events[0].input_tokens, null); assert.equal(f.sent.length, 1); assert.equal(bodyBudgetCharged(), 0);
   if (kind === "deadline") { assert.equal(canceled, true); assert.equal(f.events[0].status, "timeout"); }
 });
@@ -129,7 +129,7 @@ test("Google response capacity remains held through delivery cancellation", asyn
   const f = await fixture(t), response = await f.request();
   assert.equal(response.status, 200); assert.ok(bodyBudgetCharged() > 0);
   await response.body.cancel("synthetic consumer cancellation"); await Promise.all(f.pending);
-  assert.equal(bodyBudgetCharged(), 0); assert.equal(f.events[0].actual_cost_micros, 17); assert.equal(f.charges.length, 1);
+  assert.equal(bodyBudgetCharged(), 0); assert.equal(f.events[0].actual_cost_micros, 17); assert.equal(f.settlements.length, 1); assert.equal(f.settlements[0].actualCostMicros, 17); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 17));
 });
 
 test("Google response capacity contention denies before paid dispatch", async t => {
@@ -160,7 +160,7 @@ test("Google caller abort interrupts the original upstream reader and preserves 
   const pending = f.request(undefined, { signal: controller.signal }); await dispatched; controller.abort();
   const response = await pending; assert.equal(response.status, 502); await response.text(); await Promise.all(f.pending);
   assert.equal(canceled, true); assert.equal(f.events[0].status, "client_error");
-  assert.equal(f.events[0].actual_cost_micros, 17); assert.equal(f.charges.length, 1); assert.equal(bodyBudgetCharged(), 0);
+  assert.equal(f.events[0].actual_cost_micros, 17); assert.equal(f.settlements.length, 1); assert.equal(f.settlements[0].actualCostMicros, 17); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === 17)); assert.equal(bodyBudgetCharged(), 0);
 });
 
 test("Google validated large responses use only the codec's native token count", async t => {
