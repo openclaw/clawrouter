@@ -25,7 +25,8 @@ test("geometry respects the 16px grid, edge, pixel-area and ratio boundaries", (
 });
 test("native options do not silently convert quality, transparency, count or unsupported resolution", () => {
   for (const changes of [{ quality: "ultra" }, { output_format: "gif" }, { background: "transparent", output_format: "jpeg" },
-    { num_images: 5 }, { resolution: "4K" }, { image_size: "1024x1024" }, { prompt: "x".repeat(32001) }]) assert.throws(() => prepare(0, changes));
+    { quality: ["low"] }, { output_format: ["png"] }, { background: ["opaque"] },
+    { num_images: 5 }, { num_images: null }, { resolution: "4K" }, { image_size: "1024x1024" }, { prompt: "x".repeat(32001) }]) assert.throws(() => prepare(0, changes));
   assert.equal(prepare(1).body.quality, "auto");
   const { quality, ...body } = wire.requests[0].body;
   assert.equal(Object.hasOwn(prepareFalGptImage(wire.requests[0].model, body).body, "quality"), false);

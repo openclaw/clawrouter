@@ -10,12 +10,12 @@ export function prepareFalGptImage(model: string, value: unknown): FalImageReque
   if (Object.keys(value).some(key => !allowed.includes(key)) || typeof value.prompt !== "string" || !value.prompt.trim()
     || value.prompt.length > 32000) fail("fields");
   for (const character of value.prompt) { const code = character.codePointAt(0)!; if (code >= 0xd800 && code <= 0xdfff) fail("unicode"); }
-  const count = value.num_images ?? 1;
+  const count = value.num_images === undefined ? 1 : value.num_images;
   // The frozen OpenClaw capability caps batches at four even though fal permits ten.
   if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 4) fail("count");
-  if (value.output_format !== undefined && !["png", "jpeg", "webp"].includes(String(value.output_format))
-    || value.quality !== undefined && !["low", "medium", "high", "xhigh", "max", "auto"].includes(String(value.quality))
-    || value.background !== undefined && !["transparent", "opaque", "auto"].includes(String(value.background))) fail("options");
+  if (value.output_format !== undefined && (typeof value.output_format !== "string" || !["png", "jpeg", "webp"].includes(value.output_format))
+    || value.quality !== undefined && (typeof value.quality !== "string" || !["low", "medium", "high", "xhigh", "max", "auto"].includes(value.quality))
+    || value.background !== undefined && (typeof value.background !== "string" || !["transparent", "opaque", "auto"].includes(value.background))) fail("options");
   if (value.image_size !== undefined) {
     if (typeof value.image_size === "string") { if (!sizes.includes(value.image_size)) fail("size"); }
     else {
