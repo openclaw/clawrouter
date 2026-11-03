@@ -1,3 +1,4 @@
+import { isKeyedModelDiscovery, readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
@@ -8,7 +9,7 @@ import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
+  return isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
@@ -90,6 +91,10 @@ async function readMetadata(response: Response, operation: HttpOperation): Promi
 export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>): Promise<Response> {
   const restricted = policy.models != null, seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
+    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
+    }
     if (!response.ok) {
       if (response.status >= 300 && response.status < 400) {
         void response.body?.cancel().catch(() => undefined);
@@ -98,6 +103,10 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       if (!restricted) { const headers = new Headers(response.headers); headers.set("cache-control", "private, no-store"); return new Response(response.body, { status: response.status, headers }); }
       void response.body?.cancel().catch(() => undefined);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
+    }
+    if (isKeyedModelDiscovery(endpoint.request_format)) {
+      const metadata = await readKeyedModelDiscovery(endpoint.request_format, response, operation.signal, id => discoveryAllows(policy, provider, id));
+      return metadataResponse(metadata, response);
     }
     if (endpoint.request_format === "synthetic.models") {
       const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,
