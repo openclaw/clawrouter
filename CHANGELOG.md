@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
+- Add separate Qwen China standard and global/China Coding Plan Chat contracts with scoped credentials, finite current model inventory, retired-ID rejection and native Worker fixtures.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
