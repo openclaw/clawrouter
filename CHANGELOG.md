@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
+
 - Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.
 
 - Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.

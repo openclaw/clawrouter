@@ -1,0 +1,51 @@
+{
+  "qualification": {
+    "live": false,
+    "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+    "nativeContract": "unqualified",
+    "upstreamCostMicros": null,
+    "newCreateAllowed": false,
+    "retirementEstablished": false,
+    "aliasEstablished": false
+  },
+  "text": {
+    "model": "bytedance/seedance-1.5-pro",
+    "input": {
+      "prompt": "A paper fox sailing on a pond",
+      "duration": 4,
+      "aspect_ratio": "16:9",
+      "resolution": "720p",
+      "generate_audio": false
+    }
+  },
+  "image": {
+    "model": "bytedance/seedance-1.5-pro",
+    "input": {
+      "prompt": "Animate the sail",
+      "duration": 12,
+      "aspect_ratio": "1:1",
+      "resolution": "1080p",
+      "generate_audio": true,
+      "input_urls": [
+        "https://assets.example/boat.png"
+      ]
+    }
+  },
+  "taskId": "synthetic_kie_seedance_job",
+  "pending": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_seedance_job",
+      "model": "bytedance/seedance-1.5-pro",
+      "state": "generating"
+    }
+  },
+  "completed": {
+    "code": 200,
+    "data": {
+      "taskId": "synthetic_kie_seedance_job",
+      "model": "bytedance/seedance-1.5-pro",
+      "state": "success"
+    }
+  }
+}
