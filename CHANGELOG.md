@@ -96,6 +96,8 @@
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 - Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
 
+- Declare scoped Vydra Jobs submission/retrieval/cancellation and validate returned workflow identity, preserving cancellation/refund uncertainty and unqualified upstream-dollar costs.
+- Qualify the shipped Vydra Jobs declaration through native and manifest Worker lifecycle and settlement fixtures, keeping owned-job smoke reads unresolved and the separate Models API unadvertised.
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
 - Register Together video with the existing scoped media controller, validating original-origin dispatch and complete native responses while keeping unsupported cancellation and unknown upstream costs closed.
 - Add bounded Together video lifecycle codecs and native fixtures for frozen Wan2.7 text/image-to-video and Hailuo02, preserving job identity, first-frame inputs and conservative settlement boundaries.
