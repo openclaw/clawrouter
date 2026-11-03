@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
+
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
