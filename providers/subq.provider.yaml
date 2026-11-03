@@ -1,0 +1,67 @@
+# Contracts checked 2026-11-03:
+# https://docs.subq.ai/endpoints/decisions-api/
+# https://docs.subq.ai/using-the-api/models/
+schema: clawrouter.service-provider.v1
+id: subq
+displayName: SubQ
+status: experimental
+class: rest_json
+service:
+  platform: subq
+  kind: model_provider
+  upstreamService: subq
+  configKeys: [SUBQ_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.subq.ai
+routing:
+  nativePrefixes: [clawrouter-subq, subq]
+  modelPrefixes: [subq/]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: llm.decisions
+    endpoint: decisions
+    methods: [POST]
+endpoints:
+  decisions:
+    path: /v1/systemone
+    requestFormat: subq.decisions
+    responseFormat: subq.decisions
+    timeoutMs: 120000
+models:
+  entries:
+    - id: subq/subq-snap-1.1
+      upstream: subq-snap-1.1
+      capabilities: [llm.decisions]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          decisions:
+            checkedAt: "2026-11-03"
+            sources:
+              - https://docs.subq.ai/endpoints/decisions-api/
+              - https://docs.subq.ai/using-the-api/models/
+            input: [text, image]
+            contextWindow: 393216
+            maxOutputTokens: 0
+      pricingRef: subq-snap-1-1-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://docs.subq.ai/using-the-api/models/
+        inputMicrosPerMillion: 40000
+        outputMicrosPerMillion: 0
+        maxInputTokens: 393216
+        maxRequestInputTokens: 393216
+        defaultMaxOutputTokens: 0
+        # Reserve the full native context, including images and server formatting.
+        inputTokenOverhead: 393216
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
