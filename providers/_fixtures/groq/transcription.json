@@ -1,0 +1,11 @@
+{
+  "sourceRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "sourcePath": "extensions/groq/index.ts",
+  "method": "POST",
+  "path": "/openai/v1/audio/transcriptions",
+  "fields": {"model": "whisper-large-v3-turbo", "language": "en", "prompt": "Synthetic terminology"},
+  "file": {"name": "sample.wav", "type": "audio/wav", "base64": "AAECAw==", "qualification": "synthetic byte identity only, not a playable recording"},
+  "response": {"text": "Synthetic transcript."},
+  "billingEvidence": {"checkedAt": "2026-11-03", "source": "https://console.groq.com/docs/speech-to-text", "usdPerHour": 0.04, "minimumBilledSeconds": 10, "qualifiedBillableDuration": null, "actualCostMicros": null},
+  "transport": {"formFieldsBeforeFile": true, "reuseIncomingBoundary": false, "automaticPostReplay": false}
+}
