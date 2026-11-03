@@ -1,8 +1,8 @@
 # Service Providers
 
 ClawRouter providers are single-file manifests. A maintainer should be able to add
-most API platforms by adding `providers/<id>.provider.yaml`, fixtures when useful,
-and no Worker code.
+most API platforms by adding `providers/<id>.provider.yaml` and no Worker code.
+Put request/response fixtures in executable tests; manifests do not declare them.
 
 Use a focused TypeScript adapter only when the platform cannot be represented as:
 

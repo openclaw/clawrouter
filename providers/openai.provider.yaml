@@ -978,8 +978,3 @@ billing:
   counters:
     - { name: input_tokens, source: usage.input_tokens, unit: token }
     - { name: output_tokens, source: usage.output_tokens, unit: token }
-tests:
-  fixtures:
-    - name: chat-basic
-      request: providers/_fixtures/openai/chat-basic.request.json
-      response: providers/_fixtures/openai/chat-basic.response.json

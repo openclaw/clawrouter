@@ -377,6 +377,7 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
   const cases = [
     ["null root", () => null, /invalid manifest: #:/],
     ["unknown root field", (manifest) => ({ ...manifest, display_name: "wrong field" }), /invalid manifest: #:/],
+    ["unsupported fixture metadata", (manifest) => ({ ...manifest, tests: { fixtures: [] } }), /invalid manifest: #:/],
     ["missing endpoint format", (manifest) => { delete manifest.endpoints.chat_completions.requestFormat; return manifest; }, /invalid manifest:.*\/endpoints\/chat_completions:/],
     ["missing bearer header", (manifest) => { delete manifest.auth.schemes[0].header; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
     ["unknown auth field", (manifest) => { manifest.auth.schemes[0].token = "fixture"; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
