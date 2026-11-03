@@ -1,5 +1,5 @@
 import { readGoogleJson } from "./google-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
 
 export const googleImageModels = ["gemini-3.1-flash-image", "gemini-3-pro-image"] as const;
 const ratios = new Set(["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"]);
@@ -26,7 +26,7 @@ export function prepareGoogleImage(model: string, body: unknown): GoogleImageReq
     } else {
       const inline = object(part.inlineData); keys(inline, ["mimeType", "data"]);
       if (!["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"].includes(String(inline.mimeType))) fail();
-      bytes += base64(inline.data, googleImageLimits.decodedInputBytes).decodedBytes;
+      bytes += canonicalMediaBase64(inline.data, googleImageLimits.decodedInputBytes, fail).decodedBytes;
       if (++images > googleImageLimits.inputImages || bytes > googleImageLimits.decodedInputBytes) fail();
     }
   }
@@ -70,7 +70,7 @@ export function observeGoogleImage(body: unknown, complete: boolean): {
       if (inline.mimeType !== undefined && inline.mime_type !== undefined) fail();
       const mimeType = inline.mimeType ?? inline.mime_type ?? "image/png";
       if (!["image/png", "image/jpeg", "image/webp"].includes(String(mimeType))) fail();
-      const encoded = base64(inline.data, googleImageLimits.decodedOutputBytes);
+      const encoded = canonicalMediaBase64(inline.data, googleImageLimits.decodedOutputBytes, fail);
       bytes += encoded.decodedBytes;
       if (bytes > googleImageLimits.decodedOutputBytes || images.length >= googleImageLimits.outputImages) fail();
       images.push({ ...encoded, mimeType: String(mimeType) });
@@ -86,20 +86,6 @@ export async function readGoogleImage(response: Response, signal: AbortSignal): 
   return readGoogleJson(response, signal, googleImageLimits.responseBytes, body => observeGoogleImage(body, true), fail);
 }
 
-function base64(value: unknown, limit: number): { base64: string; decodedBytes: number } {
-  if (typeof value !== "string" || !value.length || value.length > Math.ceil(limit / 3) * 4
-    || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) fail();
-  const standard = value.replace(/-/g, "+").replace(/_/g, "/");
-  const unpadded = standard.replace(/=+$/, "");
-  if (unpadded.length % 4 === 1 || standard.includes("=") && standard.length % 4) fail();
-  const canonical = unpadded + "=".repeat((4 - unpadded.length % 4) % 4);
-  if (standard.includes("=") && standard !== canonical) fail();
-  const tail = canonical.slice(-4);
-  if (btoa(atob(tail)) !== tail) fail();
-  const decodedBytes = Math.floor(unpadded.length * 3 / 4);
-  if (decodedBytes > limit) fail();
-  return { base64: canonical, decodedBytes };
-}
 function object(value: unknown): Record<string, unknown> { if (!mediaObject(value)) fail(); return value; }
 function keys(value: Record<string, unknown>, allowed: string[]): void { if (Object.keys(value).some(key => !allowed.includes(key))) fail(); }
 function list(value: unknown, min: number, max: number): unknown[] { if (!Array.isArray(value) || value.length < min || value.length > max) fail(); return value; }

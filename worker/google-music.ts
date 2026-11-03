@@ -1,5 +1,5 @@
 import { readGoogleJson } from "./google-json.ts";
-import { mediaObject } from "./managed-media-json.ts";
+import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
 
 export const googleMusicModels = ["lyria-3-clip-preview", "lyria-3-pro-preview"] as const;
 const encoder = new TextEncoder();
@@ -23,7 +23,7 @@ export function prepareGoogleMusic(model: string, body: unknown): GoogleMusicReq
     } else {
       const image = object(part.inlineData); keys(image, ["mimeType", "data"]);
       if (!["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"].includes(String(image.mimeType))) fail();
-      bytes += encoded(image.data, 14 * 1024 * 1024).decodedBytes;
+      bytes += canonicalMediaBase64(image.data, 14 * 1024 * 1024, fail).decodedBytes;
       if (bytes > 14 * 1024 * 1024) fail();
     }
   }
@@ -60,7 +60,7 @@ export function observeGoogleMusic(body: unknown, request: GoogleMusicRequest, c
     if (track || inline.mimeType !== undefined && inline.mime_type !== undefined) fail();
     const mimeType = inline.mimeType ?? inline.mime_type ?? "audio/mpeg";
     if (mimeType !== "audio/mpeg" && !(request.model === "lyria-3-pro-preview" && mimeType === "audio/wav")) fail();
-    track = { ...encoded(inline.data, maxAudio), mimeType: String(mimeType) };
+    track = { ...canonicalMediaBase64(inline.data, maxAudio, fail), mimeType: String(mimeType) };
   }
   // Text-only or incomplete output cannot authorize automatic POST replay.
   if (!track) fail();
@@ -71,17 +71,6 @@ export async function readGoogleMusic(response: Response, request: GoogleMusicRe
   return readGoogleJson(response, signal, maxResponse, body => observeGoogleMusic(body, request, true), fail);
 }
 
-function encoded(value: unknown, limit: number): { base64: string; decodedBytes: number } {
-  if (typeof value !== "string" || !value.length || value.length > Math.ceil(limit / 3) * 4
-    || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(value)) fail();
-  const standard = value.replace(/-/g, "+").replace(/_/g, "/"), unpadded = standard.replace(/=+$/, "");
-  if (unpadded.length % 4 === 1 || standard.includes("=") && standard.length % 4) fail();
-  const canonical = unpadded + "=".repeat((4 - unpadded.length % 4) % 4), tail = canonical.slice(-4);
-  if (standard.includes("=") && standard !== canonical || btoa(atob(tail)) !== tail) fail();
-  const decodedBytes = Math.floor(unpadded.length * 3 / 4);
-  if (decodedBytes > limit) fail();
-  return { base64: canonical, decodedBytes };
-}
 function object(value: unknown): Record<string, unknown> { if (!mediaObject(value)) fail(); return value; }
 function list(value: unknown, min: number, max: number): unknown[] { if (!Array.isArray(value) || value.length < min || value.length > max) fail(); return value; }
 function keys(value: Record<string, unknown>, allowed: string[]): void { if (Object.keys(value).some(key => !allowed.includes(key))) fail(); }
