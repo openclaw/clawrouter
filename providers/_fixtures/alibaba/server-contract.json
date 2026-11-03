@@ -1,0 +1,33 @@
+{
+  "synthetic": true,
+  "provider": "alibaba",
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/alibaba/index.ts",
+  "server": {
+    "canonicalKey": "MODELSTUDIO_API_KEY",
+    "defaultOrigin": "https://dashscope-intl.aliyuncs.com",
+    "aliasesRequireExplicitServerQualification": ["DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+    "automaticClientSecretFallback": false,
+    "separateProvider": "qwen"
+  },
+  "lifecycle": {
+    "protocol": "dashscope.video",
+    "create": "POST /api/v1/services/aigc/video-generation/video-synthesis",
+    "retrieve": "GET /api/v1/tasks/${task_id}",
+    "cancelSupported": false,
+    "resultSupported": false,
+    "credentialGuardBeforeEveryEgress": "assertWanStandardCredential",
+    "controlsUseOriginalRegionalGrant": true,
+    "uncertainCreateReplay": false,
+    "nativeFixtures": "../wan/lifecycle.json"
+  },
+  "observationUnavailable": {
+    "nativeStatus": "UNKNOWN",
+    "reason": "expired_or_unknown",
+    "terminalExecution": null,
+    "pollAgain": false,
+    "actualProviderCostMicrousd": null,
+    "settlementBasis": "policy_fixed",
+    "refundInferred": false
+  }
+}

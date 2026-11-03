@@ -1,0 +1,69 @@
+# Frozen OpenClaw Alibaba/Wan surface. Activation requires the M03 scoped lifecycle.
+# Canonical server credential only; aliases require explicit server qualification.
+schema: clawrouter.service-provider.v1
+id: alibaba
+displayName: Alibaba Model Studio (Wan)
+status: experimental
+class: rest_json
+service:
+  platform: alibaba
+  kind: tool_provider
+  upstreamService: alibaba
+  configKeys: [MODELSTUDIO_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://dashscope-intl.aliyuncs.com
+routing:
+  nativePrefixes: [clawrouter-alibaba, alibaba]
+  modelPrefixes: [alibaba/]
+adapter:
+  request: dashscope
+  response: dashscope
+  error: dashscope_error
+capabilities:
+  - id: media.predict
+    endpoint: video
+    methods: [POST]
+endpoints:
+  video:
+    path: /api/v1/services/aigc/video-generation/video-synthesis
+    headers:
+      X-DashScope-Async: enable
+    requestFormat: dashscope.video_create
+    responseFormat: dashscope.video
+    lifecycle:
+      protocol: dashscope.video
+      retrieve: task
+    timeoutMs: 120000
+  task:
+    path: /api/v1/tasks/${task_id}
+    method: GET
+    pathParams: [task_id]
+    requestFormat: dashscope.video_get
+    responseFormat: dashscope.video
+    timeoutMs: 120000
+models:
+  entries:
+    - id: alibaba/wan2.6-t2v
+      upstream: wan2.6-t2v
+      capabilities: [media.predict]
+    - id: alibaba/wan2.6-i2v
+      upstream: wan2.6-i2v
+      capabilities: [media.predict]
+    - id: alibaba/wan2.6-r2v
+      upstream: wan2.6-r2v
+      capabilities: [media.predict]
+    - id: alibaba/wan2.6-r2v-flash
+      upstream: wan2.6-r2v-flash
+      capabilities: [media.predict]
+    - id: alibaba/wan2.7-r2v
+      upstream: wan2.7-r2v
+      capabilities: [media.predict]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, model, endpoint, key, service, subject]

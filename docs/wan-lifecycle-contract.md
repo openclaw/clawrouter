@@ -30,11 +30,19 @@ The adapter follows the existing managed lifecycle method contract; protocol
   HTTP failures, API error envelopes, unknown statuses, and ID mismatches are
   observation failures, not evidence of free terminal execution.
 
+The canonical provider is `alibaba`, with default origin
+`https://dashscope-intl.aliyuncs.com` and server configuration
+`MODELSTUDIO_API_KEY`. Hosted Qwen Chat is a separate provider and credential
+contract. `DASHSCOPE_API_KEY` and `QWEN_API_KEY` aliases require explicit,
+qualified server configuration; they are not automatic fallbacks and must never
+be read from client upstream-secret headers.
+
 Standard regional API keys and model regions must match the configured origin.
-Coding/Token Plan credentials and origins are rejected. The credential owner
-must invoke the guard before dispatch; shape checks cannot prove region
-entitlement. Provider ID and shared Qwen credential ownership remain coordination
-dependencies. Do not copy keys or silently switch products.
+Coding/Token Plan credentials and origins are rejected. Runtime must invoke
+`assertWanStandardCredential(selectedSecret, selectedOrigin)` before **every**
+create/control egress, including retries of safe reads. Controls retain the
+original regional grant and credential lineage; they cannot select a new region
+or credential pool. Shape checks cannot prove region entitlement.
 
 ## State, expiry, and settlement
 
@@ -71,8 +79,15 @@ closed without qualified pricing and admission bounds.
 - Runtime owner: add the protocol discriminator and one durable observation-loss
   transition, then register the adapter using the existing controller. No global
   job index or parallel job framework.
-- Manifest owner: qualify the exact regional route, credentials, and lifecycle
-  metadata after the Alibaba/Qwen provider boundary is resolved.
+- Manifest owner: `providers/alibaba.provider.yaml` declares only the five frozen
+  model IDs, canonical server credential and native create/retrieve pair.
+  `lifecycle: { protocol: dashscope.video, retrieve: task }` has no cancel or
+  result action. The compiler must bind `dashscope.video_create` to this exact
+  native POST and `dashscope.video_get` to GET `/api/v1/tasks/${task_id}`.
+  No standalone raw task control capability is advertised.
+- Schema/compiler owner: add that bounded protocol contract. The present schema
+  does not accept it; all-manifest validation must pass on the integrated head.
+  Do not remove lifecycle metadata to work around this activation dependency.
 - Client owner: consume `providers/_fixtures/wan/lifecycle.json`; test partial
   output, missing deliverable, expired task, credential isolation, and restart.
 - Integration owner: prove actual Worker and frozen client transport, final
@@ -88,6 +103,7 @@ Checked 2026-11-03:
 - [Wan 2.6 text-to-video](https://www.alibabacloud.com/help/en/model-studio/legacy-wan-text-to-video-api-reference)
 - [Wan 2.6 reference-to-video](https://www.alibabacloud.com/help/en/model-studio/legacy-wan-reference-to-video-api-reference)
 - [Wan 2.7 reference-to-video](https://www.alibabacloud.com/help/en/model-studio/wan-video-to-video-api-reference)
+- [Standard regional API keys](https://www.alibabacloud.com/help/en/model-studio/get-api-key)
 
 The existing DashScope origins remain documented as functional. Dedicated
 workspace origins do not justify adding models outside the frozen consumer.
