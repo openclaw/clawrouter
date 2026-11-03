@@ -58,13 +58,20 @@ OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 `anthropic-messages` with a refreshable catalog and no static model list.
 The existing Chat seed is retained; no newer vendor model generation is added.
 
-`POST /v1/native/vercel-ai-gateway/v1/messages` and
+`POST /v1/native/vercel-ai-gateway/messages` and
 `POST /v1/proxy/vercel-ai-gateway/messages` dispatch to
 `https://ai-gateway.vercel.sh/v1/messages` with the selected gateway key.
 Native names retain their provider prefix. Messages, signed and redacted
 thinking, tool use/results, system cache controls and the caller's Anthropic
 version/beta headers pass through unchanged. Caller API-key headers cannot
 replace the selected gateway credential.
+
+An Anthropic SDK appends `/v1/messages` to its base URL. That SDK path still
+requires the bounded schema/runtime `upstreamPath` contract: preserve the public
+Chat path while mapping a public `/v1/messages` endpoint to upstream `/messages`
+under the existing `/v1` base. Until that dependency and actual-client proof
+land, these routes prove native Messages payload transport, not drop-in SDK
+base-URL compatibility.
 
 The new real Worker/SQLite fixtures cover JSON and fragmented SSE on both
 routes, fixed-price reservation/settlement, error events, cancellation and

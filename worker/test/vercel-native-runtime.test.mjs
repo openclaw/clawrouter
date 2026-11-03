@@ -5,10 +5,12 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { snapshot, configuredUpstream } = await import("../providers.ts");
 const { sha256Hex } = await import("../utils.ts");
+const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { providers: [provider] } = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", "providers/vercel-ai-gateway.provider.yaml"], { encoding: "utf8" }));
 const id = "vercel-ai-gateway", model = "anthropic/claude-sonnet-4.6";
@@ -31,6 +33,7 @@ async function fixture(t, models = null) {
       async put(k, v) { values.set(k, JSON.parse(v)); }, async list() { return { keys: [], list_complete: true }; } },
     BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);
+  attachGrantCredentialNamespace(env, { useExistingAuthority: true, kvValues: values });
   const policy = { enabled: true, generation: "fixture", providers: [id], models, tenantId: "fixture",
     monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false };
   await authorityCall(env, "/policies/initialize-all", [{ policyId: "paid", policy },
@@ -38,6 +41,7 @@ async function fixture(t, models = null) {
   await authorityCall(env, "/credentials/initialize-all", await Promise.all(["paid", "unpriced", "foreign"].map(async id => ({ credentialId: id,
     credential: { enabled: true, secretSha256: await sha256Hex(`fixture-${id}`), policyId: id, policyGeneration: "fixture" } }))));
   await authorityCall(env, "/connections/initialize-all", [{ providerId: id, enabled: true }]);
+  await putGrantCredentials(env, `oauth/fixture/${id}`, { provider: id, kind: "api_key", enabled: true, credential: "synthetic-gateway-key" });
   const f = { env, events, sent, reply: () => Response.json(result),
     call(path, body, key = "paid") { return worker.fetch(new Request(`https://router.example${path}`, {
       method: body == null ? "GET" : "POST", headers: { authorization: `Bearer clawrouter-live-${key}-fixture-${key}`,
@@ -77,7 +81,7 @@ for (const manifest of [false, true]) for (const stream of [false, true]) test(`
         { headers: { "content-type": "text/event-stream" } });
     } catch (e) { upstreamError = e; throw e; }
   };
-  const r = await f.call(manifest ? `/v1/proxy/${id}/messages` : `/v1/native/${id}/v1/messages`, manifest ? { body: { ...body, model: `${id}/${model}` } } : body);
+  const r = await f.call(manifest ? `/v1/proxy/${id}/messages` : `/v1/native/${id}/messages`, manifest ? { body: { ...body, model: `${id}/${model}` } } : body);
   assert.ifError(upstreamError); assert.equal(r.status, 200, await r.clone().text());
   if (stream) assert.equal(await r.text(), wire); else assert.deepEqual(await r.json(), result);
   await f.drain(); assert.equal(f.sent.length, 1);
