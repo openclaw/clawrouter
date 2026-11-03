@@ -1,4 +1,5 @@
 import { BodyLease } from "./body-budget.ts";
+import { nativeQuerySearch, type NativeQueryBinding } from "./native-query.ts";
 import { jsonBodyStream } from "./json-body.ts";
 import type { RequestCostReceipt } from "./pricing.ts";
 import type { RequestTariff } from "./request-tariff.ts";
@@ -9,6 +10,7 @@ export type ValidatedNativeUsage = UsageInspection & { requestCostReceipt?: Requ
 export interface NativeResponse {
   origin: string;
   path: string;
+  query?: NativeQueryBinding;
   tariff?: RequestTariff;
   acquire(): BodyLease;
   read(response: Response, signal: AbortSignal): Promise<{ response: Response; usage: ValidatedNativeUsage }>;
@@ -27,6 +29,6 @@ export function nativeJsonResponse(body: unknown, response: Response): Response 
 }
 
 export function assertNativeResponseDestination(native: NativeResponse | undefined, url: URL): void {
-  if (native && (url.origin !== native.origin || url.pathname !== native.path || url.search || url.hash || url.username || url.password))
+  if (native && (url.origin !== native.origin || url.pathname !== native.path || url.search !== nativeQuerySearch(native.query) || url.hash || url.username || url.password))
     throw new HttpError(400, "invalid_native_response_destination", "native operation requires its qualified origin and selected path");
 }
