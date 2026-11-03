@@ -11,8 +11,18 @@ scripts normalized as string literals. These are candidate-screening results,
 not a claim that a clone score measures correctness. Concurrent feature additions
 after the frozen inventory need their own review.
 
+The continuation at frozen revision `ed4bc0e` parsed 385 test/support files
+without failures and screened nine newly reported clone groups. Consolidate the
+four hosted-provider contract suites below. Keep small adapter override helpers,
+compiler rejection loops, codec-specific assertions and usage receipt polls
+local: their surrounding contracts differ. OpenClaw search and embedding
+consumer tests have a dedicated pinned-source workflow; their ordinary-CI skips
+are intentional. The chat transport matrix exercises Worker/SQL boundaries,
+while the hosted contract table checks manifest configuration and local helpers.
+
 | Change | Evidence and retained coverage | Validation |
 | --- | --- | --- |
+| Consolidate four hosted-provider contract suites | One 15-provider table preserves all 30 named cases, explicit model/URL/binding facts, aliases, opaque model handling and tool/reasoning replay. Test each provider against the union of foreign product credentials. Compile in process; dedicated CLI tests retain process/output contracts. Removes four compiler subprocesses and 124 source lines. | Crabbox: all 30 original cases passed before consolidation; 576 focused compiler, contract, transport and smoke tests passed afterward, zero skips. Bundled snapshot equality, strict smoke plan and Worker typechecking passed. Autoreview clean through P2. |
 | Measure realtime revocation after the authority mutation is acknowledged | A hosted run failed at 339 ms; its 250 ms check included the mutation RPC and host polling wake-up. The exact cause of that excess is unproven. Start the enforcement interval after acknowledgement and timestamp the close event itself. Preserve the 250 ms ceiling, egress bound, expected errors and no-egress-after-close checks; report mutation latency separately. | Crabbox: a 300 ms simulated mutation ACK delay fails the old measurement and passes the corrected one (19 ms close). Four concurrent authority-matrix runs passed; all 20 cadence/runtime tests passed with no skips. Autoreview clean through P2. Landed in [#451](https://github.com/openclaw/clawrouter/pull/451). |
 | Finish moving Worker manifest mutations in process | The shared compiler helper already ran directly, but quota, reasoning, tier, grant-endpoint, Codex alias and pricing cases still forked the CLI. Keep every mutation and error match through the imported compiler; remove JSON round-trips. The dedicated CLI suite owns stdout/file equality and no-output failure behavior. | Crabbox: 75 focused compiler and smoke-plan/format tests passed, no skips; bundled snapshot equality and strict smoke plan passed. Autoreview clean through P2. Landed in [#441](https://github.com/openclaw/clawrouter/pull/441). |
 | Gate transcription disconnect on an explicitly held provider response | The 500 ms provider delay could expire before the caller abort on a slow runner. Hold completion in the existing fixture Durable Object, observe the gate, assert AbortError, then release and verify accounting. Add phase context to transport failures. | Eight unchanged fixture runs passed in Crabbox (four concurrent); the prior CI EPIPE did not reproduce. All eight gated runs also passed, with four concurrent and no skips. Autoreview clean through P2; the EPIPE cause remains unknown. Landed in [#437](https://github.com/openclaw/clawrouter/pull/437). |
@@ -72,3 +82,7 @@ Residual observation: an earlier transcription CI EPIPE did not reproduce in
 eight unchanged or eight gated Crabbox runs. Its root cause remains unproven;
 the gate change fixes an independent ordering flaw. Revisit that exact transport
 failure if it recurs, without adding retries or claiming it is resolved.
+
+The continuation inspected two recent failed Worker CI jobs; both failed on
+compiled snapshot equality, with no EPIPE in either log. This adds no evidence
+about the earlier transport failure’s root cause.
