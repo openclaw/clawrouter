@@ -31,6 +31,8 @@
 - Define typed Replicate prediction lifecycle links and validate the native create, retrieve and cancel endpoint contracts before compiling manifests.
 - Qualify the Deepgram prerecorded manifest format as native raw-audio transcription with Token authentication, exact endpoint/model constraints and no fabricated token tariff. Bundled discovery activation remains gated on binary dispatch integration.
 
+- Add a bounded DuckDuckGo HTML search codec and synthetic challenge/result fixtures. Anonymous-auth schema, actual HTML runtime integration and service-use qualification remain separate activation gates.
+
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
 - Verify the caller-scoped catalog through native Responses streaming and usage accounting, including tool/reasoning replay, HTTP-200 terminal errors, and credential revocation. These synthetic checks do not certify live-provider or client-runtime parity.
