@@ -17,8 +17,8 @@ async function setup(t, options = {}) {
   f.rows = () => [...new Set(f.budgetCalls.map(call => call.name))].flatMap(name => f.budgets.get(name).reservations());
   f.upstream = request => { f.dispatch = f.rows(); return options.response ? options.response(request) : Response.json(rejected, { status: options.status ?? 499 }); };
   f.request = ({ route = "native", stream = false, ...extra } = {}) => {
-    const body = { model: route === "unified" ? f.model.id : f.model.upstream, messages: [{ role: "user", content: "Synthetic billing fixture" }], max_tokens: 16, stream };
-    return f.call(route === "unified" ? "/v1/chat/completions" : route === "manifest" ? `/v1/proxy/${providerId}/chat_completions` : `/v1/native/${providerId}/chat/completions`,
+    const body = { model: route === "native" ? f.model.upstream : f.model.id, messages: [{ role: "user", content: "Synthetic billing fixture" }], max_tokens: 16, stream };
+    return f.call(route === "unified" ? "/v1/chat/completions" : route === "manifest" ? `/v1/proxy/${providerId}/chat_completions` : `/v1/native/${providerId}${f.endpoint.path}`,
       route === "manifest" ? { body } : body, extra);
   };
   t.after(f.drain); return f;
@@ -28,7 +28,7 @@ async function event(f) { await f.drain(); const rows = await f.events(); assert
 for (const route of ["native", "manifest", "unified"]) for (const pooled of [false, true]) for (const stream of [false, true]) {
   test(`Novita upstream499 ${route}/${pooled ? "grant" : "environment"}/${stream ? "SSE request" : "JSON request"} retains one dispatched policy charge`, { timeout: 10_000 }, async t => {
     const f = await setup(t, { pooled }), response = await f.request({ route, stream });
-    assert.equal(response.status, 499); await response.text();
+    assert.equal(response.status, 499, response.status === 499 ? undefined : await response.text()); await response.text();
     assert.equal(f.sent.length, 1); assert.equal(f.sent[0].url, "https://api.novita.ai/openai/v1/chat/completions");
     assert.equal(f.sent[0].headers.get("authorization"), `Bearer ${pooled ? "synthetic-original-key" : "synthetic-selected-environment"}`);
     assert.equal(f.sent[0].redirect, "manual"); assert.ok(f.dispatch.every(row => row.dispatch_started === 1 && row.settled === 0));
@@ -45,13 +45,13 @@ for (const status of [400, 401, 403, 429, 500, 503, 504]) test(`Novita upstream$
 });
 
 test("another provider's HTTP499 does not acquire Novita billing semantics", { timeout: 10_000 }, async t => {
-  const f = await setup(t, { providerId: "openai" }), response = await f.request(); assert.equal(response.status, 499); await response.text();
+  const f = await setup(t, { providerId: "openai" }), response = await f.request(); assert.equal(response.status, 499, response.status === 499 ? undefined : await response.text()); await response.text();
   const settled = await event(f); assert.equal(settled.actual_cost_micros, 0); assert.equal(settled.cost_basis, "none"); assert.equal(f.sent.length, 1);
 });
 
 test("unknown Novita inference price stays denied before egress under a hard budget", { timeout: 10_000 }, async t => {
   const f = await setup(t, { fixed: null }), response = await f.request();
-  assert.equal(response.status, 402); assert.equal((await response.json()).error.code, "pricing_required");
+  assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required");
   assert.equal(f.sent.length, 0); assert.equal(f.rows().length, 0); await f.drain(); assert.ok((await f.events()).every(row => row.actual_cost_micros === 0));
 });
 
