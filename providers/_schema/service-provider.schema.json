@@ -637,6 +637,14 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^openrouter\\.audio_transcription" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^openrouter\\.audio_transcription" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/openRouterTranscriptionEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["responseFormat"] }
           ]
@@ -2102,6 +2110,27 @@
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["upstreamPath"] }
+      ] }
+    },
+    "openRouterTranscriptionEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/audio/transcriptions" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "openrouter.audio_transcription" },
+        "responseFormat": { "const": "openrouter.audio_transcription" },
+        "query": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "deepgramPrerecordedEndpoint": {
