@@ -643,6 +643,15 @@
           "oneOf": [
             {
               "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "pixverse.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
               "required": ["protocol", "retrieve", "cancel", "files"],
               "additionalProperties": false,
               "properties": {
