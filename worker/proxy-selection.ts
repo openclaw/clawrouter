@@ -9,6 +9,7 @@ import { prepareNativeImage } from "./native-images.ts";
 import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transcription.ts";
 import { prepareNativeDeepSeekSearch } from "./native-deepseek-search.ts";
 import { prepareNativeGoogleMusic } from "./native-google-music.ts";
+import { prepareNativeGoogleSpeech } from "./native-google-speech.ts";
 import { prepareNativeGradiumSpeech } from "./native-gradium-speech.ts";
 import { prepareNativeGoogleImage } from "./native-google-images.ts";
 import type { NativeResponse } from "./native-response.ts";
@@ -46,7 +47,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
-    ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection)
+    ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
     ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
