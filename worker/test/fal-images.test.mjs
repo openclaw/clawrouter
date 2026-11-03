@@ -23,6 +23,7 @@ test("FLUX generation validates size/count and edit never claims unsupported geo
 test("Krea preserves native aspect ratio/creativity and caps style references instead of pretending batch or format support", () => {
   assert.equal(prepare(2, { image_style_references: Array.from({ length: 10 }, () => ({ image_url: wire.requests[1].body.image_url })) }).inputImages, 10);
   for (const change of [{ num_images: 2 }, { output_format: "png" }, { image_size: "square_hd" }, { creativity: "max" }, { aspect_ratio: "21:9" },
+    { creativity: ["medium"] }, { aspect_ratio: ["1:1"] },
     { image_style_references: Array.from({ length: 11 }, () => ({ image_url: wire.requests[1].body.image_url })) }]) assert.throws(() => prepare(2, change));
 });
 test("input references require bounded canonical inline data and never authorize uploads or remote fetches", () => {
@@ -45,6 +46,7 @@ test("native result parsing rejects queue/error envelopes, foreign model identit
     assert.throws(() => observeFalImage({ images: [{ url }] }, prepare(0)));
   }
   assert.throws(() => observeFalImage({ images: [{ ...wire.completed.images[0], content_type: "text/html" }] }, prepare(0)));
+  assert.throws(() => observeFalImage({ images: [{ ...wire.completed.images[0], content_type: ["image/png"] }] }, prepare(0)));
 });
 test("dispatch pins the synchronous origin and selected model path with native Key authentication", () => {
   const prepared = prepare(0);

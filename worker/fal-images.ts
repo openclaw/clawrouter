@@ -25,8 +25,8 @@ export function prepareFalImage(model: string, value: unknown): FalImageRequest 
     if (inputBytes > maxInput) fail("input_size");
   };
   if (krea) {
-    if (value.creativity !== undefined && !["raw", "low", "medium", "high"].includes(String(value.creativity))) fail("creativity");
-    if (value.aspect_ratio !== undefined && !ratios.includes(String(value.aspect_ratio))) fail("aspect_ratio");
+    if (value.creativity !== undefined && (typeof value.creativity !== "string" || !["raw", "low", "medium", "high"].includes(value.creativity))) fail("creativity");
+    if (value.aspect_ratio !== undefined && (typeof value.aspect_ratio !== "string" || !ratios.includes(value.aspect_ratio))) fail("aspect_ratio");
     if (value.image_style_references !== undefined) {
       if (!Array.isArray(value.image_style_references) || value.image_style_references.length > 10) fail("references");
       for (const item of value.image_style_references) {
@@ -76,7 +76,7 @@ export function observeFalImage(value: unknown, prepared: FalImageRequest): {
     if (url.protocol !== "https:" || url.username || url.password || url.hash || url.port && url.port !== "443"
       || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(url.hostname) || /^[\d.]+$/.test(url.hostname)
       || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(url.hostname)) fail("url");
-    if (item.content_type !== undefined && !["image/png", "image/jpeg", "image/webp"].includes(String(item.content_type))) fail("mime");
+    if (item.content_type !== undefined && (typeof item.content_type !== "string" || !["image/png", "image/jpeg", "image/webp"].includes(item.content_type))) fail("mime");
     if (item.width !== undefined) dimension(item.width);
     if (item.height !== undefined) dimension(item.height);
     if (item.file_size !== undefined && (typeof item.file_size !== "number" || !Number.isSafeInteger(item.file_size) || item.file_size <= 0 || item.file_size > 16 * 1024 * 1024)) fail("file_size");
