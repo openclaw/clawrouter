@@ -321,7 +321,7 @@ function validateManifest(manifest) {
       }
     }
   }
-  validatePredictionLifecycles(manifest);
+  validateManagedLifecycles(manifest);
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (endpoint.requestPricing) {
@@ -407,31 +407,71 @@ function validateManifest(manifest) {
   validateQuota(manifest.id, manifest.quota);
 }
 
-function validatePredictionLifecycles(manifest) {
-  const controls = new Set();
+const managedLifecycleContracts = {
+  "replicate.predictions": {
+    provider: "replicate", create: ["/v1/predictions"], request: "replicate.prediction_create", response: "replicate.prediction",
+    controls: {
+      retrieve: ["GET", "/v1/predictions/${prediction_id}", "replicate.prediction_get", "replicate.prediction"],
+      cancel: ["POST", "/v1/predictions/${prediction_id}/cancel", "replicate.prediction_cancel", "replicate.prediction"],
+    },
+  },
+  "fal.queue": {
+    provider: "fal", create: ["/${owner}/${app}", "/${owner}/${app}/${variant}"], request: "fal.queue_submit", response: "fal.queue_submission",
+    controls: {
+      retrieve: ["GET", "/${owner}/${app}/requests/${request_id}/status", "fal.queue_status", "fal.queue_status"],
+      result: ["GET", "/${owner}/${app}/requests/${request_id}", "fal.queue_result", "fal.queue_result"],
+      cancel: ["PUT", "/${owner}/${app}/requests/${request_id}/cancel", "fal.queue_cancel", "fal.queue_cancel"],
+    },
+  },
+  "kie.jobs": {
+    provider: "kie", create: ["/api/v1/jobs/createTask"], request: "kie.job_create", response: "kie.job",
+    controls: { retrieve: ["GET", "/api/v1/jobs/recordInfo", "kie.job_get", "kie.job"] },
+  },
+  "vydra.jobs": {
+    provider: "vydra", create: ["/api/v1/jobs"], request: "vydra.job_create", response: "vydra.job",
+    controls: {
+      retrieve: ["GET", "/api/v1/jobs/${job_id}", "vydra.job_get", "vydra.job"],
+      cancel: ["DELETE", "/api/v1/jobs/${job_id}", "vydra.job_cancel", "vydra.job_cancel"],
+    },
+  },
+};
+
+function validateManagedLifecycles(manifest) {
+  const controls = new Set(), creates = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (!endpoint.lifecycle) continue;
-    const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct native Replicate prediction create/retrieve/cancel endpoints`); };
-    const incompatible = (value) => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false || Object.keys(value.query ?? {}).length;
+    const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct qualified native create/control endpoints`); };
+    const protocol = endpoint.lifecycle.protocol;
+    const contract = Object.hasOwn(managedLifecycleContracts, protocol) ? managedLifecycleContracts[protocol] : null;
+    const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false || Object.keys(value.query ?? {}).length;
     const methodsMatch = (endpointId, method) => !manifest.capabilities.some(capability => capability.endpoint === endpointId && capability.methods?.some(value => value !== method));
-    if (manifest.id !== "replicate" || endpoint.lifecycle.protocol !== "replicate.predictions" || incompatible(endpoint)
-      || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST")
-      || endpoint.path !== "/v1/predictions" || (endpoint.pathParams ?? []).length
-      || endpoint.requestFormat !== "replicate.prediction_create" || endpoint.responseFormat !== "replicate.prediction"
+    const parametersMatch = value => {
+      const names = [...value.path.matchAll(/\$\{([^}]+)\}/g)].map(match => match[1]).sort();
+      return JSON.stringify([...(value.pathParams ?? [])].sort()) === JSON.stringify(names)
+        && !Object.entries(value.pathParamStyles ?? {}).some(([name, style]) => !names.includes(name) || style !== "segment");
+    };
+    if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || !parametersMatch(endpoint)
+      || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
+      || endpoint.requestFormat !== contract.request || endpoint.responseFormat !== contract.response
       || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
-    for (const action of ["retrieve", "cancel"]) {
+    creates.add(id);
+    for (const [action, [method, path, request, response]] of Object.entries(contract.controls)) {
       const controlId = endpoint.lifecycle[action];
       const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
-      const method = action === "retrieve" ? "GET" : "POST";
-      if (!control || controlId === id || controls.has(controlId) || control.lifecycle || incompatible(control)
-        || (control.method ?? "POST") !== method || !methodsMatch(controlId, method)
-        || control.path !== `/v1/predictions/\${prediction_id}${action === "cancel" ? "/cancel" : ""}`
-        || JSON.stringify(control.pathParams) !== '["prediction_id"]'
-        || Object.entries(control.pathParamStyles ?? {}).some(([name, style]) => name !== "prediction_id" || style !== "segment")
-        || control.requestFormat !== `replicate.prediction_${action === "retrieve" ? "get" : "cancel"}` || control.responseFormat !== "replicate.prediction"
-        || manifest.capabilities.some(capability => capability.endpoint === controlId && (action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
+      if (!control || controlId === id || controls.has(controlId) || control.lifecycle || incompatible(control) || !parametersMatch(control)
+        || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
+        || control.requestFormat !== request || control.responseFormat !== response
+        || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
       controls.add(controlId);
     }
+  }
+  // New managed wire formats cannot accidentally expose an unbound raw control.
+  // Legacy Replicate manifests retain their existing runtime ownership guard.
+  const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
+    .flatMap(([, contract]) => [contract.request, ...Object.values(contract.controls).map(control => control[2])]));
+  for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (formats.has(endpoint.requestFormat) && !creates.has(id) && !controls.has(id))
+      throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
 }
 
