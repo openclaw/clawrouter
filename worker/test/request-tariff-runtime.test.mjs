@@ -96,7 +96,8 @@ test("outcome admission uses the source combined estimate and leaves independent
   const plain = { ...input, tools: [{ type: "function", name: "web_search", parameters: { properties: { violation: { type: "string" } } } }] };
   assert.equal(estimateCost(model, plain, null, "llm.responses", endpoint).pricingGap, undefined);
   assert.equal(estimateCost(model, input, 7, "llm.responses", endpoint).basis, "policy_fixed");
-  assert.equal(estimateCost(model, { ...input, service_tier: "unqualified" }, null, "llm.responses", endpoint).basis, "unpriced_service_tier");
+  const tiered = { ...model, pricing: { ...model.pricing, serviceTiers: [{ ...model.pricing, id: "default", aliases: [] }] } };
+  assert.equal(estimateCost(tiered, { ...input, service_tier: "unqualified" }, null, "llm.responses", endpoint).basis, "unpriced_service_tier");
 });
 
 test("native and manifest calls reserve once and settle the whole receipt without adding token or outcome charges", async t => {
@@ -279,7 +280,8 @@ test("successful-request selection freezes one native price and rejects cheap ma
     assert.equal(cost.reserveMicros, micros); assert.equal(cost.inputTokens, null);
     const facts = { event: {}, model: null, fixed: null, cost, requestFormat: "perplexity.search", startedAtMs: 1 };
     const event = accountingReceipt(facts, { occurredAtMs: 2, statusCode: 422, status: "client_error", billable: false,
-      tokens: null, reservation: { reservedMicros: micros }, contentRef: null });
+      tokens: { input: 100, output: 100, total: 200 }, reservation: { reservedMicros: micros }, contentRef: null });
+    assert.equal(event.input_tokens, null); assert.equal(event.output_tokens, null);
     assert.equal(event.actual_cost_micros, micros, "HTTP status alone cannot attest free work");
     assert.equal(event.cost_basis, "manifest_request_reservation");
   }

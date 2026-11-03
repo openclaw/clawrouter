@@ -81,11 +81,12 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
       : outcome.requestTariffOutcome === "unsent" ? { micros: 0, basis: "none" }
       : knownReceipt ? { micros: knownReceipt.costMicros, basis: knownReceipt.basis }
       : { micros: cost.reserveMicros, basis: cost.basis === "manifest_request" ? "manifest_request_reservation" : "unpriced_usage" };
+    const inference = cost.requestTariff.kind === "outcome_request" ? tokens : null;
     return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
       reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: settled.micros, cost_basis: settled.basis,
       pricing_ref: cost.requestTariff.version, pricing_effective_at: cost.requestTariff.effectiveAt,
-      input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null, total_tokens: tokens?.total ?? null,
-      cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
+      input_tokens: inference?.input ?? null, output_tokens: inference?.output ?? null, total_tokens: inference?.total ?? null,
+      cached_input_tokens: inference?.cached ?? null, cache_write_input_tokens: inference?.cacheWrite ?? null,
       duration_ms: outcome.occurredAtMs - facts.startedAtMs, content_retained: !!contentRef, content_ref: contentRef };
   }
   // Token totals and a served tier cannot resolve omitted fees or hosted work.

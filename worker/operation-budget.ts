@@ -1,7 +1,7 @@
 import type { RequestTariffEndpoint } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
-import { validateBudgetReservation } from "./accounting";
+import { validateBudgetReservation, type EstimatedCost } from "./accounting";
 import { modelForEndpoint } from "./model-pricing.ts";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
@@ -24,10 +24,14 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
   // Catalog probes have no request model; use this exact candidate's native
   // identity while retaining request-dependent affordability for tariffs.
-  if (endpoint.requestPricing && "outcome" in endpoint.requestPricing && model && !Array.isArray(body) && body.model === undefined) body = { ...body, model: model.upstream };
-  const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint);
+  if (endpoint.requestPricing && "outcome" in endpoint.requestPricing) {
+    if (!model) return { status: "exact-blocked", reasonCode: "pricing_required" };
+    if (!Array.isArray(body) && body.model === undefined) body = { ...body, model: model.upstream };
+  }
+  let cost: EstimatedCost;
   const soft = softBudgetPolicy(auth.policy);
   try {
+    cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint);
     if (soft && !isModelDiscovery(endpoint)) {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };
     } else if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };
