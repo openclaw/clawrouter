@@ -2,6 +2,7 @@ import { capabilityForPath, createRouteCatalog, unifiedPathForRequestFormat } fr
 export { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
+import { configuredEndpointPath } from "./endpoint-path.ts";
 import { modelForEndpoint } from "./model-pricing.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
@@ -235,7 +236,7 @@ export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGr
 
 export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpoint, pathParams: Record<string, string>, env: Env, auth: UpstreamAuth): string {
   const transportPath = auth.transportPaths[endpoint.id as keyof typeof auth.transportPaths];
-  let path = transportPath ?? endpoint.path;
+  let path = configuredEndpointPath(endpoint, transportPath, auth.baseUrl);
   for (const name of endpoint.path_params) {
     const raw = pathParams[name];
     if (!raw) throw new HttpError(400, "missing_path_param", `path parameter ${name} is required`);
