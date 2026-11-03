@@ -160,6 +160,7 @@
 - Qualify the frozen Google grounded-search manifest contract with explicit endpoint selection and unknown grounding costs while overlapping native discovery remains closed.
 - Add a complete Google grounded-search response wrapper with scoped native selection, stable attribution indices, thought exclusion and bounded delivery without inferring tool costs.
 - Keep explicit native Google grounded-search and input-media formats out of generic token pricing, preserving unknown whole-request costs and separately labeled policy-fixed accounting.
+- Qualify explicit Google inline audio/video-understanding manifest contracts with frozen model binding and unknown per-endpoint prices, keeping ambiguous native paths closed.
 
 - Add experimental native Voyage text embeddings with explicit Voyage 4 model rows, preserved native vector options, a bounded native smoke request and a focused input-only usage helper for runtime integration; hard-budget token pricing remains unqualified.
 - Dispatch complete successful Voyage embedding receipts to the native usage extractor, preserving observed input counts without inferring splits for generic, failed or partial responses.
