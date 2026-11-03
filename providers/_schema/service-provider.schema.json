@@ -151,16 +151,6 @@
           "maxItems": 4
         }
       }
-    },
-    "tests": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "fixtures": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/fixture" }
-        }
-      }
     }
   },
   "$defs": {
@@ -1263,16 +1253,6 @@
         "paths": { "type": "array", "items": { "type": "string" } },
         "upstreams": { "type": "array", "items": { "type": "string" } },
         "upstreamConfig": { "type": "string" }
-      }
-    },
-    "fixture": {
-      "type": "object",
-      "required": ["name", "request", "response"],
-      "additionalProperties": false,
-      "properties": {
-        "name": { "type": "string" },
-        "request": { "type": "string" },
-        "response": { "type": "string" }
       }
     }
   }

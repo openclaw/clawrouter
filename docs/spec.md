@@ -35,7 +35,8 @@ service provider into ClawRouter:
 The intended add-provider path is:
 
 1. Add `providers/<id>.provider.yaml`.
-2. Add request/response fixtures if the adapter is new or risky.
+2. Add executable request/response tests if the adapter is new or risky.
+   Provider manifests do not declare test fixtures.
 3. Run `pnpm provider:compile`.
 4. Add a focused TypeScript adapter only if the declarative families cannot represent the
    upstream contract.
