@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
+
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
 
 - Add bounded Kie Market job helpers and executable wire/result fixtures that reject HTTP-200 API errors, preserve partial-job state and keep credit usage distinct from dollar settlement. Runtime activation remains separately qualified.
