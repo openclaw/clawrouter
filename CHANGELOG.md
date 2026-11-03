@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit Z.AI China standard and global/China Coding Plan Chat contracts with separate credential bindings, frozen model disposition and native replay/stream/accounting fixtures.
+
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
