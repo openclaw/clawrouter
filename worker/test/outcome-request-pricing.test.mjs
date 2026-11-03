@@ -13,6 +13,9 @@ const tariff = {
 };
 function fixture() {
   const manifest = structuredClone(original);
+  // Select the named existing row: queued catalog additions can change defaults.
+  manifest.models.entries = [manifest.models.entries.find(model => model.upstream === "grok-4.3")];
+  manifest.capabilities = manifest.capabilities.filter(capability => capability.endpoint !== "responses");
   manifest.endpoints.responses = { path: "/v1/responses", requestFormat: "openai.responses", responseFormat: "openai.responses", streaming: "sse", requestPricing: structuredClone(tariff) };
   manifest.capabilities.push({ id: "llm.responses", endpoint: "responses", methods: ["POST"] });
   manifest.models.entries[0].capabilities.push("llm.responses");
