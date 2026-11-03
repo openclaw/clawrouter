@@ -5,8 +5,9 @@ The optional YAML field `endpoints.<id>.upstreamPath` compiles unchanged to
 route and authorization identity. Manifest endpoint IDs, unified routes,
 capabilities, selected model, policy and original credential do not change.
 
-The first runtime slice accepts `openai.chat_completions`, `anthropic.messages`,
-`openai.models` and `anthropic.models`. Request and response formats must match;
+The runtime accepts `openai.chat_completions`, `anthropic.messages`,
+`openai.models`, `anthropic.models` and the separately qualified `synthetic.models`.
+Request and response formats must match;
 Chat/Messages use POST and metadata uses GET. WebSockets, lifecycle endpoints,
 path parameters and other native formats are not qualified by this field.
 Mapping does not translate request or response formats. Model listing cannot
@@ -34,6 +35,15 @@ For a provider configured at `https://api.synthetic.new`, public Chat
 dispatch to `/anthropic/v1/messages`, and `/v1/models` to `/openai/v1/models`.
 These are the [documented API prefixes](https://dev.synthetic.new/docs/api/overview).
 The same configured original server credential owns all three operations.
+
+Synthetic discovery uses `synthetic.models` on both sides of the endpoint. The
+landed `filterSyntheticModels` codec preserves its data-only native envelope;
+`openai.models` keeps requiring the OpenAI list tag. The existing complete JSON
+reader requires HTTP 200 JSON, fatal UTF-8 and EOF within 2 MiB under the discovery
+deadline. The original scoped API-key grant and caller policy own filtering;
+public inventory access does not grant anonymous discovery or prove account
+entitlement. Metadata remains zero-cost discovery, not priced inference. Native
+decimal price strings are observations and do not become active tariffs.
 
 The runtime tests use a synthetic provider through native and manifest routes,
 both environment and pooled credentials, actual policy admission and SQLite

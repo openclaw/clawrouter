@@ -25,6 +25,7 @@
 - Add finite OpenRouter native image codecs and fixtures with ordered inline references, bounded binary images and separate per-request accounting for partially failed batches.
 - Admit native xAI image generation and edits with frozen per-image reservations and whole-request cost receipts, withholding invalid output and retaining uncertain charges without replay.
 - Support validated endpoint dispatch paths while preserving caller routes, original credentials and same-origin configuration for Chat, Messages and model discovery.
+- Dispatch Synthetic model discovery through its native data-only codec and scoped mapped route, preserving strict OpenAI decoding and original caller/grant filtering.
 - Add frozen OpenRouter custom-host Chat image codecs with explicit host qualification, reused image validation and honest partial-count delivery.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
 

@@ -3,7 +3,7 @@ import { HttpError } from "./utils.ts";
 
 const mappedMethods: Readonly<Record<string, string>> = {
   "openai.chat_completions": "POST", "anthropic.messages": "POST",
-  "openai.models": "GET", "anthropic.models": "GET",
+  "openai.models": "GET", "anthropic.models": "GET", "synthetic.models": "GET",
 };
 const literalPath = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$(?![\s\S])/;
 const canonicalPath = (value: unknown): value is string => typeof value === "string" && value.length <= 2048
