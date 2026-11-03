@@ -58,17 +58,19 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
       const job = await operation.wait(backgroundCall<import("./background-store.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }));
       if (!job?.managed || job.managed.protocol !== protocol || job.managed.upstreamId !== responseId
         || (job.managed.providerId ?? "replicate") !== provider.id) throw new HttpError(409, "response_owner_unavailable", "the original managed route is unavailable");
+      const { readManagedControl, observePrediction, predictionResponse, managedObservationUnavailable } = await import("./managed-predictions.ts");
+      if (job.managed.observationUnavailable) { operation.stop("complete"); return managedObservationUnavailable(); }
       const route = job.managed.route ?? retainedResponseRoute({}, request.headers);
       const { managedRoute } = await import("./managed-routes.ts");
       const endpoint = managedRoute(provider, create).controls[action];
       if (!endpoint || create.path_params.some(name => endpoint.path_params.includes(name) && pathParams[name] !== route.pathParams[name])) {
         throw new HttpError(409, "response_owner_unavailable", "control path does not match the original managed route");
       }
-      const { readManagedControl, observePrediction, predictionResponse } = await import("./managed-predictions.ts");
       const result = await readManagedControl(env, { owner: binding.owner, responseId, action, query: "", stream: false, protocol,
         requestedVersion: job.managed.requestedVersion, route, authorization: publicControlAuthorization(binding.auth) }, operation);
       if (!binding.background.closed) await observePrediction(env, binding.scope, binding.background.id, result.evidence.prediction, result.evidence.status);
       operation.stop("complete");
+      if (result.evidence.prediction.observationUnavailable) return managedObservationUnavailable();
       return predictionResponse(result.prediction, provider, create, route.pathParams, result.status);
     }
     response = await operation.wait(dispatchResponseControl(env, {
