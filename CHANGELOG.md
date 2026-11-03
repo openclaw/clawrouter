@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Wire native Baseten SystemOne decisions through bounded complete-response admission and original-credential dispatch, preserving observed answer usage and conservative settlement without OpenAI wire aliases.
+
 - Keep native SystemOne decision cards out of OpenAI Decisions discovery while preserving their exact native limits, observed usage contract and caller-scoped provider routes.
 
 - Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.
