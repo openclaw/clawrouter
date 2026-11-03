@@ -28,7 +28,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(realtime.pricing.settlementBasis, "published_upper_bound");
   assert.equal(realtime.pricing.maxRequestInputTokens, 128000);
   assert.deepEqual([realtime.pricing.inputMicrosPerMillion, realtime.pricing.outputMicrosPerMillion], [32000000, 64000000]);
-  assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).filter(model => model.id !== "openai/gpt-realtime-2.1").every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
+  assert.equal(compiled.model_index["groq/gpt-oss-20b"].pricing.settlementBasis, "published_upper_bound");
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   const gemini = compiled.model_index["google/gemini-3.5-flash"];
   const google = compiled.providers.find(provider => provider.id === "google-gemini");

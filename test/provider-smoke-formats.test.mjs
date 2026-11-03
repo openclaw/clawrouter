@@ -25,7 +25,7 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", parallel: "search", replicate: "prediction", tavily: "search" };
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
@@ -43,7 +43,7 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
   ["brave", false, false], ["exa", false, false], ["parallel", false, false],
   ["openai", false, false], ["openai", false, true],
   ["openai", false, false, "openai.responses"], ["openai", false, false, "openai.decisions"], ["openai", false, false, "openai.embeddings"],
-  ["cohere", false, false, "cohere.embed"], ["tavily", false, false, "tavily.extract"],
+  ["cohere", false, false, "cohere.embed"], ["voyage", false, false], ["tavily", false, false, "tavily.extract"],
   ["firecrawl", false, false, "fixture.status", "GET"], ["firecrawl", false, false, "fixture.status", "HEAD"],
   ["firecrawl", false, false, "fixture.graphql", "POST"],
   ["groq", false, true], ["groq", false, true, null, null, "catalog"], ["groq", false, true, null, null, "native"],
@@ -133,10 +133,13 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         assert.deepEqual(body, { model: expectedModel.upstream, input: "The product is damaged.", questions: [{ type: "predicate", name: "damaged", instructions: "Is the product described as damaged?" }] });
       } else if (endpoint.request_format === "openai.embeddings") {
         assert.deepEqual(body, { model: expectedModel.upstream, input: "OpenClaw" });
+      } else if (endpoint.request_format === "voyage.embeddings") {
+        assert.deepEqual(body, { model: expectedModel.upstream, input: ["OpenClaw"], input_type: "query", truncation: false, output_dimension: 256, output_dtype: "float" });
       } else if (endpoint.request_format === "cohere.embed") {
         assert.deepEqual(body, { model: expectedModel.upstream, texts: ["OpenClaw"], input_type: "search_query", embedding_types: ["float"] });
       } else assert.deepEqual(body, { url: "https://example.com", formats: ["markdown"] });
       upstream.push(body);
+      if (endpoint.request_format === "voyage.embeddings") return Response.json({ object: "list", data: [{ object: "embedding", index: 0, embedding: Array(256).fill(0) }], usage: { total_tokens: 1 } });
       return method === "HEAD" ? new Response(null) : Response.json({ fixture: "synthetic upstream", usage: { prompt_tokens: 1, completion_tokens: 1 } });
     });
     try {

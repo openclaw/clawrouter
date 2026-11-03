@@ -1,0 +1,20 @@
+{
+  "sources": ["https://docs.x.ai/developers/model-capabilities/video/generation", "https://docs.x.ai/developers/model-capabilities/video/editing", "https://docs.x.ai/developers/model-capabilities/video/extension", "https://github.com/xai-org/xai-sdk-ts/blob/main/src/resources/videos.ts"],
+  "checkedAt": "2026-11-03",
+  "sdkVideoBlob": "bb8eb0e4bb2a2396a9ddded0eeda2fc8088886d3",
+  "sdkTypesBlob": "74805549ee8daea905bc1701dbed374aec281094",
+  "frozenSource": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7:extensions/xai/video-generation-provider.ts",
+  "id": "00000000-0000-4000-8000-000000000001",
+  "idempotencyKey": "00000000-0000-4000-8000-000000000002",
+  "generate": {"model": "grok-imagine-video", "prompt": "A synthetic geometric test scene.", "duration": 8, "aspect_ratio": "16:9", "resolution": "480p"},
+  "image": {"model": "grok-imagine-video-1.5", "prompt": "Animate the synthetic test frame.", "image": {"url": "https://example.com/input.png"}, "duration": 8, "resolution": "1080p"},
+  "edit": {"model": "grok-imagine-video", "prompt": "Change the synthetic test scene.", "video": {"url": "https://example.com/input.mp4"}},
+  "extend": {"model": "grok-imagine-video", "prompt": "Continue the synthetic test scene.", "video": {"url": "https://example.com/input.mp4"}, "duration": 5},
+  "created": {"request_id": "00000000-0000-4000-8000-000000000001"},
+  "pending": {"status": "pending"},
+  "done": {"status": "done", "model": "grok-imagine-video", "video": {"url": "https://example.com/output.mp4", "duration": 8, "respect_moderation": true}},
+  "filtered": {"status": "done", "model": "grok-imagine-video", "video": {"duration": 8, "respect_moderation": false, "url": ""}},
+  "failed": {"status": "failed", "error": {"code": "synthetic_failure", "message": "Synthetic failure"}},
+  "expired": {"status": "expired"},
+  "contract": {"pendingMayBeEmptyHttp202": true, "supportsCancel": false, "supportsSeparateResult": false, "retention": "unqualified", "outputUrlTtl": "temporary, exact duration unqualified", "automaticPostReplay": false, "upstreamCostMicros": null, "policyFixedIsVendorCost": false}
+}

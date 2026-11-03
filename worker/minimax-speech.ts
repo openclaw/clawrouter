@@ -1,3 +1,4 @@
+import { readNativeJson } from "./native-json.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const miniMaxSpeechModels = [
@@ -58,30 +59,7 @@ export function observeMiniMaxSpeech(value: unknown, request: MiniMaxSpeechReque
 
 export async function readMiniMaxSpeech(response: Response, request: MiniMaxSpeechRequest, signal: AbortSignal): Promise<ReturnType<typeof observeMiniMaxSpeech>> {
   modelId(request.model);
-  const length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxEnvelope)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", abort, { once: true });
-  let size = 0, text = "";
-  try {
-    signal.throwIfAborted();
-    for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted();
-      if (chunk.done) break;
-      size += chunk.value.byteLength; if (size > maxEnvelope) fail("size");
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
-    if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
-    return observeMiniMaxSpeech(JSON.parse(text), request, true);
-  } catch {
-    void reader.cancel().catch(() => undefined); fail("response");
-  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  return readNativeJson(response, signal, maxEnvelope, body => observeMiniMaxSpeech(body, request, true), fail);
 }
 function modelId(value: string): void { if (!(miniMaxSpeechModels as readonly string[]).includes(value)) fail("model"); }
 function counter(value: unknown): number | null { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null; }

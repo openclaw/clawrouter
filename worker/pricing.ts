@@ -191,6 +191,7 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
   for (const tool of tools) {
     if (!isObject(tool)) continue;
     // Inspect protocol declarations, never function names or user JSON schemas.
+    if (requestFormat === "openai.chat_completions" && ["browser_search", "code_interpreter"].includes(String(tool.type))) return "hosted_tool_fee";
     if (requestFormat === "openai.responses" && typeof tool.type === "string") {
       if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["x_search", "file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
       if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";
@@ -325,12 +326,14 @@ function characterCost(characters: number, pricing: CharacterPricing): number {
 // Requested tiers choose admission bounds; only the served tier can choose a
 // settlement price. OpenAI omitted/auto requests can inherit a paid default;
 // native Gemini defaults to Standard and never upgrades Flex.
-function resolveRates(pricing: TokenPricing, inputTokens: number, tier: unknown, reserve: boolean, google = false): Rates | null {
+function resolveRates(pricing: TokenPricing & { autoServiceTier?: "unpriced" }, inputTokens: number, tier: unknown, reserve: boolean, google = false): Rates | null {
   if (google) {
     tier = googleServiceTier(tier);
     if (tier == null) return null;
   }
   const tiers = pricing.serviceTiers;
+  // Automatic selection can include contracts absent from the published cards.
+  if (tier === "auto" && pricing.autoServiceTier === "unpriced") return null;
   if (!tiers?.length) return !google || tier === "standard" ? contextRates(pricing, inputTokens, reserve) : null;
   const selected = tiers.find((card) => card.id === tier || card.aliases.includes(tier as string));
   if (!reserve) return selected && (selected.maxInputTokens == null || inputTokens <= selected.maxInputTokens)
@@ -436,8 +439,8 @@ function contentHasUnboundedInput(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(contentHasUnboundedInput);
   if (!isObject(value)) return false;
   const kind = typeof value.type === "string" ? value.type : "";
-  if (["image", "image_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
-  if ("image_url" in value || "file_id" in value) return true;
+  if (["image", "image_url", "video_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
+  if ("image_url" in value || "video_url" in value || "file_id" in value) return true;
   return Object.values(value).some(contentHasUnboundedInput);
 }
 
