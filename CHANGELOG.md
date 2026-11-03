@@ -96,6 +96,7 @@
 - Qualify Synthetic data-only model discovery on its exact mapped GET endpoint and original API-key binding, without relaxing OpenAI model decoding or fabricating tariffs.
 - Qualify literal endpoint upstream-path mappings while preserving caller routes, native formats and selected credentials; reject ambiguous paths and conflicting grant transport overrides.
 - Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
+- Declare Google's stable 001 and 2 embedding models on the qualified native unary and synchronous batch routes; preserve unknown prices and deny upstream-dollar hard budgets before dispatch.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
 - Refresh pinned setup-node to 7.1.0 and upload-artifact to 7.0.2, including Node installation validation and updated cache/artifact clients.
