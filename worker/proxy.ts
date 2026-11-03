@@ -42,7 +42,7 @@ import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { backgroundResponse, requireEmptyResponseControlBody, responsesControl } from "./responses-lifecycle.ts";
+import { backgroundResponse, requireEmptyResponseControlBody, responsesControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
@@ -268,10 +268,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
   let preauthenticated: AuthorizedIdentity | Response | null = null;
-  const control = responsesControl(provider, endpoint);
+  const controls = responsesControls(provider, endpoint), control = controls[0];
   if (control) {
     preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
     if (preauthenticated instanceof Response) return preauthenticated;
+    if (controls.some(candidate => candidate.action !== control.action || candidate.protocol !== control.protocol)) throw new HttpError(409, "response_owner_unavailable", "control declarations do not agree on one protocol and action");
     if (request.method === "GET") {
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
       await requireEmptyResponseControlBody(request);
@@ -282,13 +283,13 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
         params[name] = ids[0]; query.delete(name);
       }
       const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, params, query) : params.response_id;
-      return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined, control.protocol, params);
+      return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), preauthenticated ?? undefined, session ?? undefined, control.protocol, params);
     }
     if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
     const envelope = manifestEnvelope(await readJson<unknown>(request));
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
     const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, envelope.pathParams, envelope.query) : envelope.pathParams.response_id;
-    return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams);
+    return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: envelope.pathParams })), preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams);
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
@@ -324,14 +325,27 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint || !endpoint.native_proxy) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-  const control = responsesControl(provider, endpoint);
+  const controlEndpoints = matching.filter(candidate => candidate.native_proxy && candidate.methods.includes(method));
+  const controls = controlEndpoints.flatMap(candidate => responsesControls(provider, candidate).map(control => ({ ...control, endpoint: candidate })));
+  const control = controls[0];
   if (control) {
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id);
     if (preauthenticated instanceof Response) return preauthenticated;
+    if (controlEndpoints.some(candidate => !controls.some(item => item.endpoint === candidate))
+      || controls.some(candidate => candidate.action !== control.action || candidate.protocol !== control.protocol)) {
+      throw new HttpError(409, "response_owner_unavailable", "native control declarations do not agree on one protocol and action");
+    }
     await requireEmptyResponseControlBody(request);
-    const params = nativeParams(endpoint, match[2]), query = new URL(request.url).searchParams;
-    const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, params, query) : params.response_id;
-    return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined, undefined, control.protocol, params);
+    const query = new URL(request.url).searchParams;
+    const routes = await Promise.all(controls.map(async candidate => {
+      const params = nativeParams(candidate.endpoint, match[2]);
+      const id = candidate.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(candidate.protocol, candidate.action, params, query) : params.response_id;
+      return { createId: candidate.create.id, pathParams: params, id };
+    }));
+    if (routes.some(route => route.id !== routes[0].id)) throw new HttpError(409, "response_owner_unavailable", "native control declarations disagree on the bound identity");
+    // The scoped owner selects its original create route; endpoint order never
+    // chooses between text/image jobs sharing the same native control path.
+    return proxyResponseControl(request, env, control.action, routes[0].id, control.protocol ? {} : query, "proxy_key", provider.id, routes, preauthenticated ?? undefined, undefined, control.protocol);
   }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {

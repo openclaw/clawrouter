@@ -6,15 +6,19 @@ export type ResponsesControlAction = "retrieve" | "cancel" | "result";
 
 // Control ownership is declared once on the create endpoint. It never creates
 // a second model capability or a fresh inference/catalog offer.
-export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): { create: CompiledEndpoint; action: ResponsesControlAction; protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol } | null {
+export interface ResponsesControlMatch { create: CompiledEndpoint; action: ResponsesControlAction; protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol }
+export function responsesControls(provider: CompiledProvider, endpoint: CompiledEndpoint): ResponsesControlMatch[] {
+  const matches: ResponsesControlMatch[] = [];
   for (const create of provider.endpoints) {
-    if (create.lifecycle?.retrieve === endpoint.id) return { create, action: "retrieve", protocol: create.lifecycle.protocol };
-    if (create.lifecycle?.result === endpoint.id) return { create, action: "result", protocol: create.lifecycle.protocol };
-    if (create.lifecycle?.cancel === endpoint.id) return { create, action: "cancel", protocol: create.lifecycle.protocol };
-    if (create.responsesLifecycle?.retrieve === endpoint.id) return { create, action: "retrieve" };
-    if (create.responsesLifecycle?.cancel === endpoint.id) return { create, action: "cancel" };
+    for (const action of ["retrieve", "result", "cancel"] as const) {
+      if (create.lifecycle?.[action] === endpoint.id) matches.push({ create, action, protocol: create.lifecycle.protocol });
+      if (action !== "result" && create.responsesLifecycle?.[action] === endpoint.id) matches.push({ create, action });
+    }
   }
-  return null;
+  return matches;
+}
+export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): ResponsesControlMatch | null {
+  return responsesControls(provider, endpoint)[0] ?? null;
 }
 
 export function backgroundResponse(endpoint: CompiledEndpoint, body: ProxyRequestBody): boolean {

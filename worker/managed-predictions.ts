@@ -10,7 +10,7 @@ import { assertProviderAccess } from "./providers.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import type { ManagedCreate, ManagedObservation, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
+import type { ManagedCreate, ManagedFileDescriptor, ManagedObservation, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { applyManagedHeaders, assertManagedDispatch, managedProbeId } from "./managed-dispatch.ts";
 import { managedPaths, managedRoute } from "./managed-routes.ts";
@@ -100,8 +100,16 @@ function existingPrediction(request: Request, scope: string, job: BackgroundReco
 }
 
 export async function observePrediction(env: Env, scope: string, id: string, prediction: ManagedObservation, statusCode: number): Promise<void> {
-  const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.id, predictionStatus: prediction.terminal ?? "processing", statusCode, observationUnavailable: prediction.observationUnavailable });
+  const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.id, predictionStatus: prediction.terminal ?? "processing", statusCode, observationUnavailable: prediction.observationUnavailable, files: prediction.files });
   if (ack?.observed !== true) throw new HttpError(503, "background_unavailable", "prediction observation was not acknowledged");
+}
+
+export async function bindPredictionFiles(env: Env, scope: string, id: string, prediction: ManagedObservation): Promise<void> {
+  if (prediction.files === undefined) return;
+  const ack = await backgroundCall<{ files: ManagedFileDescriptor[] }>(env, scope, { action: "managed_files", id, responseId: prediction.id, files: prediction.files });
+  if (!Array.isArray(ack?.files) || prediction.files.some(file => !ack.files.some(bound => bound.id === file.id && bound.mimeType === file.mimeType))) {
+    throw new HttpError(503, "managed_files_unavailable", "output file ownership was not acknowledged; retain the existing job and do not resubmit generation");
+  }
 }
 
 export function predictionResponse(prediction: ManagedObservation, provider: CompiledProvider, create: CompiledEndpoint,
@@ -152,13 +160,13 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
   return { ...result, evidence };
 }
 
-export async function collectManagedPrediction(env: Env, job: BackgroundJob, accept: (id: string, status: string, statusCode: number, loss?: ManagedObservationLoss) => Promise<void>): Promise<void> {
+export async function collectManagedPrediction(env: Env, job: BackgroundJob, accept: (id: string, status: string, statusCode: number, loss?: ManagedObservationLoss, files?: readonly ManagedFileDescriptor[]) => Promise<void>): Promise<void> {
   if (!job.managed || job.managed.observationUnavailable || !job.responseId || !job.route || Date.now() >= job.observeUntil) return;
   const operation = new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
   try {
     const { evidence } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,
       action: "retrieve", query: "", stream: false, protocol: job.managed.protocol, requestedVersion: job.managed.requestedVersion,
       deadline: job.observeUntil, authorization: { kind: "collection" } }, operation);
-    await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status, evidence.prediction.observationUnavailable);
+    await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status, evidence.prediction.observationUnavailable, evidence.prediction.files);
   } finally { operation.stop("complete"); }
 }

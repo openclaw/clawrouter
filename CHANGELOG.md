@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
+- Resolve shared native control paths through the original scoped create-route binding, preserving existing jobs regardless of declaration order.
+- Bind bounded output-file descriptors to succeeded managed jobs before publication, preserving initial URI identity across inline retrieval and keeping file delivery separate from exactly-once generation settlement.
 
 - Qualify Google Omni Interactions lifecycle and authenticated file endpoint links in the provider compiler, rejecting unbound controls and credential overrides before shared runtime activation.
 - Managed media: retain original per-job control permissions without exposing unsupported poll/cancel routes; pin non-secret flags through credential and route revalidation.
