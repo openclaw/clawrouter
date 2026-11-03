@@ -271,6 +271,7 @@
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
 - Add experimental hosted Chat Completions routes for NVIDIA NIM, Cerebras, DeepInfra and Baseten Model APIs, preserving provider-specific paths and credentials without inferring pricing or local runtime parity.
+- Qualify NVIDIA's four frozen hosted model identities, exclude the deprecated Llama seed, and add credential-free inventory/featured metadata codecs with strict availability intersection and unknown pricing.
 - Fix native Node loading of the Cerebras catalog codec by resolving its TypeScript imports explicitly.
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
