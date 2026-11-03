@@ -1,27 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { parse, stringify } from "yaml";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 
 const original = parse(readFileSync(new URL("../providers/anthropic.provider.yaml", import.meta.url), "utf8"));
 
-test("compiler binds the Claude search tariff only to a Messages generation endpoint", t => {
-  const root = mkdtempSync(join(tmpdir(), "clawrouter-claude-tariff-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+test("compiler binds the Claude search tariff only to a Messages generation endpoint", () => {
   function compile(mutate = () => {}) {
     const manifest = structuredClone(original);
     // Isolate hosted-tool endpoint validation from the independent modifier-card
     // guard, which also rejects a changed Messages wire format.
     for (const model of manifest.models.entries) delete model.pricing.anthropicModifiers;
     mutate(manifest);
-    const input = join(root, "provider.yaml"); writeFileSync(input, stringify(manifest));
-    return spawnSync(process.execPath, ["scripts/compile-providers.mjs", input], { encoding: "utf8" });
+    return compileProviderSnapshot([manifest]);
   }
-  const valid = compile(); assert.equal(valid.status, 0, valid.stderr);
-  const provider = JSON.parse(valid.stdout).providers[0];
+  const provider = compile().providers[0];
   assert.deepEqual(provider.endpoints.find(endpoint => endpoint.id === "messages").toolPricing, original.endpoints.messages.toolPricing);
   assert.equal(provider.endpoints.find(endpoint => endpoint.id === "count_tokens").toolPricing, undefined);
   for (const mutate of [
@@ -30,7 +24,6 @@ test("compiler binds the Claude search tariff only to a Messages generation endp
     manifest => { manifest.endpoints.count_tokens.toolPricing = manifest.endpoints.messages.toolPricing; delete manifest.endpoints.messages.toolPricing; },
     manifest => { manifest.endpoints.messages.toolPricing.previewMicrosPerCallByModel = { "claude-opus-5-5": 10000 }; },
   ]) {
-    const result = compile(mutate); assert.notEqual(result.status, 0, "invalid tariff endpoint must not compile");
-    assert.match(result.stderr, /toolPricing|schema validation/);
+    assert.throws(() => compile(mutate), /toolPricing|schema validation/);
   }
 });

@@ -1,5 +1,5 @@
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { parseArgs } from "./cli-args.mjs";
+import { parseArgs, required, optionalValue, requiredOption, setOptional } from "./cli-args.mjs";
 import { adminRequest } from "./admin-api.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -46,8 +46,4 @@ function readSecret(values, name) {
   throw new Error(`--${name}-env or --${name}-stdin is required`);
 }
 
-function requiredOption(values, name) { return required(optionalValue(values, name), `--${name}`); }
-function required(value, name) { if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`); return value.trim(); }
-function optionalValue(values, name) { const value = values[name]; if (value === undefined) return undefined; if (value === true) throw new Error(`--${name} requires a value`); return value.trim(); }
 function optionalNumber(values, name) { const value = optionalValue(values, name); if (value === undefined) return undefined; const number = Number(value); if (!Number.isFinite(number)) throw new Error(`--${name} must be a number`); return number; }
-function setOptional(object, key, value) { if (value !== undefined) object[key] = value; }

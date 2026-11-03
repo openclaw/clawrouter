@@ -60,6 +60,7 @@ export interface PricedTokens {
   image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
   billable?: false;
+  billedTokens?: { input: number | null; output: number | null };
   input: number | null;
   output: number | null;
   cached: number | null;
@@ -216,6 +217,10 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, req
   if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" ? actualImageCost(pricing, tokens) : null;
   if (pricing.unit === "character") return null;
   if (tokens.billable === false) return 0;
+  if (requestFormat === "cohere.chat" || tokens.billedTokens !== undefined) {
+    if (!tokens.billedTokens) return null;
+    tokens = { ...tokens, ...tokens.billedTokens, cached: null, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
+  }
   if (tokens.input == null) return null;
   const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false, requestFormat === "google.generate_content");
   if (!rates) return null;

@@ -1,23 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
+import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 
 const original = parse(readFileSync(new URL("../providers/anthropic.provider.yaml", import.meta.url), "utf8"));
 
-test("compiler preserves qualified Claude modifiers and rejects incomplete or invented tariffs", t => {
-  const root = mkdtempSync(join(tmpdir(), "clawrouter-claude-modifier-cards-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+test("compiler preserves qualified Claude modifiers and rejects incomplete or invented tariffs", () => {
   const compile = (mutate = () => {}) => {
     const manifest = structuredClone(original); mutate(manifest);
-    const input = join(root, "provider.yaml"); writeFileSync(input, JSON.stringify(manifest));
-    return spawnSync(process.execPath, ["scripts/compile-providers.mjs", input], { encoding: "utf8" });
+    return compileProviderSnapshot([manifest]);
   };
-  const valid = compile(); assert.equal(valid.status, 0, valid.stderr);
-  const snapshot = JSON.parse(valid.stdout);
+  const snapshot = compile();
   for (const slug of ["claude-sonnet-5-5", "claude-haiku-5-5"]) {
     const source = original.models.entries.find(model => model.upstream === slug);
     const model = snapshot.providers[0].models.find(model => model.upstream === slug);
@@ -36,14 +30,12 @@ test("compiler preserves qualified Claude modifiers and rejects incomplete or in
     card => { card.serviceTiers = ["priority"]; }, card => { card.serviceTiers = []; },
     card => { card.unknownMultiplier = 3; },
   ]) {
-    const result = compile(manifest => mutate(manifest.models.entries[0].pricing.anthropicModifiers));
-    assert.notEqual(result.status, 0); assert.equal(result.stdout, ""); assert.match(result.stderr, /invalid manifest/);
+    assert.throws(() => compile(manifest => mutate(manifest.models.entries[0].pricing.anthropicModifiers)), /invalid manifest/);
   }
   for (const mutate of [
     manifest => { manifest.id = "compatible-but-distinct-billing"; },
     manifest => { manifest.endpoints.messages.requestFormat = "openai.responses"; },
   ]) {
-    const result = compile(mutate);
-    assert.notEqual(result.status, 0); assert.equal(result.stdout, ""); assert.match(result.stderr, /anthropicModifiers requires first-party Anthropic Messages/);
+    assert.throws(() => compile(mutate), /anthropicModifiers requires first-party Anthropic Messages/);
   }
 });

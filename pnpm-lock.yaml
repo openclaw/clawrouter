@@ -24,8 +24,8 @@ importers:
         specifier: ^4.1.1
         version: 4.1.1
       '@cloudflare/workers-types':
-        specifier: ^5.20261025.1
-        version: 5.20261025.1
+        specifier: ^5.20261101.1
+        version: 5.20261101.1
       toml-eslint-parser:
         specifier: ^1.0.3
         version: 1.0.3
@@ -34,7 +34,7 @@ importers:
         version: 7.0.2
       wrangler:
         specifier: ^4.152.0
-        version: 4.152.0(@cloudflare/workers-types@5.20261025.1)
+        version: 4.152.0(@cloudflare/workers-types@5.20261101.1)
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -51,8 +51,8 @@ importers:
         specifier: ^6.1.2
         version: 6.1.2(vite@8.3.5(esbuild@0.28.2)(yaml@2.9.1))
       lucide-react:
-        specifier: ^1.61.0
-        version: 1.61.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: ^1.66.0
+        version: 1.66.0(@types/react@19.3.0)(react@19.3.1)
       react:
         specifier: ^19.3.1
         version: 19.3.1
@@ -136,8 +136,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@cloudflare/workers-types@5.20261025.1':
-    resolution: {integrity: sha512-tMRFCIZKRRieDIdAe38rpszuInDpG6ugnT8mHgJrBj8zR0EbdWeTkg8NunLhVfX3tpBatD0UXVbDuZfgZxe9Fg==}
+  '@cloudflare/workers-types@5.20261101.1':
+    resolution: {integrity: sha512-malJEW9V9x+MygAc9RDGiWF0I8HFYfMzY5CXMn3tbzCxUiQBHtHWUTG5aFmO9oaFenc2z5OyT7e+a46ZaGs3cQ==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -869,8 +869,8 @@ packages:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
 
-  lucide-react@1.61.0:
-    resolution: {integrity: sha512-v2SQPPPNjnr+BlhL9Spuzmo5yR+hLkftfuE4E3jaxdNPgSH0hJKPcLJBP7yAta87jQNPsSERS59PJjCJ/CorBA==}
+  lucide-react@1.66.0:
+    resolution: {integrity: sha512-8zjbi/Us+ETXqfBwmXF/FHrWGIqOdE6zT1yUdRJLQVoptomSkB0zdFWVIM667t9K8djWDaXdkBkqi2qVTuDNiw==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -1099,7 +1099,7 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20261021.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20261025.1': {}
+  '@cloudflare/workers-types@5.20261101.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -1550,7 +1550,7 @@ snapshots:
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
 
-  lucide-react@1.61.0(@types/react@19.3.0)(react@19.3.1):
+  lucide-react@1.66.0(@types/react@19.3.0)(react@19.3.1):
     dependencies:
       react: 19.3.1
     optionalDependencies:
@@ -1728,7 +1728,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20261021.1
       '@cloudflare/workerd-windows-64': 1.20261021.1
 
-  wrangler@4.152.0(@cloudflare/workers-types@5.20261025.1):
+  wrangler@4.152.0(@cloudflare/workers-types@5.20261101.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.2(unenv@2.0.0-rc.24)(workerd@1.20261021.1)
@@ -1739,7 +1739,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20261021.1
     optionalDependencies:
-      '@cloudflare/workers-types': 5.20261025.1
+      '@cloudflare/workers-types': 5.20261101.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - '@types/node'
