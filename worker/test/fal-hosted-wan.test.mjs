@@ -44,7 +44,7 @@ test("image-to-video requires one bounded inline image without switching text ro
 test("interior version dots cannot become traversal, encoded path injection or arbitrary executable routes", () => {
   assert.equal(falQueuePaths(wire.requests[0].model, wire.requestId).status, "/fal-ai/wan/requests/" + wire.requestId + "/status");
   for (const model of ["fal-ai/wan/../text-to-video", "fal-ai/wan/.hidden", "fal-ai/wan/v2.", "fal-ai/wan/v2..2", "fal-ai/wan/v2%2e2", "fal-ai/wan/v2.2\n"]) assert.throws(() => falQueuePaths(model));
-  for (const params of [{ ...wire.requests[0].pathParams, variant: "v9.9" }, { owner: "bytedance", app: "seedance-2.0", variant: "text-to-video" },
+  for (const params of [{ ...wire.requests[0].pathParams, variant: "v9.9" }, { owner: "bytedance", app: "seedance-2.0", variant: "unqualified-mode" },
     { owner: "fal-ai/wan", app: "v2.2-a14b", variant: "text-to-video" }]) assert.throws(() => adapter.prepare(wire.requests[0].body, new Headers(), params, new URLSearchParams()));
 });
 test("controls share the native owner/app root while full original create identity remains in the job", () => {

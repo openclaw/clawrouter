@@ -6,7 +6,8 @@ products: standard and Fast text-to-video, image-to-video and reference-to-video
 `worker/fal-seedance.ts` exports that finite `falSeedanceModels` list,
 `isFalSeedanceModel` and `prepareFalSeedance`. Model/path identity and native
 body fields are preserved; no later model or automatic mode switch is accepted.
-This is deterministic codec qualification, not an activated provider route.
+The registered fal wrapper now consumes this codec for exactly these six IDs.
+Provider activation and actual durable Worker proof remain separately qualified.
 
 Native JSON POST goes to `https://queue.fal.run/<selected model>` with Key
 authentication from the original server FAL_KEY. Existing fal queue machinery
@@ -43,16 +44,30 @@ Requested duration, inference time, result URLs and local timeouts do not prove
 final dollar cost or refunds. Hard-dollar budgets deny unknown cost separately
 from policy_fixed charging.
 
-Concrete source1/source3 handoff: the current fal route-segment validator and
-shared public-path validator reject the dot in `seedance-2.0`; Fast also needs
-four create segments. Qualify these exact dotted app/control paths under the
-existing scoped route machinery without admitting traversal, encoded path
-injection or arbitrary first-matching create routes. Source5 will consume that
-published contract in its fal wrapper; source3 owns schema links, source2 actual
-client behavior, source6 snapshots/E2E. Canonical FAL_KEY runtime admission and
-the pending fal declaration remain prerequisites. This slice does not alter
-the registry, shared types/runtime/schema, existing YAML or snapshots, and
-helper tests alone are not provider parity proof.
+Concrete source1/source3 handoff: `falManagedAdapter.prepare` now accepts the
+six IDs through the landed three/four-segment schema from
+[PR609](https://github.com/openclaw/clawrouter/pull/609). It retains every original
+create parameter, including Fast/mode. `identify` accepts only the exact dotted
+owner/app root for scoped lookup; it grants no authority to a raw job ID.
+`control` still requires the full retained qualified create parameters. The
+controller already owns original-create selection; no replacement index or
+first-matching-route fallback is introduced.
+
+Public rewriting permits only
+`/v1/native/fal/bytedance/seedance-2.0/requests/<id>` and its `/status` and `/cancel`
+suffixes as dotted exceptions. Other protocols retain `mediaPublicPath` unchanged.
+Arbitrary dotted apps, extra segments, encoded traversal and remote references
+remain rejected. Existing HeyGen/Wan preparation and controls remain covered.
+The new compiler integration test composes actual schema, registered wrapper,
+public paths and shared control declarations for all six fixtures. Wrapper
+serialization tests are not real Worker restart or cross-caller proof.
+
+Source1 owns the promised actual Worker original-owner/restart tests, canonical
+FAL_KEY admission and shared runtime; source3 owns schema, source2 the actual
+consumer, source6 snapshots/E2E. The pending fal declaration and durable asset
+binding remain prerequisites where applicable. No shared types/controller,
+existing YAML, snapshots or generic public-path grammar change here. Native
+wrapper qualification alone does not establish complete provider parity.
 
 Primary schemas:
 [Fast text](https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=bytedance/seedance-2.0/fast/text-to-video),
