@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add the five frozen Mistral Chat identities with dated endpoint facts, current Codestral/Small tariffs and conservative full-context reservations. Deprecated identities remain unpriced instead of borrowing replacement tariffs.
+
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
