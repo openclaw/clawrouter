@@ -89,6 +89,7 @@ describe("actual Vercel native Anthropic SDK through Worker", () => {
   it.each([false, true])("preserves catalog selection, native replay and fragmented stream usage (simple=%s)", async simple => {
     await fixture(async ({ start }) => {
       const result = await (await start(simple ? "vercel_simple" : "vercel_stream", { simple })).result();
+      expect(result.errorMessage?.replaceAll(origin, "<router>").replace(/clawrouter-live-[^\s"'<>]+/g, "<proxy-key>").slice(0, 512), "actual SDK terminal error").toBeUndefined();
       expect(result).toMatchObject({ stopReason: "stop", model: modelId, content: [{ type: "text", text: "synthetic-answer" }], usage: { input: 11, output: 3, totalTokens: 14 } });
     });
   });
