@@ -144,9 +144,7 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   if (requestFormat === "google.generate_content" && googleField(body, "cachedContent", "cached_content") != null) return "hosted_tool_usage";
   // Responses Lite and tool search load executable declarations through tagged
   // input items. Do not search ordinary output data, content, or function schemas.
-  const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
-    ? body.input.flatMap((item) => isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools) ? item.tools : []) : [];
-  const current = hostedToolPricingGap((Array.isArray(body.tools) ? body.tools : []).concat(inputTools), requestFormat);
+  const current = hostedToolPricingGap(requestDeclaredTools(body, requestFormat), requestFormat);
   if (current) return current;
   if (requestFormat === "openai.responses" && responsesHasOpaqueInput(body) && opaqueInputLimit(pricing) == null) return "opaque_input_bound";
   // C-S1 has no durable opaque-ancestry witness. Ciphertext and references
@@ -160,6 +158,32 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   return parentTools === "token_only" ? null : parentTools === "hosted_tool_fee" || parentTools === "hosted_tool_usage" ? parentTools : "retained_tool_unknown";
 }
 
+// Opt in only after the shared runtime binds the qualified outcome tariff to
+// admission and settlement. The ordinary classifier keeps its request-fee gap.
+export function outcomeRequestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, requestPricing: OutcomeRequestPricing, parentTools?: ToolKnowledge): PricingGap | null {
+  if (!pricing || pricing.unit != null || requestFormat !== "openai.responses" || !qualifiedOutcome(requestPricing)) return "model_request_fee";
+  // The native contract supports these ToolParam types. Unknown declarations
+  // cannot be certified as client execution merely because no fee is known.
+  const tools = requestDeclaredTools(body, requestFormat);
+  if (body.tools != null && !Array.isArray(body.tools)
+    || tools.some(tool => !isObject(tool) || !["function", "web_search", "x_search", "code_interpreter", "file_search", "image_generation", "mcp"].includes(tool.type as string))) return "hosted_tool_usage";
+  // xAI automatically enables document search for native file attachments.
+  // Inspect message content parts, never text, function schemas or arguments.
+  if (Array.isArray(body.input) && body.input.some(item => isObject(item) && (item.type === "input_file"
+    || Array.isArray(item.content) && item.content.some(part => isObject(part) && part.type === "input_file")))) return "hosted_tool_usage";
+  // Legacy native search is an execution selector, not ordinary user JSON.
+  if (body.search_parameters != null && (!isObject(body.search_parameters) || body.search_parameters.mode !== "off")) return "hosted_tool_usage";
+  // Generic token-only history does not attest xAI's implicit file-search state.
+  if (body.previous_response_id != null || body.conversation != null) return "retained_tool_unknown";
+  return requestPricingGap({ ...pricing, unpricedCosts: pricing.unpricedCosts?.filter(cost => cost !== "request_fee") }, body, requestFormat, parentTools);
+}
+
+function requestDeclaredTools(body: Record<string, unknown>, requestFormat: string): unknown[] {
+  const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
+    ? body.input.flatMap(item => isObject(item) && ["additional_tools", "tool_search_output"].includes(item.type as string) && Array.isArray(item.tools) ? item.tools : []) : [];
+  return (Array.isArray(body.tools) ? body.tools : []).concat(inputTools);
+}
+
 // Classify known executable declarations only. A null result does not attest
 // that an unknown or partially observed tool inventory is complete.
 export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: string): "hosted_tool_fee" | "hosted_tool_usage" | null {
@@ -168,7 +192,7 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
     if (!isObject(tool)) continue;
     // Inspect protocol declarations, never function names or user JSON schemas.
     if (requestFormat === "openai.responses" && typeof tool.type === "string") {
-      if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
+      if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["x_search", "file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
       if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";
       // Hosted search has no qualified cumulative bound; this is not a fee claim.
       if (["mcp", "programmatic_tool_calling"].includes(tool.type) || tool.type === "tool_search" && tool.execution !== "client") usageGap = true;

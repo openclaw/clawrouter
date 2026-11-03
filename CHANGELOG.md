@@ -68,6 +68,7 @@
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.
 - Bound xAI Responses outcome charges separately from inference and qualify exact native cost receipts, preserving unknown-error reservations and existing hard-budget guards until runtime integration.
+- Reject unbounded native X Search charges before hard-budget dispatch, preserving ordinary client functions and separately guarding implicit xAI document search and unqualified retained ancestry.
 - Qualify the Alibaba Wan create/retrieve lifecycle contract and reject unbound controls, invented cancellation and credential-header overrides before activation.
 - Allow an explicit unpriced endpoint override so a newly qualified wire contract cannot inherit a model tariff from another endpoint.
 - Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
