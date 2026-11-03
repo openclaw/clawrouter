@@ -229,6 +229,8 @@ export function createProxyAccounting(options: AccountingContext) {
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  // The native Search codec's request counter is not a qualified tariff receipt.
+  if (endpoint.request_format === "deepseek.search") return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "model_request_fee", inputTokens: null, outputTokens: null };
   // Classify with trusted routing context, then consume the source-owned image
   // pricing guard. This changes no wire format and clears no other price gap.
   const imageGap = googleImageRequest(model?.upstream, body, endpoint.request_format)

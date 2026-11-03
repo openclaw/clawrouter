@@ -153,6 +153,8 @@
 - Add frozen DeepSeek native Search codecs and fixtures, separating native nonempty-request billing from filtered consumer results and preserving unknown interrupted outcomes.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Qualify model-less native DeepSeek Search declarations against the original Bearer origin and bounded codec, keeping Search request fees separate from Chat token prices and fixed policy charges.
+- Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
+- Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
 - Add a complete Google grounded-search response wrapper with scoped native selection, stable attribution indices, thought exclusion and bounded delivery without inferring tool costs.
