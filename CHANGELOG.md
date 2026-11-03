@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
+- Add bounded Replicate prediction protocol helpers and executable lifecycle fixtures for scoped async runtime integration, including partial output, cancellation, URL rewriting and explicit unknown-cost boundaries. Route activation and durable settlement remain separate integration work.
 
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
