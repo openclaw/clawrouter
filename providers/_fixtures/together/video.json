@@ -1,0 +1,11 @@
+{
+  "source": "openclaw 31ad71a8addc1d42fbc5478f7e114860f5cbf6c7 extensions/together/index.ts",
+  "requests": [
+    { "model": "Wan-AI/wan2.7-t2v", "prompt": "A synthetic paper boat on a pond", "seconds": "10", "resolution": "720P", "ratio": "16:9" },
+    { "model": "Wan-AI/wan2.7-i2v", "prompt": "A synthetic paper boat moves forward", "seconds": "5", "resolution": "1080P", "ratio": "9:16", "media": { "frame_images": [{ "input_image": "https://assets.example.com/reference.png", "frame": "first" }] } },
+    { "model": "minimax/hailuo-02", "prompt": "A synthetic paper boat floats", "seconds": "6", "width": 1366, "height": 768 }
+  ],
+  "pending": { "id": "video_fixture", "status": "in_progress", "model": "Wan-AI/wan2.7-t2v" },
+  "completed": { "id": "video_fixture", "status": "completed", "model": "Wan-AI/wan2.7-t2v", "outputs": { "video_url": "https://assets.example.com/together.mp4", "cost": 0.4 } },
+  "failed": { "id": "video_fixture", "status": "failed", "error": { "code": "synthetic_failure", "message": "Synthetic provider failure" } }
+}
