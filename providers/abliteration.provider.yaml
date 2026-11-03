@@ -1,4 +1,4 @@
-# Chat API only; qualification: docs/hosted-specialist-providers.md.
+# Frozen Chat facts, deprecation and credential boundaries: docs/abliteration-native-catalog.md.
 # Endpoint/model source checked 2026-11-03: https://docs.abliteration.ai/models
 schema: clawrouter.service-provider.v1
 id: abliteration
@@ -27,10 +27,19 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    streaming: none
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -40,9 +49,87 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: abliteration/abliterated-model-large-flash
+      upstream: abliterated-model-large-flash
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.abliteration.ai/compatibility-matrix, https://docs.abliteration.ai/capabilities/thinking]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.abliteration.ai/models]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+            maxOutputTokens: 262144
     - id: abliteration/abliterated-model-large-v2
       upstream: abliterated-model-large-v2
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.abliteration.ai/compatibility-matrix, https://docs.abliteration.ai/capabilities/thinking]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: max
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.abliteration.ai/models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1000000
+            maxOutputTokens: 999990
+    - id: abliteration/abliterated-model
+      upstream: abliterated-model
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, minimal, low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.abliteration.ai/compatibility-matrix, https://docs.abliteration.ai/capabilities/thinking]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.abliteration.ai/models]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+            maxOutputTokens: 262134
+    - id: abliteration/abliterated-model-large
+      upstream: abliterated-model-large
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high, max]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        sources: [https://docs.abliteration.ai/models]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.abliteration.ai/compatibility-matrix, https://docs.abliteration.ai/capabilities/thinking]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.abliteration.ai/models]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1000000
+            maxOutputTokens: 999990
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
