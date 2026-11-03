@@ -94,9 +94,9 @@ test("Gemini tier admission uses native aliases and both budgets without upgradi
   }
 });
 
-test("Gemini tier qualification preserves fixed tariffs and unmetered forwarding", async (t) => {
-  for (const requestTier of ["default", "auto", "fast", "future", 0, {}]) for (const [limit, fixedCost, metadataTier, expected] of [
-    [50_000, null, "standard", "denied"], [null, null, "standard", "measured"], [null, null, "future", "unpriced"], [50_000, 0, "future", "fixed"], [50_000, 7, "future", "fixed"],
+test("Gemini malformed tiers cannot bypass admission with fixed tariffs or unmetered forwarding", async (t) => {
+  for (const requestTier of ["default", "auto", "fast", "future", 0, {}]) for (const [limit, fixedCost, metadataTier] of [
+    [50_000, null, "standard"], [null, null, "standard"], [null, null, "future"], [50_000, 0, "future"], [50_000, 7, "future"],
   ]) {
     const events = [], pending = [], env = usageEnv([], { provider: "google-gemini", limit, fixedCost, retainContent: false });
     env.GOOGLE_API_KEY = "fixture-google-key";
@@ -107,14 +107,12 @@ test("Gemini tier qualification preserves fixed tariffs and unmetered forwarding
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify({ contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 1_100 }, serviceTier: requestTier }),
     }), env, { waitUntil: promise => pending.push(promise) });
-    assert.equal(response.status, expected === "denied" ? 400 : 200);
-    if (expected === "denied") assert.equal((await response.json()).error.code, "pricing_required");
-    else await response.text();
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "service_tier_not_allowed");
     await Promise.all(pending);
-    assert.equal(upstream.mock.callCount(), expected === "denied" ? 0 : 1);
+    assert.equal(upstream.mock.callCount(), 0);
     assert.equal(events.length, 1);
-    assert.equal(events[0].actual_cost_micros, expected === "measured" ? 10_185 : expected === "fixed" ? fixedCost : 0);
-    if (expected !== "denied") assert.equal(events[0].cost_basis, expected === "measured" ? "manifest_pricing" : expected === "fixed" ? "policy_fixed" : "unpriced_usage");
+    assert.equal(events[0].actual_cost_micros, 0);
     upstream.mock.restore();
   }
 });
