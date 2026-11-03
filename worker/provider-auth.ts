@@ -22,7 +22,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   if (requirement.responsesLifecycle || requirement.managedLifecycle) {
     const lifecycle = requirement.managedLifecycle ? requirement.endpoint.lifecycle : requirement.endpoint.responsesLifecycle;
     if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined,
-      ...Object.values(requirement.managedLifecycle ? requirement.endpoint.lifecycle?.files ?? {} : {})].filter((id): id is string => typeof id === "string").every(id =>
+      ...(requirement.managedLifecycle ? [requirement.endpoint.lifecycle?.files?.metadata, requirement.endpoint.lifecycle?.files?.download] : [])].filter((id): id is string => typeof id === "string").every(id =>
       requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
   }
   return requirement.mode === "http" || (["openai.responses", "openai.realtime"].includes(requirement.endpoint.websocket ?? "") && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"));
@@ -36,7 +36,7 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
   if (requirement.responsesLifecycle || requirement.managedLifecycle) {
     const lifecycle = requirement.managedLifecycle ? endpoint.lifecycle! : endpoint.responsesLifecycle!;
     for (const id of [lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined,
-      ...Object.values(requirement.managedLifecycle ? requirement.endpoint.lifecycle?.files ?? {} : {})].filter((id): id is string => typeof id === "string")) {
+      ...(requirement.managedLifecycle ? [requirement.endpoint.lifecycle?.files?.metadata, requirement.endpoint.lifecycle?.files?.download] : [])].filter((id): id is string => typeof id === "string")) {
       assertOperationConfiguration({ provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === id)!, mode: "http" }, grant, env);
     }
   }

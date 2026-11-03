@@ -17,16 +17,22 @@ export const managedFileLimit = 16 * 1024 * 1024;
 export interface ManagedFileMatch { create: CompiledEndpoint; action: ManagedFileAction; endpoint: CompiledEndpoint; pathParams: Record<string, string> }
 
 export function managedFileRoute(provider: CompiledProvider, create: CompiledEndpoint): {
-  adapter: ManagedFileAdapter; endpoints: Record<ManagedFileAction, CompiledEndpoint>;
+  adapter: ManagedFileAdapter; endpoints: { metadata?: CompiledEndpoint; download: CompiledEndpoint };
 } {
   const adapter = managedRoute(provider, create).adapter.files, links = create.lifecycle?.files;
-  if (!adapter || adapter.protocol !== create.lifecycle?.protocol || !links || links.metadata === links.download) unavailable();
+  if (!adapter || adapter.protocol !== create.lifecycle?.protocol || !links
+    || (links.mode ?? "metadata") !== (adapter.mode ?? "metadata")
+    || !["metadata", "download_only"].includes(links.mode ?? "metadata")) unavailable();
+  if (links.mode === "download_only" ? links.metadata !== undefined || adapter.readState !== undefined
+    : links.metadata === links.download || typeof adapter.readState !== "function") unavailable();
   const endpoints = {} as Record<ManagedFileAction, CompiledEndpoint>;
-  for (const action of ["metadata", "download"] as const) {
+  const actions: ManagedFileAction[] = links.mode === "download_only" ? ["download"] : ["metadata", "download"];
+  for (const action of actions) {
     const endpoint = provider.endpoints.find(candidate => candidate.id === links[action]);
     if (!endpoint || !endpoint.native_proxy || endpoint.method !== "GET" || endpoint.methods.some(method => method !== "GET")
       || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.modelPassthrough || Object.keys(endpoint.headers).length
-      || provider.capabilities.some(capability => capability.endpoint === endpoint.id)) unavailable();
+      || provider.capabilities.some(capability => capability.endpoint === endpoint.id)
+      || [create.id, create.lifecycle?.retrieve, create.lifecycle?.result, create.lifecycle?.cancel].includes(endpoint.id)) unavailable();
     endpoints[action] = endpoint;
   }
   return { adapter, endpoints };
@@ -67,13 +73,14 @@ export function managedFilePublicBody(provider: CompiledProvider, create: Compil
   const path = (action: ManagedFileAction, file: ManagedFileDescriptor) => {
     const endpoint = endpoints[action];
     // Public paths use schema templates, never a Host header or native URI.
-    if (endpoint.path_params.length !== 1) unavailable();
+    if (!endpoint || endpoint.path_params.length !== 1) unavailable();
     const route = endpoint.path.replace(`\${${endpoint.path_params[0]}}`, encodeURIComponent(file.id));
     if (!route.startsWith("/") || route.includes("${")) unavailable();
     const query = new URLSearchParams(endpoint.query).toString();
     return `/v1/native/${provider.id}${route}${query ? `?${query}` : ""}`;
   };
-  return adapter.rewrite(body, (prediction.files ?? []).map(file => ({ id: file.id, metadata: path("metadata", file), download: path("download", file) })));
+  return adapter.rewrite(body, (prediction.files ?? []).map(file => ({ id: file.id,
+    ...(endpoints.metadata ? { metadata: path("metadata", file) } : {}), download: path("download", file) })));
 }
 
 export async function proxyManagedFile(request: Request, env: Env, provider: CompiledProvider, matches: ManagedFileMatch[], queryInput: ProxyQuery,
@@ -87,7 +94,8 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
     // A broad /files/${id} template also matches /files/${id}:download.
     // Only the wrapper's exact native selector can distinguish these actions.
     const candidates = matches.flatMap(match => {
-      const { adapter } = managedFileRoute(provider, match.create);
+      const { adapter, endpoints } = managedFileRoute(provider, match.create);
+      if (!endpoints[match.action]) return [];
       try { return [{ ...match, fileId: adapter.identify(match.action, match.pathParams, new URLSearchParams(query)) }]; }
       catch { return []; }
     });
@@ -114,7 +122,7 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
     // Reserve one bounded response allocation before either upstream read.
     if (!lease.grow(managedFileLimit)) throw new HttpError(503, "server_overloaded", "file delivery capacity is busy; retry shortly");
     const input: ResponseControlDispatch = { owner: binding.owner, route: managed.route, responseId: jobId, action: "retrieve", query: "", stream: false,
-      protocol, requestedVersion: managed.requestedVersion, deadline, authorization: publicControlAuthorization(binding.auth) };
+      protocol, requestedVersion: managed.requestedVersion, deadline: Math.min(deadline, job.replayUntil), authorization: publicControlAuthorization(binding.auth) };
     const fetchFile = async (action: ManagedFileAction, state?: ManagedFileState) => {
       operation.signal.throwIfAborted();
       response = await operation.wait(dispatchResponseControl(env, { ...input, file: { action, descriptor: file, state } }, operation.signal), "upstream",
@@ -127,13 +135,16 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
       response = boundedFileResponse(response, action === "metadata" ? 64 * 1024 : managedFileLimit, operation.signal);
       return response;
     };
-    const state = await operation.wait(adapter.readState(await fetchFile("metadata"), file), "upstream");
-    if (state.id !== file.id || !["processing", "active", "failed"].includes(state.status) || JSON.stringify(state.body).length > 16 * 1024) unavailable();
     const headers = { "cache-control": "no-store", "x-clawrouter-content-retention": "off", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-job-id": jobId };
-    if (match.action === "metadata") return json(state.body, 200, headers);
-    if (state.status !== "active") return errorResponse(state.status === "processing" ? "managed_file_processing" : "managed_file_failed",
-      state.status === "processing" ? "file is still processing; retry this file request" : "file processing failed; generation settlement is unchanged", 409, undefined,
-      { ...headers, ...(state.status === "processing" ? { "retry-after": "5" } : {}) });
+    let state: ManagedFileState | undefined;
+    if (adapter.mode !== "download_only") {
+      state = await operation.wait(adapter.readState(await fetchFile("metadata"), file), "upstream");
+      if (state.id !== file.id || !["processing", "active", "failed"].includes(state.status) || JSON.stringify(state.body).length > 16 * 1024) unavailable();
+      if (match.action === "metadata") return json(state.body, 200, headers);
+      if (state.status !== "active") return errorResponse(state.status === "processing" ? "managed_file_processing" : "managed_file_failed",
+        state.status === "processing" ? "file is still processing; retry this file request" : "file processing failed; generation settlement is unchanged", 409, undefined,
+        { ...headers, ...(state.status === "processing" ? { "retry-after": "5" } : {}) });
+    } else if (match.action !== "download") unavailable();
     const bytes = await operation.wait(adapter.readFile(await fetchFile("download", state), file, managedFileLimit), "upstream");
     if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > managedFileLimit) unavailable();
     operation.stop("complete");

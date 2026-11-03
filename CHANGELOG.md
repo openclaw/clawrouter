@@ -2,9 +2,8 @@
 
 ## Unreleased
 
-- Wire native Baseten SystemOne decisions through bounded complete-response admission and original-credential dispatch, preserving observed answer usage and conservative settlement without OpenAI wire aliases.
 
-- Keep native SystemOne decision cards out of OpenAI Decisions discovery while preserving their exact native limits, observed usage contract and caller-scoped provider routes.
+- Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
 
 - Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.
@@ -99,6 +98,7 @@
 - Qualify Synthetic data-only model discovery on its exact mapped GET endpoint and original API-key binding, without relaxing OpenAI model decoding or fabricating tariffs.
 - Qualify literal endpoint upstream-path mappings while preserving caller routes, native formats and selected credentials; reject ambiguous paths and conflicting grant transport overrides.
 - Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
+- Declare Google's stable 001 and 2 embedding models on the qualified native unary and synchronous batch routes; preserve unknown prices and deny upstream-dollar hard budgets before dispatch.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
 - Refresh pinned setup-node to 7.1.0 and upload-artifact to 7.0.2, including Node installation validation and updated cache/artifact clients.
@@ -230,6 +230,8 @@
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Add focused Baseten SystemOne decision codecs and typed fixtures, preserving frozen model identities, native probability/legend semantics and independently validated per-question output usage.
+- Keep native SystemOne decision cards out of OpenAI Decisions discovery while preserving their exact native limits, observed usage contract and caller-scoped provider routes.
+- Wire native Baseten SystemOne decisions through bounded complete-response admission and original-credential dispatch, preserving observed answer usage and conservative settlement without OpenAI wire aliases.
 - Add experimental Arcee Platform, Chutes API-key, Featherless and Venice Chat Completions routes with independent credentials, unpriced model passthrough and explicit product boundaries.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
