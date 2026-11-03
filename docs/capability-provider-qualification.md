@@ -15,7 +15,9 @@ the provider's own query or JSON shape and return its response unchanged. They
 have no synthetic language-model rows and no token tariff. The request counter
 is router telemetry, not an upstream search-credit ledger. Unpriced reserve
 budgets fail closed; an explicit fixed policy request cost is a policy charge,
-not a promise about the provider's invoice. Unmetered requests remain unpriced.
+not a promise about the provider's invoice. The existing runtime records
+unmetered requests as `flat_fallback` with one micro-unit of router cost. That
+legacy fallback is not an upstream tariff or measured provider charge.
 
 | Provider | Native request | Source |
 | --- | --- | --- |

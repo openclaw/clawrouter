@@ -66,7 +66,8 @@ test("native search preserves query/body and isolates provider credentials", asy
   for (const id of ids) {
     const event = f.events.find(event => event.provider === id);
     assert.equal(event.capability, "web.search");
-    assert.equal(event.cost_basis, "unpriced_usage");
+    assert.equal(event.cost_basis, "flat_fallback");
+    assert.equal(event.actual_cost_micros, 1, "legacy router fallback is not an upstream search tariff");
     assert.equal(event.model, null);
   }
 });
