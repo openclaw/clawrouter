@@ -1,4 +1,5 @@
 import { assertNativeResponseDestination } from "./native-response.ts";
+import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { GoogleContinuation, googleContinuationRequested, googleContinuationRoute } from "./google-continuation.ts";
 import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
@@ -561,6 +562,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
     nativeLease = selection.nativeResponse?.acquire();
+    if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
     const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });

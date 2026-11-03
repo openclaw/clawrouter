@@ -1,4 +1,5 @@
 import { modelExecutable } from "../shared/route-catalog.ts";
+import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
@@ -293,7 +294,7 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
   }
   const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
   if (auth instanceof Response) return auth;
-  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy]);
+  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision()]);
   const config = hotCacheConfig(env), shared = `${variant}\n${key}`;
   if (!entitlementCache.peek(key, config)) {
     const adopted = await coloGet<unknown>("discovery", shared, config);
@@ -407,6 +408,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     const contextHasModel = (context: typeof effective[number], model: CompiledModel | null) => context.modelIds.has(model?.id ?? null)
       || !!model && context.passthrough && !provider.models.some(candidate => candidate.id === model.id);
     const eligibility = (context: typeof effective[number], model: CompiledModel | null, capability: string, inventory = false) => {
+      if (!nativeModelEligible(context.endpoint.request_format, model?.upstream)) return { status: "exact-blocked" as const, reasonCode: "model_capability_unsupported" };
       if (model && !modelExecutable(provider, model)) return { status: "exact-blocked" as const, reasonCode: "model_unavailable" };
       if (!contextHasModel(context, model)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (context.auth.policy.models != null && context.endpoint.request_format === "cloudflare_ai_gateway.universal") return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
