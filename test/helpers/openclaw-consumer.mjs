@@ -5,14 +5,14 @@ import { copyFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
-export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env }) {
+export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts" }) {
   assert.equal(process.env.CI, "true", "the public client uses its own native install in ephemeral CI only");
   assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(), sourceHead);
-  const clientTest = join(resolve(source), "extensions/clawrouter/worker-contract.test.ts");
+  const clientTest = join(resolve(source), testPath);
   await copyFile(fixture, clientTest, constants.COPYFILE_EXCL);
   try {
     const started = performance.now();
-    const result = await promisify(execFile)("pnpm", ["test", "extensions/clawrouter/worker-contract.test.ts", "--maxWorkers=1"], {
+    const result = await promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1"], {
       // The native runner compiles its own SDK worker graph on a cold CI host.
       cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
       env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env },
