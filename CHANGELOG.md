@@ -281,6 +281,7 @@
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
+- Providers: qualify four frozen Abliteration Chat cards, native project discovery and canonical reasoning controls; retain the deprecated Large identity and project credential boundary.
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
