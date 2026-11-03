@@ -169,3 +169,18 @@ test("raw response cancellation after dispatch retains one fixed settlement and 
   assert.equal((await f.call(audio, { signal: caller.signal })).status, 499); await Promise.all(f.pending);
   assert.equal(upstream.mock.callCount(), 1); assert.equal(canceled, 1); assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 200); assert.equal(f.events[0].status, "client_error");
 });
+
+for (const path of ["/v1/native/deepgram/v1/listen", "/v1/proxy/deepgram/listen"]) test("shipped Deepgram declaration dispatches raw audio under its real policy identity: " + path, async t => {
+  const provider = providerById("deepgram"); assert.ok(provider, "integration must compile the source-owned Deepgram declaration before activation");
+  const model = provider.models.find(item => item.id === "deepgram/nova-3"); assert.equal(model?.upstream, "nova-3"); assert.equal(model.pricing, null);
+  const env = usageEnv([], { provider: "deepgram", limit: 1_000_000, fixedCost: 200, retainContent: false }), events = [], pending = [];
+  env.DEEPGRAM_API_KEY = "synthetic-original-key"; env.BUDGET_LEDGER = sqlBudgetNamespace(t); env.USAGE_QUEUE = { send: async event => events.push(event) };
+  const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+    assert.equal(String(url), "https://api.deepgram.com/v1/listen?model=nova-3"); assert.equal(init.headers.get("authorization"), "Token synthetic-original-key"); assert.deepEqual(init.body, audio);
+    return Response.json(wire.response);
+  });
+  const response = await handler.fetch(new Request("https://router.example" + path, { method: "POST", headers: { authorization: "Bearer " + proxyKey(), "content-type": wire.request.contentType }, body: audio }), env, { waitUntil: promise => pending.push(promise) });
+  assert.equal(response.status, 200, await response.clone().text()); assert.deepEqual(await response.json(), wire.response); await Promise.all(pending);
+  assert.equal(upstream.mock.callCount(), 1); assert.equal(events.length, 1); assert.equal(events[0].provider, "deepgram"); assert.equal(events[0].model, "deepgram/nova-3"); assert.equal(events[0].cost_basis, "policy_fixed"); assert.equal(events[0].total_tokens, null);
+  for (const name of ["tenant:maintainer_access:owner@example.com", "provider:deepgram"]) { const [row] = env.BUDGET_LEDGER.get(name).reservations(); assert.equal(row.dispatch_started, 1); assert.equal(row.settled, 1); }
+});
