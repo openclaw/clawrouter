@@ -2,6 +2,7 @@ import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
 import { validateSpeechRequest } from "./speech-request.ts";
 import { prepareNativeImage } from "./native-images.ts";
+import { prepareNativeGradiumSpeech } from "./native-gradium-speech.ts";
 import type { NativeResponse } from "./native-response.ts";
 import type { NativeQueryBinding } from "./native-query.ts";
 import { nativeEmbeddingMode, prepareNativeEmbedding } from "./native-embeddings.ts";
@@ -31,7 +32,7 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
-  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection) ?? prepareNativeBasetenSystemOne(selection);
+  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection) ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection);
   if (selection.nativeResponse) return;
   if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
   if (selection.endpoint.request_format === "radius.messages") {

@@ -25,16 +25,31 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, id === "replicate", id);
+    assert.equal(!!target.unresolved, ["replicate", "gradium"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
+  assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("configured Gradium stays visibly unresolved without a paid speech attempt", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "gradium");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { GRADIUM_API_KEY: "fixture-private-upstream-key" });
+  assert.equal(plan.configuredCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["GRADIUM_API_KEY"]);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); });
+  const health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["gradium"], onResult: result => health.push(result) }), /no smoke request template for gradium.speech/);
+  assert.equal(network.mock.callCount(), 0);
+  assert.deepEqual(health, [], "an unresolved target cannot publish successful provider health");
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-upstream-key|fixture-proxy-key/);
 });
 
 for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of [
