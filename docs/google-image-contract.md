@@ -76,3 +76,48 @@ Checked 2026-11-03 using current unlocalized pages:
 - [Gemini 3 Pro Image model](https://ai.google.dev/gemini-api/docs/models/gemini-3-pro-image)
 - [GenerateContent API and native usage](https://ai.google.dev/api/generate-content)
 - [Deprecation schedules](https://ai.google.dev/gemini-api/docs/deprecations)
+
+## Qualified unary response wrapper
+
+`prepareNativeGoogleImage(selection)` in `worker/native-google-images.ts` uses
+the existing `ProxySelection.body` and `NativeResponse` ABI. It calls the actual
+`prepareGoogleImage` and `observeGoogleImage` exports. The provider must be
+`google-gemini`, with one of the two frozen upstream models, a matching model
+path selector, `image.generate`, `google.image_generate` to `google.image`, and
+the exact non-streaming GenerateContent path. No query, alternate dispatch path,
+model passthrough or request tariff is accepted. The original selected credential
+and `x-goog-api-key` dispatch remain runtime-owned; the wrapper pins only the
+canonical `https://generativelanguage.googleapis.com` origin and selected path.
+
+This initial wrapper is narrower than the pure codec: request and response JSON
+are each capped at 8 MiB, and at most four output images share a 4 MiB decoded
+limit. Only explicit PNG/JPEG/WebP MIME values with canonical base64 and matching
+bounded container signatures qualify, for input and output. HEIC/HEIF input
+remains codec-only. Missing output MIME always fails, even for PNG bytes: the
+codec's compatibility default is not a production qualification. Signature checks
+do not perform full image decoding, validate pixels or establish asset ownership.
+No file reference or returned URL is fetched.
+
+The existing response lease charges 64 MiB before dispatch (`nativeResponseLease`
+with 32 MiB), alongside the existing request lease. Complete HTTP200 UTF-8 JSON,
+valid matching lengths, no redirect/range/non-identity encoding, all STOP
+candidates and every output image are required before publication. Thought parts
+are removed because the frozen client otherwise consumes every inline image.
+Other native response fields, including `usageMetadata`, are preserved. The
+wrapper returns null normalized tokens and no tariff or invoice receipt; mixed
+image/text/thinking usage is not flattened into text-only billing. Lost responses,
+abort, timeout or invalid siblings cannot authorize partial results, replay or
+refunds. Cancelling the local reader is not upstream generation cancellation.
+
+Source1 owns selection, auth, original credentials, dispatch, shared image
+classification and generic GenerateContent/stream bypass closure. Source3 owns
+the declaration and explicit unpriced-image guard, later consuming source1's
+single shared classifier. Upstream-dollar hard budgets remain closed separately
+from explicit policy_fixed charges. Source6 owns actual Worker/client acceptance;
+this leaf module does not activate a provider or change pricing.
+
+Focused wrapper tests embed decoder-verified offline PNG/JPEG/WebP fixtures and
+exercise the actual capacity lease, bounded complete delivery, original model and
+destination, strict MIME, thought removal and uncertain failures. The earlier
+codec fixture qualifies encoding behavior only; its PNG has an IDAT CRC error
+and is not reused as valid-image evidence here.
