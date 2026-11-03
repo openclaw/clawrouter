@@ -81,7 +81,6 @@
 - Resolve shared native control paths through the original scoped create-route binding, preserving existing jobs regardless of declaration order.
 - Bind bounded output-file descriptors to succeeded managed jobs before publication, preserving initial URI identity across inline retrieval and keeping file delivery separate from exactly-once generation settlement.
 
-- Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
 - Refresh Workers types to 5.20261101.1 and Lucide icons to 1.66.0 under the two-day dependency cooldown. Worker runtime pins and security overrides are unchanged.
 - Document how many screenshots fit in the 32 MB media envelope (about 60 text-heavy or 12 photo-heavy 2048 px screenshots), production-probed over HTTP and WebSocket, plus the remaining limitations: a hard 413 above 32 MB that compaction may not clear, per-isolate 503s under concurrent large bodies, and Claude's 2000 px rule above 20 images.
 
