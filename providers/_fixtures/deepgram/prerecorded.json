@@ -1,0 +1,28 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/deepgram/audio.ts",
+  "request": {
+    "method": "POST",
+    "path": "/v1/listen",
+    "contentType": "audio/wav",
+    "authScheme": "Token",
+    "query": [["model", "nova-3"], ["language", "en"], ["multichannel", "true"], ["keyterm", "synthetic"], ["keyterm", "fixture"]],
+    "base64": "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "response": {
+    "metadata": { "request_id": "00000000-0000-4000-8000-000000000001", "duration": 1.25, "channels": 2 },
+    "results": {
+      "channels": [
+        { "alternatives": [{ "transcript": "synthetic repeated track", "confidence": 0.9 }] },
+        { "alternatives": [{ "transcript": "synthetic repeated track", "confidence": 0.8 }] }
+      ]
+    }
+  },
+  "billing": {
+    "unit": "processed_audio_second_across_channels",
+    "actualProviderCostMicrousd": null,
+    "qualification": "Pin prerecorded model/language/plan and add-ons; compressed bytes do not bound duration",
+    "responseIsIndependentSyntheticExample": true
+  }
+}
