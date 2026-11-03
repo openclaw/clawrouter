@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { BudgetLedgerObject } from "../ledgers.ts";
 
 export function sqlBudgetNamespace(t) {
@@ -7,14 +7,7 @@ export function sqlBudgetNamespace(t) {
     idFromName: (name) => name,
     get(name) {
       if (!objects.has(name)) {
-        const db = new DatabaseSync(":memory:");
-        t.after(() => db.close());
-        const sql = { exec(query, ...bindings) {
-          const statement = db.prepare(query);
-          if (statement.columns().length) return statement.all(...bindings);
-          statement.run(...bindings);
-          return [];
-        } };
+        const { db, sql } = sqliteFixture(t);
         const state = { storage: { sql, getAlarm: async () => 1 } };
         let ledger = new BudgetLedgerObject(state);
         objects.set(name, {

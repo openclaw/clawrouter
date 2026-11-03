@@ -1,6 +1,6 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -18,8 +18,9 @@ const terminal = () => ({ occurredAtMs: Date.now(), statusCode: 200, status: "su
 function fixture(t) {
   let now = Date.parse("2026-09-25T00:00:00Z"), sequence = 0;
   t.mock.method(Date, "now", () => now);
-  const budgets = sqlBudgetNamespace(t), usageDb = new DatabaseSync(":memory:"); t.after(() => usageDb.close());
-  const usageState = { storage: { transactionSync: fn => { usageDb.exec("BEGIN"); try { const result = fn(); usageDb.exec("COMMIT"); return result; } catch (error) { usageDb.exec("ROLLBACK"); throw error; } }, sql: { exec(query, ...bindings) { const statement = usageDb.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } }, getAlarm: async () => 1 } };
+  const budgets = sqlBudgetNamespace(t);
+  const { sql, transactionSync } = sqliteFixture(t);
+  const usageState = { storage: { sql, transactionSync, getAlarm: async () => 1 } };
   let usage = new UsageLedgerObject(usageState);
   const calls = [], controls = { budget: async (_name, _url, _init, dispatch) => dispatch(), usage: async (_init, dispatch) => dispatch() };
   const env = {

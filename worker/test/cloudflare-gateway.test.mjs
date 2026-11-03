@@ -1,7 +1,7 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { buildProviderSmokePlan } from "../../scripts/provider-smoke-plan.mjs";
 
@@ -202,14 +202,7 @@ async function gatewayFixture(t) {
     USAGE_QUEUE: { send: async (event) => events.push(event) },
     BUDGET_LEDGER: { idFromName: (name) => name, get(name) {
       if (!budgets.has(name)) {
-        const db = new DatabaseSync(":memory:");
-        t.after(() => db.close());
-        const sql = { exec(query, ...bindings) {
-          const statement = db.prepare(query);
-          if (statement.columns().length) return statement.all(...bindings);
-          statement.run(...bindings);
-          return [];
-        } };
+        const { sql } = sqliteFixture(t);
         const ledger = new BudgetLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
         budgets.set(name, { fetch: async (url, init) => {
           budgetCalls.push({ path: new URL(url).pathname, body: JSON.parse(init.body) });

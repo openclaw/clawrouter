@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import { PolicyBindingIndexObject } from "../authority.ts";
 
 export function continuationAuthority(t, env = {}) {
@@ -8,20 +8,11 @@ export function continuationAuthority(t, env = {}) {
     idFromName: name => name,
     get(name) {
       if (!objects.has(name)) {
-        const db = new DatabaseSync(":memory:");
-        t.after(() => db.close());
+        const { db, sql, transactionSync } = sqliteFixture(t);
         const fixture = { db, scheduled: null, beforeSchedule: null };
         const storage = {
-          sql: { exec(query, ...bindings) {
-            const statement = db.prepare(query);
-            if (statement.columns().length) return statement.all(...bindings);
-            statement.run(...bindings); return [];
-          } },
-          transactionSync(operation) {
-            db.exec("BEGIN");
-            try { const result = operation(); db.exec("COMMIT"); return result; }
-            catch (error) { db.exec("ROLLBACK"); throw error; }
-          },
+          sql,
+          transactionSync,
           async setAlarm(value) { await fixture.beforeSchedule?.(); fixture.scheduled = value; },
           async getAlarm() { return fixture.scheduled; },
           async deleteAlarm() { fixture.scheduled = null; },

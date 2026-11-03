@@ -1,6 +1,6 @@
+import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 
 const { PolicyBindingIndexObject } = await import("../authority.ts");
 const { default: worker } = await import("../index.ts");
@@ -16,14 +16,7 @@ export function credential(principalId = session.email) {
 }
 
 export async function fixture(t, entries = [], { held = true, legacy = false } = {}) {
-  const db = new DatabaseSync(":memory:");
-  t.after(() => db.close());
-  const sql = { exec(query, ...bindings) {
-    const statement = db.prepare(query);
-    if (statement.columns().length) return statement.all(...bindings);
-    statement.run(...bindings);
-    return [];
-  } };
+  const { db, sql } = sqliteFixture(t);
   const owner = new PolicyBindingIndexObject({ storage: { sql } });
   const store = new Map();
   const call = async (path, body) => {
