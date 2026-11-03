@@ -79,11 +79,17 @@ real local runtime/stores with synthetic upstreams. Protocol fixtures qualify
 codecs; none of these proves live provider compatibility or a deployed service.
 No release or deployment was invoked for this audit.
 
-Residual observation: an earlier transcription CI EPIPE did not reproduce in
-eight unchanged or eight gated Crabbox runs. Its root cause remains unproven;
-the gate change fixes an independent ordering flaw. Revisit that exact transport
-failure if it recurs, without adding retries or claiming it is resolved.
+The transcription disconnect gate fixed an independent ordering flaw. The
+original EPIPE did not reproduce in eight unchanged or eight gated Crabbox runs.
+A later [CI recurrence](https://github.com/openclaw/clawrouter/actions/runs/41647646499/job/125957107176)
+failed during grant selection/request validation, without identifying the call.
+Sixty-four unchanged fixture runs and 300 ordinary unauthenticated uploads passed.
+Amplifying that early-rejected upload with 1,000 synthetic multipart fields
+reproduced EPIPE in 40/40 requests with the same Undici write stack. Encoding the
+same multipart body first passed 40/40 requests. This identifies a reproducible
+transport race, but does not prove which call failed in the historical CI run.
 
-The continuation inspected two recent failed Worker CI jobs; both failed on
-compiled snapshot equality, with no EPIPE in either log. This adds no evidence
-about the earlier transport failure’s root cause.
+The fixture now buffers only the finite unauthenticated upload, keeps the
+amplified case, and labels individual requests and upstream counter reads.
+Successful uploads and the explicitly gated caller disconnect still use real
+TCP and FormData. No retry or production request-body drain was added.
