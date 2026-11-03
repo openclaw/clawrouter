@@ -88,6 +88,41 @@ test("Venice public offline and declared privacy observations are not account ac
   for (const offline of [null, "false", 0]) assert.throws(() => filterVeniceModels(list(row(ids[0], { offline })), allows), invalid);
 });
 
+test("Venice qualified effort options preserve order and only an observed member default", () => {
+  const capabilities = { supportsReasoningEffort: true, reasoningEffortOptions: ["none", "high", "max"], defaultReasoningEffort: "max" };
+  const native = list(row(ids[0], { capabilities }));
+  assert.deepEqual(filterVeniceModels(native, allows), native);
+  for (const value of [undefined, null, "low", "MAX", 1]) {
+    const { defaultReasoningEffort, ...withoutDefault } = capabilities;
+    assert.deepEqual(filterVeniceModels(list(row(ids[0], { capabilities: { ...capabilities, defaultReasoningEffort: value } })), allows),
+      list(row(ids[0], { capabilities: withoutDefault })));
+  }
+});
+
+test("Venice effort capability alone does not invent an enum or default", () => {
+  for (const value of [undefined, null, [], ["high", "high"], ["high", "unknown"], [1], "high", Array(8).fill("high")]) {
+    assert.deepEqual(filterVeniceModels(list(row(ids[0], { capabilities: { supportsReasoningEffort: true,
+      reasoningEffortOptions: value, defaultReasoningEffort: "high" } })), allows),
+    list(row(ids[0], { capabilities: { supportsReasoningEffort: true } })));
+  }
+});
+
+test("Venice effort fields require explicit support and never infer support from reasoning", () => {
+  for (const support of [undefined, false, "true"]) {
+    const capabilities = { supportsReasoning: true, ...(support === false ? { supportsReasoningEffort: false } : {}) };
+    assert.deepEqual(filterVeniceModels(list(row(ids[0], { capabilities: { ...capabilities, supportsReasoningEffort: support,
+      reasoningEffortOptions: ["high"], defaultReasoningEffort: "high" } })), allows), list(row(ids[0], { capabilities })));
+  }
+});
+
+test("Venice effort projection copies the observed list without retaining an upstream mutable reference", () => {
+  const options = ["minimal", "low", "medium", "high", "xhigh", "max"];
+  const result = filterVeniceModels(list(row(ids[0], { capabilities: { supportsReasoningEffort: true,
+    reasoningEffortOptions: options, defaultReasoningEffort: "medium" } })), allows);
+  options.push("synthetic-invalid");
+  assert.deepEqual(result.data[0].model_spec.capabilities.reasoningEffortOptions, ["minimal", "low", "medium", "high", "xhigh", "max"]);
+});
+
 test("Venice dated deprecation is preserved without choosing a replacement or claiming shutdown", () => {
   for (const date of ["2025-03-01T00:00:00.000Z", "2099-03-01T00:00:00.000Z"]) {
     const native = list(row(ids[0], { deprecation: { date } }));

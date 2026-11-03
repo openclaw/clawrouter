@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-catalog-providers.md.
+# Frozen Chat inventory and evidence: docs/venice-native-chat.md.
 # Endpoint/model source checked 2026-11-03: https://docs.venice.ai/overview/about-venice
 schema: clawrouter.service-provider.v1
 id: venice
@@ -43,6 +43,352 @@ models:
     - id: venice/zai-org-glm-5-2
       upstream: zai-org-glm-5-2
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: max
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1000000
+            maxOutputTokens: 131072
+    - id: venice/zai-org-glm-4.7
+      upstream: zai-org-glm-4.7
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: low
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 198000
+            maxOutputTokens: 16384
+    - id: venice/venice-uncensored-1-2
+      upstream: venice-uncensored-1-2
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 128000
+            maxOutputTokens: 8192
+    - id: venice/google-gemma-4-31b-it
+      upstream: google-gemma-4-31b-it
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: low
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 256000
+            maxOutputTokens: 16384
+    - id: venice/kimi-k2-6
+      upstream: kimi-k2-6
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 256000
+            maxOutputTokens: 65536
+    - id: venice/deepseek-v3.2
+      upstream: deepseek-v3.2
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: low
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 160000
+            maxOutputTokens: 32768
+    - id: venice/qwen3-235b-a22b-thinking-2507
+      upstream: qwen3-235b-a22b-thinking-2507
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: low
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 128000
+            maxOutputTokens: 16384
+    - id: venice/qwen3-coder-480b-a35b-instruct-turbo
+      upstream: qwen3-coder-480b-a35b-instruct-turbo
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 256000
+            maxOutputTokens: 65536
+    - id: venice/qwen3-vl-235b-a22b
+      upstream: qwen3-vl-235b-a22b
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 128000
+            maxOutputTokens: 16384
+    - id: venice/grok-4-5
+      upstream: grok-4-5
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 500000
+            maxOutputTokens: 32000
+    - id: venice/qwen-3-7-max
+      upstream: qwen-3-7-max
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 65536
+    - id: venice/qwen-3-7-plus
+      upstream: qwen-3-7-plus
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 65536
+    - id: venice/claude-fable-5
+      upstream: claude-fable-5
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+    - id: venice/claude-opus-5
+      upstream: claude-opus-5
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: medium
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+    - id: venice/claude-sonnet-4-6
+      upstream: claude-sonnet-4-6
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 64000
+    - id: venice/openai-gpt-56-sol
+      upstream: openai-gpt-56-sol
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+    - id: venice/zai-org-glm-4.6
+      upstream: zai-org-glm-4.6
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: low
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 198000
+            maxOutputTokens: 16384
+    - id: venice/google-gemma-3-27b-it
+      upstream: google-gemma-3-27b-it
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 198000
+            maxOutputTokens: 16384
+    - id: venice/kimi-k2-5
+      upstream: kimi-k2-5
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/guides/features/reasoning-models]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.venice.ai/api/v1/models?type=text, https://docs.venice.ai/api-reference/endpoint/models/list]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 256000
+            maxOutputTokens: 65536
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
