@@ -122,7 +122,7 @@ export async function readXaiVideo(response: Response, action: "create" | "retri
     const body = pendingHttp && !size ? { status: "pending" } : object(JSON.parse(text));
     if (pendingHttp && body.status !== "pending") fail("http_status_mismatch");
     return observeXaiVideo(body, action, requestedModel, expectedId);
-  } catch { void reader?.cancel().catch(() => undefined); fail("response"); }
+  } catch { void reader?.cancel().catch(() => undefined); throw new Error("invalid_xai_video_response"); }
   finally { signal.removeEventListener("abort", abort); reader?.releaseLock(); }
 }
 function image(value: unknown): number {
