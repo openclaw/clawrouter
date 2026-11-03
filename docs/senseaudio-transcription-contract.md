@@ -63,10 +63,20 @@ validator checks framing results and labels, not every supported media codec.
 `providers/_fixtures/senseaudio/transcription.json` now includes `aacFile`, an
 offline decoder-qualified AAC-LC ADTS sample at 16 kHz mono. Its `.aac` name and
 `audio/aac` MIME must survive multipart construction unchanged; renaming it to
-`.m4a` is not qualification. The existing WAV is also decoder-qualified PCM16LE
+`.m4a` is not qualification. The AAC bytes now exactly match the public client
+candidate's 1,401-byte sample at `f6fbd3fae951258f999bb555dc369ec594916886`,
+`extensions/clawrouter/audio-transcription.catalog.test.ts`: 126 complete ADTS
+frames, independently fully decoded. The earlier 33-byte sample was playable
+but failed the actual media host's 1,024-byte minimum before upload. Tests now
+pin that minimum, exact sample hash and complete frame coverage; no padding or
+host-minimum change is used. This clears that specific size prerequisite, not
+actual Worker/client acceptance. The existing WAV is unchanged, decoder-qualified PCM16LE
 at 8 kHz mono with complete RIFF/data lengths. These short synthetic samples
 are separate from the response's duration observation and prove no tariff.
-Seven focused tests include AAC frame/name/byte preservation and WAV framing.
+Seven focused tests include the AAC host-size prerequisite, frame/name/byte
+preservation and WAV framing. Actual Worker/client proof must use `aacFile`
+and assert the expected upload/egress count, so a pre-upload size rejection
+cannot masquerade as successful denial or zero-egress coverage.
 
 At published raw-runtime source `3ac58451fdccf3950ead584be49e2e835df1a726`
 ([PR482](https://github.com/openclaw/clawrouter/pull/482)), multipart dispatch

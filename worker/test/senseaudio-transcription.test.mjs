@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { prepareSenseAudioUpload, observeSenseAudioTranscription, senseAudioFileLimit, senseAudioModel } from "../senseaudio-transcription.ts";
@@ -27,8 +28,13 @@ test("SenseAudio enforces its smaller direct-upload limit independently of the g
   }
 });
 
-test("SenseAudio preserves playable AAC as an AAC file instead of relabelling it as M4A", async () => {
+test("SenseAudio preserves the public client's host-sized playable AAC without relabelling it as M4A", async () => {
   const sample = wire.aacFile, data = Buffer.from(sample.base64, "base64");
+  // The actual media runner rejects smaller files before reaching upload.
+  assert.equal(wire.mediaEvidence.audioHostMinimumBytes, 1024);
+  assert.ok(data.length >= 1024, "AAC must reach the actual host's upload path");
+  assert.equal(data.length, 1401);
+  assert.equal(createHash("sha256").update(data).digest("hex"), "b6997afc26e56714955991922c489f947f4b353b37e7cf39eae48e61dd0c1b28");
   let at = 0, frames = 0;
   while (at < data.length) {
     assert.equal(data[at], 0xff); assert.equal(data[at + 1] & 0xf6, 0xf0);
@@ -36,7 +42,7 @@ test("SenseAudio preserves playable AAC as an AAC file instead of relabelling it
     const size = ((data[at + 3] & 3) << 11) | (data[at + 4] << 3) | (data[at + 5] >> 5);
     assert.ok(size > 7 && at + size <= data.length); at += size; frames++;
   }
-  assert.equal(frames, 3); assert.equal(at, data.length);
+  assert.equal(frames, 126); assert.equal(at, data.length, "every byte belongs to a complete ADTS frame; no padding");
   const file = new File([data], sample.name, { type: sample.type }), form = prepareSenseAudioUpload(upload({ language: "eng" }, file));
   assert.equal(form.get("file").name, "synthetic.aac"); assert.equal(form.get("file").type, "audio/aac");
   assert.deepEqual(Buffer.from(await form.get("file").arrayBuffer()), data);
