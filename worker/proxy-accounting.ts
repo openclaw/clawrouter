@@ -1,5 +1,5 @@
 import { nativeEmbeddingMode } from "./native-embeddings.ts";
-import { selectRequestTariff, settleRequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
+import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
@@ -130,7 +130,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
 
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
-  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint);
+  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, undefined, selection.nativeResponse?.tariff);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const google = selection.endpoint.request_format === "google.generate_content";
   const count = selection.endpoint.request_format === "openai.responses_input_tokens";
@@ -195,18 +195,20 @@ export function createProxyAccounting(options: AccountingContext) {
       const characterEstimate = observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination
         && selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary" && !Array.isArray(selection.body)
         ? actualCharacterCost(model?.pricing, selection.body.input) : null;
-      return settle(response.status, status, response.ok && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch, observed.requestTariffOutcome, observed.requestCostReceipt);
+      return settle(response.status, status, (response.ok || !!selection.nativeResponse) && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch, observed.requestTariffOutcome, observed.requestCostReceipt);
     },
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   // Native embedding shape/byte bounds are not qualified whole-request dollar bounds.
   if (nativeEmbeddingMode(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
-  const requestTariff = selectRequestTariff(endpoint, body);
+  const requestTariff = preparedTariff ?? selectRequestTariff(endpoint, body);
   if (requestTariff?.kind === "successful_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
+  if (requestTariff?.kind === "image_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
+  if (nativeImageMode(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
   // Only the source-qualified outcome classifier can discharge request_fee.

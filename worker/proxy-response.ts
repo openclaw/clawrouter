@@ -1,3 +1,4 @@
+import type { ValidatedNativeUsage } from "./native-response.ts";
 import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
 import { createNativeEventObserver } from "./native-events.ts";
 import { createRadiusEventInspector } from "./provider-radius.ts";
@@ -30,7 +31,7 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: UsageInspection): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
   if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
@@ -76,7 +77,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     const binaryComplete = speech && response.ok && delivery === "complete" && audio && nonempty;
     if (speech && !binaryComplete) inspection.outcome = "provider_error";
     const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
-    const requestCostReceipt = receipt?.result(delivery === "complete");
+    const requestCostReceipt = receipt?.result(delivery === "complete") ?? validated?.requestCostReceipt;
     resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
       ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.

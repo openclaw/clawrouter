@@ -1,5 +1,6 @@
-import { requestOutcomeCost, type RequestCostReceipt } from "./pricing.ts";
-import type { OutcomeRequestPricing } from "../shared/request-pricing.ts";
+import { prepareXaiImage, type XaiImageRequest } from "./xai-images.ts";
+import { imageRequestReserve, requestOutcomeCost, type ImageRequestSelection, type RequestCostReceipt } from "./pricing.ts";
+import type { ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 import type { CompiledEndpoint, ProxyRequestBody } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -22,14 +23,38 @@ export interface OutcomeRequestTariff {
   pricing: Readonly<OutcomeRequestPricing>;
   model: string;
 }
-export type RequestTariff = SuccessfulRequestTariff | OutcomeRequestTariff;
+export interface ImageRequestTariff {
+  kind: "image_request";
+  version: string;
+  effectiveAt: string;
+  pricing: Readonly<ImageRequestPricing>;
+  selection: Readonly<ImageRequestSelection>;
+  micros: number;
+}
+export type RequestTariff = SuccessfulRequestTariff | OutcomeRequestTariff | ImageRequestTariff;
 export type RequestTariffOutcome = "succeeded" | "failed" | "unknown" | "unsent";
 export type RequestTariffEndpoint = Partial<Pick<CompiledEndpoint,
   "method" | "path" | "request_format" | "response_format" | "streaming" | "lifecycle" | "responsesLifecycle" | "websocket" | "modelPassthrough" | "query" | "requestPricing">>;
 
-export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: ProxyRequestBody): RequestTariff | undefined {
+export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: ProxyRequestBody, preparedImage?: XaiImageRequest): RequestTariff | undefined {
   const pricing = endpoint.requestPricing;
   if (pricing === undefined) return undefined;
+  if (pricing.unit === "image") {
+    const mode = nativeImageMode(endpoint.request_format ?? "");
+    if (!mode || endpoint.method !== "POST" || endpoint.path !== `/v1/images/${mode === "generate" ? "generations" : "edits"}`
+      || endpoint.response_format !== "xai.images" || endpoint.streaming || endpoint.lifecycle || endpoint.responsesLifecycle
+      || endpoint.websocket || endpoint.modelPassthrough || Object.keys(endpoint.query ?? {}).length || !versioned(pricing)) unqualified();
+    let prepared: XaiImageRequest;
+    try { prepared = preparedImage ?? prepareXaiImage(!Array.isArray(body) && typeof body.model === "string" ? body.model : "", mode, body); }
+    catch { throw new HttpError(400, "invalid_native_image_request", "image input does not match the selected native model contract"); }
+    const { model, servingModel, count, inputImages, resolution, quality, qualityBasis } = prepared;
+    if (prepared.mode !== mode || prepared.path !== endpoint.path) unqualified();
+    const selection = Object.freeze({ model, servingModel, mode, count, inputImages, resolution, quality, qualityBasis });
+    const micros = imageRequestReserve(pricing, selection);
+    if (micros === null) unqualified();
+    return Object.freeze({ kind: "image_request", version: pricing.version, effectiveAt: pricing.effectiveAt,
+      pricing: Object.freeze(structuredClone(pricing)), selection, micros });
+  }
   if ("outcome" in pricing) {
     if (endpoint.method !== "POST" || endpoint.path !== "/v1/responses" || endpoint.request_format !== "openai.responses" || endpoint.response_format !== "openai.responses"
       || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.modelPassthrough || Object.keys(endpoint.query ?? {}).length
@@ -60,6 +85,10 @@ export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: Proxy
     source: pricing.source, micros: value === null ? pricing.successfulResponseMicros : rates.rates[value as string], parameter: rates.parameter, value: value as string | null });
 }
 
+export function nativeImageMode(format: string): "generate" | "edit" | null {
+  return format === "xai.images_generations" ? "generate" : format === "xai.images_edits" ? "edit" : null;
+}
+
 export function settleRequestTariff(tariff: SuccessfulRequestTariff, outcome: RequestTariffOutcome): { micros: number; basis: string } {
   if (outcome === "unsent" || outcome === "failed") return { micros: 0, basis: "none" };
   return { micros: tariff.micros, basis: outcome === "succeeded" ? "manifest_request" : "manifest_request_reservation" };
@@ -81,7 +110,7 @@ function unqualified(): never {
 // selected destination before admission, without retaining credentials or URLs.
 export function assertRequestTariffDestination(endpoint: RequestTariffEndpoint, destination: string | URL): void {
   if (!endpoint.requestPricing) return;
-  const expected = "outcome" in endpoint.requestPricing ? "https://api.x.ai/v1/responses" : "https://api.perplexity.ai/search";
+  const expected = endpoint.requestPricing.unit === "image" ? `https://api.x.ai${endpoint.path}` : "outcome" in endpoint.requestPricing ? "https://api.x.ai/v1/responses" : "https://api.perplexity.ai/search";
   if (String(destination) !== expected) unqualified();
 }
 

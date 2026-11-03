@@ -37,4 +37,15 @@ export interface OutcomeRequestPricing {
   maximumAdditionalMicros: 50000;
   receipt: "xai.usage.cost_in_usd_ticks";
 }
-export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing;
+export interface ImageRequestPricing {
+  unit: "image"; protocol: "xai.images"; version: string; effectiveAt: string;
+  source: "https://docs.x.ai/developers/pricing";
+  receipt: "xai.usage.cost_in_usd_ticks";
+  alias: { selectedModel: "grok-imagine-image-quality"; servingModel: "grok-imagine-image-2.0"; quality: "low";
+    effectiveAt: "2026-11-02"; source: "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2" };
+  rates: {
+    "grok-imagine-image": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"1k" | "2k", number> };
+    "grok-imagine-image-2.0": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"low" | "medium", Record<"1k" | "2k", number>> };
+  };
+}
+export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing | ImageRequestPricing;

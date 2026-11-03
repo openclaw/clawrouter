@@ -1,4 +1,4 @@
-import { assertNativeEmbeddingDestination } from "./native-embeddings.ts";
+import { assertNativeResponseDestination } from "./native-response.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
@@ -62,7 +62,7 @@ import {
 type AuthMode = "proxy_key" | "access";
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
-const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents"]);
+const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits"]);
 const mediaPaths = new Set(["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/chat/completions"]);
 const mediaEnvelope = (endpoint: { request_format: string }) => mediaFormats.has(endpoint.request_format);
 const bodyLimit = (endpoint: { request_format: string }) => mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
@@ -426,14 +426,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, search?.pinned ?? continuation?.pinned, "http", true);
     assertRequestTariffDestination(selection.endpoint, prepared.url);
-    assertNativeEmbeddingDestination(selection.nativeEmbedding, prepared.url);
+    assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
     if (search) {
       if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
       prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
     }
-    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
+    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       accounting.fail(500, "provider_error", reservedBudget.reservation);
@@ -540,16 +540,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
   }
   const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
-  const discardEmbedding = (value: { response: Response }) => discard(value.response);
+  const discardNative = (value: { response: Response }) => discard(value.response);
   let response: Response | undefined;
   let priceGuard: AnthropicPriceGuard | undefined;
-  let embeddingLease: BodyLease | undefined;
-  let embeddingUsage: import("./token-usage.ts").UsageInspection | undefined;
+  let nativeLease: BodyLease | undefined;
+  let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    embeddingLease = selection.nativeEmbedding?.acquire();
+    nativeLease = selection.nativeResponse?.acquire();
     dispatched = true;
     const upstreamStart = performance.now();
     const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
@@ -561,7 +561,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await operation.wait(pending, "upstream", discard);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!selection.nativeEmbedding && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -597,17 +597,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         return page;
       });
     }
-    if (selection.nativeEmbedding) {
-      const validated = await operation.wait(selection.nativeEmbedding.read(response, signal), "upstream", discardEmbedding);
+    if (selection.nativeResponse) {
+      const validated = await operation.wait(selection.nativeResponse.read(response, signal), "upstream", discardNative);
       response = validated.response;
-      embeddingUsage = validated.usage;
+      nativeUsage = validated.usage;
     }
     upstreamMs = performance.now() - upstreamStart;
     if (soft) {
       budgetMs = await soft.beforeDelivery();
       if (soft.denial) throw soft.denial;
     }
-    if (!response.ok) operation.acceptRejection(response.status);
+    if (!response.ok && !selection.nativeResponse) operation.acceptRejection(response.status);
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
@@ -621,12 +621,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       response = priceGuard.response;
     }
   } catch (error) {
-    embeddingLease?.release();
+    nativeLease?.release();
     soft?.close();
     if (soft?.denial) {
       operation.stop("upstream", soft.denial);
       void response?.body?.cancel().catch(() => undefined);
-      accounting.fail(402, "denied", (cost.requestTariff || selection.nativeEmbedding) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeEmbedding) && dispatched);
+      if (nativeUsage?.requestCostReceipt && cost.requestTariff) context.waitUntil(accounting.settle(402, "denied", true, null, reservation!, content, null, undefined, "unknown", nativeUsage.requestCostReceipt));
+      else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
     operation.stop("upstream", error);
@@ -640,7 +641,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (background) {
       if (!dispatched || response?.ok === false) context.waitUntil(background.unsent(response?.status ?? 502, operation.status ?? "provider_error", content));
       // Unknown dispatched delivery remains collectible; it is not a terminal.
-    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && (!!cost.requestTariff || !!selection.nativeEmbedding || response?.ok !== false));
+    } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && (!!cost.requestTariff || !!selection.nativeResponse || response?.ok !== false));
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
@@ -662,8 +663,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, embeddingUsage);
-  if (embeddingLease) void observed.result.then(() => embeddingLease!.release());
+  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage);
+  if (nativeLease) void observed.result.then(() => nativeLease!.release());
   if (admission) admission.completion = observed.result;
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
@@ -749,7 +750,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     queryInput = discoveryQuery(queryInput);
     validateDiscoveryQuery(selection.provider, selection.endpoint, auth.policy, queryInput);
   }
-  if (selection.nativeEmbedding && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_native_embedding_query", "native embedding options must be in JSON, not query parameters");
+  if (selection.nativeResponse && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_native_response_query", "native operation options must be in JSON, not query parameters");
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");

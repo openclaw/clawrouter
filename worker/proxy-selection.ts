@@ -1,4 +1,6 @@
-import { nativeEmbeddingMode, prepareNativeEmbedding, type NativeEmbedding } from "./native-embeddings.ts";
+import { prepareNativeImage } from "./native-images.ts";
+import type { NativeResponse } from "./native-response.ts";
+import { nativeEmbeddingMode, prepareNativeEmbedding } from "./native-embeddings.ts";
 import { selectRequestTariff } from "./request-tariff.ts";
 import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
@@ -20,12 +22,12 @@ export interface ProxySelection {
   pathParams: Record<string, string>;
   method: string;
   timeoutMs?: number;
-  nativeEmbedding?: NativeEmbedding;
+  nativeResponse?: NativeResponse;
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
-  selection.nativeEmbedding = prepareNativeEmbedding(selection);
-  if (selection.nativeEmbedding) return;
+  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection);
+  if (selection.nativeResponse) return;
   if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
   if (selection.endpoint.request_format === "radius.messages") {
     const body = requestObject(selection.body);
