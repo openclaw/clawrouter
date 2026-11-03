@@ -1,3 +1,4 @@
+import { readProviderJson } from "./provider-json-response.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const googleImageModels = ["gemini-3.1-flash-image", "gemini-3-pro-image"] as const;
@@ -82,31 +83,7 @@ export function observeGoogleImage(body: unknown, complete: boolean): {
 }
 
 export async function readGoogleImage(response: Response, signal: AbortSignal): Promise<ReturnType<typeof observeGoogleImage>> {
-  if (signal.aborted || response.redirected || response.status !== 200 || !response.body
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || Number(response.headers.get("content-length")) > googleImageLimits.responseBytes) {
-    void response.body?.cancel().catch(() => undefined); fail();
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", abort, { once: true });
-  let text = "", bytes = 0;
-  try {
-    for (;;) {
-      const part = await reader.read();
-      if (signal.aborted) fail();
-      if (part.done) break;
-      bytes += part.value.byteLength;
-      if (bytes > googleImageLimits.responseBytes) fail();
-      text += decoder.decode(part.value, { stream: true });
-    }
-    text += decoder.decode();
-    return observeGoogleImage(JSON.parse(text), true);
-  } catch {
-    void reader.cancel().catch(() => undefined); fail();
-  } finally {
-    signal.removeEventListener("abort", abort); reader.releaseLock();
-  }
+  return readProviderJson(response, signal, googleImageLimits.responseBytes, value => observeGoogleImage(value, true), fail);
 }
 
 function base64(value: unknown, limit: number): { base64: string; decodedBytes: number } {

@@ -1,3 +1,4 @@
+import { readProviderJson } from "./provider-json-response.ts";
 export const googleEmbeddingModels = ["gemini-embedding-001", "gemini-embedding-2", "gemini-embedding-2-preview"] as const;
 type Model = typeof googleEmbeddingModels[number];
 type Mode = "unary" | "batch";
@@ -92,34 +93,7 @@ export function observeGoogleEmbedding(body: unknown, request: GoogleEmbeddingRe
 // Runtime supplies its existing deadline/caller signal. No prefix results are
 // returned before complete bounded UTF-8 EOF; caller abort never implies refund.
 export async function readGoogleEmbedding(response: Response, request: GoogleEmbeddingRequest, signal: AbortSignal): Promise<GoogleEmbeddingObservation> {
-  if (signal.aborted || response.redirected || response.status !== 200 || !response.body
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || Number(response.headers.get("content-length")) > responseLimit) {
-    void response.body?.cancel().catch(() => undefined);
-    throw new Error("invalid_google_embedding_response");
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); };
-  signal.addEventListener("abort", abort, { once: true });
-  let text = "", bytes = 0;
-  try {
-    for (;;) {
-      const part = await reader.read();
-      if (signal.aborted) throw new Error("aborted");
-      if (part.done) break;
-      bytes += part.value.byteLength;
-      if (bytes > responseLimit) throw new Error("oversized");
-      text += decoder.decode(part.value, { stream: true });
-    }
-    text += decoder.decode();
-    return observeGoogleEmbedding(JSON.parse(text), request, true);
-  } catch {
-    void reader.cancel().catch(() => undefined);
-    throw new Error("invalid_google_embedding_response");
-  } finally {
-    signal.removeEventListener("abort", abort);
-    reader.releaseLock();
-  }
+  return readProviderJson(response, signal, responseLimit, value => observeGoogleEmbedding(value, request, true), () => { throw new Error("invalid_google_embedding_response"); });
 }
 
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
