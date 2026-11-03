@@ -285,6 +285,7 @@
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
+- Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
