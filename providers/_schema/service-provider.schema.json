@@ -605,6 +605,12 @@
     },
     "endpoint": {
       "allOf": [{
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^aws_bedrock\\.converse" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^aws_bedrock\\.converse" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/bedrockConverseEndpoint" }
+      }, {
         "if": { "properties": { "requestFormat": { "const": "openai.responses_compact" } }, "required": ["requestFormat"] },
         "then": {
           "properties": { "responseFormat": { "const": "openai.responses_compact" }, "method": { "const": "POST" } },
@@ -2183,6 +2189,24 @@
         { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["upstreamPath"] }
+      ] }
+    },
+    "bedrockConverseEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "pathParamStyles"],
+      "properties": {
+        "path": { "const": "/model/${model}/converse" }, "method": { "const": "POST" },
+        "requestFormat": { "const": "aws_bedrock.converse" }, "responseFormat": { "const": "aws_bedrock.converse" },
+        "nativeProxy": { "const": true }, "pathParams": { "const": ["model"] },
+        "pathParamStyles": { "const": { "model": "opaque_segment" } },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "deepseekSearchEndpoint": {

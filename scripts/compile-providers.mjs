@@ -271,6 +271,7 @@ function validateManifest(manifest) {
   validateGroqMistralTranscription(manifest);
   validateGoogleEmbeddings(manifest);
   validateBedrockEmbeddings(manifest);
+  validateBedrockConverse(manifest);
   validateGoogleUnaryMedia(manifest, "image", "image.generate", ["gemini-3.1-flash-image", "gemini-3-pro-image"]);
   validateGoogleUnaryMedia(manifest, "music", "audio.generate", ["lyria-3-clip-preview", "lyria-3-pro-preview"]);
   validateGoogleSpeech(manifest);
@@ -947,6 +948,30 @@ function validateGoogleEmbeddings(manifest) {
   // not established by that fixture. No native tariff/bound is qualified yet.
   if (!models.length || models.some(model => !["gemini-embedding-001", "gemini-embedding-2"].includes(model.upstream)
     || model.capabilities.length !== 1 || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length)) fail();
+}
+
+function validateBedrockConverse(manifest) {
+  const endpoints = Object.entries(manifest.endpoints).filter(([, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(format => format.startsWith("aws_bedrock.converse"))
+    || manifest.id === "aws-bedrock" && /\/converse(?:[-/]|$)/.test(endpoint.path));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("aws_bedrock.converse requires a selected unary Chat model, original regional SigV4 route and unpriced native contract"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (manifest.id !== "aws-bedrock" || manifest.class !== "custom_adapter" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://bedrock-runtime.${region}.amazonaws.com")
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "sig_v4" || scheme.service !== "bedrock" || scheme.regionParam !== "region" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || adapter?.request !== "aws_bedrock" || adapter?.response !== "aws_bedrock"
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0], capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "llm.chat" || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST"
+    || endpoint.requestFormat !== "aws_bedrock.converse" || endpoint.responseFormat !== "aws_bedrock.converse"
+    || Object.entries(endpoint.headers ?? {}).some(([name, value]) => !["content-type", "accept"].includes(name.toLowerCase()) || value !== "application/json")) fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("llm.chat"));
+  if (!models.length || models.some(model => !model.upstream || model.upstream.length > 2048 || /[\x00-\x1f\x7f]/.test(model.upstream)
+    || model.upstream.includes("${") || model.availability?.status === "upstream_alias" || model.pricing
+    || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();
 }
 
 function validateBedrockEmbeddings(manifest) {
