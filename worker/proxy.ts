@@ -547,7 +547,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    response = await normalizePreStreamError(response, streaming && !["audio.binary", "ollama.chat"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    response = await normalizePreStreamError(response, streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
     // Retire only the timer; caller cancellation remains connected through EOF.
     operation.retireDeadline();

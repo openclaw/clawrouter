@@ -1,3 +1,5 @@
+import { createNativeEventObserver } from "./native-events.ts";
+import { createRadiusEventInspector } from "./provider-radius.ts";
 import { createOllamaChatInspector, ollamaChatFormat } from "./provider-ollama.ts";
 import { createBedrockEventStreamInspector } from "./bedrock-eventstream.ts";
 import { extractImageUsageTokens } from "./image-generation.ts";
@@ -30,7 +32,7 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
-  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || responseFormat === ollamaChatFormat ? "provider_error" : null, delivery: "complete" }) }; }
+  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mime = contentType.split(";")[0].trim();
   const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
@@ -40,8 +42,9 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const revokeRejection = response.ok && operation.receivedRejection ? () => operation.revokeRejection() : undefined;
   const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe, undefined, revokeRejection) : null;
   const bedrock = responseFormat === "aws_bedrock.eventstream" && mime === "application/vnd.amazon.eventstream" ? createBedrockEventStreamInspector() : null;
-  const nativeChat = responseFormat === ollamaChatFormat;
-  const ollama = nativeChat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
+  const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
+  const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
+  const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection) : null;
   let inspect = !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
@@ -56,8 +59,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     if (delivery === "canceled") operation.cancel(reason);
     else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
     delivery = operation.delivery ?? delivery;
-    let inspection: UsageInspection = ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
-    if (nativeChat && (!ollama || delivery === "complete" && !inspection.outcome)) inspection.outcome = "provider_error";
+    let inspection: UsageInspection = radius?.result() ?? ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    if (nativeChat && (!ollama && !radius || delivery === "complete" && !inspection.outcome)) inspection.outcome = "provider_error";
     if (delivery === "complete" && inspect) {
       try {
         text += decoder.decode();
@@ -104,6 +107,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         sse?.push(next.value);
         bedrock?.push(next.value);
         ollama?.push(next.value);
+        radius?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;
           if (bytes > usageInspectionLimit) { inspect = false; text = ""; }
