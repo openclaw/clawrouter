@@ -25,8 +25,8 @@ export async function createVertexAssertion(clientEmail: string, privateKey: Cry
   seconds(now);
   requireVertex(/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.gserviceaccount\.com$/.test(clientEmail) && clientEmail.length <= 254, "service_account");
   requireVertex(keyId === undefined || /^[a-zA-Z0-9_-]{1,128}$/.test(keyId), "key_id");
-  const algorithm = privateKey.algorithm as RsaHashedKeyAlgorithm;
-  requireVertex(privateKey.type === "private" && algorithm.name === "RSASSA-PKCS1-v1_5" && algorithm.hash?.name === "SHA-256" && algorithm.modulusLength >= 2048 && privateKey.usages.includes("sign"), "signing_key");
+  const algorithm = record(privateKey.algorithm), hash = record(algorithm?.hash);
+  requireVertex(privateKey.type === "private" && algorithm?.name === "RSASSA-PKCS1-v1_5" && hash?.name === "SHA-256" && typeof algorithm.modulusLength === "number" && algorithm.modulusLength >= 2048 && privateKey.usages.includes("sign"), "signing_key");
   const header = base64url(encoder.encode(JSON.stringify({ alg: "RS256", typ: "JWT", ...(keyId ? { kid: keyId } : {}) })));
   const claims = base64url(encoder.encode(JSON.stringify({ iss: clientEmail, scope: vertexScope, aud: vertexTokenUrl, iat: now, exp: now + 3600 })));
   const input = `${header}.${claims}`;
