@@ -46,6 +46,13 @@ try {
 
   await revoke();
   created = false;
+  const revokedResponse = await fetch(`${baseUrl}/v1/catalog`, {
+    headers: { authorization: `Bearer ${proxyKey}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  const revocation = await revokedResponse.json();
+  assert.equal(revokedResponse.status, 403, "revoked smoke key must lose catalog access");
+  assert.equal(revocation.error?.code, "proxy_key_revoked");
   console.log("self-host smoke ok: health, admin mutation, scoped catalog, revocation");
 } finally {
   if (created) await revoke();
