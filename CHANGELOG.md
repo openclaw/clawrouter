@@ -47,6 +47,7 @@
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
+- Register Together video with the existing scoped media controller, validating original-origin dispatch and complete native responses while keeping unsupported cancellation and unknown upstream costs closed.
 - Add bounded Together video lifecycle codecs and native fixtures for frozen Wan2.7 text/image-to-video and Hailuo02, preserving job identity, first-frame inputs and conservative settlement boundaries.
 - Add bounded native codecs and synthetic fixtures for the two frozen Google image models, with atomic image delivery, thought-image exclusion and explicit modality/accounting integration boundaries.
 - Add native MiniMax image-01 generation/reference codecs and fixtures with explicit partial/safety-filtered delivery, bounded image bytes and conservative regional product/accounting boundaries.
