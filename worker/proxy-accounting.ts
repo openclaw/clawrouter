@@ -90,7 +90,10 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     cached_input_tokens: null, cache_write_input_tokens: null, duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!contentRef, content_ref: contentRef };
   if (cost.requestTariff && fixed == null) {
-    const knownReceipt = outcome.requestCostReceipt?.pricingVersion === cost.requestTariff.version ? outcome.requestCostReceipt : undefined;
+    const candidate = outcome.requestCostReceipt;
+    const knownReceipt = candidate?.pricingVersion === cost.requestTariff.version
+      && (cost.requestTariff.kind !== "deepseek_search" || candidate.basis === "manifest_request"
+        && (candidate.costMicros === 0 || candidate.costMicros === cost.requestTariff.micros)) ? candidate : undefined;
     const settled = cost.requestTariff.kind === "successful_request" ? settleRequestTariff(cost.requestTariff, outcome.requestTariffOutcome ?? "unknown")
       : outcome.requestTariffOutcome === "unsent" ? { micros: 0, basis: "none" }
       : knownReceipt ? { micros: knownReceipt.costMicros, basis: knownReceipt.basis }
@@ -231,8 +234,14 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   if (endpoint.request_format === "minimax.speech" && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
-  // The native Search codec's request counter is not a qualified tariff receipt.
-  if (endpoint.request_format === "deepseek.search") return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "model_request_fee", inputTokens: null, outputTokens: null };
+  // Unknown Search fees stay closed. Only the frozen, route-qualified native
+  // tariff can cover this model-less operation; Chat prices never substitute.
+  if (endpoint.request_format === "deepseek.search") {
+    const requestTariff = preparedTariff ?? selectRequestTariff(endpoint, body);
+    if (model === null && capability === "search.web" && requestTariff?.kind === "deepseek_search")
+      return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
+    return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "model_request_fee", inputTokens: null, outputTokens: null };
+  }
   // Classify with trusted routing context, then consume the source-owned image
   // pricing guard. This changes no wire format and clears no other price gap.
   const imageGap = googleImageRequest(model?.upstream, body, endpoint.request_format)

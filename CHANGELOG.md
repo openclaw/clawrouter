@@ -175,6 +175,7 @@
 - Qualify model-less native DeepSeek Search declarations against the original Bearer origin and bounded codec, keeping Search request fees separate from Chat token prices and fixed policy charges.
 - Define the published DeepSeek Search request tariff and conservative single-dispatch reserve without enabling hard-dollar admission or deriving charges from incomplete results.
 - Calculate version-bound DeepSeek Search request receipts from validated native empty/nonempty observations while retaining reserves for unknown outcomes and keeping runtime admission closed.
+- Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.

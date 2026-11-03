@@ -48,7 +48,7 @@ export interface ImageRequestPricing {
     "grok-imagine-image-2.0": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"low" | "medium", Record<"1k" | "2k", number>> };
   };
 }
-/** Definition only until shared admission qualifies the native result condition. */
+/** Published native-result tariff; admission freezes this before dispatch. */
 export interface DeepSeekSearchRequestPricing {
   unit: "request";
   protocol: "deepseek.search";
@@ -58,4 +58,4 @@ export interface DeepSeekSearchRequestPricing {
   successfulNonemptyRequestMicros: 750;
   emptyRequestMicros: 0;
 }
-export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing | ImageRequestPricing;
+export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing | ImageRequestPricing | DeepSeekSearchRequestPricing;
