@@ -168,7 +168,11 @@ test("managed rewriting removes upstream control URLs while leaving media output
       assert.equal(rewritten.cancel_url, publicPaths.cancel);
       assert.throws(() => c.adapter.rewrite(observed, { ...publicPaths, retrieve: "//untrusted.example" }));
     }
-    if (c.route.protocol === "replicate.predictions") assert.deepEqual(rewritten.urls, { get: publicPaths.retrieve, cancel: publicPaths.cancel });
+    if (c.route.protocol === "replicate.predictions") {
+      assert.deepEqual(rewritten.urls, { get: publicPaths.retrieve, cancel: publicPaths.cancel });
+      assert.throws(() => c.adapter.rewrite(observed, { cancel: publicPaths.cancel }), /missing_replicate_retrieve_path/);
+      assert.throws(() => c.adapter.rewrite(observed, { retrieve: publicPaths.retrieve }), /missing_replicate_cancel_path/);
+    }
     if (c.route.protocol === "vydra.jobs") assert.deepEqual(rewritten.output, observed.body.output);
   }
 });

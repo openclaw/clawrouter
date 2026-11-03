@@ -11,8 +11,10 @@ Frozen consumer: OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 
 `worker/managed-runway.ts` exports `createRunwayManagedAdapter(mode)`,
 `validateRunwayTaskId`, `runwayModels`, and `runwayApiVersion`.
-It uses the existing managed lifecycle method contract and is unregistered
-pending shared `runway.tasks`, per-control headers, and observation-loss support.
+It implements the shared `ManagedLifecycleAdapter` contract and remains
+unregistered pending the manifest/schema and real Worker qualification.
+Per-control `X-Runway-Version` is stable route identity; a version change must
+invalidate an original job's route. It is never a transient diagnostic header.
 
 ## Wire and input qualification
 

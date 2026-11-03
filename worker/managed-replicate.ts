@@ -36,6 +36,7 @@ export const replicateManagedAdapter: ManagedLifecycleAdapter = {
       body: prediction.body };
   },
   rewrite(observation, paths) {
+    if (!paths.retrieve) throw new Error("missing_replicate_retrieve_path");
     if (!paths.cancel) throw new Error("missing_replicate_cancel_path");
     return rewriteReplicatePredictionUrls(parseReplicatePrediction(JSON.stringify(dropMediaControlUrls(observation.body)), observation.id),
       { get: paths.retrieve, cancel: paths.cancel });

@@ -34,11 +34,14 @@ MIME alone is not image validation. The router does not fetch remote URLs.
 
 ## Shared runtime prerequisites
 
-The adapter is unregistered. Add protocol `pixverse.video`, consume the
-non-secret `headers` returned by every `control` call, and retain the
-original credential on each poll. Caller trace IDs and credentials are never
-reused. The shared controller must generate a new adapter control request for
-each attempt, including restarts.
+The adapter implements the shared `ManagedLifecycleAdapter` contract and remains
+unregistered pending the provider manifest/schema and real Worker proof. Every
+control returns fresh non-secret `headers` plus `transientHeaders: ["ai-trace-id"]`.
+The route identity pins UUID volatility, not a random value. `identityProbe: "1"`
+is a valid synthetic decimal ID for route qualification, never caller authority.
+Original credentials remain bound on each poll. The shared controller generates
+a new control request for each attempt, including restarts; caller trace IDs and
+credentials are not reused.
 
 Image upload IDs require a durable caller/policy/provider/region/credential
 binding before image creation. The optional factory argument `boundImageId`
@@ -57,8 +60,8 @@ Status 5 is pending even with a partial URL. Status 1 is terminal execution;
 missing or inaccessible media is a separate deliverable failure. Statuses 7
 and 8 are terminal errors. Status 6 is the frozen client's deleted-task case:
 return `observationUnavailable: "deleted"`, stop polling and freeze once
-without inventing an upstream execution outcome or refund. The shared owner
-must implement that observation-loss transition before registration. Unknown
+without inventing an upstream execution outcome or refund. This uses the shared
+observation-loss transition. Unknown
 status, transport errors, and malformed bodies are not terminal job proof.
 
 Use the established reservation/idempotency/outbox path for one frozen terminal
