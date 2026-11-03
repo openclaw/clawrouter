@@ -1,4 +1,5 @@
 import { mediaObject } from "./managed-media-json.ts";
+import { readNativeJson } from "./native-json.ts";
 import type { TranscriptionUpload } from "./transcription-body.ts";
 
 export const xaiTranscriptionPath = "/v1/stt";
@@ -55,26 +56,7 @@ export function observeXaiTranscription(value: unknown, complete: boolean) {
 }
 
 export async function readXaiTranscription(response: Response, signal: AbortSignal): Promise<ReturnType<typeof observeXaiTranscription>> {
-  const length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxJson)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true });
-  let text = "", size = 0;
-  try {
-    signal.throwIfAborted();
-    for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
-      size += chunk.value.byteLength; if (size > maxJson) fail("size"); text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
-    if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
-    return observeXaiTranscription(JSON.parse(text), true);
-  } catch { void reader.cancel().catch(() => undefined); fail("response"); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  return readNativeJson(response, signal, maxJson, body => observeXaiTranscription(body, true), fail);
 }
 function seconds(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 86400) fail("duration");
