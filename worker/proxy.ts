@@ -276,7 +276,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
       await requireEmptyResponseControlBody(request);
       const query = new URL(request.url).searchParams, idParam = control.protocol ? "prediction_id" : "response_id", ids = query.getAll(idParam);
-      if (ids.length !== 1) throw new HttpError(400, control.protocol && ids.length === 0 ? "missing_path_param" : "response_id_required", `one ${idParam} path parameter is required`);
+      if (ids.length !== 1) throw new HttpError(400, "response_id_required", "one response_id path parameter is required");
       query.delete(idParam);
       return proxyResponseControl(request, env, control.action, ids[0], query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined, control.protocol);
     }

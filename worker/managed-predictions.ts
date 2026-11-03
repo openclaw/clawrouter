@@ -20,9 +20,6 @@ import { errorResponse, HttpError, json, sha256Hex } from "./utils.ts";
 export async function proxyManagedPrediction(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
   selection: ProxySelection, query: ProxyQuery): Promise<Response> {
   const connection = await assertProviderAccess(selection.provider, auth, env);
-  for (const name of selection.endpoint.path_params) {
-    if (!selection.pathParams[name]) throw new HttpError(400, "missing_path_param", `path parameter ${name} is required`);
-  }
   if (!selection.endpoint.lifecycle) throw new HttpError(409, "response_owner_unavailable", "the managed prediction lifecycle is unavailable; raw job IDs cannot be forwarded");
   if (selection.endpoint.lifecycle?.protocol !== "replicate.predictions" || selection.method !== "POST"
     || hasProxyQuery(query) || new URL(request.url).search) throw new HttpError(400, "invalid_prediction_request", "managed prediction creation requires a body-only declared POST");
