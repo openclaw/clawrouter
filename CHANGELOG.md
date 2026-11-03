@@ -50,6 +50,7 @@
 - Reject non-string native fal music MIME fields instead of coercing arrays into qualified audio descriptors.
 
 - xAI: add five frozen Chat identities with qualified context/input facts and explicit reasoning defaults where documented, preserving unknown whole-request costs and selected wire identities.
+- xAI: apply Grok 4.3 long-context token rates from exactly 200,000 prompt tokens, matching the published inclusive boundary without changing other providers’ thresholds.
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
