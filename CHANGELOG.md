@@ -72,6 +72,7 @@
 - Add the frozen Gemini 3.6 Flash card with sourced token limits and explicitly labeled published price ceilings across Standard, Flex and Priority, preserving conservative tool and cache admission.
 - Add the frozen Gemini 3.5 Flash-Lite card with sourced context/output bounds and exact Standard, Flex and Priority cache rates, preserving conditional tool-cost guards.
 - Bind Google continuation tokens to the original principal, model, request and credential, publishing ownership only from completed native candidate evidence and independently accounting for each HTTP hop.
+- Add the frozen Google 3.1 Pro preview card with explicitly labeled long-context price ceilings, exact tier cache rates and conservative hosted-tool admission.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Dispatch declared Groq and Mistral unary transcription through authenticated bounded multipart intake, original-key revalidation and conservative settlement; keep unknown audio-dollar budgets closed and preserve native file bytes.
