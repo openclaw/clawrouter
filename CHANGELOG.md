@@ -9,6 +9,7 @@
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
+- Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
 
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.
