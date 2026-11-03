@@ -189,7 +189,10 @@ interface Rates {
 
 export type PricingGap = "audio_upload_bound" | "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
 
+const unpricedGoogleRequestFormats = new Set(["google.grounded_search", "google.audio_understanding", "google.video_understanding"]);
+
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge, selectedUpstreamModel?: string | null): PricingGap | null {
+  if (unpricedGoogleRequestFormats.has(requestFormat)) return requestFormat === "google.grounded_search" ? "hosted_tool_fee" : "opaque_input_bound";
   // Native media bounds do not qualify an image, music or speech tariff.
   if (googleAudioRequest(selectedUpstreamModel, body, requestFormat)
     || googleImageRequest(selectedUpstreamModel, body, requestFormat)) return "opaque_input_bound";
@@ -293,6 +296,8 @@ export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputT
 };
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint, requestPricing?: OutcomeRequestPricing): CostEstimate {
+  if (unpricedGoogleRequestFormats.has(endpoint?.request_format ?? ""))
+    return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   if (googleAudioRequest(endpoint?.selectedUpstreamModel, body, endpoint?.request_format ?? "")
     || googleImageRequest(endpoint?.selectedUpstreamModel, body, endpoint?.request_format ?? ""))
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
@@ -361,6 +366,7 @@ export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: 
 }
 
 export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, requestFormat?: string): number | null {
+  if (unpricedGoogleRequestFormats.has(requestFormat ?? "")) return null;
   if (requestFormat === "google.image_generate" || requestFormat === "google.music_generate"
     || requestFormat === "google.speech_generate_content" || requestFormat === "google.speech_interactions") return null;
   if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" ? actualImageCost(pricing, tokens) : null;
