@@ -36,6 +36,9 @@ capabilities:
   - id: llm.embeddings
     endpoint: batch_embed_contents
     methods: [POST]
+  - id: image.generate
+    endpoint: image_generate
+    methods: [POST]
 endpoints:
   generate_content:
     modelPassthrough: {}
@@ -65,6 +68,13 @@ endpoints:
     requestFormat: google.batch_embed_contents
     responseFormat: google.batch_embed_contents
     timeoutMs: 60000
+  image_generate:
+    method: POST
+    path: /v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.image_generate
+    responseFormat: google.image
+    timeoutMs: 600000
 models:
   entries:
     - id: google/gemini-3.5-flash
@@ -506,6 +516,14 @@ models:
             inputMicrosPerMillion: 540000
             cachedInputMicrosPerMillion: 54000
             outputMicrosPerMillion: 720000
+    # Frozen non-preview identities; bounded native images have no qualified dollar tariff.
+    # Availability checked 2026-11-04: https://ai.google.dev/gemini-api/docs/deprecations
+    - id: google/gemini-3.1-flash-image
+      upstream: gemini-3.1-flash-image
+      capabilities: [image.generate]
+    - id: google/gemini-3-pro-image
+      upstream: gemini-3-pro-image
+      capabilities: [image.generate]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

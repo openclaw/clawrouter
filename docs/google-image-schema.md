@@ -5,8 +5,10 @@ wrapper in [PR661](https://github.com/openclaw/clawrouter/pull/661), source
 `e2203e7ff4a18b1a2bbf95d8d57c0f9b64113d75`, landed as
 `4cb7ba420622183cc2c1fa44961f55d45d2346b9`, and the landed `prepareGoogleImage`
 codec. It qualifies only `gemini-3.1-flash-image` and `gemini-3-pro-image` from
-OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`. It does not activate YAML,
-generated discovery, shared routing or live image calls.
+OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`. The existing Google YAML now
+declares that exact endpoint and both image-only model rows. Generated discovery
+and actual-client integration still require the serialized snapshot proof. No
+live image call is made.
 
 ## Exact declaration
 
@@ -60,7 +62,7 @@ byte bounds, output count or another provider's card.
 
 Current unlocalized primary [image documentation](https://ai.google.dev/gemini-api/docs/image-generation)
 and [deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations),
-checked 2026-11-03, list both frozen non-preview identities without an announced
+checked 2026-11-04, list both frozen non-preview identities without an announced
 shutdown. Their preview IDs are separate retired identities and are rejected.
 Current examples prefer Interactions; they do not prove live GenerateContent
 compatibility. This slice preserves the actual frozen codec/wrapper wire and
@@ -71,5 +73,18 @@ matched model paths, conservative admission, unchanged existing routes, rejected
 origins/formats/prices and strict request preparation. Source1 owns common matching,
 auth, classification, dispatch and accounting; source5 owns the wrapper; source2
 owns actual-client image consumption; source6 owns serialized snapshot and composed
-Worker proof. Existing Google YAML remains source3-owned and unactivated until
-those runtime prerequisites qualify.
+Worker proof. The bundled declaration follows landed matcher
+[PR672](https://github.com/openclaw/clawrouter/pull/672)
+(`0777fa1cde38d9ed48fb664afb9eddfae55c6b71`), actual image runtime
+[PR675](https://github.com/openclaw/clawrouter/pull/675)
+(`cd75e6962b1c5656e4ea1aade84f39c1a622a9ba`) and shared-context pricing
+[PR681](https://github.com/openclaw/clawrouter/pull/681)
+(`9c21b70de2755b3353d1fc633d344beb8cf62db0`). Four declaration cases exercise
+actual bundled identities, native matching/preparation, order independence,
+manifest offers, ambiguity rejection and conservative admission. They do not
+replace source2/source6 actual-client and serialized snapshot proof. Source1
+retains the real Worker fixture and dispatch ownership. Its exact duplicate-row
+fixture correction [PR692](https://github.com/openclaw/clawrouter/pull/692) is
+consumed from landed `ed1b1318d8d0e9a2f31c235d1473c8b77dc861ba`, without copying
+or modifying its assertions. No snapshot is regenerated
+in this source slice, and model availability does not establish account entitlement.

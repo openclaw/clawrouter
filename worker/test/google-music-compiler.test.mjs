@@ -137,6 +137,8 @@ test("Google music declaration does not broaden the actual wrapper to missing MI
 
 test("Google music and image declarations retain separate native formats and reject mixed model capabilities", () => {
   const manifest = fixture();
+  manifest.capabilities = manifest.capabilities.filter(value => value.endpoint !== "image_generate");
+  manifest.models.entries = manifest.models.entries.filter(value => !value.capabilities.includes("image.generate"));
   manifest.capabilities.push({ id: "image.generate", endpoint: "image_generate", methods: ["POST"] });
   manifest.endpoints.image_generate = { method: "POST", path: "/v1beta/models/${model}:generateContent", pathParams: ["model"],
     requestFormat: "google.image_generate", responseFormat: "google.image" };
