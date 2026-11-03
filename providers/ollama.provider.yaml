@@ -1,0 +1,62 @@
+# Configured server transport: docs/local-engine-transports.md.
+# Native and compatibility contracts checked 2026-11-03: https://docs.ollama.com/api/chat
+schema: clawrouter.service-provider.v1
+id: ollama
+displayName: Ollama configured server
+status: experimental
+class: openai_compatible
+service:
+  platform: ollama
+  kind: model_provider
+  upstreamService: ollama
+  configKeys: [OLLAMA_API_KEY, OLLAMA_BASE_URL, OLLAMA_MODEL]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: ${base_url}
+routing:
+  nativePrefixes: [clawrouter-ollama, ollama]
+  modelPrefixes: [ollama/]
+  baseUrlParam: base_url
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - { id: llm.chat, endpoint: native_chat, methods: [POST] }
+  - { id: models.list, endpoint: native_models, methods: [GET] }
+endpoints:
+  models_list: { method: GET, path: /v1/models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  chat_completions:
+    modelPassthrough: {}
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  native_models: { method: GET, path: /api/tags, requestFormat: ollama.models, responseFormat: ollama.models, timeoutMs: 30000 }
+  native_chat:
+    modelPassthrough: {}
+    path: /api/chat
+    requestFormat: ollama.chat
+    responseFormat: ollama.chat
+    streaming: ndjson
+    timeoutMs: 600000
+models:
+  entries:
+    - id: ollama/configured
+      upstream: ${model}
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

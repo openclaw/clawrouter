@@ -20,15 +20,19 @@ const messages = [
 ];
 const tools = [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }];
 const tokens = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
+const configuredModel = "fixture/served-model";
+const configuredDeployment = "deployment";
 const delta = { id: "chat_fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "synthetic-output", reasoning_content: "synthetic-reasoning", tool_calls: messages[0].tool_calls }, finish_reason: null }] };
 const sse = value => `data: ${JSON.stringify(value)}\n\n`;
 
 async function fixture(t, provider) {
   const pending = [], events = [], records = new Map();
   const env = Object.fromEntries(provider.config_keys.map(key => [key,
-    /(?:URL|ENDPOINT)$/.test(key) ? "https://fixture-upstream.example" : "synthetic-upstream-key"]));
+    /(?:URL|ENDPOINT)$/.test(key) ? "https://fixture-upstream.example"
+      : /_MODEL$/.test(key) ? configuredModel
+      : /_DEPLOYMENT$/.test(key) ? configuredDeployment : "synthetic-upstream-key"]));
   Object.assign(env, {
-    AZURE_OPENAI_API_VERSION: "2024-10-21", AZURE_OPENAI_DEPLOYMENT: "deployment",
+    AZURE_OPENAI_API_VERSION: "2024-10-21", AZURE_OPENAI_DEPLOYMENT: configuredDeployment,
     POLICY_KV: {
       async get(key) { return Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null; },
       async put(key, value) { records.set(key, JSON.parse(value)); },
@@ -84,7 +88,7 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
       const offer = offered.offers.find(row => row.endpoint === endpoint.id && row.routeKind === "native" && row.modelId && row.eligible);
       assert.ok(offer, "known Chat format must offer a credential-eligible native model");
       const model = offered.models.find(row => row.id === offer.modelId);
-      const upstreamModel = model.upstream.replace("${deployment}", f.env.AZURE_OPENAI_DEPLOYMENT);
+      const upstreamModel = model.upstream.replace("${deployment}", configuredDeployment).replace("${model}", configuredModel);
       const selectedModel = dispatch === "manifest" ? model.id : upstreamModel;
       // A dynamic deployment is an operator-supplied native identity, not a
       // certified model behind the catalog's generic deployment placeholder.
