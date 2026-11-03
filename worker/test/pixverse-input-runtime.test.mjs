@@ -12,7 +12,7 @@ const { GrantCredentialObject, putGrantCredentials, revokeGrantCredentials } = a
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const plan = { model: "v6", prompt: "A lighthouse", duration: 5, quality: "720p" };
 // Decoder-valid 1x1 PNG, used unchanged; no remote input reference.
-const bytes = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1cAAAAASUVORK5CYII=", "base64"));
+const bytes = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64"));
 const permission = { version: "clawrouter.upstream-retention.v1", allow: [{ providerId: "pixverse", protocol: "pixverse.video" }] };
 async function setup(t, options = {}) {
   const index = snapshot.providers.findIndex(provider => provider.id === "replicate"), original = snapshot.providers[index];
