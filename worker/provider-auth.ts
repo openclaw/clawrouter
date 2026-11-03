@@ -1,4 +1,5 @@
 import { isModelDiscovery } from "./model-discovery.ts";
+import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
 import { envValue, HttpError } from "./utils.ts";
@@ -46,8 +47,8 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
     applyTransportHeaders(headers, transport, grant);
     applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers);
     applyTemplateHeaders(provider, endpoint.headers, env, headers);
-    const path = (transport?.endpointPaths[endpoint.id] ?? endpoint.path).replace(/\$\{([^}]+)\}/g, (template, name: string) => endpoint.path_params.includes(name) ? "path-param" : template);
     const base = transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env);
+    const path = configuredEndpointPath(endpoint, transport?.endpointPaths[endpoint.id], base).replace(/\$\{([^}]+)\}/g, (template, name: string) => endpoint.path_params.includes(name) ? "path-param" : template);
     new URL(`${base.replace(/\/$/, "")}${resolveTemplate(provider, path, env)}`);
     for (const value of [...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query)]) resolveTemplate(provider, value, env);
   } catch (error) {

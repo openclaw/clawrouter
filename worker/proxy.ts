@@ -750,6 +750,9 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     queryInput = discoveryQuery(queryInput);
     validateDiscoveryQuery(selection.provider, selection.endpoint, auth.policy, queryInput);
   }
+  if (selection.endpoint.upstreamPath !== undefined && !isModelDiscovery(selection.endpoint)
+    && (hasProxyQuery(queryInput) || new URL(request.url).search))
+    throw new HttpError(400, "invalid_mapped_endpoint_query", "mapped operation options must be in the request body");
   if (selection.nativeResponse && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_native_response_query", "native operation options must be in JSON, not query parameters");
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
