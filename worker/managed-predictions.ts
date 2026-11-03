@@ -12,6 +12,7 @@ import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { ManagedCreate, ManagedObservation, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
+import { applyManagedHeaders, assertManagedDispatch, managedProbeId } from "./managed-dispatch.ts";
 import { managedPaths, managedRoute } from "./managed-routes.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
@@ -29,7 +30,7 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   if (retentionRequired(auth, selection.capability)) throw new HttpError(400, "prediction_retention_unsupported", "this managed protocol does not support required request-content retention");
   let create: ManagedCreate;
   try { create = adapter.prepare(selection.body, request.headers, selection.pathParams, new URLSearchParams());
-    managedPaths(selection.provider, selection.endpoint, adapter.protocol === "replicate.predictions" ? "owner-pin" : "11111111-1111-4111-8111-111111111111", create.pathParams); }
+    managedPaths(selection.provider, selection.endpoint, managedProbeId(adapter), create.pathParams); }
   catch { throw new HttpError(400, "invalid_prediction_request", "provide a supported native managed job input and route"); }
   selection = { ...selection, body: create.body, pathParams: create.pathParams };
   const fixed = policyRequestCost(auth.policy, selection.capability);
@@ -46,6 +47,12 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   }
   const prepared = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection);
   if (!prepared.continuation) throw new HttpError(503, "prediction_owner_unavailable", "prediction ownership is unavailable");
+  // Qualify the selected grant before durable admission; never shop another
+  // account after a product/region guard rejects it.
+  prepared.headers.delete("Prefer"); prepared.headers.delete("Idempotency-Key");
+  applyManagedHeaders(selection.provider, prepared.headers, create);
+  const dispatchRequest = new Request(prepared.url, { method: "POST", headers: prepared.headers });
+  assertManagedDispatch(adapter.protocol, dispatchRequest);
   const cost = { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   const accounting = createProxyAccounting({ request, env, context, auth, selection, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
   const background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection,
@@ -54,15 +61,12 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   const admitted = await backgroundCall<{ admitted: boolean; created: boolean; job: BackgroundRecord }>(env, scope, { action: "managed_admit", admission: background.admission });
   if (admitted?.admitted !== true || !admitted.job || typeof admitted.created !== "boolean") throw new HttpError(503, "background_unavailable", "prediction admission was not acknowledged");
   if (!admitted.created) return existingPrediction(request, scope, admitted.job, selection.provider, selection.endpoint);
-  // Native async creation never forwards wait preferences or a key that could
-  // imply an upstream replay guarantee. The durable local scope owns retries.
-  prepared.headers.delete("Prefer"); prepared.headers.delete("Idempotency-Key");
-  create.headers.forEach((value, name) => prepared.headers.set(name, value));
   const task = (async () => {
     let attempted = false, response: Response | undefined;
     const operation = new HttpOperation(undefined, Math.min(selection.endpoint.timeout_ms ?? 120_000, 120_000));
     try {
       request.signal.throwIfAborted();
+      assertManagedDispatch(adapter.protocol, dispatchRequest);
       attempted = true;
       await background.dispatch(null);
       response = await operation.wait(fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" }), "upstream",

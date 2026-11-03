@@ -1,6 +1,7 @@
 import { resolveConnection } from "./authority.ts";
 import type { BackgroundAdmission } from "./background-store.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
+import { applyManagedHeaders, assertManagedDispatch, managedHeaderIdentity, managedProbeId } from "./managed-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { applyTransportHeaders, assertOperationConfiguration, providerCredentialScheme } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
@@ -40,11 +41,12 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
     parts.push(lifecycle.protocol, ...(["retrieve", "result", "cancel"] as const).flatMap(action => {
       const endpoint = controls[action];
       if (!endpoint) return [];
-      const control = adapter.control(action, endpoint, adapter.protocol === "replicate.predictions" ? "owner-pin" : "11111111-1111-4111-8111-111111111111", pathParams);
+      const control = adapter.control(action, endpoint, managedProbeId(adapter), pathParams);
       // Transport overrides must not silently move a declared managed control.
       if (upstream.transport?.endpointPaths[endpoint.id]) unavailable();
+      const headers = managedHeaderIdentity(provider, control);
       return [[endpoint.method, control.path,
-        Object.entries(endpoint.headers).map(([name, value]) => [name, resolveTemplate(provider, value, env)]), [...control.query]]];
+        Object.entries(endpoint.headers).map(([name, value]) => [name, resolveTemplate(provider, value, env)]), [...control.query], ...(headers.length ? [headers] : [])]];
     }));
   }
   return sha256Hex(JSON.stringify(parts));
@@ -102,6 +104,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   if (input.clientRequestId) incoming.set("x-client-request-id", input.clientRequestId);
   copyRequestHeaders(incoming, provider, endpoint, headers, env);
   applyTransportHeaders(headers, upstream.transport, grant);
+  if (control) applyManagedHeaders(provider, headers, control);
   return new Request(url, { method: endpoint.method, headers, redirect: "manual" });
 }
 
@@ -120,6 +123,7 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
     preparation.signal.throwIfAborted();
     assertControlDeadline(input);
     assertControlCallerLive(input.authorization);
+    assertManagedDispatch(input.protocol, request);
     return fetch(request, { signal });
   } finally { preparation.stop("complete"); }
 }

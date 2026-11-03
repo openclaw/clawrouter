@@ -78,6 +78,8 @@ export class GrantCredentialObject implements DurableObject {
           if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
           }
+          const { assertManagedDispatch } = await import("./managed-dispatch.ts");
+          assertManagedDispatch(input.protocol, outbound);
           // Start egress before releasing the serialized credential check, but
           // never make revocation wait for the remote response or stream.
           return { response: fetch(outbound, { signal: request.signal }) };
