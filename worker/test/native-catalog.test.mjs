@@ -104,8 +104,9 @@ for (const outcome of ["completed", "failed"]) test(`catalog-selected Responses 
     } }), { headers: { "content-type": "text/event-stream", "x-request-id": "upstream_fixture" } });
   });
   const response = await f.post("limited", path, { model: model.upstream, input: history, tools, reasoning: { effort: "high" }, stream: true, service_tier: "default", max_output_tokens: 32 });
-  assert.equal(response.status, 200);
-  assert.equal(await response.text(), wire, "native SSE bytes and terminal error stay intact");
+  const received = await response.text();
+  assert.equal(response.status, 200, received);
+  assert.equal(received, wire, "native SSE bytes and terminal error stay intact");
   await Promise.all(f.pending);
   assert.equal(f.upstream.mock.callCount(), 1);
   const events = f.events.filter(event => event.type === "clawrouter.usage.v1");
