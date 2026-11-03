@@ -88,6 +88,41 @@ test("Bedrock vector validation is atomic across the complete batch and finite d
   assert.throws(() => observeBedrockEmbedding({ ...item.response, __type: "SyntheticFailure" }, request, true));
 });
 
+test("Titan Multimodal accepts absent/null messages without changing vectors, tokens or completeness", () => {
+  const item = example("amazon.titan-embed-image-v1");
+  for (const model of [item.model, "us." + item.model + ":0:2:8k", "global." + item.model]) {
+    const request = prepareBedrockEmbedding(model, item.body);
+    for (const message of [{}, { message: null }]) for (const inputTextTokenCount of [0, 17]) {
+      const response = { ...item.response, inputTextTokenCount, ...message };
+      const observed = observeBedrockEmbedding(response, request, true);
+      assert.deepEqual(observed.vectors, [item.response.embedding]); assert.equal(observed.inputTokens, inputTextTokenCount);
+      assert.throws(() => observeBedrockEmbedding(response, request, false), { message: "invalid_bedrock_embedding_response" });
+    }
+  }
+});
+
+test("Titan Multimodal rejects every nonnull message even with valid vectors and token evidence", () => {
+  const item = example("amazon.titan-embed-image-v1");
+  for (const model of [item.model, "us." + item.model + ":0:2:8k", "global." + item.model]) {
+    const request = prepareBedrockEmbedding(model, item.body);
+    for (const message of ["synthetic upstream diagnostic", "", 0, false, {}, [], ["synthetic"]]) {
+      const response = { ...item.response, inputTextTokenCount: 17, message };
+      assert.throws(() => observeBedrockEmbedding(response, request, true), error => {
+        assert.equal(error.message, "invalid_bedrock_embedding_response");
+        assert.equal(error.cause, undefined); return true;
+      });
+    }
+  }
+});
+
+test("Titan Multimodal message semantics do not change other embedding families", () => {
+  for (const item of wire.cases.filter(item => item.model !== "amazon.titan-embed-image-v1")) {
+    const request = prepareBedrockEmbedding(item.model, item.body);
+    const baseline = observeBedrockEmbedding(item.response, request, true);
+    assert.deepEqual(observeBedrockEmbedding({ ...item.response, message: "synthetic informational field" }, request, true), baseline);
+  }
+});
+
 test("Bedrock only reports qualified native Titan token counters; dimensions and other usage fields are not tokens", () => {
   const request = prepareBedrockEmbedding(titan.model, titan.body);
   for (const inputTextTokenCount of [-1, 1.5, "3", Number.MAX_SAFE_INTEGER + 1]) assert.equal(observeBedrockEmbedding({ ...titan.response, inputTextTokenCount }, request, true).inputTokens, null);

@@ -193,6 +193,7 @@
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
 - Add finite native Bedrock embedding codecs and complete synthetic vector fixtures for Titan, Cohere, Nova and version-specific Marengo requests. Shared model routing, native client fixes and tariff qualification remain separate integration work.
 - Qualify finite native Bedrock embedding declarations against the landed family codecs and signed runtime, retaining exact registered identities, text-only inputs and unknown costs.
+- Reject non-null Titan Multimodal error messages before exposing embeddings or usage, including empty and malformed values, while preserving other Bedrock families.
 - Add bounded native Bedrock embedding response validation with original regional destination binding, complete vector delivery and qualified Titan input counts; shared signing, dispatch and memory acceptance remain separately qualified.
 - Dispatch qualified native Bedrock embeddings with original regional SigV4 credentials, unchanged model-specific input, complete bounded vectors and conservative accounting without inferred tariffs.
 - Expose the existing Bedrock embedding model recognizer for shared route guards without duplicating family or inference-profile parsing rules.

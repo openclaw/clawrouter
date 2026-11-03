@@ -75,6 +75,10 @@ export function observeBedrockEmbedding(value: unknown, request: BedrockEmbeddin
   vectors: number[][]; inputTokens: number | null;
 } {
   if (!complete || !object(value) || value.error !== undefined || value.__type !== undefined) throw new Error("invalid_bedrock_embedding_response");
+  // Titan Multimodal uses a nullable error field, not a truthy diagnostic flag.
+  if (value.message !== undefined && value.message !== null && request.family === "titan-v1"
+    && resolveSpec(request.modelId) === specs["amazon.titan-embed-image-v1"])
+    throw new Error("invalid_bedrock_embedding_response");
   let rows: unknown;
   switch (request.family) {
     case "cohere-v3": rows = value.embeddings; break;
