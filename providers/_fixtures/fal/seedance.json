@@ -1,0 +1,17 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://queue.fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null, "inlineBytesAreSynthetic": true, "activationRequires": ["scoped dotted-app routes", "native format/schema links", "original credential and asset binding", "actual consumer proof"] },
+  "requests": [
+    { "model": "bytedance/seedance-2.0/fast/text-to-video", "body": { "prompt": "A blue paper boat on a stream", "duration": "4", "resolution": "720p", "aspect_ratio": "16:9", "generate_audio": false } },
+    { "model": "bytedance/seedance-2.0/fast/image-to-video", "body": { "prompt": "Animate this boat", "duration": "5", "resolution": "480p", "image_url": "data:image/png;base64,iVBORw0KGgo=" } },
+    { "model": "bytedance/seedance-2.0/text-to-video", "body": { "prompt": "A boat sailing past a green shore", "duration": "15", "resolution": "1080p", "generate_audio": true } },
+    { "model": "bytedance/seedance-2.0/image-to-video", "body": { "prompt": "Animate the paper sail", "resolution": "4k", "image_url": "data:image/png;base64,iVBORw0KGgo=" } },
+    { "model": "bytedance/seedance-2.0/fast/reference-to-video", "body": { "prompt": "Use this boat and wave motion", "duration": "6", "image_urls": ["data:image/png;base64,iVBORw0KGgo="], "video_urls": ["data:video/mp4;base64,AAAAHGZ0eXBpc29t"], "audio_urls": ["data:audio/mpeg;base64,SUQz"] } },
+    { "model": "bytedance/seedance-2.0/reference-to-video", "body": { "prompt": "Use the reference boat", "aspect_ratio": "9:16", "image_urls": ["data:image/png;base64,iVBORw0KGgo="] } }
+  ],
+  "requestId": "synthetic_seedance_job",
+  "submit": { "request_id": "synthetic_seedance_job", "status": "IN_QUEUE", "status_url": "https://untrusted.example/status" },
+  "running": { "request_id": "synthetic_seedance_job", "status": "IN_PROGRESS" },
+  "completed": { "request_id": "synthetic_seedance_job", "status": "COMPLETED" },
+  "result": { "video": { "url": "https://assets.example/boat.mp4", "content_type": "video/mp4" } },
+  "expectedControlRoot": "/bytedance/seedance-2.0/requests/synthetic_seedance_job"
+}
