@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { AccessPolicy, FusionConfig, FusionReadiness } from "../src/ui-types";
+import type { AccessPolicy, AdminUsageRow, FusionConfig, FusionReadiness, ProviderReadiness, ProviderRow, UsageSnapshot } from "../src/ui-types";
+import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
@@ -8,9 +9,29 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("dashboard is WCAG AA clean and visually stable", async ({ page }) => {
-  await openDemo(page);
+  const { responses, providers } = dashboardFixture();
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  await expect(page.locator(".dashboardStats > div").first().locator("strong")).toHaveText(`8/${providers.length}`);
+  await expect(page.locator(".dashboardServiceGrid article strong")).toHaveText(providers.slice(0, 10).map((provider) => provider.display_name));
+  await expect(page.getByRole("button", { name: "Show 1 more services" })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
   await expect(page).toHaveScreenshot("dashboard.png", { animations: "disabled", fullPage: true });
   await expectA11yClean(page);
+});
+
+test("real demo shows the bundled provider inventory and remains WCAG AA clean", async ({ page }) => {
+  await openDemo(page);
+  const count = snapshot.providers.length;
+  await expect(page.locator(".dashboardStats > div").first().locator("strong")).toHaveText(new RegExp(`^\\d+/${count}$`));
+  await expectA11yClean(page);
+  await page.getByRole("button", { name: "Catalog", exact: true }).click();
+  await expect(page.locator(".catalogMeta strong")).toHaveText(`${count} services`);
+  await expect(page.locator(".mainPane .entityTitle")).toHaveText(snapshot.providers.map((provider) => provider.display_name));
 });
 
 test("dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
@@ -228,6 +249,76 @@ async function expectFusionConnectorsContained(page: Page, direction: "horizonta
       expect(cell.right).toBeLessThanOrEqual(after.left + 1);
     }
   }
+}
+
+// Intentionally independent of the bundled manifests and product demo. Provider
+// additions should change semantic inventory checks, not these layout fixtures.
+function dashboardFixture() {
+  const providers: ProviderRow[] = [
+    ["anthropic", "Anthropic", "llm"], ["aws-bedrock", "AWS Bedrock", "llm"],
+    ["azure-openai", "Azure OpenAI", "llm"], ["firecrawl", "Firecrawl", "web_scrape"],
+    ["google-gemini", "Google Gemini", "llm"], ["mistral", "Mistral", "llm"],
+    ["openai", "OpenAI", "llm"], ["perplexity", "Perplexity", "llm"],
+    ["replicate", "Replicate", "media"], ["tavily", "Tavily", "web_search"], ["xai", "xAI", "llm"],
+  ].map(([id, display_name, service_kind]) => ({ id, display_name, service_kind, class: "api_key", capabilities: [] }));
+  const readiness: ProviderReadiness[] = providers.map((provider) => {
+    const disabled = ["aws-bedrock", "mistral"].includes(provider.id);
+    const missing = provider.id === "azure-openai";
+    return {
+      id: provider.id, displayName: provider.display_name, class: provider.class, serviceKind: provider.service_kind,
+      requiredConfig: [], optionalConfig: [], missingConfig: missing ? ["AZURE_OPENAI_ENDPOINT"] : [],
+      configPresent: !missing, connectionEnabled: !disabled, oauthGrantRequired: false, oauthGrantCount: 0,
+      upstreamGrantCount: 0, openaiCompatible: false, manifestRoutes: 1, modelCount: 0,
+      executable: !disabled && !missing, verified: !disabled && !missing,
+      lastCheckedAt: "2026-07-06T11:59:15.000Z", latencyMs: 184,
+      status: disabled ? "disabled" : missing ? "missing_config" : "verified",
+      reasons: disabled ? ["Provider connection is disabled by an administrator."] : missing ? ["Provider config is not present in the runtime environment."] : [],
+    };
+  });
+  const { policy: defaults, fusion } = fusionFixture();
+  const policies: AccessPolicy[] = [
+    { ...defaults, policyId: "shared_models", tenantId: "example", providers: providers.filter((provider) => provider.service_kind === "llm").map((provider) => provider.id), monthlyBudgetMicros: 250_000_000 },
+    { ...defaults, policyId: "shared_tools", tenantId: "example", providers: ["firecrawl", "replicate", "tavily"], monthlyBudgetMicros: 75_000_000 },
+  ];
+  const rows: AdminUsageRow[] = policies.map((policy, index) => ({
+    policyId: policy.policyId, kid: policy.policyId, tenantId: "example", enabled: true, providers: policy.providers,
+    monthlyBudgetMicros: policy.monthlyBudgetMicros, budgetScope: "policy",
+    budget: { configured: true, ledger: "ready", limitMicros: policy.monthlyBudgetMicros, spentMicros: index ? 70_000_000 : 50_000_000, remainingMicros: index ? 5_000_000 : 200_000_000 },
+  }));
+  const usage: UsageSnapshot = {
+    ledger: "ready", events: [],
+    summary: { requestCount: 120, successCount: 116, errorCount: 4, inputTokens: 90_000, outputTokens: 30_000, totalTokens: 120_000, actualCostMicros: 8_400_000 },
+    providers: [
+      { provider: "openai", requestCount: 80, successCount: 78, errorCount: 2, totalTokens: 90_000, actualCostMicros: 5_600_000 },
+      { provider: "anthropic", requestCount: 40, successCount: 38, errorCount: 2, totalTokens: 30_000, actualCostMicros: 2_800_000 },
+    ],
+    daily: [10, 20, 15, 25, 20, 30].map((requestCount, index) => ({
+      dayStartMs: Date.UTC(2026, 6, index + 1), requestCount, successCount: requestCount - (index < 4 ? 1 : 0),
+      errorCount: index < 4 ? 1 : 0, totalTokens: requestCount * 1000, actualCostMicros: requestCount * 70_000,
+    })),
+  };
+  const credentials = [{ credentialId: "fixture_cli", policyId: "shared_models", enabled: true, active: true, principalId: "member@example.com" }];
+  const session = {
+    authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", tenantId: "example",
+    entitlements: {
+      providers: readiness.map((provider) => ({ provider: provider.id, displayName: provider.displayName, serviceKind: provider.serviceKind, allowed: provider.id !== "perplexity", policies: policies.filter((policy) => policy.providers.includes(provider.id)).map((policy) => policy.policyId), readiness: provider })),
+      catalog: { version: "clawrouter.client-catalog.v1", observedAt: "2026-07-06T12:00:00.000Z", scope: { authType: "access", credentialId: null, principalId: "admin@example.com" }, providers: [] },
+    },
+  };
+  const responses: Record<string, unknown> = {
+    "/v1/providers": { providers },
+    "/v1/routes": { openaiCompatible: [], manifestProxy: providers.map((provider) => ({ provider: provider.id, endpoint: "fixture", route: `/v1/proxy/${provider.id}/fixture`, methods: ["POST"] })) },
+    "/v1/session": session, "/v1/session/credentials": { credentials: [] }, "/v1/session/usage": { policies: rows },
+    "/v1/admin/usage": { policies: rows, usage },
+    "/v1/admin/bootstrap": {
+      policies, credentials, fusion: { ...fusion, enabled: false }, bindings: [], grants: [], rules: [], providers: readiness,
+      connections: readiness.map((provider) => ({ providerId: provider.id, enabled: provider.connectionEnabled })),
+      users: [{ email: "admin@example.com", role: "admin", tenantId: "example", enabled: true, groups: [], contentRetentionDisabled: false }, { email: "member@example.com", role: "user", tenantId: "example", enabled: true, groups: [], contentRetentionDisabled: false }],
+      tenants: [{ tenantId: "example", keys: 1, activeKeys: 1, providers: providers.map((provider) => provider.id), monthlyBudgetMicros: 325_000_000, requestCostMicros: 0 }],
+      overview: { policiesActive: 2, tenantsTotal: 1 },
+    },
+  };
+  return { providers, responses };
 }
 
 function fusionFixture(adviserModels: string[] = []) {
