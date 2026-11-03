@@ -268,7 +268,7 @@ function validateManifest(manifest) {
   validateDeepSeekSearch(manifest);
   validateDeepgramPrerecorded(manifest);
   validateOpenRouterTranscription(manifest);
-  validateGroqMistralTranscription(manifest);
+  validateNativeTranscription(manifest);
   validateGoogleEmbeddings(manifest);
   validateBedrockEmbeddings(manifest);
   validateGoogleUnaryMedia(manifest, "image", "image.generate", ["gemini-3.1-flash-image", "gemini-3-pro-image"]);
@@ -1068,18 +1068,19 @@ function validateGradiumSpeech(manifest) {
   if (capabilities.length !== 1 || capabilities[0].id !== "audio.speech" || capabilities[0].methods?.some(method => method !== "POST")) fail();
 }
 
-function validateGroqMistralTranscription(manifest) {
+function validateNativeTranscription(manifest) {
   const contracts = {
     groq: { base: "https://api.groq.com/openai", model: "whisper-large-v3-turbo", format: "groq.transcription" },
     mistral: { base: "https://api.mistral.ai", model: "voxtral-mini-latest", format: "mistral.transcription" },
+    xai: { base: "https://api.x.ai", model: null, format: "xai.stt" },
   };
   const formats = Object.values(contracts).map(contract => contract.format);
   const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
     [endpoint.requestFormat, endpoint.responseFormat].some(value => formats.some(format => value.startsWith(format)))
-    || Object.hasOwn(contracts, manifest.id) && (endpoint.path === "/v1/audio/transcriptions"
+    || Object.hasOwn(contracts, manifest.id) && (["/v1/audio/transcriptions", "/v1/stt"].includes(endpoint.path)
       || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "audio.transcription")));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error("Groq/Mistral transcription requires its finite multipart format, original Bearer origin and unpriced audio-only model"); };
+  const fail = () => { throw new Error("Groq/Mistral transcription or xAI STT requires its finite multipart format, original Bearer origin and unpriced model contract"); };
   const contract = Object.hasOwn(contracts, manifest.id) ? contracts[manifest.id] : null;
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (!contract || endpoints.length !== 1 || Object.values(manifest.baseUrls).some(base => base !== contract.base)
@@ -1095,6 +1096,7 @@ function validateGroqMistralTranscription(manifest) {
   if (capabilities.length !== 1 || capabilities[0].id !== "audio.transcription"
     || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "POST") fail();
   const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes("audio.transcription"));
+  if (contract.model === null) { if (models.length) fail(); return; }
   if (models.length !== 1 || models.some(model => model.upstream !== contract.model || model.id !== `${manifest.id}/${contract.model}`
     || model.capabilities.length !== 1 || model.availability?.status === "upstream_alias"
     || model.pricing || model.pricingRef || Object.keys(model.endpointPricing ?? {}).length || Object.keys(model.requestParameters ?? {}).length)) fail();

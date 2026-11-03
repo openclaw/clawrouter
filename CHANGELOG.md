@@ -54,6 +54,7 @@
 - Keep Groq and Mistral native transcription costs unknown before token/free/image estimates and settlement; deny unqualified hard-dollar admission while preserving explicit policy-fixed charges.
 - Keep model-less xAI native STT unpriced before token/free/image estimates and settlement, preserving explicit policy-fixed charging and conservative silence/duration accounting.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
+- Qualify model-less xAI native STT declarations with original multipart/credential binding, unchanged Chat cards and conservative unknown-dollar admission; shared upload activation remains separate.
 - Add frozen OpenRouter JSON transcription codecs and fixtures with exact inline audio, silent-transcript handling and independent native duration/token/cost observations.
 - Dispatch native OpenRouter JSON transcription with authenticated bounded uploads, original grants, complete output and conservative settlement without treating duration or diagnostic cost as a tariff.
 - Add bounded native OpenRouter transcription response validation with complete JSON delivery, playable audio byte-preservation tests and conservative independent usage; shared ingress, dispatch and actual consumer activation remain separately qualified.
