@@ -1,3 +1,5 @@
+import { validGrantSegment } from "./grant-routing.ts";
+export { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, validGrantSegment } from "./grant-routing.ts";
 import { HttpError } from "./utils.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { grantCoolingDown, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh } from "./grant-quota.ts";
@@ -6,43 +8,6 @@ import type { Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "
 export const REFRESH_MARGIN_MS = 5 * 60_000;
 const DEFAULT_GRANT_PRIORITY = 100;
 const DEFAULT_GRANT_WEIGHT = 1;
-export const DEFAULT_GRANT_ROUTING: GrantRoutingPolicy = {
-  strategy: "most_remaining",
-  stickiness: "none",
-  failover: true,
-  environmentFallback: false,
-  includedQuotaReservePercent: 0,
-  staleState: "allow",
-  staleAfterSeconds: 300,
-  switchAtUsedPercent: 90,
-  hysteresisPercent: 10,
-  eligibleGrants: {},
-};
-
-export function grantRoutingPolicy(value: GrantRoutingPolicy | null | undefined): GrantRoutingPolicy {
-  if (!value) return { ...DEFAULT_GRANT_ROUTING, eligibleGrants: {} };
-  const eligibleGrants: Record<string, string[]> = {};
-  if (value.eligibleGrants && typeof value.eligibleGrants === "object" && !Array.isArray(value.eligibleGrants)) {
-    for (const [providerId, refs] of Object.entries(value.eligibleGrants)) {
-      if (!validGrantSegment(providerId) || !Array.isArray(refs)) continue;
-      eligibleGrants[providerId] = [...new Set(refs.filter((ref): ref is string => typeof ref === "string" && validGrantSegment(ref)))].slice(0, 32).sort();
-    }
-  }
-  const strategy = ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"].includes(value.strategy) ? value.strategy : DEFAULT_GRANT_ROUTING.strategy;
-  return {
-    strategy,
-    stickiness: strategy === "threshold" ? "none" : ["none", "identity", "session"].includes(value.stickiness) ? value.stickiness : DEFAULT_GRANT_ROUTING.stickiness,
-    failover: value.failover !== false,
-    environmentFallback: value.environmentFallback === true,
-    includedQuotaReservePercent: Number.isInteger(value.includedQuotaReservePercent) && value.includedQuotaReservePercent! >= 0 && value.includedQuotaReservePercent! <= 50 ? value.includedQuotaReservePercent : 0,
-    staleState: value.staleState === "deny" ? "deny" : "allow",
-    staleAfterSeconds: Number.isSafeInteger(value.staleAfterSeconds) && value.staleAfterSeconds >= 30 && value.staleAfterSeconds <= 86_400 ? value.staleAfterSeconds : DEFAULT_GRANT_ROUTING.staleAfterSeconds,
-    switchAtUsedPercent: finitePercent(value.switchAtUsedPercent, DEFAULT_GRANT_ROUTING.switchAtUsedPercent),
-    hysteresisPercent: finitePercent(value.hysteresisPercent, DEFAULT_GRANT_ROUTING.hysteresisPercent),
-    eligibleGrants,
-  };
-}
-
 export interface SelectedGrant {
   authorityRevision?: number;
   key: string;
@@ -139,10 +104,6 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
   return { available, recovering, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
 }
 
-function finitePercent(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : fallback;
-}
-
 export function currentGrantRuntime(grant: UpstreamGrant, state: GrantRuntimeState | null | undefined): GrantRuntimeState | null {
   if (!state) return null;
   return state.grantRevision === grantRevision(grant) ? state : null;
@@ -156,10 +117,6 @@ export function grantPriority(grant: UpstreamGrant): number {
 
 export function grantWeight(grant: UpstreamGrant): number {
   return typeof grant.weight === "number" && Number.isFinite(grant.weight) && grant.weight > 0 && grant.weight <= 1_000_000 ? grant.weight : DEFAULT_GRANT_WEIGHT;
-}
-
-export function validGrantSegment(value: string): boolean {
-  return value.length > 0 && value.length <= 256 && !value.includes("/") && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function parseGrantScope(key: string): { scope: "policies" | "tenants"; scopeId: string; tokenRef: string } | null {
