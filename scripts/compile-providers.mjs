@@ -264,6 +264,14 @@ function validateManifest(manifest) {
   for (const capability of manifest.capabilities) {
     if (!Object.hasOwn(manifest.endpoints, capability.endpoint)) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
   }
+  validateModels(manifest);
+  validateManagedLifecycles(manifest);
+  validateEndpoints(manifest);
+  validateGrantTransports(manifest);
+  validateQuota(manifest.id, manifest.quota);
+}
+
+function validateModels(manifest) {
   for (const model of manifest.models?.entries ?? []) {
     for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
@@ -322,7 +330,9 @@ function validateManifest(manifest) {
       }
     }
   }
-  validateManagedLifecycles(manifest);
+}
+
+function validateEndpoints(manifest) {
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (endpoint.requestPricing?.outcome) {
@@ -408,6 +418,9 @@ function validateManifest(manifest) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }
   }
+}
+
+function validateGrantTransports(manifest) {
   const headerName = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
   for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
     if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
@@ -422,7 +435,6 @@ function validateManifest(manifest) {
     }
     if (transport.maintenance?.quotaPoll && !(manifest.quota?.probes ?? []).some((probe) => probe.grantKinds?.includes(kind))) throw new Error(`provider ${manifest.id} grant transport ${kind} quota polling requires a matching quota probe`);
   }
-  validateQuota(manifest.id, manifest.quota);
 }
 
 const managedLifecycleContracts = {
