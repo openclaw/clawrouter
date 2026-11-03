@@ -17,6 +17,7 @@
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
+- Add documented Perplexity Agent/Responses and native Search routes while retaining conservative legacy Sonar pricing and leaving new upstream tariffs unqualified.
 - Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
