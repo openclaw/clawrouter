@@ -140,8 +140,10 @@ for (const mutation of ["remove", "replace", "disable", "revoke", "unavailable",
     if (mutation === "revoke") { await revokeGrantCredentials(f.env, grantKey); return; }
     if (mutation === "failed-publication") {
       const namespace = f.env.ACCESS_CONTROL, get = namespace.get;
-      namespace.get = id => { const stub = get(id); return { fetch(url, init) { return new URL(url).pathname === "/grant-pools/publish" ? new Response("publication unavailable", { status: 503 }) : stub.fetch(url, init); } }; };
-      await assert.rejects(() => putGrantCredentials(f.env, grantKey, { enabled: false }, true)); return;
+      namespace.get = id => { const stub = get(id); return { fetch(url, init) { return new URL(url).pathname === "/grant-pools/publish" && JSON.parse(init.body).status === "paused" ? new Response("publication unavailable", { status: 503 }) : stub.fetch(url, init); } }; };
+      await assert.rejects(() => putGrantCredentials(f.env, grantKey, { enabled: false }, true));
+      const committed = f.env.GRANT_CREDENTIALS.objects.get(grantKey).values.get("credential");
+      assert.equal(committed.enabled, false); assert.equal(committed.poolSyncPending, true); return;
     }
     await f.put(mutation === "remove" ? { nativeMediaAuthorization: null }
       : mutation === "disable" ? { enabled: false } : { credential: "synthetic-replacement-key", nativeMediaAuthorization: "minimax-global-speech" });
@@ -252,4 +254,14 @@ test("MiniMax owner check is deadline bounded and never refreshes or falls back"
     return new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true }));
   } }; };
   await denied(f, await f.request()); assert.equal(inspected, true);
+});
+
+
+test("MiniMax admin distinguishes a paused owner's retained binding from explicit removal", async t => {
+  const f = await setup(t, { pooled: true });
+  const paused = await f.put({ enabled: false });
+  assert.equal(paused.enabled, false); assert.deepEqual(paused.nativeMediaBinding, minimaxSpeechBinding);
+  await denied(f, await f.request());
+  const removed = await f.put({ enabled: false, nativeMediaAuthorization: null });
+  assert.equal(removed.enabled, false); assert.equal(removed.nativeMediaBinding, null);
 });
