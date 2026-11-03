@@ -15,6 +15,9 @@ Passthrough, queries, streaming, alternate origins and model remapping do not
 qualify. A native path shared with generic Invoke resolves by the selected
 model's declared capability, not YAML order. Manifest selection remains explicit.
 Provider/schema activation is separate from these candidate runtime fixtures.
+The source-owned `isBedrockEmbeddingModel` predicate closes known embedding
+models and profiles out of generic Invoke passthrough; it does not register or
+authorize any model.
 
 The existing protocol codec validates the ten frozen family contracts, including
 exact registered profile identities, flat Marengo 2.7 input and qualified Cohere

@@ -1,3 +1,4 @@
+import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
 import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
@@ -37,6 +38,10 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.provider.id === "aws-bedrock" && (selection.model?.capabilities.includes("llm.embeddings")
+    || isBedrockEmbeddingModel(selection.model?.upstream ?? selection.pathParams?.model ?? ""))
+    && selection.capability !== "llm.embeddings")
+    throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection);
