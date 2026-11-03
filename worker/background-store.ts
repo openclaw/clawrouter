@@ -129,6 +129,7 @@ export class BackgroundStore {
   }
 
   managedRetry(input: ManagedAdmission, policyGeneration: string): BackgroundRecord | null {
+    validateManagedMetadata(input);
     if (input.idempotencyKey === null) return null;
     const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE json_extract(job_json, '$.managed.protocol') = ? AND json_extract(job_json, '$.managed.idempotencyKey') = ? AND json_extract(job_json, '$.replayUntil') > ? LIMIT 1", input.protocol, input.idempotencyKey, Date.now())][0];
     if (!row) return null;
@@ -302,11 +303,15 @@ function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): Bac
   const { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError } = job;
   return { id, admittedAt, observeUntil, autoRetryUntil, replayUntil, eventId, requestId, amount, basis, usage, settlements, lastError, phase, ...(job.managed ? { managed: job.managed } : {}) };
 }
-function validateManagedAdmission(input: BackgroundAdmission): void {
-  const managed = input.managed, digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
+  const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   if (!managed || Object.keys(managed).length !== 4 || managed.protocol !== "replicate.predictions"
     || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)
-    || typeof managed.requestedVersion !== "string" || !/^[a-zA-Z0-9_./:-]{1,256}$/.test(managed.requestedVersion) || input.stream) invalid();
+    || typeof managed.requestedVersion !== "string" || !/^[a-zA-Z0-9_./:-]{1,256}$/.test(managed.requestedVersion)) invalid();
+}
+function validateManagedAdmission(input: BackgroundAdmission): void {
+  validateManagedMetadata(input.managed);
+  if (input.stream) invalid();
   // This first protocol slice supports an explicit router tariff only. An
   // unknown provider price is never silently replaced with the flat fallback.
   if (input.facts.cost.basis !== "policy_fixed" || !Number.isSafeInteger(input.facts.fixed) || input.facts.fixed! < 0

@@ -8,7 +8,7 @@ import { configuredUpstream, copyRequestHeaders, providerById, upstreamPath, typ
 import { responseIdentity } from "./response-identities.ts";
 import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
-import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
+import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
 export interface ResponseControlDispatch {
@@ -18,18 +18,27 @@ export interface ResponseControlDispatch {
   action: ResponsesControlAction;
   query: string;
   stream: boolean;
+  protocol?: "replicate.predictions";
   deadline?: number;
   // Per-call diagnostics, not persisted ownership or an idempotency promise.
   clientRequestId?: string;
   authorization: ResponseControlAuthorization;
 }
 
-export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null): Promise<string> {
+export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null, lifecycle?: CompiledEndpoint["lifecycle"], env?: Env): Promise<string> {
   const routeUrl = new URL(url), scheme = providerCredentialScheme(provider, upstream.grant);
   if (grantKey && scheme.type === "query_api_key") routeUrl.searchParams.delete(scheme.param);
   const identity = upstream.grant?.credentialLineage ?? await sha256Hex(JSON.stringify([[...upstream.headers], [...upstream.query]]));
   const passthrough = provider.adapter.passthroughHeaders.map(name => [name.toLowerCase(), headers.get(name)]).sort();
-  return sha256Hex(JSON.stringify(["POST", routeUrl.href, identity, passthrough]));
+  const parts: unknown[] = ["POST", routeUrl.href, identity, passthrough];
+  if (lifecycle) parts.push(lifecycle.protocol, ...[lifecycle.retrieve, lifecycle.cancel].map(id => {
+    const endpoint = provider.endpoints.find(endpoint => endpoint.id === id);
+    if (!endpoint || !env) unavailable();
+    return [endpoint.method, upstreamPath(provider, endpoint, { prediction_id: "owner-pin" }, env, upstream),
+      Object.entries(endpoint.headers).map(([name, value]) => [name, resolveTemplate(provider, value, env)]),
+      Object.entries(endpoint.query).map(([name, value]) => [name, resolveTemplate(provider, value, env)])];
+  }));
+  return sha256Hex(JSON.stringify(parts));
 }
 
 export function retainedResponseRoute(pathParams: Record<string, string>, headers: Headers): BackgroundAdmission["route"] {
@@ -42,14 +51,18 @@ export function retainedResponseRoute(pathParams: Record<string, string>, header
 export async function prepareResponseControl(env: Env, input: ResponseControlDispatch, grant: UpstreamGrant | null): Promise<Request> {
   assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
-  const id = responseIdentity("response", input.responseId);
-  if (!provider || !create?.responsesLifecycle || !id || !["retrieve", "cancel"].includes(input.action)) unavailable();
+  const managed = input.protocol === "replicate.predictions";
+  if (input.protocol !== undefined && !managed) unavailable();
+  const lifecycle = managed ? create?.lifecycle : create?.responsesLifecycle;
+  const id = managed ? { value: (await import("./replicate-lifecycle.ts")).validateReplicatePredictionId(input.responseId) } : responseIdentity("response", input.responseId);
+  if (!provider || !create || !lifecycle || managed && create.lifecycle?.protocol !== input.protocol || !id || !["retrieve", "cancel"].includes(input.action)) unavailable();
   validateRoute(input.route);
   if (typeof input.query !== "string" || input.query.length > 8192) unavailable();
-  const query = responsesControlQuery(input.action, new URLSearchParams(input.query));
+  if (managed && input.query !== "") unavailable();
+  const query = managed ? new URLSearchParams() : responsesControlQuery(input.action, new URLSearchParams(input.query));
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
   if (Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
-  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: true }, grant, env);
+  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed }, grant, env);
   const connection = await resolveConnection(env, provider.id);
   if (connection?.enabled === false) throw new HttpError(503, "provider_disabled", "response provider is disabled");
   const upstream = configuredUpstream(provider, grant, env), incoming = new Headers();
@@ -66,9 +79,10 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   };
   // Compare the original create route, not the necessarily different control
   // URL. Environment credential/configuration changes also invalidate the pin.
-  if (await responseRouteDigest(provider, upstream, urlFor(create, input.route.pathParams), headers, input.owner.grantKey) !== input.owner.routeSha256) unavailable();
-  const endpoint = provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action])!;
-  const url = urlFor(endpoint, { response_id: id.value });
+  if (await responseRouteDigest(provider, upstream, urlFor(create, input.route.pathParams), headers, input.owner.grantKey, managed ? create.lifecycle : undefined, env) !== input.owner.routeSha256) unavailable();
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === lifecycle[input.action])!;
+  if (managed) (await import("./replicate-lifecycle.ts")).replicateControlPath(endpoint.path, id.value);
+  const url = urlFor(endpoint, { [managed ? "prediction_id" : "response_id"]: id.value });
   for (const [name, value] of query) url.searchParams.append(name, value);
   if (input.clientRequestId) incoming.set("x-client-request-id", input.clientRequestId);
   copyRequestHeaders(incoming, provider, endpoint, headers, env);

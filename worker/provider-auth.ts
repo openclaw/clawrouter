@@ -8,7 +8,7 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
   return provider.auth.grantTransports[grant.kind] ?? null;
 }
 
-export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean }
+export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
@@ -18,8 +18,8 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   if (requirement.endpoint.request_format === "openai.responses_input_tokens" && grant && grant.kind !== "api_key") return false;
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
-  if (requirement.responsesLifecycle) {
-    const lifecycle = requirement.endpoint.responsesLifecycle;
+  if (requirement.responsesLifecycle || requirement.managedLifecycle) {
+    const lifecycle = requirement.managedLifecycle ? requirement.endpoint.lifecycle : requirement.endpoint.responsesLifecycle;
     if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel].every(id =>
       requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
   }
@@ -31,8 +31,9 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
 export function assertOperationConfiguration(requirement: GrantRequirement, grant: UpstreamGrant | null, env: Env): void {
   const { provider, endpoint } = requirement;
   if (!grantSupports(requirement, grant)) throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
-  if (requirement.responsesLifecycle) {
-    for (const id of Object.values(endpoint.responsesLifecycle!)) {
+  if (requirement.responsesLifecycle || requirement.managedLifecycle) {
+    const lifecycle = requirement.managedLifecycle ? endpoint.lifecycle! : endpoint.responsesLifecycle!;
+    for (const id of [lifecycle.retrieve, lifecycle.cancel]) {
       assertOperationConfiguration({ provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === id)!, mode: "http" }, grant, env);
     }
   }

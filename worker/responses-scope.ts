@@ -1,6 +1,6 @@
 import { markBudgetDispatched, reserveLedgerIntent } from "./accounting.ts";
 import { collectBackground } from "./background-collection.ts";
-import { BackgroundStore, liveBackground, type BackgroundAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
+import { BackgroundStore, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
 import { HttpContinuationStore, type ContinuationInput } from "./continuation-store.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { identityKey } from "./http-continuation.ts";
@@ -12,7 +12,7 @@ import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
 import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
 
-type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe"; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string };
+type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup"; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string };
 
 // Continuation cleanup, collection and financial recovery share the object's
 // only alarm and serialized mutation tail. Network waits never hold that tail.
@@ -53,6 +53,7 @@ export class ResponsesScopeStore {
     if (input.action === "get") return this.serial(() => json(this.jobs.get(input.id)), false);
     if (input.action === "list") return this.serial(() => json({ records: this.jobs.list(input.after) }), false);
     if (input.action === "admit" && input.admission && !input.admission.managed) return json(await this.admit(input.admission));
+    if (input.action === "managed_lookup" && input.managed && typeof input.policyGeneration === "string") return this.serial(() => json(this.jobs.managedRetry(input.managed!, input.policyGeneration!)), false);
     if (input.action === "managed_admit" && input.admission) {
       const result = await this.mutate(() => this.jobs.admitManaged(input.admission!));
       if (result.created) await this.reserve(result.job as BackgroundJob);
@@ -167,7 +168,12 @@ export class ResponsesScopeStore {
     const until = automatic ? Math.min(claimed.autoRetryUntil, claimed.replayUntil) : claimed.replayUntil;
     if (Date.now() >= until) return;
     try {
-      if (!claimed.event) await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
+      if (!claimed.event) {
+        if (claimed.managed) {
+          const { collectManagedPrediction } = await import("./managed-predictions.ts");
+          await collectManagedPrediction(this.env, claimed, (id, status, statusCode) => this.mutate(() => this.jobs.observeManaged(claimed.id, id, status, statusCode, claimed.attempts)));
+        } else await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
+      }
       const current = await this.mutate(() => this.jobs.get(claimed.id));
       if (!current || !liveBackground(current) || current.attempts !== claimed.attempts || Date.now() >= current.replayUntil) return;
       if (!current.event) { await this.mutate(() => this.jobs.retry(current.id, null, claimed.attempts)); return; }
