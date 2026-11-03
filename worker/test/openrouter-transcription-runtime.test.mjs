@@ -50,6 +50,10 @@ async function setup(t, options = {}) {
     f.upload = await request.json();
     return options.response ? options.response(request) : Response.json(result(), { headers: { "x-generation-id": "gen_fixture", "x-private-upstream": "synthetic" } });
   };
+  // Node's Request requires duplex for the Worker's streamed media upload.
+  t.mock.method(globalThis, "fetch", async (input, init) => {
+    const request = new Request(input, { ...init, duplex: "half" }); f.sent.push(request); return f.upstream(request);
+  });
   t.after(f.drain); return f;
 }
 async function error(response, status) { const text = await response.text(); assert.equal(response.status, status, text); return JSON.parse(text).error; }
