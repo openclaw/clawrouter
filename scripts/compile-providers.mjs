@@ -408,6 +408,10 @@ function validateManifest(manifest) {
 }
 
 const managedLifecycleContracts = {
+  "together.video": {
+    provider: "together", create: ["/v2/videos"], request: "together.video_create", response: "together.video",
+    controls: { retrieve: ["GET", "/v2/videos/${video_id}", "together.video_get", "together.video"] },
+  },
   "runway.tasks": {
     provider: "runway", create: ["/v1/text_to_video", "/v1/image_to_video", "/v1/video_to_video"], response: "runway.task",
     requestByPath: { "/v1/text_to_video": "runway.text_video", "/v1/image_to_video": "runway.image_video", "/v1/video_to_video": "runway.video_video" },
@@ -486,6 +490,18 @@ function validateManagedLifecycles(manifest) {
       if (endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
         !(["x-dashscope-async", "content-type"].includes(name.toLowerCase()) && value === (name.toLowerCase() === "x-dashscope-async" ? "enable" : "application/json")))) fail();
     }
+    if (protocol === "together.video") {
+      // Pin the selected Together origin and credential; no alias fallback or
+      // cross-product Wan/MiniMax authorization on the native video route.
+      if (Object.values(manifest.baseUrls).some(base => !["https://api.together.xyz", "https://api.together.ai"].includes(base))
+        || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")
+        || Object.keys(manifest.auth.grantTransports ?? {}).length || Object.keys(manifest.adapter?.injectHeaders ?? {}).length
+        || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.passthroughHeaders?.length
+        || manifest.adapter?.requestTransforms?.renameFields?.length) fail();
+      const schemes = manifest.auth.schemes;
+      if (schemes.length !== 1 || schemes[0].type !== "bearer" || schemes[0].header?.toLowerCase() !== "authorization"
+        || schemes[0].format !== "Bearer ${secret}" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
+    }
     if (protocol === "runway.tasks") {
       if (Object.values(manifest.baseUrls).some(base => base !== "https://api.dev.runwayml.com")
         || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) =>
@@ -519,7 +535,7 @@ function validateManagedLifecycles(manifest) {
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
         || control.requestFormat !== request || control.responseFormat !== response
         || manifest.capabilities.some(capability => capability.endpoint === controlId && (protocol !== "replicate.predictions" || action !== "retrieve" || capability.id !== "media.prediction.read"))) fail();
-      if (["dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
+      if (["dashscope.video", "google.omni_video", "pixverse.video", "runway.tasks", "together.video"].includes(protocol) && (control.auth || control.requestHeaders?.length || Object.keys(control.headers ?? {}).length)) fail();
       controls.add(controlId);
     }
   }
@@ -528,7 +544,7 @@ function validateManagedLifecycles(manifest) {
   const formats = new Set(Object.entries(managedLifecycleContracts).filter(([protocol]) => protocol !== "replicate.predictions")
     .flatMap(([, contract]) => [contract.request, ...Object.values(contract.requestByPath ?? {}), ...Object.values({ ...contract.controls, ...contract.files }).map(control => control[2])].filter(Boolean)));
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    const reservedFormat = ["dashscope.video", "google.omni_video", "pixverse.", "runway."].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
+    const reservedFormat = ["dashscope.video", "google.omni_video", "pixverse.", "runway.", "together.video"].some(prefix => endpoint.requestFormat.startsWith(prefix) || endpoint.responseFormat.startsWith(prefix));
     if ((formats.has(endpoint.requestFormat) || reservedFormat) && !creates.has(id) && !controls.has(id))
       throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle binding is required for a managed wire format`);
   }
