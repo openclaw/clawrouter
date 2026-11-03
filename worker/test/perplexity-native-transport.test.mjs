@@ -128,7 +128,7 @@ test("Perplexity candidate Agent keeps HTTP-200 stream failure visible after par
   assert.equal(await response.text(), bytes);
   await Promise.all(f.pending);
   assert.equal(f.events.length, 1);
-  assert.equal(f.events[0].outcome, "provider_error");
+  assert.equal(f.events[0].status, "provider_error");
 });
 
 test("Perplexity candidate Agent and Search fail closed before egress without qualified hard-budget prices", async t => {
