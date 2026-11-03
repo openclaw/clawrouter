@@ -59,7 +59,7 @@ test("Google manifest declares only qualified stable embedding identities with n
       assert.equal(endpoint.request_format, `google.${id}`); assert.equal(endpoint.response_format, `google.${id}`);
       assert.equal(endpoint.modelPassthrough, undefined); assert.equal(endpoint.timeout_ms, 60000);
       assert.equal(facts.contextWindow, model.upstream === "gemini-embedding-001" ? 2048 : 8192);
-      assert.equal(facts.checkedAt, "2026-11-03"); assert.ok(facts.sources.includes("https://ai.google.dev/gemini-api/docs/deprecations"));
+      assert.equal(facts.checkedAt, "2026-11-03"); assert.deepEqual(facts.sources, ["https://ai.google.dev/gemini-api/docs/embeddings", "https://ai.google.dev/gemini-api/docs/deprecations"]);
     }
   }
   assert.equal(provider.endpoints.find(row => row.id === "stream_generate_content").query.alt, "sse");
