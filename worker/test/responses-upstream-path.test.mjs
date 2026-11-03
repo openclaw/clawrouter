@@ -21,6 +21,10 @@ async function setup(t, options = {}) {
     // Synthetic model qualifies path mechanics, not an OpenCode native offer.
     provider.models.push({ ...structuredClone(provider.models[0]), id: `${id}/fixture-responses`, upstream: "fixture-responses", capabilities: ["llm.responses"], pricing: null, pricing_ref: null });
   } });
+  if (options.pooled) {
+    f.policy.grantRouting = { eligibleGrants: { [id]: ["replicate"] }, environmentFallback: false };
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  }
   f.env[source.config_keys[0]] = "synthetic-mapped-environment"; f.endpoint = f.provider.endpoints.find(endpoint => endpoint.id === "responses");
   f.upstream = request => {
     const response = { id: "resp_fixture", object: "response", status: "completed", model: "fixture-responses", output: [], usage: { input_tokens: 11, output_tokens: 3, total_tokens: 14 } };
@@ -70,7 +74,7 @@ test("Responses mapped path grammar is identical at preflight and dispatch", { t
 for (const manifest of [false, true]) test(`Responses ${manifest ? "manifest" : "native"} caller query cannot override mapping or origin`, { timeout: 10_000 }, async t => {
   const f = await setup(t, { manifest });
   for (const query of ["?upstreamPath=/other", "?base_url=https://unqualified.example", "?model=other"]) {
-    const response = await f.request({ query }); assert.equal(response.status, 400); await response.text();
+    const response = await f.request({ query }), body = await response.text(); assert.equal(response.status, 400, body);
   }
   assert.equal(f.sent.length, 0); assert.ok(f.budgetCalls.every(call => call.path !== "/reserve"));
 });
@@ -80,5 +84,5 @@ test("mapped Responses cannot expose its upstream suffix as a new public route o
   const hidden = await f.request({ route: `/v1/native/opencode-go${f.endpoint.upstreamPath}` }); assert.equal(hidden.status, 404); await hidden.text(); assert.equal(f.sent.length, 0);
   const first = await f.request(); assert.equal(first.status, 200, first.ok ? undefined : await first.text()); await first.text(); await f.drain();
   await revokeGrantCredentials(f.env, grantKey);
-  const denied = await f.request(); assert.equal(denied.status, 503); await denied.text(); assert.equal(f.sent.length, 1);
+  const denied = await f.request(), body = await denied.text(); assert.equal(denied.status, 503, body); assert.equal(f.sent.length, 1);
 });
