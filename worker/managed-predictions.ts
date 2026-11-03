@@ -58,7 +58,7 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   const accounting = createProxyAccounting({ request, env, context, auth, selection, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
   const background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection,
     selection.pathParams, prepared.headers, false);
-  if (selection.endpoint.lifecycle.files) managed.fileBaseUrl = managedFileBase(selection.provider, prepared.managedBaseUrl);
+  if (selection.endpoint.lifecycle?.files) managed.fileBaseUrl = managedFileBase(selection.provider, prepared.managedBaseUrl);
   background.admission.managed = managed;
   const admitted = await backgroundCall<{ admitted: boolean; created: boolean; job: BackgroundRecord }>(env, scope, { action: "managed_admit", admission: background.admission });
   if (admitted?.admitted !== true || !admitted.job || typeof admitted.created !== "boolean") throw new HttpError(503, "background_unavailable", "prediction admission was not acknowledged");
