@@ -1,3 +1,4 @@
+import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
@@ -824,6 +825,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
+    const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
+      ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
     const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
       ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;
@@ -842,7 +845,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
