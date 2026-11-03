@@ -137,3 +137,15 @@ test("unrestricted Anthropic discovery skips a stopped-only page using the origi
   assert.equal(f.sent.length, 2); assert.equal(new URL(f.sent[1].url).searchParams.get("after_id"), "stopped");
   assert.ok(f.sent.every(request => request.headers.get("authorization") === "Bearer synthetic-original"));
 });
+
+test("Synthetic data-only discovery applies the same stopped-identity filter after mapped dispatch", { timeout: 10_000 }, async t => {
+  const f = await fixture(t), endpoint = f.provider.endpoints.find(e => e.id === "models_list");
+  endpoint.request_format = endpoint.response_format = "synthetic.models";
+  endpoint.upstreamPath = "/openai/v1/models";
+  f.reply = () => Response.json({ data: ["stopped", "alias", "unlisted"].map(id => ({ id, name: id,
+    context_length: 1024, input_modalities: ["text"], output_modalities: ["text"] })) });
+  const response = await f.call(`/v1/native/${id}/v1/models`); assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual((await response.json()).data.map(row => row.id), ["alias", "unlisted"]);
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].url, "https://provider.example/openai/v1/models");
+  assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-original");
+});
