@@ -653,6 +653,14 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^google\\.music" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^google\\.music" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleMusicEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "const": "xai.images" } }, "required": ["responseFormat"] }
           ]
@@ -1949,6 +1957,24 @@
         "path": { "const": "/v1beta/models/${model}:generateContent" },
         "pathParams": { "const": ["model"] },
         "requestFormat": { "const": "google.image_generate" }, "responseFormat": { "const": "google.image" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleMusicEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.music_generate" }, "responseFormat": { "const": "google.music" },
         "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
       },
       "not": { "anyOf": [
