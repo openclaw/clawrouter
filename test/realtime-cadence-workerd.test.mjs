@@ -68,15 +68,15 @@ const session = asr => ({ type: 'realtime', model: 'gpt-realtime-2.1', output_mo
     turn_detection: { type: 'server_vad', create_response: false, interrupt_response: false } },
   output: { format: { type: 'audio/pcmu' }, voice: 'marin' } }, tools: [], tool_choice: 'none' });
 function observe(ws) {
-  const events = [], errors = [], outputDelay = [], acks = []; let closed = false;
+  const events = [], errors = [], outputDelay = [], acks = []; let closedAt = null;
   ws.addEventListener('message', e => { const value = JSON.parse(e.data); events.push(value);
     if (value.type === 'error') errors.push(value.error.code);
     if (value.type === 'rate_limits.updated') acks.push(value.rate_limits[0].remaining);
     if (value.type === 'response.output_audio.delta') outputDelay.push(Date.now() - value.fixture_at);
   });
-  ws.addEventListener('close', () => { closed = true; });
-  return { events, errors, outputDelay, acks, get closed() { return closed; }, async next(type) {
-    for (let i = 0; i < 1500; i++) { const found = events.findIndex(e => e.type === type); if (found >= 0) return events.splice(found, 1)[0]; if (closed) throw Error('closed: ' + errors); await sleep(5); }
+  ws.addEventListener('close', () => { closedAt = Date.now(); });
+  return { events, errors, outputDelay, acks, get closed() { return closedAt !== null; }, get closedAt() { return closedAt; }, async next(type) {
+    for (let i = 0; i < 1500; i++) { const found = events.findIndex(e => e.type === type); if (found >= 0) return events.splice(found, 1)[0]; if (closedAt !== null) throw Error('closed: ' + errors); await sleep(5); }
     throw Error('missing ' + type + ': ' + errors);
   } };
 }
@@ -141,7 +141,7 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
     if (kind === 'route') await f.control('/fixture-grant', 'put');
     const c = await f.open(asr, false);
     append(c, 0); await c.q.next('rate_limits.updated');
-    const changed = Date.now();
+    const mutationStarted = Date.now();
     if (kind === 'revocation') await f.setCredential({ enabled: false });
     if (kind === 'principal') await f.setCredential({ principalId: 'reassigned@example.invalid' });
     if (kind === 'tenant') await f.policy({ tenantId: 'reassigned' });
@@ -149,16 +149,19 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
     if (kind === 'route') await f.control('/fixture-grant', 'rotate');
     if (kind === 'asr-model') await f.policy({ models: ['openai/gpt-realtime-2.1'] });
     if (kind === 'budget') await f.policy({ monthlyBudgetMicros: 0 });
+    // Measure enforcement after authority acknowledges the mutation. Its own
+    // storage/RPC latency is outside the socket's media freshness window.
+    const changed = Date.now(), mutationMs = changed - mutationStarted;
     let sent = 1;
     while (!c.q.closed && Date.now() - changed < 1000) { append(c, sent++); await sleep(20); }
-    const elapsed = Date.now() - changed, stats = await f.stats();
+    const elapsed = Math.max(0, (c.q.closedAt ?? Date.now()) - changed), stats = await f.stats();
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));
     assert.ok(elapsed <= 250, '100ms freshness plus observed RPC envelope: ' + elapsed);
     const code = { revocation: /authority_revoked/, principal: /caller_changed/, tenant: /caller_changed/, generation: /policy_changed|authority_revoked/, route: /grant|route/, 'asr-model': /model_not_allowed/, budget: /budget_exhausted/ }[kind];
     assert.equal(c.q.errors.length, 1); assert.match(c.q.errors[0], code);
     assert.ok(stats.appends.length <= 7, JSON.stringify({ kind, elapsed, stats }));
     await sleep(120); assert.equal((await f.stats()).appends.length, stats.appends.length, 'no egress after retirement');
-    t.diagnostic(JSON.stringify({ kind, asr, closeMs: elapsed, egress: stats.appends.length, code: c.q.errors[0] }));
+    t.diagnostic(JSON.stringify({ kind, asr, mutationMs, closeMs: elapsed, egress: stats.appends.length, code: c.q.errors[0] }));
   });
 }
 for (const mode of ['response', 'ASR', 'hard-response']) test('authority changes across real ' + mode + ' funding await retire unsent unit once', { timeout: 15_000 }, async t => {
