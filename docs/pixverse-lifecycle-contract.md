@@ -34,8 +34,11 @@ MIME alone is not image validation. The router does not fetch remote URLs.
 
 ## Shared runtime prerequisites
 
-The adapter implements the shared `ManagedLifecycleAdapter` contract and remains
-unregistered pending the provider manifest/schema and real Worker proof. Every
+The text adapter is registered against the shared `ManagedLifecycleAdapter`
+contract and the closed text/retrieve schema. `providers/pixverse.provider.yaml`
+declares only text creation plus scoped retrieval, with unpriced `v6` and `c1`
+models and server-owned `PIXVERSE_API_KEY`. Shared snapshots and actual Worker/client
+proof are required before claiming activation. Image/upload stays unregistered. Every
 control returns fresh non-secret `headers` plus `transientHeaders: ["ai-trace-id"]`.
 The route identity pins UUID volatility, not a random value. `identityProbe: "1"`
 is a valid synthetic decimal ID for route qualification, never caller authority.
@@ -48,7 +51,10 @@ binding before image creation. The optional factory argument `boundImageId`
 must come from that trusted lookup, never from the caller's `img_id`.
 An unbound image adapter rejects create. Store only the necessary ownership
 metadata using the existing scoped machinery, not a global ID index.
-Upload timeout/uncertain response must not trigger automatic replay.
+Upload timeout/uncertain response must not trigger automatic replay. Text and image
+creation share the same native GET path. Before both can activate, control
+resolution must use the original caller/job/create-route binding, not the first
+matching endpoint. The current declaration has only one create route.
 
 The JSON response limit is 1 MiB, valid UTF-8 through EOF, with HTTP success
 and numeric `ErrCode=0`. IDs must be positive safe decimal integers; unsafe
