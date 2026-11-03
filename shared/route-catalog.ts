@@ -37,4 +37,23 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
   return { openaiCompatible, manifestProxy };
 }
 
-function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.decisions" ? "/v1/decisions" : capability === "llm.responses.compact" ? "/v1/responses/compact" : capability === "llm.count_tokens" ? "/v1/responses/input_tokens" : capability === "llm.moderations" ? "/v1/moderations" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : capability === "audio.transcription" ? "/v1/audio/transcriptions" : capability === "image.generation" ? "/v1/images/generations" : ""; }
+const unifiedProtocols = [
+  ["llm.chat", "/v1/chat/completions", "openai.chat_completions"],
+  ["llm.responses", "/v1/responses", "openai.responses"],
+  ["llm.decisions", "/v1/decisions", "openai.decisions"],
+  ["llm.responses.compact", "/v1/responses/compact", "openai.responses_compact"],
+  ["llm.count_tokens", "/v1/responses/input_tokens", "openai.responses_input_tokens"],
+  ["llm.moderations", "/v1/moderations", "openai.moderations"],
+  ["llm.embeddings", "/v1/embeddings", "openai.embeddings"],
+  ["audio.speech", "/v1/audio/speech", "openai.audio_speech"],
+  ["audio.transcription", "/v1/audio/transcriptions", "openai.audio_transcriptions"],
+  ["image.generation", "/v1/images/generations", "openai.images_generations"],
+] as const;
+
+const pathsByCapability = new Map<string, string>(unifiedProtocols.map(([capability, path]) => [capability, path]));
+const capabilitiesByPath = new Map<string, string>(unifiedProtocols.map(([capability, path]) => [path, capability]));
+const pathsByFormat = new Map<string, string>(unifiedProtocols.map(([, path, format]) => [format, path]));
+
+function unifiedPathForCapability(capability: string): string { return pathsByCapability.get(capability) ?? ""; }
+export function capabilityForPath(path: string): string | null { return capabilitiesByPath.get(path) ?? null; }
+export function unifiedPathForRequestFormat(format: string): string | null { return pathsByFormat.get(format) ?? null; }
