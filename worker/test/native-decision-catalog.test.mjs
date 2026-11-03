@@ -51,7 +51,9 @@ for (const pooled of [false, true]) for (const native of [false, true]) {
     const legacy = routeCatalog().openaiCompatible.find(provider => provider.provider === "baseten");
     assert.ok(!legacy.endpoints.includes("/v1/decisions")); assert.ok(legacy.models.every(model => !ids.includes(model.id)));
     assert.ok(legacy.endpoints.includes("/v1/chat/completions"));
-    assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
+    assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 2);
+    assert.ok(f.budgetCalls.every(call => call.path === "/status"));
+    for (const { name } of f.budgetCalls) assert.deepEqual(f.budgets.get(name).reservations(), []);
     assert.doesNotMatch(JSON.stringify(catalog), /synthetic-baseten-environment|synthetic-original-key/);
   });
 }
@@ -72,5 +74,7 @@ test("observed question-token metadata never supplies an upstream-dollar tariff"
   const offers = provider.offers.filter(offer => ids.includes(offer.modelId));
   assert.equal(offers.length, 3);
   assert.ok(offers.every(offer => !offer.eligible && offer.reasonCode === "pricing_required"));
-  assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
+  assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 2);
+    assert.ok(f.budgetCalls.every(call => call.path === "/status"));
+    for (const { name } of f.budgetCalls) assert.deepEqual(f.budgets.get(name).reservations(), []);
 });
