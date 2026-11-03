@@ -16,6 +16,7 @@ async function setup(t, pooled = false) {
   const f = await fixture(t, { pooled, providerId: "elevenlabs", configure(provider) {
     Object.assign(provider, compileProviderSnapshot([{
       schema: "clawrouter.service-provider.v1", id: "elevenlabs", displayName: "ElevenLabs fixture",
+      service: { platform: "elevenlabs", kind: "tool_provider", configKeys: ["ELEVENLABS_API_KEY"] },
       auth: { schemes: [{ type: "api_key", header: "xi-api-key", secretKind: "api_key" }] }, baseUrls: { default: origin },
       capabilities: [{ id: "audio.speech", endpoint: "speech", methods: ["POST"] }],
       endpoints: { speech: { path: "/v1/text-to-speech/${voice_id}", pathParams: ["voice_id"], requestFormat: "elevenlabs.speech", responseFormat: "audio.binary" } },
