@@ -46,6 +46,7 @@
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
+- Add finite native Bedrock embedding codecs and complete synthetic vector fixtures for Titan, Cohere, Nova and version-specific Marengo requests. Shared model routing, native client fixes and tariff qualification remain separate integration work.
 - Qualify typed Sage, Liquid/TypeSafe SystemOne and SubQ decision metadata against closed provider/wire contracts without inventing context, prices or client compatibility.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 - Observe native Radius Pi event usage and errors without rewriting SSE bytes or native tool/reasoning payloads. Preserve cancellation and conservative fixed-policy settlement when terminal evidence is incomplete.
