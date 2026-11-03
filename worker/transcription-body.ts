@@ -39,6 +39,24 @@ export async function readTranscriptionUpload(request: Request, options?: Readon
   } finally { operation.stop("complete"); }
 }
 
+// Shared bounded raw input; protocol adapters validate MIME/query/document shape.
+export async function readBinaryUpload(request: Request, maximum: number): Promise<Uint8Array<ArrayBuffer>> {
+  if (request.headers.has("content-encoding")) invalid("content encoding is unsupported");
+  const length = request.headers.get("content-length");
+  if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)))) invalid("invalid content length");
+  if (length !== null && Number(length) > maximum) tooLarge();
+  const operation = new HttpOperation(request.signal, transcriptionLimits.readMs);
+  try {
+    const bytes = await readBounded(request.body, maximum, operation, 413);
+    if (length !== null && Number(length) !== bytes.length) invalid("binary upload length does not match its body");
+    return bytes;
+  } catch (error) {
+    if (operation.status === "timeout") throw new HttpError(408, "transcription_read_timeout", "binary upload deadline exceeded");
+    if (operation.status === "client_error") throw new HttpError(400, "transcription_canceled", "binary upload was canceled");
+    throw error;
+  } finally { operation.stop("complete"); }
+}
+
 export async function readBounded(body: ReadableStream<Uint8Array> | null, maximum: number, operation: HttpOperation, status = 502, maximumReads = Infinity): Promise<Uint8Array<ArrayBuffer>> {
   operation.signal.throwIfAborted();
   if (!body) return new Uint8Array();

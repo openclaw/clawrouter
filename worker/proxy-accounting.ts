@@ -255,6 +255,9 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   if (endpoint.request_format === "minimax.speech" && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  // Raw audio bytes and response duration cannot bound the whole upload price.
+  // Keep catalog affordability and dispatch admission on the same verdict.
+  if (endpoint.request_format === "deepgram.prerecorded") return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "audio_upload_bound", inputTokens: null, outputTokens: null };
   // Provider context comes from the selected route, never the request model.
   // This native speech contract has no qualified character or token tariff.
   if (providerId === "openrouter" && capability === "audio.speech" && endpoint.request_format === "openai.audio_speech")
