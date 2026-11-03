@@ -225,7 +225,7 @@ test("default tier admission, model override, per-key narrowing, non-OpenAI form
   assert.doesNotThrow(() => assertServiceTier(team, selection("ultrafast")));
   assert.throws(() => assertServiceTier(team, selection("ultrafast", "openai/gpt-6-astra")));
   for (const tier of ["fast", "priority"]) assert.throws(() => assertServiceTier({ ...auth, serviceTiers: ["default", "flex"] }, selection(tier)));
-  assert.doesNotThrow(() => assertServiceTier(auth, selection("ultrafast", "google/gemini", "google.generate_content")));
+  assert.throws(() => assertServiceTier(auth, selection("ultrafast", "google/gemini", "google.generate_content")), error => error.code === "service_tier_not_allowed");
   assert.deepEqual(normalizePolicyTiers({ allowed: ["default", "default"] }, new Set()), { allowed: ["default"], models: {} });
   for (const value of [{ allowed: ["Priority"] }, { allowed: ["fast"] }, { allowed: [], models: { unknown: [] } }]) assert.throws(() => normalizePolicyTiers(value, new Set()));
   assert.equal(normalizePolicy({ providers: ["openai"], dailyBudgetMicros: 100, limitHint: "  Team  " }, undefined, false).limitHint, "Team");
