@@ -1,0 +1,97 @@
+schema: clawrouter.service-provider.v1
+id: runway
+displayName: Runway
+status: experimental
+class: rest_json
+service:
+  platform: runway
+  kind: tool_provider
+  upstreamService: runway
+  configKeys: [RUNWAYML_API_SECRET]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.dev.runwayml.com
+routing:
+  nativePrefixes: [clawrouter-runway, runway]
+  modelPrefixes: [runway/]
+adapter:
+  request: runway
+  response: runway
+  error: runway_error
+capabilities:
+  - id: media.predict
+    endpoint: text_video
+    methods: [POST]
+  - id: media.predict
+    endpoint: image_video
+    methods: [POST]
+endpoints:
+  text_video:
+    path: /v1/text_to_video
+    requestFormat: runway.text_video
+    responseFormat: runway.task
+    lifecycle:
+      protocol: runway.tasks
+      retrieve: text_task
+      cancel: text_task_cancel
+    timeoutMs: 120000
+  image_video:
+    path: /v1/image_to_video
+    requestFormat: runway.image_video
+    responseFormat: runway.task
+    lifecycle:
+      protocol: runway.tasks
+      retrieve: image_task
+      cancel: image_task_cancel
+    timeoutMs: 120000
+  text_task:
+    method: GET
+    path: /v1/tasks/${id}
+    pathParams: [id]
+    requestFormat: runway.task_get
+    responseFormat: runway.task
+    timeoutMs: 120000
+  text_task_cancel:
+    method: DELETE
+    path: /v1/tasks/${id}
+    pathParams: [id]
+    requestFormat: runway.task_cancel
+    responseFormat: runway.task_cancel
+    timeoutMs: 120000
+  image_task:
+    method: GET
+    path: /v1/tasks/${id}
+    pathParams: [id]
+    requestFormat: runway.task_get
+    responseFormat: runway.task
+    timeoutMs: 120000
+  image_task_cancel:
+    method: DELETE
+    path: /v1/tasks/${id}
+    pathParams: [id]
+    requestFormat: runway.task_cancel
+    responseFormat: runway.task_cancel
+    timeoutMs: 120000
+models:
+  entries:
+    - id: runway/gen4.5
+      upstream: gen4.5
+      capabilities: [media.predict]
+    - id: runway/gen4_turbo
+      upstream: gen4_turbo
+      capabilities: [media.predict]
+    - id: runway/veo3.1
+      upstream: veo3.1
+      capabilities: [media.predict]
+    - id: runway/veo3.1_fast
+      upstream: veo3.1_fast
+      capabilities: [media.predict]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, model, endpoint, key, service, subject]
+
