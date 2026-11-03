@@ -31,9 +31,26 @@ Frozen OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 `/api/v1/models/elevenlabs/tts` and consumes an audio URL. These are different
 create payloads and response contracts from the canonical workflow Jobs API.
 This declaration does not silently translate them or claim image/video/speech
-consumer parity. A focused Models API wrapper, typed create links and actual
-consumer acceptance remain required. Studio run idempotency, uploads, listings,
+consumer parity. The focused Models codec and `vydraModelVideoAdapter` are now
+landed separately; they are not registered by this Jobs declaration. Typed create
+links, registry composition and actual consumer acceptance remain required.
+Studio run idempotency, uploads, listings,
 account APIs and later model generations are not added by this slice.
+
+The [Models contract](vydra-models-contract.md) qualifies `veo3` and `kling`
+video creates with HTTP202 `jobId`, unlike Jobs' workflow-body HTTP201 response.
+Only original-job GET is qualified for Models; Jobs' DELETE support must not be
+inherited. The frozen Kling client reuses one image URL as its motion video;
+the codec rejects that mismatch. Source 2 must supply the distinct qualified
+inputs, and source 1 must bind assets to the original caller/credential before
+activation. Arbitrary Jobs input has no model-specific asset qualification here.
+Unary Models image/speech can return a URL without a job ID and must not be forced
+into this lifecycle with a fabricated ID.
+
+Source 3 owns Models format/endpoint qualification; source 1 owns original-create
+resolution for the shared GET path and asset admission; source 5 owns subsequent
+registry/declaration composition. This manifest remains Jobs-only, with no Models
+defaults, replacement model, cross-product credential alias or inferred dollar rate.
 
 `worker/test/vydra-manifest.test.mjs` compiles the actual YAML and resolves actual
 registry/control paths. `worker/test/vydra-managed-workflow.test.mjs` checks
