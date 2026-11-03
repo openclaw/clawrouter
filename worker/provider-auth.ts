@@ -20,7 +20,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
   if (requirement.responsesLifecycle || requirement.managedLifecycle) {
     const lifecycle = requirement.managedLifecycle ? requirement.endpoint.lifecycle : requirement.endpoint.responsesLifecycle;
-    if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel].every(id =>
+    if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined].filter((id): id is string => typeof id === "string").every(id =>
       requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
   }
   return requirement.mode === "http" || (["openai.responses", "openai.realtime"].includes(requirement.endpoint.websocket ?? "") && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"));
@@ -33,7 +33,7 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
   if (!grantSupports(requirement, grant)) throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
   if (requirement.responsesLifecycle || requirement.managedLifecycle) {
     const lifecycle = requirement.managedLifecycle ? endpoint.lifecycle! : endpoint.responsesLifecycle!;
-    for (const id of [lifecycle.retrieve, lifecycle.cancel]) {
+    for (const id of [lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined].filter((id): id is string => typeof id === "string")) {
       assertOperationConfiguration({ provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === id)!, mode: "http" }, grant, env);
     }
   }

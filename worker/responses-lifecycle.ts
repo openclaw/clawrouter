@@ -2,13 +2,14 @@ import type { CompiledEndpoint, CompiledProvider, ProxyRequestBody } from "./typ
 import { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
-export type ResponsesControlAction = "retrieve" | "cancel";
+export type ResponsesControlAction = "retrieve" | "cancel" | "result";
 
 // Control ownership is declared once on the create endpoint. It never creates
 // a second model capability or a fresh inference/catalog offer.
-export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): { create: CompiledEndpoint; action: ResponsesControlAction; protocol?: "replicate.predictions" } | null {
+export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): { create: CompiledEndpoint; action: ResponsesControlAction; protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol } | null {
   for (const create of provider.endpoints) {
     if (create.lifecycle?.retrieve === endpoint.id) return { create, action: "retrieve", protocol: create.lifecycle.protocol };
+    if (create.lifecycle?.result === endpoint.id) return { create, action: "result", protocol: create.lifecycle.protocol };
     if (create.lifecycle?.cancel === endpoint.id) return { create, action: "cancel", protocol: create.lifecycle.protocol };
     if (create.responsesLifecycle?.retrieve === endpoint.id) return { create, action: "retrieve" };
     if (create.responsesLifecycle?.cancel === endpoint.id) return { create, action: "cancel" };
@@ -43,6 +44,7 @@ export async function requireEmptyResponseControlBody(request: Request): Promise
 // Retrieval has a finite bodyless contract. Keep include[] multiplicity; the
 // ordinary manifest query-to-record conversion intentionally is not used here.
 export function responsesControlQuery(action: ResponsesControlAction, input: URLSearchParams | Record<string, unknown>): URLSearchParams {
+  if (action === "result") throw new HttpError(400, "invalid_response_query", "Responses has no result control");
   const pairs: Array<[string, unknown]> = input instanceof URLSearchParams ? [...input] : Object.entries(input);
   const query = new URLSearchParams();
   const invalid = () => new HttpError(400, "invalid_response_query", "response controls accept bounded include[], stream, include_obfuscation and starting_after query values");

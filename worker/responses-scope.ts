@@ -4,7 +4,7 @@ import { BackgroundStore, liveBackground, type BackgroundAdmission, type Managed
 import { HttpContinuationStore, type ContinuationInput } from "./continuation-store.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { identityKey } from "./http-continuation.ts";
-import { managedPredictionKey } from "./managed-prediction-identity.ts";
+import { managedJobKey } from "./managed-prediction-identity.ts";
 import { responseIdentity } from "./response-identities.ts";
 import { BudgetSettlementError, ingestUsage, settleLedger } from "./ledgers.ts";
 import type { AccountingOutcome } from "./proxy-accounting.ts";
@@ -118,7 +118,9 @@ export class ResponsesScopeStore {
   }
 
   private async bindManaged(id: string, upstreamId: string): Promise<Response> {
-    const key = await managedPredictionKey(upstreamId), producerId = await sha256Hex(id);
+    const original = await this.serial(() => this.jobs.get(id), false);
+    if (!original?.managed || !liveBackground(original)) throw new HttpError(409, "background_binding_unavailable", "the admitted job is unavailable");
+    const key = await managedJobKey(original.managed.protocol, original.owner.providerId, upstreamId), producerId = await sha256Hex(id);
     const response = await this.serial(() => {
       const job = this.jobs.get(id);
       if (!job?.managed || !liveBackground(job) || job.event || job.phase !== "observing" || Date.now() >= job.observeUntil) {

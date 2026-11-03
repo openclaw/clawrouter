@@ -10,9 +10,11 @@ import { assertProviderAccess } from "./providers.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { prepareReplicateCreate, readReplicatePrediction, rewriteReplicatePredictionUrls, type ReplicatePrediction } from "./replicate-lifecycle.ts";
+import type { ManagedCreate, ManagedObservation } from "./managed-lifecycle-types.ts";
+import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
+import { managedPaths, managedRoute } from "./managed-routes.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
-import type { AuthorizedIdentity, Env } from "./types.ts";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
 import { errorResponse, HttpError, json, sha256Hex } from "./utils.ts";
 
 // Opt-in protocol path. Ordinary requests keep their existing hot path and do
@@ -21,23 +23,26 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   selection: ProxySelection, query: ProxyQuery): Promise<Response> {
   const connection = await assertProviderAccess(selection.provider, auth, env);
   if (!selection.endpoint.lifecycle) throw new HttpError(409, "response_owner_unavailable", "the managed prediction lifecycle is unavailable; raw job IDs cannot be forwarded");
-  if (selection.endpoint.lifecycle?.protocol !== "replicate.predictions" || selection.method !== "POST"
+  const { adapter } = managedRoute(selection.provider, selection.endpoint);
+  if (selection.method !== "POST"
     || hasProxyQuery(query) || new URL(request.url).search) throw new HttpError(400, "invalid_prediction_request", "managed prediction creation requires a body-only declared POST");
   if (retentionRequired(auth, selection.capability)) throw new HttpError(400, "prediction_retention_unsupported", "this managed protocol does not support required request-content retention");
-  let create: ReturnType<typeof prepareReplicateCreate>;
-  try { create = prepareReplicateCreate(selection.body, request.headers); }
-  catch { throw new HttpError(400, "invalid_prediction_request", "provide a supported version and input object; webhooks and streaming are unavailable"); }
+  let create: ManagedCreate;
+  try { create = adapter.prepare(selection.body, request.headers, selection.pathParams, new URLSearchParams());
+    managedPaths(selection.provider, selection.endpoint, adapter.protocol === "replicate.predictions" ? "owner-pin" : "11111111-1111-4111-8111-111111111111", create.pathParams); }
+  catch { throw new HttpError(400, "invalid_prediction_request", "provide a supported native managed job input and route"); }
+  selection = { ...selection, body: create.body, pathParams: create.pathParams };
   const fixed = policyRequestCost(auth.policy, selection.capability);
   if (!Number.isSafeInteger(fixed) || fixed == null || fixed < 0) throw new HttpError(400, "pricing_required", "managed predictions require an explicit policy-fixed tariff before dispatch");
   const scope = await continuationScope(auth), key = request.headers.get("Idempotency-Key");
   if (key !== null && !/^[a-zA-Z0-9._:-]{1,128}$/.test(key)) throw new HttpError(400, "invalid_idempotency_key", "Idempotency-Key must be a bounded ASCII identifier");
-  const managed: ManagedAdmission = { protocol: "replicate.predictions", requestedVersion: create.requestedVersion,
+  const managed: ManagedAdmission = { protocol: adapter.protocol, providerId: selection.provider.id, requestedVersion: create.requestedVersion,
     idempotencyKey: key === null ? null : await sha256Hex(key),
     requestDigest: await sha256Hex(JSON.stringify([selection.provider.id, selection.endpoint.id, selection.pathParams, create.body, create.headers.get("Cancel-After")],
       (_key, value) => value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value)) };
   if (key !== null) {
     const existing = await backgroundCall<BackgroundRecord | null>(env, scope, { action: "managed_lookup", managed, policyGeneration: auth.policy.generation });
-    if (existing) return existingPrediction(request, scope, existing, selection.provider.id);
+    if (existing) return existingPrediction(request, scope, existing, selection.provider, selection.endpoint);
   }
   const prepared = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection);
   if (!prepared.continuation) throw new HttpError(503, "prediction_owner_unavailable", "prediction ownership is unavailable");
@@ -48,7 +53,7 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   background.admission.managed = managed;
   const admitted = await backgroundCall<{ admitted: boolean; created: boolean; job: BackgroundRecord }>(env, scope, { action: "managed_admit", admission: background.admission });
   if (admitted?.admitted !== true || !admitted.job || typeof admitted.created !== "boolean") throw new HttpError(503, "background_unavailable", "prediction admission was not acknowledged");
-  if (!admitted.created) return existingPrediction(request, scope, admitted.job, selection.provider.id);
+  if (!admitted.created) return existingPrediction(request, scope, admitted.job, selection.provider, selection.endpoint);
   // Native async creation never forwards wait preferences or a key that could
   // imply an upstream replay guarantee. The durable local scope owns retries.
   prepared.headers.delete("Prefer"); prepared.headers.delete("Idempotency-Key");
@@ -63,11 +68,11 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
       response = await operation.wait(fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" }), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-      const prediction = await operation.wait(readReplicatePrediction(response), "upstream");
-      const bound = await backgroundCall<{ bound: boolean }>(env, scope, { action: "managed_bind", id: background.admission.id, responseId: prediction.observation.id });
+      const prediction = await operation.wait(adapter.read(response, { action: "create", requestedVersion: create.requestedVersion, pathParams: create.pathParams }), "upstream");
+      const bound = await backgroundCall<{ bound: boolean }>(env, scope, { action: "managed_bind", id: background.admission.id, responseId: prediction.id });
       if (bound?.bound !== true) throw new Error("prediction binding not acknowledged");
       await observePrediction(env, scope, background.admission.id, prediction, response.status);
-      return predictionResponse(prediction, selection.provider.id, response.status);
+      return predictionResponse(prediction, selection.provider, selection.endpoint, create.pathParams, response.status);
     } catch {
       if (!attempted) await background.unsent(499, "client_error", null).catch(() => undefined);
       // No create replay and no inferred refund after dispatch. The existing
@@ -81,49 +86,64 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   return task;
 }
 
-function existingPrediction(request: Request, scope: string, job: BackgroundRecord, providerId: string): Response {
-  if (!job.managed) throw new HttpError(409, "background_protocol_conflict", "the original job is not a managed prediction");
+function existingPrediction(request: Request, scope: string, job: BackgroundRecord, provider: CompiledProvider, create: CompiledEndpoint): Response {
+  if (!job.managed) throw new HttpError(409, "background_protocol_conflict", "the original job is not managed");
   setBackgroundRecovery(request, `${scope.slice("http-continuations:".length)}.${job.id}`);
-  const location = job.managed.upstreamId ? predictionPaths(providerId, job.managed.upstreamId).get : null;
+  const location = job.managed.upstreamId ? managedPaths(provider, create, job.managed.upstreamId, job.managed.route?.pathParams ?? {}).retrieve : null;
   return json({ job_id: job.id, submission: job.managed.submission, prediction_id: job.managed.upstreamId }, location ? 303 : 202,
     { "cache-control": "no-store", ...(location ? { location } : { "retry-after": "5" }) });
 }
 
-export async function observePrediction(env: Env, scope: string, id: string, prediction: ReplicatePrediction, statusCode: number): Promise<void> {
-  const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.observation.id, predictionStatus: prediction.observation.status, statusCode });
+export async function observePrediction(env: Env, scope: string, id: string, prediction: ManagedObservation, statusCode: number): Promise<void> {
+  const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.id, predictionStatus: prediction.terminal ?? "processing", statusCode });
   if (ack?.observed !== true) throw new HttpError(503, "background_unavailable", "prediction observation was not acknowledged");
 }
 
-export function predictionResponse(prediction: ReplicatePrediction, providerId: string, status: number): Response {
-  return json(rewriteReplicatePredictionUrls(prediction, predictionPaths(providerId, prediction.observation.id)), status,
-    { "cache-control": "no-store", "x-clawrouter-upstream-provider": providerId, "x-clawrouter-content-retention": "off" });
-}
-function predictionPaths(providerId: string, id: string) {
-  const get = `/v1/native/${providerId}/v1/predictions/${id}`;
-  return { get, cancel: `${get}/cancel` };
+export function predictionResponse(prediction: ManagedObservation, provider: CompiledProvider, create: CompiledEndpoint,
+  pathParams: Record<string, string>, status: number): Response {
+  const { adapter } = managedRoute(provider, create);
+  return json(adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams)), status,
+    { "cache-control": "no-store", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-content-retention": "off" });
 }
 
-export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation): Promise<{ prediction: ReplicatePrediction; status: number }> {
-  // Every explicit cancel first observes current state. After an uncertain
-  // cancel, the next authenticated attempt cannot blindly repeat the POST.
-  const read = async (action: "retrieve" | "cancel") => {
+type ControlRead = { prediction: ManagedObservation; status: number };
+export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation): Promise<ControlRead & { evidence: ControlRead }> {
+  const adapter = input.protocol && managedLifecycleAdapter(input.protocol);
+  if (!adapter) throw new HttpError(409, "response_owner_unavailable", "the managed protocol is unavailable");
+  const read = async (action: "retrieve" | "result" | "cancel"): Promise<ControlRead> => {
     let response: Response | undefined;
     try {
       response = await operation.wait(dispatchResponseControl(env, { ...input, action }, operation.signal), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
-      return { prediction: await operation.wait(readReplicatePrediction(response, input.responseId), "upstream"), status: response.status };
+      return { prediction: await operation.wait(adapter.read(response, { action, expectedId: input.responseId,
+        requestedVersion: input.requestedVersion ?? "", pathParams: input.route.pathParams }), "upstream"), status: response.status };
     } finally { void response?.body?.cancel().catch(() => undefined); }
   };
-  const current = await read("retrieve");
-  return input.action === "cancel" && !current.prediction.observation.terminal ? read("cancel") : current;
+  // A terminal queue status can require a result read; cancellation ACKs can
+  // require retrieval. At most two follow-ups, never another mutation or URL.
+  const follow = async (first: ControlRead): Promise<ControlRead> => {
+    let current = first;
+    for (let count = 0; count < 2 && !current.prediction.terminal && current.prediction.followUp; count++) {
+      current = await read(current.prediction.followUp);
+    }
+    return current;
+  };
+  if (input.action === "cancel") {
+    const current = await follow(await read("retrieve"));
+    if (current.prediction.terminal) return { ...current, evidence: current };
+  }
+  const result = await read(input.action), evidence = await follow(result);
+  // Return the native action's body; only qualified terminal evidence settles.
+  return { ...result, evidence };
 }
 
 export async function collectManagedPrediction(env: Env, job: BackgroundJob, accept: (id: string, status: string, statusCode: number) => Promise<void>): Promise<void> {
   if (!job.managed || !job.responseId || !job.route || Date.now() >= job.observeUntil) return;
   const operation = new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
   try {
-    const { prediction, status } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,
-      action: "retrieve", query: "", stream: false, protocol: job.managed.protocol, deadline: job.observeUntil, authorization: { kind: "collection" } }, operation);
-    await accept(prediction.observation.id, prediction.observation.status, status);
+    const { evidence } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,
+      action: "retrieve", query: "", stream: false, protocol: job.managed.protocol, requestedVersion: job.managed.requestedVersion,
+      deadline: job.observeUntil, authorization: { kind: "collection" } }, operation);
+    await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status);
   } finally { operation.stop("complete"); }
 }

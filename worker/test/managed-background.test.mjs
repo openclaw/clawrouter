@@ -156,3 +156,25 @@ test("unknown prices, malformed metadata and raw idempotency keys fail before re
   assert.deepEqual(f.reserveCalls, []);
   for (const id of ["", "../escape", "a".repeat(129), "query?x=1"]) assert.throws(() => managedPredictionKey(id));
 });
+
+test("managed protocols and configured providers keep distinct keys, bindings and compacted routes", async t => {
+  const f = fixture(t), rows = [];
+  for (const protocol of ["fal.queue", "kie.jobs", "vydra.jobs"]) for (const providerId of ["first", "second"]) {
+    const input = f.admission(); input.owner = { ...input.owner, providerId };
+    input.managed = { ...input.managed, protocol, providerId };
+    input.route.pathParams = protocol === "fal.queue" ? { owner: "fal-ai", app: "flux", variant: "schnell" } : {};
+    assert.equal(f.store.admitManaged(input).created, true); dispatch(f, input.id);
+    assert.equal((await (await f.call({ action: "managed_bind", id: input.id, responseId: "11111111-2222-4333-8444-555555555555" })).json()).bound, true);
+    f.store.observeManaged(input.id, "11111111-2222-4333-8444-555555555555", "succeeded", 200);
+    const frozen = f.store.get(input.id);
+    for (let index = 0; index < frozen.legs.length; index++) f.store.acknowledge(input.id, frozen.eventId, index, "settled");
+    f.store.acknowledge(input.id, frozen.eventId, "usage", "stored");
+    rows.push(input);
+  }
+  f.restart(); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM http_continuations").get().n, 6);
+  for (const input of rows) {
+    const retry = f.store.managedRetry(input.managed, "g1");
+    assert.equal(retry.id, input.id); assert.equal(retry.phase, "complete");
+    assert.deepEqual(retry.managed.route, input.route);
+  }
+});
