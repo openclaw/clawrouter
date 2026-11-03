@@ -23,10 +23,10 @@ test("content provisioning verifies the applied rule after create or duplicate r
     calls.push({ args, options });
     return args[3] === "list" ? expectedRule : "";
   });
-  assert.deepEqual(calls.map(({ args }) => args.slice(0, 4)), [
+  assert.deepEqual(calls.map(({ args }) => args), [
     ["r2", "bucket", "create", "archive"],
-    ["r2", "bucket", "lifecycle", "add"],
-    ["r2", "bucket", "lifecycle", "list"],
+    ["r2", "bucket", "lifecycle", "add", "archive", "request-content-v1-30-days", "v1/", "--expire-days", "30", "-y"],
+    ["r2", "bucket", "lifecycle", "list", "archive"],
   ]);
   assert.equal(calls[0].options.allowExisting, true);
   assert.equal(calls[1].options.allowExisting, true);

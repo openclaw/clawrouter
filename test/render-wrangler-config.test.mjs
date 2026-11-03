@@ -12,11 +12,6 @@ test("the standard deploy path provisions required content storage", () => {
     pkg.scripts["cf:deploy"].indexOf("cf:content:provision") <
       pkg.scripts["cf:deploy"].indexOf("wrangler deploy"),
   );
-  const provisioner = readFileSync(
-    resolve("scripts/provision-content-storage.mjs"),
-    "utf8",
-  );
-  assert.match(provisioner, /"request-content-v1-30-days",\s*"v1\/"/);
 });
 
 test("rendered config keeps the usage queue and dead-letter queue distinct", () => {
