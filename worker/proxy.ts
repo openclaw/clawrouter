@@ -578,9 +578,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       context.waitUntil(soft.check);
     }
     response = await operation.wait(pending, "upstream", discard);
+    accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!accounting.upstreamChargePossible && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -599,6 +600,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         prepared = retry;
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
         response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }), "upstream", discard);
+        accounting.observeUpstreamResponse(response, prepared.url);
         captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
