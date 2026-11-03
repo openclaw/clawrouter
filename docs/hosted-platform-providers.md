@@ -5,7 +5,7 @@ were checked on 2026-11-03; live upstream inference remains unqualified.
 
 | Provider | Key binding | Base URL | Bundled upstream model |
 | --- | --- | --- | --- |
-| `qianfan` | `QIANFAN_API_KEY` | `https://qianfan.baidubce.com/v2` | None; supply an entitled model ID |
+| `qianfan` | `QIANFAN_API_KEY` | `https://qianfan.baidubce.com/v2` | `ernie-4.5-0.3b` |
 | `stepfun` | `STEPFUN_API_KEY` | `https://api.stepfun.ai/v1` | `step-3.7-flash` |
 | `tencent-tokenhub` | `TOKENHUB_API_KEY` | `https://tokenhub.tencentmaas.com/v1` | `deepseek-v4-flash` |
 | `volcengine` | `VOLCANO_ENGINE_API_KEY` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-2-1-pro-260915` |
@@ -15,8 +15,8 @@ Each appends `/chat/completions` and uses Bearer API-key auth. Native calls use
 `/v1/native/<provider>/chat/completions` with the full upstream model ID. Unified
 calls prepend the provider to that ID. Stored API-key grants are provider-scoped.
 Unknown models and account-specific deployment IDs pass through without inferred
-prices or native model facts. Qianfan has no static catalog row because its API
-contract alone does not qualify an account's model inventory.
+prices or native model facts. Qianfan bundles the published ERNIE 4.5 0.3B request ID for deterministic smoke
+planning; account entitlement and current availability still require live proof.
 
 ## Region, plan and credential boundaries
 

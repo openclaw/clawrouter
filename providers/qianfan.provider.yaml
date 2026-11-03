@@ -39,7 +39,10 @@ endpoints:
     streaming: sse
     timeoutMs: 600000
 models:
-  entries: []
+  entries:
+    - id: qianfan/ernie-4.5-0.3b
+      upstream: ernie-4.5-0.3b
+      capabilities: [llm.chat]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

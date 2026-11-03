@@ -5,7 +5,7 @@ import test from "node:test";
 import { configuredUpstream, providerModel, transformRequestBody, upstreamPath } from "../providers.ts";
 
 const contracts = [
-  ["qianfan", "QIANFAN_API_KEY", "https://qianfan.baidubce.com/v2/chat/completions", "fixture-deployment"],
+  ["qianfan", "QIANFAN_API_KEY", "https://qianfan.baidubce.com/v2/chat/completions", "ernie-4.5-0.3b"],
   ["stepfun", "STEPFUN_API_KEY", "https://api.stepfun.ai/v1/chat/completions", "step-3.7-flash"],
   ["tencent-tokenhub", "TOKENHUB_API_KEY", "https://tokenhub.tencentmaas.com/v1/chat/completions", "deepseek-v4-flash"],
   ["volcengine", "VOLCANO_ENGINE_API_KEY", "https://ark.cn-beijing.volces.com/api/v3/chat/completions", "doubao-seed-2-1-pro-260915"],
