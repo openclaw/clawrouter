@@ -52,7 +52,7 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     provider: provider.id,
     models: provider.models.filter(model => modelExecutable(provider, model)).flatMap((model) => {
       const capabilities = model.capabilities.filter(capability => legacyUnifiedCapability(provider, capability));
-      if (model.capabilities.includes("llm.decisions") && !capabilities.length) return [];
+      if (!capabilities.length && model.capabilities.some(capability => capability === "llm.decisions" || capability === "audio.transcription")) return [];
       return [{
         id: model.id,
         ...(model.availability ? { availability: model.availability } : {}),
@@ -79,13 +79,15 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
   return { openaiCompatible, manifestProxy };
 }
 
-// Decision capability alone does not establish an OpenAI wire contract. Match
+// Decision and transcription capabilities alone do not establish an OpenAI wire contract. Match
 // the same first capability binding used by unified request selection.
 function legacyUnifiedCapability(provider: CatalogProvider, capability: string): boolean {
-  if (capability !== "llm.decisions") return true;
+  const format = capability === "llm.decisions" ? "openai.decisions"
+    : capability === "audio.transcription" ? "openai.audio_transcriptions" : null;
+  if (!format) return true;
   const id = provider.capabilities.find(value => value.id === capability)?.endpoint;
   const endpoint = provider.endpoints.find(value => value.id === id);
-  return endpoint?.request_format === "openai.decisions" && endpoint.response_format === "openai.decisions"
+  return endpoint?.request_format === format && endpoint.response_format === format
     && endpoint.methods.includes("POST");
 }
 
