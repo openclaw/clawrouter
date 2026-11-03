@@ -51,6 +51,8 @@ export interface ManagedLifecycleAdapter {
   requestFormats: readonly string[];
   supportsResult: boolean;
   supportsCancel: boolean;
+  // Source registry attaches its qualified file wrapper; absence keeps files closed.
+  files?: ManagedFileAdapter;
   // Non-secret per-job flags retained beside URL parameters, never caller authority.
   retainedParams?: readonly string[];
   // Restrict declared controls using only the original validated job flags.

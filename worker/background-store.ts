@@ -37,6 +37,8 @@ export interface ManagedAdmission {
   idempotencyKey: string | null;
   requestDigest: string;
   requestedVersion: string;
+  // Secret-free selected API base for qualifying only this job's output descriptors.
+  fileBaseUrl?: string;
 }
 interface ManagedState extends ManagedAdmission {
   observationUnavailable?: ManagedObservationLoss;
@@ -344,11 +346,13 @@ function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): Bac
 }
 function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
   const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-  if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion"].includes(key))
+  if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion", "fileBaseUrl"].includes(key))
     || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs", "dashscope.video", "pixverse.video", "runway.tasks", "together.video", "google.omni_video"].includes(managed.protocol)
     || managed.providerId !== undefined && (typeof managed.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(managed.providerId))
     || managed.protocol !== "replicate.predictions" && managed.providerId === undefined
     || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)
+    || managed.fileBaseUrl !== undefined && (typeof managed.fileBaseUrl !== "string" || managed.fileBaseUrl.length > 2048
+      || !/^https:\/\/[a-z0-9.-]+(?::443)?(?:\/[a-zA-Z0-9_/-]*)?$/.test(managed.fileBaseUrl))
     || typeof managed.requestedVersion !== "string" || !/^[a-zA-Z0-9_./:-]{1,256}$/.test(managed.requestedVersion)) invalid();
 }
 function validateManagedAdmission(input: BackgroundAdmission): void {

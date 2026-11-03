@@ -21,6 +21,10 @@ export interface ResponseControlDispatch {
   stream: boolean;
   protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol;
   requestedVersion?: string;
+  // Internal scoped-controller input, never decoded from a public request body.
+  file?: { action: import("./managed-lifecycle-types.ts").ManagedFileAction;
+    descriptor: import("./managed-lifecycle-types.ts").ManagedFileDescriptor;
+    state?: import("./managed-lifecycle-types.ts").ManagedFileState };
   deadline?: number;
   // Per-call diagnostics, not persisted ownership or an idempotency promise.
   clientRequestId?: string;
@@ -39,6 +43,17 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
     const { managedRoute } = await import("./managed-routes.ts");
     const { adapter, controls, retained } = managedRoute(provider, create, pathParams);
     if (retained) parts.push(["managed-job-params", retained]);
+    if (lifecycle.files) {
+      const { managedFileRoute, managedFileBase } = await import("./managed-files.ts");
+      const { endpoints } = managedFileRoute(provider, create);
+      managedFileBase(provider, upstream.baseUrl);
+      parts.push(["managed-files", ...(["metadata", "download"] as const).map(action => {
+        const endpoint = endpoints[action];
+        if (upstream.transport?.endpointPaths[endpoint.id]) unavailable();
+        return [action, endpoint.id, endpoint.method, endpoint.path, endpoint.path_params, endpoint.request_format,
+          endpoint.response_format, Object.entries(endpoint.query).sort()];
+      })]);
+    }
     parts.push(lifecycle.protocol, ...(["retrieve", "result", "cancel"] as const).flatMap(action => {
       const endpoint = controls[action];
       if (!endpoint) return [];
@@ -92,11 +107,26 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   // Compare the original create route, not the necessarily different control
   // URL. Environment credential/configuration changes also invalidate the pin.
   if (await responseRouteDigest(provider, upstream, urlFor(create, input.route.pathParams), headers, input.owner.grantKey, managed ? create.lifecycle : undefined, env, input.route.pathParams) !== input.owner.routeSha256) unavailable();
-  const endpoint = managed ? contract?.controls[input.action]
+  const fileContract = input.file && provider && create ? (await import("./managed-files.ts")).managedFileRoute(provider, create) : null;
+  if (input.file && (!managed || !fileContract || input.action !== "retrieve" || input.authorization.kind !== "public"
+    || !["metadata", "download"].includes(input.file.action))) unavailable();
+  if (input.file) {
+    (await import("./managed-files.ts")).validateManagedFile(input.file.descriptor);
+    if (input.file.action === "download" && (input.file.state?.id !== input.file.descriptor.id || input.file.state.status !== "active")) unavailable();
+  }
+  const endpoint = input.file ? fileContract?.endpoints[input.file.action] : managed ? contract?.controls[input.action]
     : provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action as "retrieve" | "cancel"]);
   if (!endpoint) unavailable();
-  const control = managed ? contract!.adapter.control(input.action, endpoint, id.value!, input.route.pathParams) : null;
+  if (input.file) assertOperationConfiguration({ provider, endpoint, mode: "http" }, grant, env);
+  const control = input.file ? fileContract!.adapter.control(input.file.action, endpoint, input.file.descriptor, upstream.baseUrl, input.file.state)
+    : managed ? contract!.adapter.control(input.action, endpoint, id.value!, input.route.pathParams) : null;
+  if (input.file && control && (!control.path.startsWith("/") || /[\\%?#\s]/.test(control.path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(control.path)
+    || control.headers && [...control.headers].length || control.transientHeaders?.length)) unavailable();
   const url = control ? new URL(`${upstream.baseUrl.replace(/\/$/, "")}${control.path}`) : urlFor(endpoint, { response_id: id.value! });
+  if (input.file) {
+    const base = new URL(upstream.baseUrl);
+    if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/")) unavailable();
+  }
   if (control) {
     upstream.query.forEach((value, name) => url.searchParams.set(name, value));
     control.query.forEach((value, name) => { if (url.searchParams.has(name)) unavailable(); url.searchParams.set(name, value); });
@@ -130,6 +160,7 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
 }
 
 export function assertControlDeadline(input: ResponseControlDispatch): void {
+  if (input.file && (input.authorization?.kind !== "public" || input.deadline === undefined)) unavailable();
   if (input.authorization?.kind === "collection" && ((input.action !== "retrieve" && !(input.protocol && input.action === "result")) || input.query !== "" || input.deadline === undefined)) unavailable();
   if (input.deadline !== undefined && (!Number.isSafeInteger(input.deadline) || Date.now() >= input.deadline)) {
     throw new HttpError(409, "response_observation_expired", "automatic response observation has ended; authenticated controls remain available");
