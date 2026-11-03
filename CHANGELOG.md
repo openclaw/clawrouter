@@ -119,6 +119,7 @@
 - Dispatch native OpenRouter JSON transcription with authenticated bounded uploads, original grants, complete output and conservative settlement without treating duration or diagnostic cost as a tariff.
 - Add bounded native OpenRouter transcription response validation with complete JSON delivery, playable audio byte-preservation tests and conservative independent usage; shared ingress, dispatch and actual consumer activation remain separately qualified.
 - Qualify finite OpenRouter JSON transcription declarations with the existing API base, exact model and original Bearer credential, keeping byte bounds separate from unknown upstream prices.
+- Declare the frozen OpenRouter Whisper transcription model on the qualified native JSON route, preserving original auth and API-prefix composition while keeping unknown whole-upload dollar costs closed.
 - Record Together’s frozen Llama 3.3 70B Turbo serverless retirement, keeping its identity out of live offers and rejecting passthrough calls before egress.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
 
