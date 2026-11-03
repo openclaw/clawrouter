@@ -47,6 +47,7 @@
 - Bind Google continuation tokens to the original principal, model, request and credential, publishing ownership only from completed native candidate evidence and independently accounting for each HTTP hop.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
+- Qualify finite Groq and Mistral multipart transcription declarations with exact frozen models, original credential/path binding and unknown audio costs; shared ingress activation remains separate.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Add frozen OpenRouter JSON transcription codecs and fixtures with exact inline audio, silent-transcript handling and independent native duration/token/cost observations.
 - Dispatch native OpenRouter JSON transcription with authenticated bounded uploads, original grants, complete output and conservative settlement without treating duration or diagnostic cost as a tariff.
