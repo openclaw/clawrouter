@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
+
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
 
 - Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.

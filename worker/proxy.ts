@@ -1,4 +1,5 @@
 import { assertNativeResponseDestination } from "./native-response.ts";
+import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
@@ -408,6 +409,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     createProxyAccounting({ context, env, auth, selection, request, compound, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } }).fail(identityDenial.status, "denied");
     return identityDenial;
   }
+  if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
   validateSelectedInput(selection);
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
@@ -752,7 +754,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   if (selection.endpoint.upstreamPath !== undefined && !isModelDiscovery(selection.endpoint)
     && (hasProxyQuery(queryInput) || new URL(request.url).search))
     throw new HttpError(400, "invalid_mapped_endpoint_query", "mapped operation options must be in the request body");
-  if (selection.nativeResponse && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_native_response_query", "native operation options must be in JSON, not query parameters");
+  if (selection.nativeResponse || selection.nativeQuery || selection.endpoint.request_format === "elevenlabs.speech")
+    queryInput = nativeDispatchQuery(selection, queryInput, new URL(request.url));
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
