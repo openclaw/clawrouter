@@ -21,8 +21,8 @@ importers:
         version: 3.8.0
     devDependencies:
       '@cfworker/json-schema':
-        specifier: ^4.1.1
-        version: 4.1.1
+        specifier: ^4.1.4
+        version: 4.1.4
       '@cloudflare/workers-types':
         specifier: ^5.20261101.1
         version: 5.20261101.1
@@ -90,8 +90,8 @@ packages:
     peerDependencies:
       playwright-core: 1.64.1
 
-  '@cfworker/json-schema@4.1.1':
-    resolution: {integrity: sha512-gAmrUZSGtKc3AiBL71iNWxDsyUC5uMaKKGdvzYsBoTW/xi42JQHl7eKV2OYzCUqvc+D2RCcf7EXY2iCyFIk6og==}
+  '@cfworker/json-schema@4.1.4':
+    resolution: {integrity: sha512-20rPE8EX0dSg6JGOVe31HpqsLYZTDSlcFJZA5mpZqQxcZ71vh/SXCMX+UuHO1mMcZBDKeb752z+3L8IWa+0Svg==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -1074,7 +1074,7 @@ snapshots:
       axe-core: 4.14.0
       playwright-core: 1.64.1
 
-  '@cfworker/json-schema@4.1.1': {}
+  '@cfworker/json-schema@4.1.4': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
