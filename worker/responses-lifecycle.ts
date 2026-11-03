@@ -17,6 +17,11 @@ export function responsesControls(provider: CompiledProvider, endpoint: Compiled
   }
   return matches;
 }
+export function responsesFileControls(provider: CompiledProvider, endpoint: CompiledEndpoint): Array<{ create: CompiledEndpoint; action: "metadata" | "download" }> {
+  return provider.endpoints.flatMap(create => (["metadata", "download"] as const).flatMap(action =>
+    create.lifecycle?.files?.[action] === endpoint.id ? [{ create, action }] : []));
+}
+
 export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): ResponsesControlMatch | null {
   return responsesControls(provider, endpoint)[0] ?? null;
 }

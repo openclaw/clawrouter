@@ -13,6 +13,7 @@ import type { ProxySelection } from "./proxy-selection.ts";
 import type { ManagedCreate, ManagedFileDescriptor, ManagedObservation, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { applyManagedHeaders, assertManagedDispatch, managedProbeId } from "./managed-dispatch.ts";
+import { managedFileBase, managedFilePublicBody, qualifyManagedFiles } from "./managed-files.ts";
 import { managedPaths, managedRoute } from "./managed-routes.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
@@ -57,6 +58,7 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
   const accounting = createProxyAccounting({ request, env, context, auth, selection, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
   const background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection,
     selection.pathParams, prepared.headers, false);
+  if (selection.endpoint.lifecycle.files) managed.fileBaseUrl = managedFileBase(selection.provider, prepared.managedBaseUrl);
   background.admission.managed = managed;
   const admitted = await backgroundCall<{ admitted: boolean; created: boolean; job: BackgroundRecord }>(env, scope, { action: "managed_admit", admission: background.admission });
   if (admitted?.admitted !== true || !admitted.job || typeof admitted.created !== "boolean") throw new HttpError(503, "background_unavailable", "prediction admission was not acknowledged");
@@ -72,9 +74,10 @@ export async function proxyManagedPrediction(request: Request, env: Env, context
       response = await operation.wait(fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" }), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-      const prediction = await operation.wait(adapter.read(response, { action: "create", requestedVersion: create.requestedVersion, pathParams: create.pathParams }), "upstream");
+      let prediction = await operation.wait(adapter.read(response, { action: "create", requestedVersion: create.requestedVersion, pathParams: create.pathParams }), "upstream");
       const bound = await backgroundCall<{ bound: boolean }>(env, scope, { action: "managed_bind", id: background.admission.id, responseId: prediction.id });
       if (bound?.bound !== true) throw new Error("prediction binding not acknowledged");
+      prediction = qualifyManagedFiles(selection.provider, selection.endpoint, prediction, managed.fileBaseUrl);
       await observePrediction(env, scope, background.admission.id, prediction, response.status);
       return predictionResponse(prediction, selection.provider, selection.endpoint, create.pathParams, response.status);
     } catch {
@@ -122,7 +125,8 @@ export function predictionResponse(prediction: ManagedObservation, provider: Com
     return managedObservationUnavailable();
   }
   const { adapter } = managedRoute(provider, create);
-  return json(adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams)), status, headers);
+  return json(managedFilePublicBody(provider, create, prediction, adapter.rewrite(prediction, managedPaths(provider, create, prediction.id, pathParams))), status,
+    { ...headers, ...(create.lifecycle?.files ? { "x-clawrouter-job-id": prediction.id } : {}) });
 }
 
 export function managedObservationUnavailable(): Response {
@@ -130,7 +134,7 @@ export function managedObservationUnavailable(): Response {
 }
 
 type ControlRead = { prediction: ManagedObservation; status: number };
-export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation): Promise<ControlRead & { evidence: ControlRead }> {
+export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation, fileBaseUrl?: string): Promise<ControlRead & { evidence: ControlRead }> {
   const adapter = input.protocol && managedLifecycleAdapter(input.protocol);
   if (!adapter) throw new HttpError(409, "response_owner_unavailable", "the managed protocol is unavailable");
   const read = async (action: "retrieve" | "result" | "cancel"): Promise<ControlRead> => {
@@ -138,8 +142,12 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
     try {
       response = await operation.wait(dispatchResponseControl(env, { ...input, action }, operation.signal), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
-      return { prediction: await operation.wait(adapter.read(response, { action, expectedId: input.responseId,
-        requestedVersion: input.requestedVersion ?? "", pathParams: input.route.pathParams }), "upstream"), status: response.status };
+      const { providerById } = await import("./providers.ts");
+      const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
+      if (!provider || !create) throw new HttpError(409, "response_owner_unavailable", "original route is unavailable");
+      const prediction = await operation.wait(adapter.read(response, { action, expectedId: input.responseId,
+        requestedVersion: input.requestedVersion ?? "", pathParams: input.route.pathParams }), "upstream");
+      return { prediction: qualifyManagedFiles(provider, create, prediction, fileBaseUrl), status: response.status };
     } finally { void response?.body?.cancel().catch(() => undefined); }
   };
   // A terminal queue status can require a result read; cancellation ACKs can
@@ -166,7 +174,7 @@ export async function collectManagedPrediction(env: Env, job: BackgroundJob, acc
   try {
     const { evidence } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,
       action: "retrieve", query: "", stream: false, protocol: job.managed.protocol, requestedVersion: job.managed.requestedVersion,
-      deadline: job.observeUntil, authorization: { kind: "collection" } }, operation);
+      deadline: job.observeUntil, authorization: { kind: "collection" } }, operation, job.managed.fileBaseUrl);
     await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status, evidence.prediction.observationUnavailable, evidence.prediction.files);
   } finally { operation.stop("complete"); }
 }

@@ -76,6 +76,7 @@
 - Qualify managed provider credentials and origins before create/control dispatch, preserve source-owned non-secret headers per attempt, and pin stable control metadata independently from fresh trace IDs. Keep upload ownership and new provider activation separately qualified.
 - Resolve shared native control paths through the original scoped create-route binding, preserving existing jobs regardless of declaration order.
 - Bind bounded output-file descriptors to succeeded managed jobs before publication, preserving initial URI identity across inline retrieval and keeping file delivery separate from exactly-once generation settlement.
+- Deliver qualified managed files through the original scoped job and credential, with fresh ACTIVE metadata, bounded bytes, cancellation and pinned file routes; file failures do not change generation settlement.
 
 - Refresh Worker type definitions and the provider icon catalog under the existing two-day dependency cooldown.
 - Refresh Workers types to 5.20261101.1 and Lucide icons to 1.66.0 under the two-day dependency cooldown. Worker runtime pins and security overrides are unchanged.

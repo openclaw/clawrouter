@@ -42,7 +42,7 @@ import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { backgroundResponse, requireEmptyResponseControlBody, responsesControls } from "./responses-lifecycle.ts";
+import { backgroundResponse, requireEmptyResponseControlBody, responsesControls, responsesFileControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
@@ -123,6 +123,7 @@ interface PreparedUpstream {
   backgroundRecovery: boolean;
   failedGrantKey?: string;
   continuation?: ContinuationOwner;
+  managedBaseUrl?: string;
   revalidateAccount?: () => Promise<void>;
 }
 
@@ -268,6 +269,21 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
   let preauthenticated: AuthorizedIdentity | Response | null = null;
+  const fileControls = responsesFileControls(provider, endpoint);
+  if (fileControls.length) {
+    const auth = await preauthenticate(request, env, mode, provider.id);
+    if (auth instanceof Response) return auth;
+    if (request.method !== "GET" || responsesControls(provider, endpoint).length) return errorResponse("method_not_allowed", "file controls require a declared GET", 405);
+    await requireEmptyResponseControlBody(request);
+    const query = new URL(request.url).searchParams, params: Record<string, string> = {};
+    for (const name of endpoint.path_params) {
+      const values = query.getAll(name);
+      if (values.length !== 1) throw new HttpError(400, "managed_file_invalid", "one declared file path parameter is required");
+      params[name] = values[0]; query.delete(name);
+    }
+    return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider,
+      fileControls.map(control => ({ ...control, endpoint, pathParams: params })), query, mode, auth ?? undefined, session ?? undefined);
+  }
   const controls = responsesControls(provider, endpoint), control = controls[0];
   if (control) {
     preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
@@ -326,6 +342,16 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
   const controlEndpoints = matching.filter(candidate => candidate.native_proxy && candidate.methods.includes(method));
+  const fileControls = controlEndpoints.flatMap(candidate => responsesFileControls(provider, candidate).map(control => ({ ...control, endpoint: candidate, pathParams: nativeParams(candidate, match[2]) })));
+  if (fileControls.length) {
+    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (auth instanceof Response) return auth;
+    if (method !== "GET" || controlEndpoints.some(candidate => !fileControls.some(item => item.endpoint === candidate) || responsesControls(provider, candidate).length)) {
+      throw new HttpError(409, "managed_file_owner_unavailable", "native file declarations do not agree on one file control");
+    }
+    await requireEmptyResponseControlBody(request);
+    return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider, fileControls, new URL(request.url).searchParams, "proxy_key", auth ?? undefined);
+  }
   const controls = controlEndpoints.flatMap(candidate => responsesControls(provider, candidate).map(control => ({ ...control, endpoint: candidate })));
   const control = controls[0];
   if (control) {
@@ -772,7 +798,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

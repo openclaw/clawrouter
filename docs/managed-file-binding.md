@@ -56,14 +56,41 @@ durable writes, logging or price calculation:
 - `rewrite(body, paths)` replaces only validated output file URIs with trusted
   relative router metadata/download paths. Never derive paths from a caller Host.
 
-The next dispatcher slice owns the `x-clawrouter-job-id` header on native file
+The scoped dispatcher uses the `x-clawrouter-job-id` header on native file
 requests. The header is a selector only: resolve the authenticated caller's scoped
 original job/create/model/credential binding, then require the requested file in
 that job's descriptors. File metadata and download cannot use an arbitrary raw ID,
 current credential-pool fallback, redirect destination or unqualified origin.
-No native file endpoint, upload route, image reference or Google offer is activated
-by this state foundation. The original credential dispatcher and actual Worker /
-consumer tests remain required before registry/snapshot activation.
+The lifecycle registry attaches the factory result as `ManagedLifecycleAdapter.files`.
+A declared `lifecycle.files` pair without a matching wrapper fails before create
+egress. File links, formats and query are included in the original route digest.
+Changing them cannot move an existing job to another file route.
+
+Native and manifest file controls accept bodyless GET only. The manifest GET
+carries its one declared file path parameter in the query. Download first reads
+fresh matching metadata, then makes at most one content GET. PROCESSING returns
+409 `managed_file_processing` with Retry-After: 5; FAILED returns 409
+`managed_file_failed`. Both preserve generation settlement. Each upstream read
+reauthorizes the original caller and grant, without refresh or pool fallback.
+One 30-second deadline and caller cancellation cover preparation, metadata and
+content. Redirects, partial responses, invalid media and incomplete bytes fail.
+
+The first delivery slice bounds metadata to 64 KiB and content to 16 MiB, with a
+shared isolate allocation lease. This is a delivery envelope, not a duration or
+tariff bound. The selected HTTPS origin must be a manifest-declared provider
+origin; custom proxy origins remain closed pending their own qualification.
+Output URLs never authorize a new origin. The secret-free selected API base is
+retained with the original job solely to qualify later output descriptors.
+
+The runtime qualifies descriptors on create, public retrieval and collection,
+commits them before publication, and rewrites validated native file URIs to
+relative router paths. The client must carry the returned job header on every
+file request; knowledge of a file ID alone is insufficient. No public endpoint
+can register a raw file ID. Files do not create reservations or usage events.
+
+No native file endpoint, upload route, image reference or Google offer is
+activated by these common modules. Source wrappers, declarations, snapshots and
+actual consumer proof remain required before offering a provider route.
 
 ## Shared native control paths
 
