@@ -1,12 +1,13 @@
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { falManagedAdapter } from "./managed-fal.ts";
+import { googleOmniManagedAdapter } from "./managed-google-omni-wrapper.ts";
 import { kieManagedAdapter } from "./managed-kie.ts";
 import { replicateManagedAdapter } from "./managed-replicate.ts";
 import { togetherManagedAdapter } from "./managed-together-wrapper.ts";
 import { vydraManagedAdapter } from "./managed-vydra.ts";
 
 const adapters: readonly ManagedLifecycleAdapter[] = [
-  replicateManagedAdapter, falManagedAdapter, kieManagedAdapter, vydraManagedAdapter, togetherManagedAdapter,
+  replicateManagedAdapter, falManagedAdapter, kieManagedAdapter, vydraManagedAdapter, togetherManagedAdapter, googleOmniManagedAdapter,
 ];
 
 // A lifecycle declaration alone never activates an unknown protocol or format.
