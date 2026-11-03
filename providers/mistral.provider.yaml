@@ -102,9 +102,16 @@ models:
         outputMicrosPerMillion: 900000
         serviceTiers:
           - id: default
+            aliases: [standard_only, standard]
             inputMicrosPerMillion: 300000
             cachedInputMicrosPerMillion: 30000
             outputMicrosPerMillion: 900000
+          # Auto may select Priority; reserve the published 1.75x bound.
+          # https://docs.mistral.ai/inference/priority-tier
+          - id: priority
+            inputMicrosPerMillion: 525000
+            cachedInputMicrosPerMillion: 52500
+            outputMicrosPerMillion: 1575000
         # Reserve the full context when the caller omits an output limit.
         # This ceiling is not a claim about the provider's default output.
         maxInputTokens: 131072
@@ -174,9 +181,16 @@ models:
         outputMicrosPerMillion: 600000
         serviceTiers:
           - id: default
+            aliases: [standard_only, standard]
             inputMicrosPerMillion: 150000
             cachedInputMicrosPerMillion: 15000
             outputMicrosPerMillion: 600000
+          # Auto may select Priority; reserve the published 1.75x bound.
+          # https://docs.mistral.ai/inference/priority-tier
+          - id: priority
+            inputMicrosPerMillion: 262500
+            cachedInputMicrosPerMillion: 26250
+            outputMicrosPerMillion: 1050000
         # Reserve the full context when the caller omits an output limit.
         # This ceiling is not a claim about the provider's default output.
         maxInputTokens: 262144

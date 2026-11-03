@@ -41,13 +41,18 @@ test("current Codestral and Small prices reserve a full output ceiling and bill 
     assert.equal(pricing.defaultMaxOutputTokens, bound);
     assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500 }, "openai.chat_completions"), null, "missing served-tier evidence retains conservative settlement");
     assert.equal(estimateModelCost(pricing, { messages: [] }, endpoint).outputTokens, bound);
-    assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500, serviceTier: "default" }, "openai.chat_completions"), Math.ceil((500 * input + 500 * cached + 100 * output) / 1000000));
+    const standard = estimateModelCost(pricing, { messages: [], max_tokens: 100, service_tier: "standard_only" }, endpoint);
+    const automatic = estimateModelCost(pricing, { messages: [], max_tokens: 100, service_tier: "auto" }, endpoint);
+    assert.equal(standard.pricingAvailable, undefined);
+    assert.ok(automatic.reserveMicros > standard.reserveMicros);
+    assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500, serviceTier: "priority" }, "openai.chat_completions"), Math.ceil((500 * input + 500 * cached + 100 * output) * 1.75 / 1000000));
+    assert.equal(actualModelCost(pricing, { input: 1000, output: 100, cached: 500, serviceTier: "standard" }, "openai.chat_completions"), Math.ceil((500 * input + 500 * cached + 100 * output) / 1000000));
   }
   const small = snapshot.model_index["mistral/mistral-small-latest"].pricing;
   const image = estimateModelCost(small, { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/image.png" } }] }], max_tokens: 16 }, endpoint);
   assert.equal(image.inputTokens, 262144);
   assert.equal(image.outputTokens, 16);
-  assert.equal(estimateModelCost(small, { messages: [], service_tier: "priority" }, endpoint).pricingAvailable, false);
+  assert.equal(estimateModelCost(small, { messages: [], service_tier: "future" }, endpoint).pricingAvailable, false);
 });
 
 test("deprecated and dynamic identities cannot acquire a current replacement tariff", () => {

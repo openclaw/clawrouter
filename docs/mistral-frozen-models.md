@@ -20,8 +20,9 @@ catalog presence does not establish current account access or live availability.
 
 The price cards reserve a full context ceiling when an output limit is omitted;
 this is not a declaration of a provider default or maximum output. Model facts
-therefore omit the frozen client's output defaults. Standard cards reject an
-unqualified service tier rather than silently charge the standard rate. Missing
+therefore omit the frozen client's output defaults. The [Priority Tier contract](https://docs.mistral.ai/inference/priority-tier)
+qualifies a 1.75× multiplier on all rates. `auto` reserves that premium;
+`standard_only` uses the standard card. Unknown tiers are rejected. Missing
 served-tier evidence retains conservative settlement instead of guessing a tariff.
 
 Small's canonical `none`/`high` reasoning values follow the
