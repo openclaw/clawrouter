@@ -33,6 +33,7 @@
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
+- Run pinned OpenClaw consumer contracts in parallel with independent frozen installs and lockfile-keyed pnpm download caching.
 - Use the standard GitHub Actions runtime budget for CodeQL instead of the rollout-specific 20-minute job cap.
 - Skip expensive OpenClaw consumer contracts for unrelated and standalone Worker test changes while preserving the reported check; run the full suite when change detection is uncertain.
 
