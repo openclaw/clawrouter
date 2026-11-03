@@ -1,4 +1,4 @@
-# Gateway Chat contract: docs/hosted-gateway-providers.md.
+# Gateway Chat and native Messages: docs/hosted-gateway-providers.md.
 # Endpoint/model source checked 2026-11-03: https://vercel.com/docs/ai-gateway/sdks-and-apis
 schema: clawrouter.service-provider.v1
 id: vercel-ai-gateway
@@ -30,6 +30,12 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: llm.messages
+    endpoint: messages
+    methods: [POST]
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -38,11 +44,24 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  messages:
+    modelPassthrough: {}
+    path: /messages
+    requestHeaders: [anthropic-beta, anthropic-version]
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
+  models_list:
+    path: /models
+    method: GET
+    requestFormat: openai.models
+    responseFormat: openai.models
 models:
   entries:
     - id: vercel-ai-gateway/anthropic/claude-sonnet-4.6
       upstream: anthropic/claude-sonnet-4.6
-      capabilities: [llm.chat]
+      capabilities: [llm.chat, llm.messages]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
