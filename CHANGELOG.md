@@ -59,6 +59,7 @@
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
 
 - Qualify OpenRouter video download-only endpoint links with original-job content controls, preserving metadata-first file declarations and conservative unknown costs.
+- Add three frozen Gemini Flash/Lite identities with published multimodal input-cost bounds, served-tier cache rates and unchanged hosted-tool cost guards.
 - Qualify Google Omni Interactions lifecycle and authenticated file endpoint links in the provider compiler, rejecting unbound controls and credential overrides before shared runtime activation.
 - Register the qualified Omni lifecycle/file wrapper with retained store/background controls and original-job authenticated file links; retired Veo routes remain unavailable.
 - Add source-owned Omni lifecycle/file wrappers for original-job descriptors, retained control flags, ACTIVE-only download and trusted output rewriting; live route activation remains separately qualified.
