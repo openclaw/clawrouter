@@ -97,6 +97,7 @@
 - Add published Fireworks GPT OSS 120B Standard and Priority token rates with conservative context bounds and preserve the pricing verification date in compiled cards. Unknown models remain unpriced.
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
+- Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
