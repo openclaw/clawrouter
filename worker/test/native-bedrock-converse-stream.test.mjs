@@ -14,7 +14,8 @@ const model = "anthropic.claude-sonnet-4-5-20250929-v1:0", format = "aws_bedrock
 const base = providerById("aws-bedrock");
 // Candidate only: no production manifest, factory or compiler activation.
 const endpoint = { ...base.endpoints.find(item => item.id === "invoke_model_stream"), id: "converse_stream",
-  path: "/model/${model}/converse-stream", streaming: null, request_format: format, response_format: "aws_bedrock.converse_eventstream" };
+  path: "/model/${model}/converse-stream", streaming: null, modelPassthrough: undefined,
+  request_format: format, response_format: "aws_bedrock.converse_eventstream" };
 const request = () => ({ messages: [{ role: "user", content: [{ text: "synthetic prompt" }] }] });
 const selection = (upstream = model, body = request()) => ({ provider: { ...base,
   capabilities: [{ id: "llm.chat", endpoint: endpoint.id, methods: ["POST"] }] }, endpoint: structuredClone(endpoint),
@@ -182,11 +183,15 @@ test("ConverseStream rejects unknown/error mappings and contradictory or wrapped
   const mappings = [event("unknown", {}), event("chunk", { bytes: "e30=" }), event("internalServerException", {}),
     exception("unknownException"), event("messageStart", { messageStart: { role: "assistant" } }),
     event("messageStart", { role: "assistant" }, { ":exception-type": "validationException" }),
+    event("messageStart", { role: "assistant" }, { ":exception-type": "" }),
     event("messageStart", { role: "assistant" }, { ":content-type": "text/plain" }),
     event("messageStart", { role: "assistant" }, { ":error-code": "synthetic" }),
     eventFrame({}, { ":message-type": "error", ":error-code": "InternalError", ":content-type": "application/json" }),
+    eventFrame({}, { ":message-type": "exception", ":exception-type": "validationException", ":event-type": "", ":content-type": "application/json" }),
     eventFrame({}, { ":message-type": "event", ":event-type": "messageStart" })];
   for (const bytes of mappings) await assert.rejects(read(response(Buffer.concat([wire(), bytes]))));
+  for (const extra of [{ ":exception-type": "" }, { ":content-type": "text/plain" }, { ":content-type": "" }])
+    await assert.rejects(read(response(Buffer.concat([event("messageStart", { role: "assistant" }, extra), delta(), stopBlock(), stop(), metadata()]))));
 });
 
 test("ConverseStream validates every CRC, declared length, header UTF-8 and header uniqueness", async () => {
@@ -209,6 +214,8 @@ test("ConverseStream validates every CRC, declared length, header UTF-8 and head
 
 test("ConverseStream rejects malformed JSON, fatal payload UTF-8 and late corrupt evidence", async () => {
   const badUtf8 = delta(); badUtf8[12 + badUtf8.readUInt32BE(4)] = 0xff; resign(badUtf8);
+  const invalidText = delta("synthetic UTF8"); invalidText[invalidText.indexOf("synthetic UTF8")] = 0xff; resign(invalidText);
+  await assert.rejects(read(response(Buffer.concat([start(), invalidText, stopBlock(), stop(), metadata()]))));
   for (const bytes of [badUtf8, event("metadata", "{"), event("metadata", "null"), event("metadata", "[]"),
     event("contentBlockDelta", { contentBlockIndex: 0, delta: { unsupported: true } })])
     await assert.rejects(read(response(Buffer.concat([wire(), bytes]))));

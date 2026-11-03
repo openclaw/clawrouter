@@ -91,8 +91,8 @@ async function readConverseStream(response: Response, signal: AbortSignal) {
       const messageType = headers.get(":message-type"), eventType = headers.get(":event-type"), exceptionType = headers.get(":exception-type");
       if (headers.get(":content-type") !== "application/json"
         || [...headers.keys()].some(name => !metadataNames.has(name))) invalid();
-      const kind = messageType === "event" && eventType && !exceptionType && eventKinds.has(eventType) ? eventType
-        : messageType === "exception" && exceptionType && !eventType && exceptionKinds.has(exceptionType) ? exceptionType : undefined;
+      const kind = messageType === "event" && eventType && !headers.has(":exception-type") && eventKinds.has(eventType) ? eventType
+        : messageType === "exception" && exceptionType && !headers.has(":event-type") && exceptionKinds.has(exceptionType) ? exceptionType : undefined;
       if (!kind) invalid();
       const data: unknown = JSON.parse(utf8.decode(payload));
       const object = bedrockRecord(data);
