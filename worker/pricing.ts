@@ -1,4 +1,5 @@
 import type { DeepSeekSearchRequestPricing } from "../shared/request-pricing.ts";
+import type { ValidatedNativeUsage } from "./native-response.ts";
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -82,6 +83,17 @@ export function deepSeekSearchReserve(pricing: Readonly<DeepSeekSearchRequestPri
     || pricing.source !== "https://api-docs.deepseek.com/guides/search/"
     || pricing.successfulNonemptyRequestMicros !== 750 || pricing.emptyRequestMicros !== 0) return null;
   return pricing.successfulNonemptyRequestMicros;
+}
+
+// Only the native reader's validated observation can select the empty rate.
+// Missing or contradictory evidence leaves shared settlement holding its reserve.
+export function deepSeekSearchCost(pricing: Readonly<DeepSeekSearchRequestPricing>, usage: ValidatedNativeUsage): RequestCostReceipt | null {
+  if (deepSeekSearchReserve(pricing) === null || !isObject(usage) || usage.outcome !== "success") return null;
+  const observed = usage.nativeRequestUsage;
+  if (!isObject(observed) || observed.operation !== "deepseek.search" || observed.pricingVersion !== pricing.version
+    || observed.billableRequests !== 0 && observed.billableRequests !== 1) return null;
+  return { costMicros: observed.billableRequests === 0 ? pricing.emptyRequestMicros : pricing.successfulNonemptyRequestMicros,
+    basis: "manifest_request", pricingVersion: pricing.version };
 }
 
 export interface ImageRequestPricing {

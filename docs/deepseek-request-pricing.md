@@ -22,24 +22,31 @@ compiler still rejects this tariff on an endpoint, and the early Search
 hard-dollar denial remains intact. Explicit `policy_fixed` costs remain
 separate, including an explicitly configured zero.
 
-`RequestCostReceipt.basis` now permits `manifest_request` separately from
-`provider_reported`. No calculated receipt is emitted by this change.
-The published `ValidatedNativeUsage` only contains token inspection and an
-optional receipt; it cannot yet carry codec-complete native `billableRequests`
-and the admitted pricing version. Shared runtime must publish that trusted
-observation contract before the pure receipt calculator can consume it.
-Caller JSON, raw response reparsing and a shadow trust marker are not substitutes.
+`RequestCostReceipt.basis` distinguishes `manifest_request` from
+`provider_reported`. The pure `deepSeekSearchCost(pricing, usage)` helper consumes
+`ValidatedNativeUsage.nativeRequestUsage` from the qualified shared contract in
+[PR762](https://github.com/openclaw/clawrouter/pull/762), landed as
+`dd68a52a0f846d7f359c8bc3ddec7cbc6c3ab5c0`. The slot binds operation
+`deepseek.search`, the admitted pricing version and native `billableRequests`
+(0 or 1). Only a successful, codec-complete native observation can populate it.
+The calculator does not parse raw provider responses or caller conditions.
 
-The pending calculation is exactly 750 for validated native nonempty and zero
+The helper emits exactly 750 microUSD for validated native nonempty and zero
 for validated complete native empty, against the frozen admitted tariff and
 matching version. Invalid, mismatched, missing or interrupted evidence yields
 no receipt, retaining the reserve. A proven unsent dispatch can settle zero in
-the shared path; a generic failed request cannot. Receipt version mismatch and
-complete-result settlement tests depend on that published interface and are
-not claimed here.
+the shared path; a generic failed request cannot. Published tariff calculation
+is not an upstream invoice receipt or a policy-fixed price. The helper returns
+a receipt without mutating the usage observation or tariff.
 
-Focused tests cover strict definition validation, the actual codec's empty and
-filtered observations, request-count independence, immutable value behavior,
-unknown outcomes, compiler/admission closure and provider-reported/fixed-policy
-isolation. They do not prove shared admission freezing, durable settlement or
-hard-dollar runtime activation. No provider YAML or snapshot changes are made.
+Focused tests cover strict definition validation, actual codec empty/nonempty
+and filtered observations, request-count/token independence, frozen tariff
+behavior after source mutation, version mismatch, unknown/error outcomes,
+compiler/admission closure and provider-reported/fixed-policy isolation.
+Calculator fixtures build the published slot from actual complete codec output;
+they do not claim that the runtime producer is activated.
+
+Shared observation propagation, tariff-selector narrowing, admitted freezing and
+durable settlement remain separately owned integration work. The active pricing
+union and early hard-dollar denial are unchanged. No provider YAML, snapshot,
+common dispatch or settlement changes are made.
