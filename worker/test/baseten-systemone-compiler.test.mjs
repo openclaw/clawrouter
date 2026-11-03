@@ -23,6 +23,8 @@ function fixture() {
   const manifest = structuredClone(existing);
   manifest.capabilities.push({ id: "llm.decisions", endpoint: "systemone", methods: ["POST"] });
   manifest.endpoints.systemone = { path: "/systemone", requestFormat: "baseten.systemone", responseFormat: "baseten.systemone" };
+  // Replace the exact fixture-owned decision rows, retaining every Chat card.
+  manifest.models.entries = manifest.models.entries.filter(model => !BASETEN_SYSTEMONE_MODELS.includes(model.upstream));
   manifest.models.entries.push(...BASETEN_SYSTEMONE_MODELS.map(upstream => ({ id: `baseten/${upstream}`, upstream, capabilities: ["llm.decisions"],
     nativeCapabilities: { version: "clawrouter.native-capabilities.v1", endpoints: { systemone: {
       sources: ["https://docs.baseten.co/reference/inference-api/system-one", "https://docs.baseten.co/inference/model-apis/decision-models"],
@@ -37,7 +39,10 @@ test("Baseten's exact three decision rows preserve Chat and compose the existing
   const original = compile(existing), snapshot = compile(fixture()), provider = snapshot.providers[0];
   assert.deepEqual(snapshot.capability_index["llm.chat"], original.capability_index["llm.chat"]);
   assert.deepEqual(provider.endpoints.find(endpoint => endpoint.id === "chat_completions"), original.providers[0].endpoints.find(endpoint => endpoint.id === "chat_completions"));
-  for (const model of existing.models.entries) assert.deepEqual(snapshot.model_index[model.id], original.model_index[model.id]);
+  for (const model of existing.models.entries.filter(model => !BASETEN_SYSTEMONE_MODELS.includes(model.upstream))) {
+    assert.deepEqual(snapshot.model_index[model.id], original.model_index[model.id]);
+  }
+  assert.equal(provider.models.filter(model => BASETEN_SYSTEMONE_MODELS.includes(model.upstream)).length, 3);
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === "systemone");
   assert.equal(provider.base_urls.default + endpoint.path, "https://inference.baseten.co/v1/systemone");
   assert.equal(endpoint.request_format, BASETEN_SYSTEMONE_FORMAT); assert.equal(endpoint.response_format, BASETEN_SYSTEMONE_FORMAT);
