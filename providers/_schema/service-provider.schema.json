@@ -682,6 +682,14 @@
           ]
         },
         "then": { "$ref": "#/$defs/chutesModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^featherless\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^featherless\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/featherlessModelsEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -984,6 +992,24 @@
         "method": { "const": "GET" }, "path": { "const": "/models" },
         "requestFormat": { "const": "chutes.models" },
         "responseFormat": { "const": "chutes.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "featherlessModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "featherless.models" },
+        "responseFormat": { "const": "featherless.models" },
         "nativeProxy": { "const": true },
         "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
       },
