@@ -10,28 +10,40 @@ const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/amazon-b
 const titan = wire.cases[0], region = "us-east-1", origin = `https://bedrock-runtime.${region}.amazonaws.com`;
 
 async function setup(t, options = {}) {
-  const original = snapshot.providers, source = structuredClone(original.find(provider => provider.id === "aws-bedrock")); assert.ok(source);
+  const original = snapshot.providers, source = structuredClone(options.source ?? original.find(provider => provider.id === "aws-bedrock")); assert.ok(source);
   snapshot.providers = original.filter(provider => provider.id !== source.id); t.after(() => { snapshot.providers = original; });
+  let embeddingEndpoint;
   const f = await fixture(t, { ...options, providerId: source.id, configure(provider) {
     Object.assign(provider, source);
-    // Candidate declaration for common dispatch proof. Production schema/cards
-    // remain with their source owner; retain existing Invoke routes unchanged.
-    const endpoint = { ...structuredClone(provider.endpoints.find(endpoint => endpoint.id === "invoke_model")), id: "embed", modelPassthrough: undefined,
-      streaming: null, request_headers: [] };
-    provider.endpoints.push(endpoint); if (options.reverse) provider.endpoints.reverse(); provider.capabilities.push({ id: "llm.embeddings", endpoint: "embed", methods: ["POST"] });
-    const item = options.item ?? titan;
-    provider.models.push({ ...structuredClone(provider.models[0]), id: `bedrock/${item.model}`, upstream: item.model,
-      capabilities: ["llm.embeddings"], pricing: null, inference: undefined, nativeCapabilities: undefined });
+    // Use the actual declaration when present. The fallback only supplies the
+    // candidate route before source-owned YAML/snapshot integration.
+    const bindings = provider.capabilities.filter(capability => capability.id === "llm.embeddings");
+    assert.ok(bindings.length <= 1, "fixture requires one explicit embedding route");
+    if (bindings.length) {
+      embeddingEndpoint = provider.endpoints.find(endpoint => endpoint.id === bindings[0].endpoint);
+      assert.ok(embeddingEndpoint, "declared embedding endpoint must exist");
+    } else {
+      embeddingEndpoint = { ...structuredClone(provider.endpoints.find(endpoint => endpoint.id === "invoke_model")), id: "embed", modelPassthrough: undefined,
+        streaming: null, request_headers: [] };
+      provider.endpoints.push(embeddingEndpoint); provider.capabilities.push({ id: "llm.embeddings", endpoint: embeddingEndpoint.id, methods: ["POST"] });
+    }
+    if (options.reverse) provider.endpoints.reverse();
+    const item = options.item ?? titan, id = `bedrock/${item.model}`;
+    const model = provider.models.find(model => model.id === id)
+      ?? { ...structuredClone(provider.models[0]), inference: undefined, nativeCapabilities: undefined };
+    provider.models = provider.models.filter(model => model.id !== id);
+    provider.models.push({ ...structuredClone(model), id, upstream: item.model, capabilities: ["llm.embeddings"], pricing: null });
   } });
   Object.assign(f.env, { AWS_ACCESS_KEY_ID: "synthetic-env-access", AWS_SECRET_ACCESS_KEY: "synthetic-env-secret",
     AWS_SESSION_TOKEN: "synthetic-env-session", AWS_REGION: region });
   if (options.pooled) await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true,
     credentials: { accessKeyId: "synthetic-grant-access", secretAccessKey: "synthetic-grant-secret", sessionToken: "synthetic-grant-session" } });
+  f.embeddingEndpoint = embeddingEndpoint.id;
   f.item = options.item ?? titan;
   f.rows = () => [...new Set(f.budgetCalls.map(call => call.name))].flatMap(name => f.budgets.get(name).reservations());
   f.upstream = request => { f.dispatch = { rows: f.rows(), capacity: bodyBudgetCharged() };
     return options.response ? options.response(request) : Response.json(f.item.response, { headers: { "x-private-upstream": "synthetic" } }); };
-  f.request = ({ manifest = false, model = f.item.model, body = f.item.body, query = "", endpoint = "embed", ...extra } = {}) => f.call(
+  f.request = ({ manifest = false, model = f.item.model, body = f.item.body, query = "", endpoint = f.embeddingEndpoint, ...extra } = {}) => f.call(
     (manifest ? `/v1/proxy/aws-bedrock/${endpoint}` : `/v1/native/aws-bedrock/model/${encodeURIComponent(model)}/invoke`) + query,
     manifest ? { body, pathParams: { model } } : body, { ...extra, headers: { "x-amz-security-token": "synthetic-caller-session", "x-api-key": "synthetic-caller", ...extra.headers } });
   t.after(f.drain); return f;
@@ -127,6 +139,34 @@ test("Bedrock missing dispatch acknowledgment never sends the signed paid reques
 
 for (const model of [titan.model, "us.amazon.titan-embed-text-v2:0:2:8k"]) test(`Bedrock unregistered ${model} cannot bypass the qualified embedding route through generic Invoke`, { timeout: 10_000 }, async t => {
   const f = await setup(t); f.provider.models = f.provider.models.filter(model => !model.capabilities.includes("llm.embeddings"));
-  f.provider.endpoints = f.provider.endpoints.filter(endpoint => endpoint.id !== "embed");
+  f.provider.endpoints = f.provider.endpoints.filter(endpoint => endpoint.id !== f.embeddingEndpoint);
   await denied(f, { model }); assert.equal(f.budgetCalls.some(call => call.path === "/reserve"), false);
+});
+
+
+for (const manifest of [false, true]) test(`Bedrock fixture reuses the declared embed_text route and selected model without duplicating identities: ${manifest}`, async t => {
+  const source = structuredClone(snapshot.providers.find(provider => provider.id === "aws-bedrock"));
+  const binding = source.capabilities.find(capability => capability.id === "llm.embeddings");
+  if (!binding) {
+    // Exact published route identity from the nine-row text declaration. This
+    // in-memory setup is not a provider declaration or snapshot activation.
+    source.capabilities.push({ id: "llm.embeddings", endpoint: "embed_text", methods: ["POST"] });
+    source.endpoints.push({ ...structuredClone(source.endpoints.find(endpoint => endpoint.id === "invoke_model")),
+      id: "embed_text", modelPassthrough: undefined, streaming: null, request_headers: [] });
+  }
+  const id = `bedrock/${titan.model}`;
+  if (!source.models.some(model => model.id === id)) source.models.push({ ...structuredClone(source.models[0]), id,
+    upstream: titan.model, capabilities: ["llm.embeddings"], pricing: null, inference: undefined, nativeCapabilities: undefined });
+  const unrelated = structuredClone(source.models.filter(model => model.id !== id));
+  const invokes = structuredClone(source.endpoints.filter(endpoint => ["invoke_model", "invoke_model_stream"].includes(endpoint.id)));
+  const f = await setup(t, { source, pooled: true, reverse: manifest });
+  assert.equal(f.embeddingEndpoint, binding?.endpoint ?? "embed_text");
+  assert.equal(f.provider.capabilities.filter(capability => capability.id === "llm.embeddings").length, 1);
+  assert.equal(f.provider.models.filter(model => model.id === id).length, 1);
+  assert.deepEqual(f.provider.models.filter(model => model.id !== id), unrelated);
+  for (const endpoint of invokes) assert.deepEqual(f.provider.endpoints.find(row => row.id === endpoint.id), endpoint);
+  const response = await f.request({ manifest }); assert.equal(response.status, 200, response.ok ? undefined : await response.text());
+  assert.deepEqual(await response.json(), titan.response); assert.equal(f.sent.length, 1);
+  assert.match(f.sent[0].headers.get("authorization"), /Credential=synthetic-grant-access\//);
+  assert.equal((await event(f)).actual_cost_micros, 700);
 });
