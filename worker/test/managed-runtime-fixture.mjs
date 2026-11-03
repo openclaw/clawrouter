@@ -8,7 +8,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById, snapshot } = await import("../providers.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { UsageLedgerObject } = await import("../ledgers.ts");
 export const contract = JSON.parse(readFileSync(new URL("../../providers/_fixtures/replicate/prediction-lifecycle.json", import.meta.url)));
@@ -16,7 +16,7 @@ export const path = "/v1/native/replicate/v1/predictions";
 export const control = `${path}/${contract.responses.created.id}`;
 export const grantKey = "oauth/fixture/replicate";
 
-export async function fixture(t, { fixed = 700, pooled = false, providerId = "replicate", configure = () => {} } = {}) {
+export async function fixture(t, { fixed = 700, pooled = false, providerId = "replicate", compiledProvider = false, configure = () => {} } = {}) {
   let now = Date.parse("2026-11-03T00:00:00Z"); t.mock.method(Date, "now", () => now);
   const values = new Map(), pending = [], sent = [], budgetCalls = [];
   const env = { REPLICATE_API_TOKEN: "synthetic-environment-key", POLICY_KV: {
@@ -45,13 +45,24 @@ export async function fixture(t, { fixed = 700, pooled = false, providerId = "re
   await authority("/policies/initialize-all", [{ policyId: "fixture", policy }]);
   await authority("/credentials/initialize-all", [{ credentialId: "fixture", credential }]);
   await authority("/connections/initialize-all", [{ providerId, enabled: true, monthlyBudgetMicros: 10_000 }]);
-  // Activation must work from the shipped snapshot; injecting lifecycle fields
-  // here would hide a missing or stale compiled declaration.
-  const provider = providerById("replicate"), original = structuredClone(provider);
+  // Synthetic declarations must not collide with a newly shipped provider.
+  // Compiled activation tests instead consume that exact provider unchanged.
+  if (!compiledProvider && providerId !== "replicate") {
+    const index = snapshot.providers.findIndex(provider => provider.id === providerId);
+    if (index !== -1) {
+      const [shipped] = snapshot.providers.splice(index, 1);
+      t.after(() => snapshot.providers.splice(index, 0, shipped));
+    }
+  }
+  const provider = providerById(compiledProvider ? providerId : "replicate");
+  assert.ok(provider, `missing compiled provider ${providerId}`);
+  const original = structuredClone(provider);
   t.after(() => { Object.keys(provider).forEach(key => delete provider[key]); Object.assign(provider, original); });
-  assert.deepEqual(provider.endpoints.find(endpoint => endpoint.id === "predictions").lifecycle,
-    { protocol: "replicate.predictions", retrieve: "prediction", cancel: "prediction_cancel" });
-  assert.equal(provider.endpoints.find(endpoint => endpoint.id === "prediction_cancel")?.request_format, "replicate.prediction_cancel");
+  if (!compiledProvider || providerId === "replicate") {
+    assert.deepEqual(provider.endpoints.find(endpoint => endpoint.id === "predictions").lifecycle,
+      { protocol: "replicate.predictions", retrieve: "prediction", cancel: "prediction_cancel" });
+    assert.equal(provider.endpoints.find(endpoint => endpoint.id === "prediction_cancel")?.request_format, "replicate.prediction_cancel");
+  }
   provider.id = providerId; configure(provider);
   if (pooled) await putGrantCredentials(env, grantKey, { provider: providerId, kind: "api_key", enabled: true, credential: "synthetic-original-key" });
   const f = { env, policy, credential, authority, budgets, budgetCalls, sent, provider,

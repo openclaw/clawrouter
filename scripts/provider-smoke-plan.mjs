@@ -442,10 +442,10 @@ function supportsManifestProxy(provider, endpoint) {
 function supportsEdgeAuth(provider) {
   return provider.auth.schemes.every((scheme) => {
     if (scheme.type === "bearer") {
-      return scheme.required === false || providerHasSecretCandidate(provider, scheme.secretKind);
+      return scheme.required === false || providerHasSecretCandidate(provider, scheme);
     }
     if (["api_key", "query_api_key"].includes(scheme.type)) {
-      return providerHasSecretCandidate(provider, scheme.secretKind);
+      return providerHasSecretCandidate(provider, scheme);
     }
     if (scheme.type === "cloudflare_binding") {
       return true;
@@ -471,7 +471,7 @@ function optionalAuthConfig(provider, key) {
     return (
       scheme.type === "bearer" &&
       scheme.required === false &&
-      secretBindingCandidates(provider, scheme.secretKind).includes(key)
+      secretBindingCandidates(provider, scheme).includes(key)
     );
   });
 }
@@ -514,14 +514,22 @@ function pushDeclaredTemplateCandidate(provider, candidates, candidate) {
   }
 }
 
-function providerHasSecretCandidate(provider, secretKind) {
-  return secretBindingCandidates(provider, secretKind).some((candidate) => {
+function providerHasSecretCandidate(provider, scheme) {
+  return secretBindingCandidates(provider, scheme).some((candidate) => {
     return provider.config_keys.includes(candidate);
   });
 }
 
-function secretBindingCandidates(provider, secretKind) {
+function secretBindingCandidates(provider, scheme) {
+  const { secretKind } = scheme;
   const candidates = [];
+  if (
+    provider.id === "fal" && scheme.type === "bearer" && secretKind === "api_key"
+    && scheme.header?.toLowerCase() === "authorization" && scheme.format === "Key ${secret}"
+    && provider.config_keys.includes("FAL_KEY")
+  ) {
+    candidates.push("FAL_KEY");
+  }
   for (const key of provider.config_keys) {
     if (configKeyMatchesSecretKind(key, secretKind)) {
       candidates.push(key);
