@@ -159,7 +159,7 @@ test("unknown prices, malformed metadata and raw idempotency keys fail before re
 
 test("managed protocols and configured providers keep distinct keys, bindings and compacted routes", async t => {
   const f = fixture(t), rows = [];
-  for (const protocol of ["fal.queue", "kie.jobs", "vydra.jobs"]) for (const providerId of ["first", "second"]) {
+  for (const protocol of ["fal.queue", "kie.jobs", "vydra.jobs", "openrouter.video"]) for (const providerId of ["first", "second"]) {
     const input = f.admission(); input.owner = { ...input.owner, providerId };
     input.managed = { ...input.managed, protocol, providerId };
     input.route.pathParams = protocol === "fal.queue" ? { owner: "fal-ai", app: "flux", variant: "schnell" } : {};
@@ -171,7 +171,7 @@ test("managed protocols and configured providers keep distinct keys, bindings an
     f.store.acknowledge(input.id, frozen.eventId, "usage", "stored");
     rows.push(input);
   }
-  f.restart(); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM http_continuations").get().n, 6);
+  f.restart(); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM http_continuations").get().n, rows.length);
   for (const input of rows) {
     const retry = f.store.managedRetry(input.managed, "g1");
     assert.equal(retry.id, input.id); assert.equal(retry.phase, "complete");

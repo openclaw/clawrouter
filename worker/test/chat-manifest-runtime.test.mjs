@@ -127,7 +127,7 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
         try {
           const url = new URL(target), headers = new Headers(init.headers), body = JSON.parse(init.body);
           const base = provider.base_urls.default.startsWith("https:") ? provider.base_urls.default : "https://fixture-upstream.example";
-          const expected = new URL(base.replace(/\/$/, "") + bind(endpoint.path, upstreamModel));
+          const expected = new URL(base.replace(/\/$/, "") + bind(endpoint.upstreamPath ?? endpoint.path, upstreamModel));
           assert.equal(url.origin, expected.origin);
           assert.equal(url.pathname, expected.pathname);
           assert.ok(!headers.get("authorization")?.includes("clawrouter-live-"));

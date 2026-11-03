@@ -58,6 +58,7 @@
 - Add frozen OpenRouter Lyria streaming music codecs and fixtures, preserving split base64 audio, native completion and unknown-cost outcomes on interrupted delivery.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 - Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.
+- Require explicit caller-policy and expiring original-credential configuration before managed upstream-retention admission, independently of router logging, with no automatic consent or credential fallback.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
 - Run pinned OpenClaw consumer contracts in parallel with independent frozen installs and lockfile-keyed pnpm download caching.
@@ -227,6 +228,7 @@
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
 - Add experimental hosted Chat Completions routes for NVIDIA NIM, Cerebras, DeepInfra and Baseten Model APIs, preserving provider-specific paths and credentials without inferring pricing or local runtime parity.
+- Fix native Node loading of the Cerebras catalog codec by resolving its TypeScript imports explicitly.
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Add focused Baseten SystemOne decision codecs and typed fixtures, preserving frozen model identities, native probability/legend semantics and independently validated per-question output usage.
@@ -242,6 +244,7 @@
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
 - Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
+- Add Synthetic native Messages and model discovery beside the preserved Chat route, with distinct dispatch paths, original credentials, qualified frozen model facts and real Worker protocol fixtures.
 
 - Decouple dashboard screenshot fixtures from the evolving provider inventory, while checking the real demo catalog and accessibility separately.
 - Add bounded native Google Live setup/frame codecs for the frozen voice models, preserving PCM, tool ownership, interruption and unknown usage without activating an unqualified WebSocket or browser-token bridge.
