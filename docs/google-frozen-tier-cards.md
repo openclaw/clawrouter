@@ -32,3 +32,7 @@ Interactions are not priced by these generation cards. Ordinary caller function
 declarations do not imply hosted execution. Explicit policy-fixed tariffs remain
 a separate policy choice. Native-client replay/thought-signature acceptance and
 live-account entitlement require their actual consumers and tests.
+
+Native tier discovery metadata remains limited to its currently qualified wire
+formats. These cards use the existing Gemini runtime tier contract; they do not
+extend the client catalog tier-advertisement contract.
