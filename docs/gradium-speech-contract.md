@@ -5,8 +5,10 @@ This route matches OpenClaw revision
 `extensions/gradium/speech-provider.ts`. It submits JSON with text, voice_id,
 only_audio:true, output_format and an encoded json_config to
 `POST https://api.gradium.ai/api/post/speech/tts`, authenticated with x-api-key.
-The binary output is passed through unchanged. The selected slice is WAV, Opus
-and ulaw_8000, matching speech, voice-note and telephony consumers.
+The validator preserves WAV, Opus and ulaw_8000 settings from the frozen client.
+The complete-output wrapper qualifies only WAV (audio/wav) and Opus (audio/ogg).
+It denies ulaw_8000 before dispatch because its HTTP MIME pair is unqualified;
+validator acceptance alone is not executable telephony support.
 
 ## Native evidence
 
@@ -23,11 +25,21 @@ and ulaw_8000, matching speech, voice-note and telephony consumers.
 
 ## Runtime and consumer handoff
 
-The runtime owner must call `validateGradiumSpeech(requestObject(selection.body))`
-for request_format `gradium.speech` in `validateSelectedInput`, mapping its
-validation error to an HTTP 400 before budget dispatch. This is required before
-snapshot activation: the manifest cannot constrain only_audio by itself.
-The validator retains text/settings exactly and rejects JSON-stream modes.
+The runtime owner wires `prepareNativeGradiumSpeech(selection)` for request_format
+`gradium.speech`. That wrapper calls `validateGradiumSpeech`, preserves native
+JSON and maps invalid settings to HTTP 400 before dispatch. The manifest cannot
+constrain only_audio by itself. The wrapper also denies unqualified output
+formats and rejects JSON-stream modes before paid egress.
+
+The existing shared capacity lease reserves 32 MiB before dispatch for at most
+16 MiB of complete output. Only HTTP 200, matching MIME and complete bounded EOF
+produce unchanged audio bytes. Redirects, ranges, bad lengths, overflow, wrong
+MIME and interrupted audio produce no partial audio publication. The native
+runtime returns sanitized `502 provider_unavailable` for those upstream failures,
+including rejected synthesis. A rejection without a qualified nonbillable
+classifier does not release the dispatched policy_fixed charge or prove free
+upstream work. Successful and failed delivery each settle once; neither permits
+remote POST replay. Known-unsent admission remains a separate runtime outcome.
 
 The integration owner regenerates the provider snapshot and validates all
 manifests. The client owner must resolve this native route using the scoped
