@@ -120,8 +120,8 @@ models:
         defaultMaxOutputTokens: 1048576
         serviceTiers:
           - id: default
-            # Fireworks treats these API enum values as default, not paid upgrades.
-            aliases: [auto, flex]
+            # Flex uses default processing; auto selects the only qualified card.
+            aliases: [flex]
             inputMicrosPerMillion: 2100000
             cachedInputMicrosPerMillion: 390000
             outputMicrosPerMillion: 6600000
