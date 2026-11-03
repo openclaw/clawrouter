@@ -47,6 +47,7 @@ models:
       capabilities: [llm.chat]
       pricingRef: huggingface-router-dynamic
       nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
         endpoints:
           chat_completions:
             checkedAt: "2026-11-03"
@@ -59,6 +60,7 @@ models:
       capabilities: [llm.chat]
       pricingRef: huggingface-router-dynamic
       nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
         endpoints:
           chat_completions:
             checkedAt: "2026-11-03"
@@ -71,6 +73,7 @@ models:
       capabilities: [llm.chat]
       pricingRef: huggingface-router-dynamic
       nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
         endpoints:
           chat_completions:
             checkedAt: "2026-11-03"
