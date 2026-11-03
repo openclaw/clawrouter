@@ -1,0 +1,12 @@
+{
+  "source": "openclaw/openclaw@31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "requests": [
+    { "model": "veo-3.1-fast-generate-preview", "body": { "instances": [{ "prompt": "Synthetic paper boat on a pond" }], "parameters": { "durationSeconds": 4, "aspectRatio": "16:9", "resolution": "720p" } } },
+    { "model": "veo-3.1-generate-preview", "body": { "instances": [{ "prompt": "Synthetic image animation", "image": { "bytesBase64Encoded": "AP+A", "mimeType": "image/png" } }], "parameters": { "durationSeconds": 6, "aspectRatio": "9:16", "resolution": "1080p" } } },
+    { "model": "veo-3.1-lite-generate-preview", "body": { "instances": [{ "prompt": "Synthetic video continuation", "video": { "encodedVideo": "AP+A", "encoding": "video/mp4" } }], "parameters": { "durationSeconds": 8 } } }
+  ],
+  "pending": { "name": "models/veo-3.1-fast-generate-preview/operations/fixture-op", "done": false },
+  "restComplete": { "name": "models/veo-3.1-fast-generate-preview/operations/fixture-op", "done": true, "response": { "generateVideoResponse": { "generatedSamples": [{ "video": { "uri": "https://generativelanguage.googleapis.com/v1beta/files/fixture-video:download?alt=media", "encoding": "video/mp4" } }] } } },
+  "sdkComplete": { "name": "operations/fixture-op", "done": true, "response": { "generatedVideos": [{ "video": { "uri": "files/fixture-video", "mimeType": "video/mp4" } }] } },
+  "failed": { "name": "models/veo-3.1-fast-generate-preview/operations/fixture-op", "done": true, "error": { "code": 3, "message": "Synthetic invalid argument" } }
+}
