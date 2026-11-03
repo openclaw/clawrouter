@@ -1,6 +1,6 @@
 import type { ModelAvailability } from "./model-availability";
 import type { ProviderRow, RouteCatalog } from "./contracts.ts";
-import { nativeModelEligible } from "./native-model-eligibility.ts";
+import { nativeModelEligible } from "./native-model-eligibility";
 
 export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   capabilities: Array<{ id: string; endpoint: string }>;
