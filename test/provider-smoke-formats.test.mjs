@@ -25,17 +25,48 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
+  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, ["replicate", "gradium"].includes(id), id);
+    assert.equal(!!target.unresolved, ["replicate", "gradium", "fal"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
   assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("canonical fal Key auth plans an unresolved result read without egress, health success or key disclosure", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "fal");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { FAL_KEY: "fixture-private-fal-key", FAL_API_KEY: "fixture-alias-key" });
+  assert.equal(plan.configuredCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["FAL_KEY"]);
+  assert.equal(plan.providers[0].target.endpoint, "queue_result");
+  assert.equal(plan.providers[0].target.upstreamMethod, "GET");
+  assert.match(plan.providers[0].target.unresolved, /owner, app, request_id/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); });
+  const health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["fal"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0);
+  assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-fal-key|fixture-alias-key|fixture-proxy-key/);
+  const missing = buildProviderSmokePlan({ providers: [provider] }, { FAL_API_KEY: "fixture-alias-key" });
+  assert.equal(missing.configuredCount, 0); assert.deepEqual(missing.providers[0].missingConfig, ["FAL_KEY"]);
+});
+
+test("fal's canonical key cannot qualify another provider, key name or auth scheme", () => {
+  const source = catalog.providers.find(provider => provider.id === "fal");
+  for (const patch of [{ id: "unrelated" }, { config_keys: ["OTHER_KEY"] },
+    ...[{ type: "api_key" }, { format: "Bearer ${secret}" }, { header: "X-Api-Key" }, { secretKind: "api_token" }]
+      .map(scheme => ({ auth: { ...source.auth, schemes: [{ ...source.auth.schemes[0], ...scheme }] } }))]) {
+    const provider = { ...source, ...patch };
+    const plan = buildProviderSmokePlan({ providers: [provider] }, { FAL_KEY: "fixture-private-key", OTHER_KEY: "fixture-foreign-key" });
+    assert.equal(plan.targetCount, 0);
+    assert.equal(plan.providers[0].target, null);
+  }
 });
 
 test("configured Gradium stays visibly unresolved without a paid speech attempt", async t => {
