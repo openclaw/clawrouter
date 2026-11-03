@@ -1,10 +1,11 @@
+import { filterOllamaModels } from "./provider-ollama.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return ["openai.models", "anthropic.models"].includes(endpoint.request_format);
+  return ["openai.models", "anthropic.models", "ollama.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
@@ -93,6 +94,10 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
     const metadata = await readMetadata(response, operation);
+    if (endpoint.request_format === "ollama.models") {
+      try { return metadataResponse(filterOllamaModels(metadata, id => discoveryAllows(policy, provider, id)), response); }
+      catch { throw malformed(); }
+    }
     const valid = (value: unknown): value is Record<string, unknown> & { id: string } => !!value && typeof value === "object" && !Array.isArray(value) && typeof (value as { id?: unknown }).id === "string" && !!(value as { id: string }).id && (value as { id: string }).id.length <= 512 && !/[\u0000-\u001f\u007f]/.test((value as { id: string }).id);
     if (endpoint.path_params.includes("model_id")) {
       if (!valid(metadata)) throw malformed();

@@ -1,3 +1,4 @@
+import { createOllamaChatInspector, ollamaChatFormat } from "./provider-ollama.ts";
 import { createBedrockEventStreamInspector } from "./bedrock-eventstream.ts";
 import { extractImageUsageTokens } from "./image-generation.ts";
 import { extractCompactUsageTokens } from "./responses-compact.ts";
@@ -29,7 +30,7 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
-  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech ? "provider_error" : null, delivery: "complete" }) }; }
+  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || responseFormat === ollamaChatFormat ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mime = contentType.split(";")[0].trim();
   const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
@@ -39,8 +40,10 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const revokeRejection = response.ok && operation.receivedRejection ? () => operation.revokeRejection() : undefined;
   const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe, undefined, revokeRejection) : null;
   const bedrock = responseFormat === "aws_bedrock.eventstream" && mime === "application/vnd.amazon.eventstream" ? createBedrockEventStreamInspector() : null;
-  const sse = !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection) : null;
-  let inspect = !bedrock && !compact && !images && !responses && !sse && json;
+  const nativeChat = responseFormat === ollamaChatFormat;
+  const ollama = nativeChat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
+  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection) : null;
+  let inspect = !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   let text = "", bytes = 0, nonempty = false, finished = false;
@@ -53,7 +56,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     if (delivery === "canceled") operation.cancel(reason);
     else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
     delivery = operation.delivery ?? delivery;
-    let inspection: UsageInspection = bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    let inspection: UsageInspection = ollama?.result(delivery === "complete") ?? bedrock?.result(delivery === "complete") ?? responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    if (nativeChat && (!ollama || delivery === "complete" && !inspection.outcome)) inspection.outcome = "provider_error";
     if (delivery === "complete" && inspect) {
       try {
         text += decoder.decode();
@@ -99,6 +103,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         if (responses) { await (bodyInspection?.observe ? operation.wait(responses.push(next.value), "publication") : responses.push(next.value)); if (finished) return; }
         sse?.push(next.value);
         bedrock?.push(next.value);
+        ollama?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;
           if (bytes > usageInspectionLimit) { inspect = false; text = ""; }

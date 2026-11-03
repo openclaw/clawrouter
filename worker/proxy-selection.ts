@@ -1,3 +1,4 @@
+import { prepareOllamaChatRequest } from "./provider-ollama.ts";
 import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
 import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
 import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
@@ -19,6 +20,12 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.endpoint.request_format === "ollama.chat") {
+    const body = requestObject(selection.body);
+    try { prepareOllamaChatRequest(body, typeof body.model === "string" ? body.model : ""); }
+    catch { throw new HttpError(400, "invalid_ollama_chat_request", "native Chat requires a selected model, native messages and valid tools, thinking, stream and options fields"); }
+    return;
+  }
   if (isStandaloneSearch(selection.endpoint)) {
     if (!selection.model) throw new HttpError(400, "model_required", "standalone search requires a qualified registered model");
     validateStandaloneSearch(requestObject(selection.body));
