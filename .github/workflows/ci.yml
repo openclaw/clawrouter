@@ -130,7 +130,7 @@ jobs:
           fs.accessSync(process.env.HOME, fs.constants.W_OK);
           console.log(JSON.stringify({ image, version, chromium, home: process.env.HOME, uid: process.getuid(), node: process.version }));
           NODE
-      - run: pnpm --dir admin exec playwright test --workers 4
+      - run: pnpm --dir admin exec playwright test
         id: browser
       - name: Upload browser failure output
         if: failure() && steps.browser.outcome == 'failure'
@@ -158,7 +158,7 @@ jobs:
           node -e 'if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Expected Darwin ARM64"); console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch }))'
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin build
-      - run: pnpm --dir admin exec playwright install chromium
+      - run: pnpm --dir admin exec playwright install --only-shell chromium
       - name: Check Fusion mobile screenshot and accessibility
         id: browser
         run: >-
