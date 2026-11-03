@@ -28,12 +28,29 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
 endpoints:
   chat_completions:
     modelPassthrough: {}
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    requestPricing:
+      unit: request
+      version: xai-responses-outcome-2026-11-03
+      effectiveAt: "2026-11-03"
+      source: https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee
+      outcome: xai.responses_violation
+      maximumAdditionalMicros: 50000
+      receipt: xai.usage.cost_in_usd_ticks
     streaming: sse
     timeoutMs: 600000
 models:
@@ -55,6 +72,62 @@ models:
           inputMicrosPerMillion: 2500000
           cachedInputMicrosPerMillion: 400000
           outputMicrosPerMillion: 5000000
+    - id: xai/grok-4.7
+      upstream: grok-4.7
+      capabilities: [llm.responses]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        responses:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.7
+            - https://docs.x.ai/developers/model-capabilities/text/best-practices
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: high
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.7
+              - https://docs.x.ai/developers/tools/web-search
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 500000
+            hostedTools: [web_search]
+      pricingRef: xai-grok-4-7-token-rates-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://docs.x.ai/developers/models/grok-4.7
+        # The bound outcome tariff handles this gap only on its qualified runtime
+        # path. Hosted tool fees and iteration bounds remain independent gaps.
+        unpricedCosts: [request_fee]
+        inputMicrosPerMillion: 2000000
+        cachedInputMicrosPerMillion: 500000
+        outputMicrosPerMillion: 6000000
+        maxInputTokens: 500000
+        defaultMaxOutputTokens: 500000
+        longContext: &grok47LongContext
+          # The upstream tariff starts at >=200k; the runtime compares >.
+          thresholdInputTokens: 199999
+          inputMicrosPerMillion: 4000000
+          cachedInputMicrosPerMillion: 1000000
+          outputMicrosPerMillion: 12000000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 500000
+            outputMicrosPerMillion: 6000000
+            longContext: *grok47LongContext
+          - id: priority
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 1000000
+            outputMicrosPerMillion: 12000000
+            longContext:
+              thresholdInputTokens: 199999
+              inputMicrosPerMillion: 8000000
+              cachedInputMicrosPerMillion: 2000000
+              outputMicrosPerMillion: 24000000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
