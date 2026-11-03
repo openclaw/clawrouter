@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Exclude stopped model identities from executable catalogs and native discovery while preserving dated deprecation and upstream-alias facts without changing selected models or tariffs.
 - Recognize fal’s canonical FAL_KEY binding for native Key authentication, preserving original managed-job credentials and rejecting malformed values without exposing them.
 
 - Exercise the actual OpenClaw Cohere compatibility client through Worker catalog, admission, fragmented streams and SQLite settlement, keeping policy charges separate from native token usage.
