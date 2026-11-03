@@ -108,3 +108,13 @@ test("SubQ image and question limits are typed separately from token pricing", (
   facts(m).input = ["text"];
   assert.throws(() => compile(m), /image limits require image input/);
 });
+
+// An omitted maximum must not admit a minimum beyond a known protocol bound.
+test("known option ceilings also constrain minimum-only declarations", () => {
+  for (const [contract, kind, tooMany] of [[contracts[0], "score", 27], [contracts[2], "choice", 256], [contracts[3], "score", 11]]) {
+    const m = fixture(contract), question = decision(m).questions[kind];
+    delete question.maxOptions;
+    question.minOptions = tooMany;
+    assert.throws(() => compile(m), /invalid manifest/);
+  }
+});

@@ -947,7 +947,8 @@
                         "const": "categorical"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 120
                       },
                       "maxOptions": {
                         "maximum": 120
@@ -963,7 +964,8 @@
                         "const": "categorical"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 26
                       },
                       "maxOptions": {
                         "maximum": 26
@@ -980,7 +982,8 @@
                         "const": "none"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 120
                       },
                       "maxOptions": {
                         "maximum": 120
@@ -997,7 +1000,8 @@
                         "const": "independent"
                       },
                       "minOptions": {
-                        "minimum": 1
+                        "minimum": 1,
+                        "maximum": 120
                       },
                       "maxOptions": {
                         "maximum": 120
@@ -1113,7 +1117,8 @@
                         "const": "provider-defined"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 255
                       },
                       "maxOptions": {
                         "maximum": 255
@@ -1130,7 +1135,8 @@
                         "const": "provider-defined"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 10
                       },
                       "maxOptions": {
                         "maximum": 10
@@ -1206,7 +1212,8 @@
                         "const": "categorical"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 255
                       },
                       "maxOptions": {
                         "maximum": 255
@@ -1223,7 +1230,8 @@
                         "const": "categorical"
                       },
                       "minOptions": {
-                        "minimum": 2
+                        "minimum": 2,
+                        "maximum": 10
                       },
                       "maxOptions": {
                         "maximum": 10
