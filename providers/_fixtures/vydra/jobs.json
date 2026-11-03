@@ -1,0 +1,104 @@
+{
+  "protocol": "vydra.jobs",
+  "synthetic": true,
+  "request": {
+    "method": "POST",
+    "path": "/api/v1/jobs",
+    "body": {
+      "workflow": "generate_video",
+      "input": {
+        "prompt": "A synthetic blue square",
+        "model": "veo3"
+      }
+    }
+  },
+  "submission": {
+    "id": "11111111-2222-4333-8444-555555555555",
+    "status": "running",
+    "workflow": "generate_video",
+    "creditsCharged": 150,
+    "_links": {
+      "self": "https://untrusted.example/job",
+      "status": "https://untrusted.example/job"
+    }
+  },
+  "read": {
+    "method": "GET",
+    "path": "/api/v1/jobs/11111111-2222-4333-8444-555555555555"
+  },
+  "cancel": {
+    "method": "DELETE",
+    "path": "/api/v1/jobs/11111111-2222-4333-8444-555555555555",
+    "response": {
+      "success": true,
+      "message": "Job cancelled",
+      "refund": {
+        "applied": true,
+        "creditsRefunded": 150
+      }
+    }
+  },
+  "responses": {
+    "pending": {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "status": "pending",
+      "progress": 0
+    },
+    "partial": {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "status": "running",
+      "output": {
+        "videoUrl": "https://media.example/partial.mp4"
+      }
+    },
+    "completed": {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "status": "completed",
+      "creditsCharged": 150,
+      "output": {
+        "videoUrl": "https://media.example/final.mp4",
+        "thumbnailUrl": "https://media.example/preview.png"
+      }
+    },
+    "failed": {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "status": "failed",
+      "error": {
+        "message": "Synthetic failure",
+        "code": "PROCESSING_ERROR"
+      },
+      "creditsRefunded": 150,
+      "refundStatus": "completed"
+    },
+    "cancelled": {
+      "id": "11111111-2222-4333-8444-555555555555",
+      "status": "cancelled",
+      "creditsCharged": 150,
+      "creditsRefunded": 150,
+      "refundStatus": "completed"
+    }
+  },
+  "billing": {
+    "nativeUnit": "integer_ledger_unit",
+    "ledgerUnitsPerCustomerCredit": 50,
+    "actualProviderCostMicrousd": null,
+    "conversionSource": "https://www.vydra.ai/docs/billing",
+    "pricingVersion": "2026-10-07-whole-credits",
+    "effectiveDollarRate": "account offer dependent; unknown here",
+    "hardBudgetRequires": "frozen workflow/model/settings quote and whole-job dollar bound, or explicit policy_fixed tariff"
+  },
+  "retention": {
+    "mediaLifetimeSeconds": null,
+    "qualification": "No universal output TTL asserted; ownership and receipt retention are independent."
+  },
+  "integrationRequirements": [
+    "bind original caller/policy/credential/workflow/model and request digest before exposing id",
+    "canonical POST jobs is not idempotent Studio run; never replay uncertain creation",
+    "retrieve output through bound GET even after immediate completed create",
+    "DELETE acknowledgement and credit refund are not terminal execution evidence; observe original job",
+    "partial output does not complete a running job",
+    "cross-caller IDs, rotated credentials and expired bindings deny before egress",
+    "record at most one frozen settlement; do not double-refund or rewrite it after a late terminal race",
+    "keep _links/output/error text transient and never auto-download media with provider credentials"
+  ]
+}
