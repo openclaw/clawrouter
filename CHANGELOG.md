@@ -113,6 +113,8 @@
 
 
 - Add bounded Kie Market job helpers and executable wire/result fixtures that reject HTTP-200 API errors, preserve partial-job state and keep credit usage distinct from dollar settlement. Runtime activation remains separately qualified.
+- Declare scoped Kie Market submit/retrieve routes and reject returned model mismatches; keep cancellation unavailable and native credits separate from upstream-dollar pricing.
+- Keep Kie smoke lookups explicitly unresolved without an owned task ID, and qualify the shipped Market declaration through native and manifest Worker lifecycle, original-credential and conservative settlement fixtures.
 - Validate the frozen Kie Wan 2.6 native text/image wire contracts, enforcing explicit text resolution and native string duration while keeping unbound image dispatch and unknown upstream costs closed.
 - Validate frozen Kie Kling 2.6 text inputs in the registered job adapter, preserve native sound/duration semantics and keep image execution closed pending original-credential asset binding.
 - Add a bounded Wan video lifecycle adapter and synthetic native fixtures, preserving model-specific inputs, regional credential boundaries and expired observations. Shared durable route activation remains separately qualified.
@@ -338,7 +340,6 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
-- Declare scoped Kie Market submit/retrieve routes and reject returned model mismatches; keep cancellation unavailable and native credits separate from upstream-dollar pricing.
 
 - Preserve validated payload formats for caller-scoped manifest-only catalog routes so native embedding clients can qualify offers without enabling disabled native endpoints.
 

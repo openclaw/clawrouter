@@ -311,8 +311,9 @@ function smokeTarget(provider, env) {
     method: "POST",
     upstreamMethod,
     endpoint: endpoint.id,
-    ...(body === null || unresolvedParams.length ? { unresolved: endpoint.request_format === "replicate.prediction_get"
+    ...(body === null || unresolvedParams.length || endpoint.request_format === "kie.job_get" ? { unresolved: endpoint.request_format === "replicate.prediction_get"
       ? "prediction lookup requires an existing prediction ID; no smoke fixture is declared"
+      : endpoint.request_format === "kie.job_get" ? "Kie lookup requires an existing task ID; no smoke fixture is declared"
       : unresolvedParams.length ? `path parameters require a smoke fixture: ${unresolvedParams.join(", ")}`
       : `no smoke request template for ${endpoint.request_format}` } : {}),
     envelope: {
