@@ -650,6 +650,7 @@
             "maximum": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           }
         },
+        "requestPricing": { "$ref": "#/$defs/requestPricing" },
         "toolPricing": {
           "type": "object",
           "required": ["version", "effectiveAt", "source", "webSearchMicrosPerCall", "previewMicrosPerCallByModel"],
@@ -1511,6 +1512,68 @@
         "topP": { "$ref": "#/$defs/parameterSupport" },
         "logprobs": { "$ref": "#/$defs/parameterSupport" },
         "toolCalling": { "$ref": "#/$defs/parameterSupport" }
+      }
+    },
+    "requestPricing": {
+      "type": "object",
+      "required": [
+        "unit",
+        "version",
+        "effectiveAt",
+        "source",
+        "successfulResponseMicros"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "const": "request"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "effectiveAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^https://",
+          "maxLength": 2048
+        },
+        "successfulResponseMicros": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "parameterRates": {
+          "type": "object",
+          "required": [
+            "parameter",
+            "rates"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "parameter": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
+            },
+            "rates": {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 16,
+              "propertyNames": {
+                "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+              },
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        }
       }
     },
     "modelPricing": {

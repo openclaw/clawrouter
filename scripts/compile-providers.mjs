@@ -75,6 +75,7 @@ function compileProvider(manifest, ids) {
     streaming: endpoint.streaming ?? null,
     ...(endpoint.responsesLifecycle ? { responsesLifecycle: endpoint.responsesLifecycle } : {}),
     ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
+    ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}),
     ...(endpoint.toolPricing ? { toolPricing: structuredClone(endpoint.toolPricing) } : {}),
     ...(endpoint.modelPassthrough ? { modelPassthrough: {
       pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
@@ -320,6 +321,22 @@ function validateManifest(manifest) {
   }
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.requestPricing) {
+      // The runtime can select a flat request tariff without provider branches.
+      // Qualification remains explicit until another protocol has sourced billing semantics.
+      const pricing = endpoint.requestPricing, variants = pricing.parameterRates;
+      if (manifest.id !== "perplexity" || endpoint.path !== "/search" || (endpoint.method ?? "POST") !== "POST"
+        || endpoint.requestFormat !== "perplexity.search" || endpoint.responseFormat !== "perplexity.search"
+        || endpoint.streaming || endpoint.websocket || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
+        || Object.keys(endpoint.query ?? {}).length || endpoint.pathParams?.length
+        || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "web.search")
+        || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST")))
+        throw new Error(`endpoint ${id} requestPricing requires a qualified successful-request contract`);
+      if (!variants || variants.parameter !== "search_type" || Object.keys(variants.rates).length !== 2 || !["web", "fast"].every(value => Object.hasOwn(variants.rates, value)))
+        throw new Error(`endpoint ${id} requestPricing has unqualified parameter rates`);
+      if (variants && Object.hasOwn(variants.rates, "web") && variants.rates.web !== pricing.successfulResponseMicros)
+        throw new Error(`endpoint ${id} requestPricing default must match the web tariff`);
+    }
     // This request format owns OpenAI's free tariff and API-key-only transport.
     // Wire compatibility alone cannot qualify another provider's billing.
     if (endpoint.requestFormat === "openai.moderations" && manifest.id !== "openai") throw new Error(`provider ${manifest.id} endpoint ${id} openai.moderations requires provider openai`);
