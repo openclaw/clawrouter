@@ -83,6 +83,7 @@
 - Qualify the explicit four-segment fal submit template and shared owner/app control links against native HeyGen and Seedance fixtures; retain exact product admission, original credentials and unknown-cost boundaries.
 - Qualify the three native xAI video create formats and shared original-job retrieve link; reject unbound controls, credential overrides and fabricated token prices before activation.
 - Validate the model-less Gradium native unary speech declaration, preserving original API-key routing and native settings while rejecting format aliases and invented tariffs before activation.
+- Qualify Baseten SystemOne decision metadata and exact native endpoint links for the three frozen models, preserving option/question usage bounds and separation from Chat and unqualified tariffs.
 - Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
