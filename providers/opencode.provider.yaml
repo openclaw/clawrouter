@@ -1,5 +1,5 @@
-# Gateway Chat contract: docs/hosted-gateway-providers.md.
-# Endpoint/model source checked 2026-11-03: https://opencode.ai/v2/docs/console/api/inference/
+# Frozen native API bindings and activation boundaries: docs/opencode-native-catalog.md.
+# Endpoint/model source checked 2026-11-04: https://opencode.ai/v2/docs/console/api/inference/
 schema: clawrouter.service-provider.v1
 id: opencode
 displayName: OpenCode Console
@@ -17,7 +17,7 @@ auth:
       format: "Bearer ${secret}"
       secretKind: api_key
 baseUrls:
-  default: https://opencode.ai/inference/openai/v1
+  default: https://opencode.ai
 routing:
   nativePrefixes: [clawrouter-opencode, opencode]
   modelPrefixes: [opencode/]
@@ -30,12 +30,55 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: llm.messages
+    endpoint: messages
+    methods: [POST]
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
+  - id: llm.generate
+    endpoint: generate_content
+    methods: [POST]
+  - id: llm.stream
+    endpoint: stream_generate_content
+    methods: [POST]
 endpoints:
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
+    upstreamPath: /inference/openai/v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  messages:
+    path: /v1/messages
+    upstreamPath: /inference/anthropic/v1/messages
+    requestHeaders: [anthropic-beta, anthropic-version]
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
+  responses:
+    path: /v1/responses
+    upstreamPath: /inference/openai/v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
+  # Existing template composition records the native paths; no model is activated.
+  generate_content:
+    path: /inference/google/v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.generate_content
+    responseFormat: google.generate_content
+    timeoutMs: 600000
+  stream_generate_content:
+    path: /inference/google/v1beta/models/${model}:streamGenerateContent
+    pathParams: [model]
+    query: { alt: sse }
+    requestFormat: google.generate_content
+    responseFormat: google.stream_generate_content
     streaming: sse
     timeoutMs: 600000
 models:
@@ -43,6 +86,66 @@ models:
     - id: opencode/glm-5.3
       upstream: glm-5.3
       capabilities: [llm.chat]
+    - id: opencode/claude-opus-5
+      upstream: claude-opus-5
+      capabilities: [llm.messages]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            input: [text, image]
+            inference: { chat: true }
+            checkedAt: '2026-11-04'
+            sources:
+              - https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/opencode/openclaw.plugin.json
+              - https://opencode.ai/v2/docs/console/models/
+    - id: opencode/gpt-5.6-sol
+      upstream: gpt-5.6-sol
+      capabilities: [llm.responses]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            input: [text, image]
+            inference: { chat: true }
+            checkedAt: '2026-11-04'
+            sources:
+              - https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/opencode/openclaw.plugin.json
+              - https://opencode.ai/v2/docs/console/models/
+    # Native Gemini path facts above; composition/client qualification remains open.
+    - id: opencode/gemini-3.6-flash
+      upstream: gemini-3.6-flash
+      capabilities: []
+    - id: opencode/minimax-m3
+      upstream: minimax-m3
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            input: [text, image]
+            inference: { chat: true }
+            checkedAt: '2026-11-04'
+            sources:
+              - https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/opencode/openclaw.plugin.json
+              - https://opencode.ai/v2/docs/console/models/
+    - id: opencode/kimi-k3
+      upstream: kimi-k3
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            input: [text, image]
+            inference: { chat: true }
+            checkedAt: '2026-11-04'
+            sources:
+              - https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/opencode/openclaw.plugin.json
+              - https://opencode.ai/v2/docs/console/models/
+    # OpenCode-only free tier: external-client restriction, not retirement.
+    - id: opencode/big-pickle
+      upstream: big-pickle
+      capabilities: []
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
