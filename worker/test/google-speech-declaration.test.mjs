@@ -47,7 +47,8 @@ test("bundled Google speech declares only the five frozen unpriced identities wi
     assert.deepEqual(Object.keys(declared.nativeCapabilities.endpoints), [endpointId(model.upstream)]);
     const facts = declared.nativeCapabilities.endpoints[endpointId(model.upstream)];
     assert.deepEqual(facts.input, ["text"]); assert.equal(facts.checkedAt, "2026-11-04");
-    assert.ok(facts.sources.includes("https://ai.google.dev/gemini-api/docs/deprecations"));
+    assert.deepEqual(facts.sources, ["https://ai.google.dev/gemini-api/docs/speech-generation",
+      "https://ai.google.dev/gemini-api/docs/deprecations"]);
     assert.equal(facts.contextWindow, undefined); assert.equal(facts.maxOutputTokens, undefined);
     assert.equal(eligible[0].native_proxy, !interactions(model.upstream));
   }
