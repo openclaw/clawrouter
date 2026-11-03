@@ -1,0 +1,65 @@
+# Native queue protocol; no synchronous image/music or model tariff claim.
+# Frozen source: OpenClaw 31ad71a extensions/fal/video-generation-provider.ts.
+schema: clawrouter.service-provider.v1
+id: fal
+displayName: fal Queue
+status: experimental
+class: rest_json
+service:
+  platform: fal
+  kind: tool_provider
+  upstreamService: fal
+  configKeys: [FAL_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: Authorization
+      format: "Key ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://queue.fal.run
+routing:
+  nativePrefixes: [clawrouter-fal, fal]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: media.predict
+    endpoint: queue
+    methods: [POST]
+endpoints:
+  queue:
+    path: /${owner}/${app}/${variant}
+    pathParams: [owner, app, variant]
+    requestFormat: fal.queue_submit
+    responseFormat: fal.queue_submission
+    lifecycle:
+      protocol: fal.queue
+      retrieve: queue_status
+      result: queue_result
+      cancel: queue_cancel
+    timeoutMs: 120000
+  queue_status:
+    path: /${owner}/${app}/requests/${request_id}/status
+    method: GET
+    pathParams: [owner, app, request_id]
+    requestFormat: fal.queue_status
+    responseFormat: fal.queue_status
+    timeoutMs: 120000
+  queue_result:
+    path: /${owner}/${app}/requests/${request_id}
+    method: GET
+    pathParams: [owner, app, request_id]
+    requestFormat: fal.queue_result
+    responseFormat: fal.queue_result
+    timeoutMs: 120000
+  queue_cancel:
+    path: /${owner}/${app}/requests/${request_id}/cancel
+    method: PUT
+    pathParams: [owner, app, request_id]
+    requestFormat: fal.queue_cancel
+    responseFormat: fal.queue_cancel
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
