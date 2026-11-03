@@ -1,0 +1,66 @@
+# Frozen Token Plan contract and per-edition model eligibility: docs/qwen-token-plan.md.
+# Primary endpoint checked 2026-11-03; no standard/Coding Plan/QwenCloud key fallback.
+schema: clawrouter.service-provider.v1
+id: qwen-token-plan-cn
+displayName: Qwen Token Plan (Beijing)
+status: experimental
+class: openai_compatible
+service:
+  platform: qwen
+  kind: model_provider
+  upstreamService: qwen-token-plan-cn
+  configKeys: [QWEN_TOKEN_PLAN_CN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+routing:
+  nativePrefixes: [clawrouter-qwen-token-plan-cn, qwen-token-plan-cn]
+  modelPrefixes: [qwen-token-plan-cn/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: qwen-token-plan-cn/qwen3.7-plus
+      upstream: qwen3.7-plus
+      capabilities: [llm.chat]
+    - id: qwen-token-plan-cn/qwen3.8-max
+      upstream: qwen3.8-max
+      capabilities: [llm.chat]
+    - id: qwen-token-plan-cn/qwen3.8-flash
+      upstream: qwen3.8-flash
+      capabilities: [llm.chat]
+    - id: qwen-token-plan-cn/qwen3.6-plus
+      upstream: qwen3.6-plus
+      capabilities: [llm.chat]
+    - id: qwen-token-plan-cn/kimi-k2.5
+      upstream: kimi-k2.5
+      capabilities: [llm.chat]
+    - id: qwen-token-plan-cn/glm-5
+      upstream: glm-5
+      capabilities: [llm.chat]
+    - id: qwen-token-plan-cn/MiniMax-M2.5
+      upstream: MiniMax-M2.5
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
