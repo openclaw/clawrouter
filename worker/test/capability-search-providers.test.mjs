@@ -1,8 +1,10 @@
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
@@ -11,7 +13,7 @@ const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { snapshot } = await import("../providers.ts");
 const ids = ["brave", "exa", "parallel"];
-const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...ids.map(id => `providers/${id}.provider.yaml`)], { encoding: "utf8" }));
+const compiled = compileProviderSnapshot(ids.map(id => `providers/${id}.provider.yaml`).toSorted().map(file => parse(readFileSync(file, "utf8"))));
 
 async function fixture(t) {
   // Integration owns the generated snapshot. Exercise these exact compiled manifests
