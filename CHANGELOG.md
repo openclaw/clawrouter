@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
+
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
