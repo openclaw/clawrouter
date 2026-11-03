@@ -9,6 +9,7 @@ const fileId = "fixture-video", filePath = `/v1/native/replicate/files/${fileId}
 const fileHeaders = { "x-clawrouter-job-id": wire.pending.id };
 const media = new Uint8Array([0, 255, 128, 7]);
 const file = { id: fileId, mimeType: "video/mp4" };
+const adminActor = { auth: "admin_token", email: "fixture@example.com", role: "admin" };
 
 async function fixture(t, options = {}) {
   const f = await setup(t, options), create = f.provider.endpoints.find(e => e.id === "predictions");
@@ -124,15 +125,20 @@ for (const status of ["PROCESSING", "FAILED"]) test(`metadata ${status} performs
 });
 
 for (const change of ["caller", "grant"]) test(`fresh ${change} revocation between metadata and download prevents content egress`, async t => {
-  const f = await fixture(t, { pooled: true }); await f.call(path, body({})); const upstream = f.upstream;
+  const f = await fixture(t, { pooled: true }); await f.call(path, body({})); const upstream = f.upstream; let changed = false;
   f.upstream = async request => {
     if (!request.url.includes(":download")) {
-      if (change === "caller") await f.authority("/credentials/put", { credentialId: "fixture", credential: { ...f.credential, enabled: false } });
+      if (change === "caller") {
+        const result = await (await f.authority("/credentials/mutate", { scope: "admin", actor: adminActor, operation: "revoke", credentialId: "fixture" })).json();
+        assert.equal(result.outcome, "updated");
+      }
       else await putGrantCredentials(f.env, "oauth/fixture/replicate", { provider: "replicate", kind: "api_key", enabled: true, credential: "synthetic-replacement-key" });
+      changed = true;
     }
     return upstream(request);
   };
   const response = await f.fileCall(); assert.ok([401, 403, 409, 502, 503].includes(response.status), await response.text());
+  assert.equal(changed, true, "the authority mutation must commit before this test can prove revocation");
   assert.equal(f.sent.length, 2); assert.equal(bodyBudgetCharged(), 0);
 });
 
@@ -151,11 +157,12 @@ for (const malformed of ["redirect", "wrong-id", "truncated", "oversized", "part
   assert.ok(f.sent.every(r => new URL(r.url).hostname === "generativelanguage.googleapis.com"));
 });
 
-test("caller cancellation cancels the held source reader and releases file capacity", async t => {
+test("caller cancellation cancels the held source reader and releases file capacity", { timeout: 10_000 }, async t => {
   const f = await fixture(t); await f.call(path, body({})); const controller = new AbortController(); let cancel = false, entered;
   const ready = new Promise(resolve => { entered = resolve; });
   f.upstream = () => new Response(new ReadableStream({ start() { entered(); }, cancel() { cancel = true; } }), { headers: { "content-type": "application/json" } });
-  const pending = f.fileCall(undefined, { signal: controller.signal }); await ready; controller.abort();
+  const pending = f.fileCall(undefined, { signal: controller.signal });
+  await Promise.race([ready, pending.then(async response => assert.fail(`file read ended before source entry: ${response.status} ${await response.text()}`))]); controller.abort();
   const response = await pending; assert.equal(response.status, 499); await Promise.resolve();
   assert.equal(cancel, true); assert.equal(bodyBudgetCharged(), 0); assert.equal(f.sent.length, 2);
 });
@@ -204,7 +211,8 @@ test("canceling returned bytes releases the bounded allocation", async t => {
 
 test("another valid credential in the same policy cannot claim the original caller's file", async t => {
   const f = await fixture(t); await f.call(path, body({}));
-  await f.authority("/credentials/put", { credentialId: "other", credential: { ...f.credential } });
+  const result = await (await f.authority("/credentials/mutate", { scope: "admin", actor: adminActor, operation: "create", credentialId: "other", credential: { ...f.credential } })).json();
+  assert.equal(result.outcome, "updated");
   const response = await f.fileCall(undefined, { headers: { authorization: "Bearer clawrouter-live-other-fixture-secret" } });
   assert.equal(response.status, 409, await response.clone().text()); assert.equal(f.sent.length, 1);
 });
