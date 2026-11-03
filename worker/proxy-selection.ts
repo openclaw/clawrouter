@@ -1,3 +1,4 @@
+import { googleAudioRequest } from "./google-audio-classification.ts";
 import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
@@ -38,6 +39,9 @@ export function validateSelectedInput(selection: ProxySelection): void {
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
     throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
+  if (googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
+    && (!["google.music_generate", "google.speech_generate_content", "google.speech_interactions"].includes(selection.endpoint.request_format) || !selection.nativeResponse))
+    throw new HttpError(400, "native_audio_route_required", "Google audio output requires its qualified nonstream native audio route");
   if (selection.nativeResponse) return;
   if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
   if (selection.endpoint.request_format === "radius.messages") {

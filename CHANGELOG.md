@@ -65,6 +65,7 @@
 - Validate frozen fal MiniMax Live and HeyGen prompt-only video requests in the registered scoped queue adapter, preserving original control routes and terminal execution when output media is unusable.
 - Validate the two frozen fal Wan video input contracts in the scoped queue adapter, preserving exact version paths and credential boundaries; keep the unsupported Kling 2.1 Master endpoint closed.
 - Add frozen OpenRouter Lyria streaming music codecs and fixtures, preserving split base64 audio, native completion and unknown-cost outcomes on interrupted delivery.
+- Keep Google music and speech output out of generic GenerateContent/SSE text dispatch and settlement, preserving selected-model and native AUDIO evidence until qualified audio routes are wired.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 - Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.
 - Require explicit caller-policy and expiring original-credential configuration before managed upstream-retention admission, independently of router logging, with no automatic consent or credential fallback.
@@ -249,6 +250,7 @@
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
 - Add the native Lyria response wrapper with explicit audio MIME, complete MP3/WAV framing, bounded delivery and thought exclusion; shared music routing and cost admission remain separately qualified.
 - Keep explicit native Lyria music unpriced at admission and settlement, rejecting borrowed token/image tariffs under hard-dollar budgets while preserving separately labeled policy charges.
+- Qualify the two frozen Lyria unary music declarations with exact native formats, selected-model paths and unknown-cost guards, keeping shared runtime activation separately gated.
 - Add bounded frozen MiniMax music stream codecs and fixtures with terminal audio validation, required cover references and explicit existing-user/free-discontinuation qualifications.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
@@ -258,6 +260,7 @@
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Qualify DeepInfra’s eight frozen model dispositions and original-account model discovery, preserving the existing Chat seed and withholding the known GLM-5.1 alias until runtime availability integration.
+- Add the six frozen Baseten Chat identities with qualified image inputs and native reasoning/tool replay fixtures; keep decision-only identities out of Chat and unknown prices unset.
 - Add focused Baseten SystemOne decision codecs and typed fixtures, preserving frozen model identities, native probability/legend semantics and independently validated per-question output usage.
 - Keep native SystemOne decision cards out of OpenAI Decisions discovery while preserving their exact native limits, observed usage contract and caller-scoped provider routes.
 - Wire native Baseten SystemOne decisions through bounded complete-response admission and original-credential dispatch, preserving observed answer usage and conservative settlement without OpenAI wire aliases.
