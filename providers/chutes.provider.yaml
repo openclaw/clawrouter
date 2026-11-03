@@ -1,0 +1,48 @@
+# Hosted Chat API only; product boundaries: docs/hosted-catalog-providers.md.
+# Endpoint/model source checked 2026-11-03: https://www.chutes.ai/docs/help/faq
+schema: clawrouter.service-provider.v1
+id: chutes
+displayName: Chutes hosted API
+status: experimental
+class: openai_compatible
+service:
+  platform: chutes
+  kind: model_provider
+  upstreamService: chutes
+  configKeys: [CHUTES_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://llm.chutes.ai/v1
+routing:
+  nativePrefixes: [clawrouter-chutes, chutes]
+  modelPrefixes: [chutes/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: chutes/deepseek-ai/DeepSeek-V4-Flash-0731-TEE
+      upstream: deepseek-ai/DeepSeek-V4-Flash-0731-TEE
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
