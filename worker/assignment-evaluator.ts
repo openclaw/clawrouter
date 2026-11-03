@@ -104,6 +104,6 @@ function assignmentEntry(rule: AssignmentRuleEntry): AssignmentStateEntry {
   return { groups: normalizeGroups([...rule.groups, ...(rule.policyIds.length ? [rule.generatedGroup] : [])]), revokeOnLoss: rule.revokeOnLoss };
 }
 
-function normalizeGroups(groups: string[]) { return [...new Set(groups.map((group) => group.trim().toLowerCase()).filter(Boolean))].sort(); }
+export function normalizeGroups(groups: string[]) { return [...new Set(groups.map((group) => group.trim().toLowerCase()).filter(Boolean))].sort(); }
 function records(value: unknown): Array<Record<string, unknown>> { return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === "object") : []; }
 function scalarString(value: unknown): string { return typeof value === "string" || typeof value === "number" ? String(value).trim() : ""; }

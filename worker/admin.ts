@@ -11,7 +11,7 @@ import {
   type PoolSubmissionTicket, type PoolSubmissionTicketView,
 } from "./authority";
 import {
-  listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
+  listAssignmentRules, normalizeAssignmentEvidence, normalizeGroups, reconcileUserAssignments,
   type AssignmentEvidence,
 } from "./assignments";
 import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
@@ -723,7 +723,6 @@ function grantResponse(key: string, grant: UpstreamGrant) {
   return { refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
 }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
-function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }
 function mutationObject(value: unknown, code: string, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, code, `${label} must be an object`);

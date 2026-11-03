@@ -1,7 +1,7 @@
 import { isModelDiscovery } from "./model-discovery.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { envValue, HttpError } from "./utils.ts";
 
 export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
   if (!grant?.kind) return null;
@@ -146,9 +146,4 @@ function providerSecret(provider: CompiledProvider, scheme: AuthScheme | GrantTr
 
 function firstCredential(values: Record<string, string> | undefined): string | null {
   return values ? Object.values(values).find(Boolean) ?? null : null;
-}
-
-function envValue(env: Env, key: string): string | null {
-  const value = env[key];
-  return typeof value === "string" && value.trim() ? value : null;
 }
