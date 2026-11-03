@@ -97,6 +97,7 @@
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
 - Add a bounded unary Bedrock Converse response wrapper with explicit selected-model and regional-origin binding, complete validation and cache-inclusive usage; common dispatch and SigV4 integration remain separately qualified.
+- Add bounded complete-response quarantine for native Bedrock ConverseStream, validating every frame and terminal event before releasing original bytes; common dispatch, signing and route activation remain separately qualified.
 - Qualify unary Bedrock Converse declarations with explicit model binding and regional SigV4 constraints; keep streaming, tariffs and provider activation closed.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
 
