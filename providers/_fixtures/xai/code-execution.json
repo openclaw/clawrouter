@@ -1,0 +1,32 @@
+{
+  "request": {
+    "model": "grok-4.7", "input": [{ "role": "user", "content": "Calculate the sum of the first ten positive integers." }],
+    "tools": [{ "type": "code_interpreter" }], "store": false, "reasoning": { "effort": "low" }, "max_turns": 2
+  },
+  "completed": {
+    "id": "resp_synthetic_code", "model": "grok-4.7", "status": "completed",
+    "output": [
+      { "type": "code_interpreter_call", "id": "code_synthetic_1", "status": "completed" },
+      { "type": "message", "content": [{ "type": "output_text", "text": "The sum is 55." }] }
+    ],
+    "usage": { "input_tokens": 120, "output_tokens": 25, "server_side_tool_usage_details": { "code_interpreter_calls": 1 } }
+  },
+  "attempted": {
+    "id": "resp_synthetic_code_attempt", "model": "grok-4.7", "status": "completed",
+    "output": [
+      { "type": "code_interpreter_call", "id": "code_synthetic_failure", "status": "failed" },
+      { "type": "message", "content": [{ "type": "output_text", "text": "The remote calculation did not complete." }] }
+    ],
+    "usage": { "input_tokens": 100, "output_tokens": 20, "server_side_tool_usage_details": { "code_interpreter_calls": 0 } }
+  },
+  "unused": {
+    "id": "resp_synthetic_code_unused", "model": "grok-4.7", "status": "completed",
+    "output": [{ "type": "message", "content": [{ "type": "output_text", "text": "No calculation was necessary." }] }]
+  },
+  "incomplete": {
+    "id": "resp_synthetic_code_partial", "model": "grok-4.7", "status": "incomplete",
+    "incomplete_details": { "reason": "max_output_tokens" },
+    "output": [{ "type": "code_interpreter_call", "id": "code_synthetic_partial", "status": "completed" }],
+    "usage": { "input_tokens": 100, "output_tokens": 8, "server_side_tool_usage_details": { "code_interpreter_calls": 1 } }
+  }
+}

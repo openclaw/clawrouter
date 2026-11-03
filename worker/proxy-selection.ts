@@ -1,3 +1,4 @@
+import { nativeEmbeddingMode, prepareNativeEmbedding, type NativeEmbedding } from "./native-embeddings.ts";
 import { selectRequestTariff } from "./request-tariff.ts";
 import { prepareRadiusRequest } from "./provider-radius.ts";
 import { prepareOllamaChatRequest } from "./provider-ollama.ts";
@@ -19,9 +20,12 @@ export interface ProxySelection {
   pathParams: Record<string, string>;
   method: string;
   timeoutMs?: number;
+  nativeEmbedding?: NativeEmbedding;
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  selection.nativeEmbedding = prepareNativeEmbedding(selection);
+  if (selection.nativeEmbedding) return;
   if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
   if (selection.endpoint.request_format === "radius.messages") {
     const body = requestObject(selection.body);
@@ -119,7 +123,9 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   }
   if (endpoint.request_format === "openai.moderations" && body.model === undefined) body.model = "omni-moderation-latest";
   if (isModelDiscovery(endpoint)) return prepareModelDiscovery(provider, endpoint, body, inputPathParams);
-  const modelId = typeof body.model === "string" ? body.model : null;
+  const embedding = nativeEmbeddingMode(endpoint.request_format);
+  // Native models/foo is a wire assertion, not a second router selector.
+  const modelId = !embedding && typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
   const resolve = (value: string | null) => {
     if (value === null) return null;
@@ -140,6 +146,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
     if (upstreamModel) pathParams[name] = upstreamModel;
   }
+  if (embedding) return { model, body, pathParams };
   const transformedInput = { ...body };
   if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
   else if (modelId && upstreamModel) transformedInput.model = upstreamModel;

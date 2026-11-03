@@ -1,3 +1,4 @@
+import { readNativeJson } from "./native-json.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const xaiImageModels = ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"] as const;
@@ -82,27 +83,7 @@ export function observeXaiImage(value: unknown, request: XaiImageRequest, comple
     quality: request.quality, qualityBasis: request.qualityBasis, usage: mediaObject(body.usage) ? body.usage : null };
 }
 export async function readXaiImage(response: Response, request: XaiImageRequest, signal: AbortSignal): Promise<ReturnType<typeof observeXaiImage>> {
-  const length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
-    || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
-    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxEnvelope)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
-  }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true });
-  let size = 0, text = "";
-  try {
-    signal.throwIfAborted();
-    for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
-      size += chunk.value.byteLength; if (size > maxEnvelope) fail("size");
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
-    if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
-    return observeXaiImage(JSON.parse(text), request, true);
-  } catch { void reader.cancel().catch(() => undefined); fail("response"); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  return readNativeJson(response, signal, maxEnvelope, body => observeXaiImage(body, request, true), fail);
 }
 function bytes(value: unknown): Uint8Array {
   if (typeof value !== "string" || !value.length || value.length > Math.ceil(maxImage / 3) * 4 || value.length % 4

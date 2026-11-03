@@ -2,13 +2,20 @@
 
 ## Unreleased
 
+- Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
+
+- Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
+
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
+- Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
-- Qualify native xAI image declarations and separate per-image request tariffs, preserving the retired alias's low rate, conservative auto-quality admission and complete native cost receipts before shared runtime activation.
+- Add finite OpenRouter native image codecs and fixtures with ordered inline references, bounded binary images and separate per-request accounting for partially failed batches.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
+- Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Qualify Together native video lifecycle declarations with scoped retrieval and original-provider auth, rejecting unbound controls and unsupported cancellation before route activation.
 
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.
@@ -21,9 +28,11 @@
 
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
+- Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
 - Use the standard GitHub Actions runtime budget for CodeQL instead of the rollout-specific 20-minute job cap.
+- Skip expensive OpenClaw consumer contracts for unrelated and standalone Worker test changes while preserving the reported check; run the full suite when change detection is uncertain.
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
@@ -59,6 +68,7 @@
 - Add a bounded DuckDuckGo HTML search codec and synthetic challenge/result fixtures. Anonymous-auth schema, actual HTML runtime integration and service-use qualification remain separate activation gates.
 - Add native Google unary and synchronous batch embedding codecs with atomic bounded vector validation, stable Embedding 2 task handling and explicit input/modality token observations.
 - Qualify exact Google native unary/batch embedding declaration formats and model-bound paths, preserving unknown costs and rejecting async-file or credential overrides before runtime activation.
+- Bind native Google unary and synchronous batch embeddings to selected models and credentials, validating complete ordered vectors before delivery and retaining conservative charges on uncertain execution.
 - Add frozen Gemini inline audio/video understanding codecs and fixtures, preserving native bytes, bounded complete text delivery and explicit media-accounting boundaries.
 - Add Google file-backed embedding batch codecs and fixtures with scoped file/model prerequisites, conservative async lifecycle/cancellation and bounded keyed JSONL result staging.
 - Add frozen DeepSeek native Search codecs and fixtures, separating native nonempty-request billing from filtered consumer results and preserving unknown interrupted outcomes.
@@ -78,6 +88,7 @@
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.
 - Bound xAI Responses outcome charges separately from inference and qualify exact native cost receipts, preserving unknown-error reservations and existing hard-budget guards until runtime integration.
 - Reject unbounded native X Search charges before hard-budget dispatch, preserving ordinary client functions and separately guarding implicit xAI document search and unqualified retained ancestry.
+- Qualify native xAI image declarations and separate per-image request tariffs, preserving the retired alias's low rate, conservative auto-quality admission and complete native cost receipts before shared runtime activation.
 - Qualify the Alibaba Wan create/retrieve lifecycle contract and reject unbound controls, invented cancellation and credential-header overrides before activation.
 - Allow an explicit unpriced endpoint override so a newly qualified wire contract cannot inherit a model tariff from another endpoint.
 - Request Gemini streaming responses as SSE when callers omit the wire format, preserve native SDK SSE requests, and reject conflicting or repeated alt parameters before upstream dispatch.
@@ -156,6 +167,8 @@
 - Report caller-owned request, token, and spend totals as `usage.personal` on personal usage reads and a per-principal breakdown as `usage.principals` on admin usage, alongside the unchanged shared policy totals. Show both in the console.
 
 - Add published Fireworks GPT OSS 120B Standard and Priority token rates with conservative context bounds and preserve the pricing verification date in compiled cards. Unknown models remain unpriced.
+- Add Groq GPT-OSS 20B with sourced text limits, reasoning controls and conservative token rates. Preserve plain priced Chat and client function tools; reject unqualified hosted tools and automatic/enterprise tiers before hard-budget egress.
+- Add the frozen Groq Safeguard 20B identity with qualified plain-Chat token pricing and conditional tool/tier guards; record Qwen 3.6 retirement for public tiers without inventing a replacement alias.
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
