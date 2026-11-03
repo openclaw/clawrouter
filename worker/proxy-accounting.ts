@@ -1,3 +1,4 @@
+import { googleAudioRequest } from "./google-audio-classification.ts";
 import { nativeEmbeddingMode } from "./native-embeddings.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
@@ -52,8 +53,9 @@ export interface AccountingFacts {
   hostedSearchPrice?: HostedSearchPrice;
   anthropicWebPrice?: AnthropicWebPrice;
   // Freeze the admission classification; an output token counter cannot price
-  // image generation, including generic GenerateContent and soft budgets.
+  // image/audio generation, including generic GenerateContent and soft budgets.
   googleImage?: boolean;
+  googleAudio?: boolean;
 }
 
 export interface AccountingOutcome {
@@ -80,7 +82,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
-  if (facts.googleImage && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+  if ((facts.googleImage || facts.googleAudio) && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: billable ? reservation.reservedMicros : 0,
     cost_basis: billable ? "unpriced_usage" : "none", input_tokens: null, output_tokens: null, total_tokens: null,
     pricing_ref: null, pricing_effective_at: null,
@@ -152,6 +154,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const started = options.startedAtMs ?? Date.now();
   const facts: AccountingFacts = {
     googleImage: googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
+    googleAudio: googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
