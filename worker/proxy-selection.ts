@@ -1,3 +1,4 @@
+import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
 import { validateSpeechRequest } from "./speech-request.ts";
 import { prepareNativeImage } from "./native-images.ts";
@@ -30,7 +31,7 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
-  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection);
+  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection) ?? prepareNativeBasetenSystemOne(selection);
   if (selection.nativeResponse) return;
   if (selection.endpoint.requestPricing) selectRequestTariff(selection.endpoint, selection.body);
   if (selection.endpoint.request_format === "radius.messages") {
