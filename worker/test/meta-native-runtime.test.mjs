@@ -5,10 +5,10 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
-import worker from "../index.ts";
-import { authorityCall } from "../authority.ts";
-import { snapshot } from "../providers.ts";
-import { sha256Hex } from "../utils.ts";
+const { default: worker } = await import("../index.ts");
+const { authorityCall } = await import("../authority.ts");
+const { snapshot } = await import("../providers.ts");
+const { sha256Hex } = await import("../utils.ts");
 
 // Compile this source manifest independently of the serialized shared snapshot.
 const { providers: [meta] } = JSON.parse(execFileSync(process.execPath,
