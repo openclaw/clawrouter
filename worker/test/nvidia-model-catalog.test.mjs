@@ -1,5 +1,6 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 const { nvidiaPublicCatalogRequests, parseNvidiaPublicCatalog, readNvidiaPublicCatalog } = await import("../nvidia-model-catalog.ts");
 
@@ -124,4 +125,9 @@ test("NVIDIA deadline cancellation closes both resources and cannot return an em
     { headers: { "content-type": "application/json" } });
   const reading = readNvidiaPublicCatalog(response(), response(), controller.signal, allowed);
   controller.abort(); await assert.rejects(reading, invalid); assert.equal(canceled, 2);
+});
+
+test("NVIDIA catalog loads without the test-only TypeScript resolver", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", 'await import("./worker/nvidia-model-catalog.ts"); process.stdout.write("loaded")'], { encoding: "utf8" });
+  assert.equal(output, "loaded");
 });
