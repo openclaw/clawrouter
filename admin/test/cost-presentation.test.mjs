@@ -24,6 +24,9 @@ test("zero amounts retain their recorded accounting basis", () => {
     ["policy_fixed", "Fixed policy tariff"],
     ["manifest_pricing", "Token-based estimate"],
     ["manifest_reservation", "Retained reservation estimate"],
+    ["manifest_request", "Published request tariff"],
+    ["manifest_request_reservation", "Retained request reservation estimate"],
+    ["provider_reported", "Provider-reported charge"],
   ];
   for (const [basis, label] of cases) {
     assert.deepEqual(presentCost(0, basis), { value: "$0.00", label, unavailable: false });
@@ -40,6 +43,9 @@ test("estimates, published upper bounds and fixed tariffs are not invoice claims
   assert.equal(presentCost(2_000_000, "manifest_rate_upper_bound").label, "Token-based estimate (rate upper bound)");
   assert.equal(presentCost(15, "request_character_estimate").label, "Request-character estimate");
   assert.equal(presentCost(60, "request_character_estimate", true).label, "Input-byte reservation estimate");
+  assert.equal(presentCost(50000, "manifest_request", true).label, "Request-tariff reservation estimate");
+  assert.equal(presentCost(50000, "manifest_request_reservation").label, "Retained request reservation estimate");
+  assert.equal(presentCost(50000, "provider_reported").label, "Provider-reported charge");
   assert.deepEqual(presentCost(2_000_000, "policy_fixed"), { value: "$2.00", label: "Fixed policy tariff", unavailable: false });
 });
 
