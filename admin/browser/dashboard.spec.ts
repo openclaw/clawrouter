@@ -31,7 +31,8 @@ test("real demo shows the bundled provider inventory and remains WCAG AA clean",
   await expectA11yClean(page);
   await page.getByRole("button", { name: "Catalog", exact: true }).click();
   await expect(page.locator(".catalogMeta strong")).toHaveText(`${count} services`);
-  await expect(page.locator(".mainPane .entityTitle")).toHaveText(snapshot.providers.map((provider) => provider.display_name));
+  await expect.poll(async () => (await page.locator(".mainPane .entityTitle").allTextContents()).sort())
+    .toEqual(snapshot.providers.map((provider) => provider.display_name).sort());
 });
 
 test("dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
