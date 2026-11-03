@@ -7,6 +7,7 @@ import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
 import { validateSpeechRequest } from "./speech-request.ts";
+import { prepareNativeElevenLabsSpeech } from "./native-elevenlabs-speech.ts";
 import { prepareNativeImage } from "./native-images.ts";
 import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transcription.ts";
 import { prepareNativeDeepSeekSearch } from "./native-deepseek-search.ts";
@@ -53,7 +54,8 @@ export function validateSelectedInput(selection: ProxySelection): void {
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
-    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection);
+    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
+    ?? prepareNativeElevenLabsSpeech(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
     throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");

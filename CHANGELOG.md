@@ -358,6 +358,7 @@
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
 - Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
+- Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
 
 - Preserve validated payload formats for caller-scoped manifest-only catalog routes so native embedding clients can qualify offers without enabling disabled native endpoints.
 - Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
