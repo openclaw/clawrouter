@@ -16,7 +16,9 @@ export function prepareMiniMaxMusic(region: keyof typeof origins, value: unknown
   if (region !== "global" && region !== "cn") fail("region");
   const body = object(value); keys(body, ["model", "prompt", "lyrics", "lyrics_optimizer", "is_instrumental", "stream", "output_format", "audio_setting", "audio_url", "audio_base64"]);
   if (typeof body.model !== "string" || !(miniMaxMusicModels as readonly string[]).includes(body.model)
-    || body.stream !== true || body.output_format !== "hex") fail("request");
+    || body.stream !== true && body.stream !== false || body.output_format !== "hex") fail("request");
+  if (body.stream === false && (region !== "global" || !["music-2.6", "music-2.6-free"].includes(body.model)
+    || Object.hasOwn(body, "audio_url") || Object.hasOwn(body, "audio_base64"))) fail("unary_request");
   const settings = object(body.audio_setting); keys(settings, ["sample_rate", "bitrate", "format"]);
   if (settings.sample_rate !== 44100 || settings.bitrate !== 256000 || settings.format !== "mp3") fail("audio_settings");
   const cover = body.model.startsWith("music-cover");
@@ -47,10 +49,11 @@ export function prepareMiniMaxMusic(region: keyof typeof origins, value: unknown
     } else if (body.lyrics_optimizer !== true) fail("lyrics");
   }
   return { origin: origins[region], path: "/v1/music_generation", body, model: body.model,
-    headers: new Headers({ "content-type": "application/json", accept: "text/event-stream, application/json" }) };
+    headers: new Headers({ "content-type": "application/json", accept: body.stream === false ? "application/json" : "text/event-stream, application/json" }) };
 }
 export function observeMiniMaxMusic(values: unknown[], request: MiniMaxMusicRequest, complete: boolean): MiniMaxMusicObservation {
   if (!complete || values.length < 1 || values.length > 2048 || encoder.encode(JSON.stringify(values)).length > maxEnvelope) fail("frames");
+  if (request.body.stream === false && values.length !== 1) fail("unary_frames");
   let audioHex = "", terminal = false, durationMillis: number | null = null;
   const frames: Json[] = [];
   for (const value of values) {
@@ -94,6 +97,7 @@ export async function readMiniMaxMusic(response: Response, request: MiniMaxMusic
   const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase(), length = response.headers.get("content-length");
   if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
     || mime !== "application/json" && mime !== "text/event-stream"
+    || request.body.stream === false && mime !== "application/json"
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxEnvelope)) {
     void response.body?.cancel().catch(() => undefined); fail("http");
   }
