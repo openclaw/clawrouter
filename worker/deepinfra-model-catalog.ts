@@ -1,5 +1,5 @@
-import { readNativeJson } from "./native-json";
-import { HttpError } from "./utils";
+import { readNativeJson } from "./native-json.ts";
+import { HttpError } from "./utils.ts";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_ROWS = 4096;
