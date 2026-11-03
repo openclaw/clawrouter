@@ -33,7 +33,8 @@ test("actual OpenClaw search registration through Worker admission, upstream and
       const policy = { enabled: true, generation: "fixture", providers: [provider.id], tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false };
       for (const [id, price] of [[provider.id, 7], [`unpriced_${provider.id}`, null]]) {
         await kv.put(`policies/${id}`, JSON.stringify({ ...policy, requestCostMicros: price }));
-        await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(`fixture-${provider.id}`).digest("hex"), policyId: id, policyGeneration: "fixture" }));
+        const credentialId = id === provider.id ? `search_${id}` : id;
+        await kv.put(`credentials/${credentialId}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(`fixture-${provider.id}`).digest("hex"), policyId: id, policyGeneration: "fixture" }));
       }
       await kv.put(`connections/${provider.id}`, JSON.stringify({ providerId: provider.id, enabled: true }));
     }
@@ -60,14 +61,14 @@ test("actual OpenClaw search registration through Worker admission, upstream and
       else assert.equal(call.body.query ?? call.body.search_queries?.[0], "synthetic contract query");
       let usage;
       for (let attempt = 0; attempt < 100; attempt++) {
-        usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer clawrouter-live-${provider.id}-fixture-${provider.id}` } })).json();
+        usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer clawrouter-live-search_${provider.id}-fixture-${provider.id}` } })).json();
         if (usage.usage.events.length) break;
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       assert.equal(usage.usage.events.length, 1, "one search produces one caller-scoped receipt");
       const [event] = usage.usage.events;
       assert.equal(event.provider, provider.id);
-      assert.equal(event.credential_id, provider.id);
+      assert.equal(event.credential_id, `search_${provider.id}`);
       assert.equal(event.policy_id, provider.id);
       assert.equal(event.status, "success");
       assert.equal(event.cost_basis, "policy_fixed");

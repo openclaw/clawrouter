@@ -11,7 +11,7 @@ describe("ClawRouter registered web search through workerd", () => {
   plugin.register?.(captured.api);
   const baseUrl = process.env.CLAWROUTER_CONTRACT_ORIGIN! + "/v1";
   const providers = process.env.CLAWROUTER_CONTRACT_PROVIDERS!.split(",");
-  const tool = (id: string, key = `clawrouter-live-${id}-fixture-${id}`) =>
+  const tool = (id: string, key = `clawrouter-live-search_${id}-fixture-${id}`) =>
     captured.webSearchProviders.find((provider) => provider.id === "clawrouter")!.createTool({
       config: {
         models: {
@@ -36,7 +36,7 @@ describe("ClawRouter registered web search through workerd", () => {
     });
 
     it(`${id}: an invalid router key never falls back to provider credentials`, async () => {
-      await expect(tool(id, `clawrouter-live-${id}-invalid`).execute({ query: "rejected", count: 1 })).rejects.toThrow(/401/);
+      await expect(tool(id, `clawrouter-live-search_${id}-invalid`).execute({ query: "rejected", count: 1 })).rejects.toThrow(/401/);
     });
 
     it(`${id}: an unknown upstream tariff cannot consume a hard dollar budget`, async () => {
