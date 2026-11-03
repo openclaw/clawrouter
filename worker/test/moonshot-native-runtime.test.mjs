@@ -70,6 +70,7 @@ for (const [id, binding, base] of contracts) {
       assert.deepEqual(facts.input, k3 ? ["text", "image", "video"] : ["text", "image"]);
       assert.equal(facts.contextWindow, k3 ? 1048576 : 262144); assert.equal(facts.maxOutputTokens, k3 ? 1048576 : undefined);
       assert.deepEqual(m.supportedReasoningEfforts, k3 ? ["max"] : undefined);
+      assert.equal(m.requestParameters?.chat_completions.defaultReasoningEffort, k3 ? "max" : undefined);
       assert.equal(m.availability?.status, k3 ? undefined : "deprecated");
       if (!k3) { assert.equal(m.availability.effectiveAt, "2026-10-31"); assert.equal(m.availability.servingModel, undefined); }
     }
