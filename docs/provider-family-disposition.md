@@ -8,11 +8,17 @@ only. Aliases, endpoint regions, auth methods and plan variants are not extra
 families. Implementation batches started from ClawRouter
 `8833ed747cbcf521aa8139c234de286126e29f30`.
 
-**State:** 34 families have experimental Chat transport implementations in the
-linked PR queue; 16 have the exact dependencies below; four media families have
-a separate implementation owner. These counts are not a parity certification.
-Draft PRs need serial current-main snapshot integration, focused tests, all
-manifest validation and exact final-head CI. No live proof is claimed here.
+**State:** 45 families now have transport manifests in the landed/draft queue;
+two more have landed scoped identity codecs awaiting runtime activation; three
+require native host executors; four media families have a separate implementation
+owner. These are implementation dispositions, not 54-family parity certification.
+The original 34-transport/16-dependency split is superseded by the native work
+below. Shared runtime/compiler/client tasks remain actionable code work.
+
+Draft manifests need serial current-main snapshot integration, focused tests,
+all-manifest validation and exact final-head CI. Real Worker proof must include
+credential isolation, native streaming/errors, usage, cancellation and budget
+settlement; actual OpenClaw consumer proof is separate. No live proof is claimed.
 
 ## Hosted inference: 24
 
@@ -63,14 +69,14 @@ references qualify the transport declaration, not an account's live entitlement.
 | opencode-go | Distinct Go Chat transport, [397](https://github.com/openclaw/clawrouter/pull/397) | Explicit subscription credential and entitlement; no fallback to Console billing |
 | requesty | Global Chat transport, [397](https://github.com/openclaw/clawrouter/pull/397) | Managed policies, EU placement, BYOK and live tariffs need account qualification |
 | vercel-ai-gateway | API-key OpenAI Chat transport, [397](https://github.com/openclaw/clawrouter/pull/397) | AI SDK native protocol, OIDC refresh, team/project identity and other APIs separate |
-| radius | **Blocked: native Pi protocol** | R01 below; no Chat manifest or OpenRouter credential substitution |
+| radius | Native Pi codec landed [422](https://github.com/openclaw/clawrouter/pull/422); declaration/fixtures [452](https://github.com/openclaw/clawrouter/pull/452) | R01: common SSE observation/scoped config dispatch and actual Pi consumer proof; no OpenRouter key or price substitution |
 
 ## Enterprise: three
 
 | Family | Disposition | Exact remaining dependency |
 | --- | --- | --- |
 | amazon-bedrock-mantle | US East API-key `/v1` Chat subset, [401](https://github.com/openclaw/clawrouter/pull/401) | IAM bearer generation/refresh, regional discovery, per-model `/openai/v1` routes and other APIs separate from existing Bedrock SigV4 Invoke |
-| anthropic-vertex | **Blocked: Google identity and resource binding** | E01 below; not Anthropic API-key auth or Google AI Studio |
+| anthropic-vertex | Scoped service-account assertion, token/resource and native Messages codec landed [424](https://github.com/openclaw/clawrouter/pull/424) | E01: credential-owner refresh/materialization, request dispatch and actual consumer proof; workload identity/ambient ADC remain distinct |
 | microsoft-foundry | Configured resource/deployment API-key Chat subset, [401](https://github.com/openclaw/clawrouter/pull/401) | Entra refresh/audience/tenant selection, deployment discovery, Anthropic and MAI image routes separate |
 
 ## Media: four, separate owner
@@ -89,8 +95,8 @@ and proof must be linked by the campaign integration owner before completion.
 
 | Family | Disposition | Exact remaining dependency |
 | --- | --- | --- |
-| github-copilot | **Blocked: account/enterprise auth route** | S01 below; no static generic GitHub-token endpoint |
-| copilot-proxy | **Blocked: operator host bridge** | S02 below; `localhost:3000/v1` belongs to the machine running the bridge |
+| github-copilot | Account-origin/model-format/original-token codec landed [430](https://github.com/openclaw/clawrouter/pull/430) | S01: owner-bound credential lifecycle and runtime/catalog activation; no retired token exchange or borrowing router GitHub auth |
+| copilot-proxy | Configured Chat transport with optional upstream auth and real Worker fixtures [442](https://github.com/openclaw/clawrouter/pull/442) | Snapshot/final-head CI and actual client proof; reachable VS Code bridge/live entitlement remain separate host/account facts |
 | kimi | Overseas Coding Plan Chat subset, [401](https://github.com/openclaw/clawrouter/pull/401) | Separate `KIMI_CODING_API_KEY`; mainland, plan quotas, login, Responses/Messages and CLI runtime unqualified |
 
 ## Local engines: seven
@@ -103,12 +109,12 @@ assumption must not be reused for cloud or paid gateway products.
 | Family | Frozen native contract | Disposition / exact blocker |
 | --- | --- | --- |
 | apple-fm | `native.ts` compiles `AppleFoundationModels.swift` with the macOS 27 SDK and runs its helper | **L01:** Worker has no Apple framework, native compiler or device state; needs an authenticated host bridge and availability/tool/stream fixtures |
-| llama-cpp | `src/managed-server.ts`, installer and hardware modules own GGUF/model assets and llama-server | **L02:** Worker cannot install binaries, load local weights or own GPU/CPU process lifecycle; host executor plus model/discovery/cancellation boundary required |
-| lmstudio | `src/chat.ts` selects native Messages versus schema-enforcing Chat; discovery identifies installed models | **L03:** Reachable LM Studio host, model-load/auth discovery and transport-specific reasoning/schema tests required; generic Chat loses native semantics |
-| ollama | Native `/api/chat`, NDJSON, discovery, embeddings and node inference; separate `ollama-cloud` credentials | **L04:** Native NDJSON/tool/usage and host/node transport required; local/cloud auth isolation and cancellation need fixtures |
-| omlx | Apple Silicon service, `/v1/models`, Chat and memory embedding registration; oMLX owns model lifecycle | **L05:** Reachable host plus exact discovery/embedding contract; an edge Chat route does not provide MLX or model lifecycle |
-| sglang | Provider discovery/setup at loopback port 30000 | **L06:** Reachable serving host and discovered model facts; GPU/server lifecycle remains with operator |
-| vllm | Provider discovery/setup at loopback port 8000 | **L07:** Reachable serving host and discovered model facts; GPU/server lifecycle remains with operator |
+| llama-cpp | Native host owns GGUF assets and llama-server lifecycle | Configured Chat/SSE and scoped discovery implemented in [413](https://github.com/openclaw/clawrouter/pull/413); shared discovery gate below. L02 host executor/model loading remains separate |
+| lmstudio | Native Messages versus schema-enforcing Chat; installed model discovery | Configured Chat plus native Messages JSON/SSE and credential/usage fixtures in [413](https://github.com/openclaw/clawrouter/pull/413). L03 model loading, native schema/reasoning/model facts and actual consumer proof remain |
+| ollama | Native Chat NDJSON/JSON and Tags; separate cloud account | Codec [416](https://github.com/openclaw/clawrouter/pull/416), shared runtime [435](https://github.com/openclaw/clawrouter/pull/435), declarations/workerd fixtures [413](https://github.com/openclaw/clawrouter/pull/413). L04 host/node lifecycle, cloud identity and remaining native APIs stay separate |
+| omlx | Apple Silicon service with model discovery, Chat and embeddings | Configured Chat/discovery in [413](https://github.com/openclaw/clawrouter/pull/413). L05 MLX/model lifecycle, embedding consumer and live hardware/model facts remain |
+| sglang | Configured OpenAI-shaped HTTP serving and discovery | Transport/discovery/budget fixtures in [413](https://github.com/openclaw/clawrouter/pull/413). L06 host/GPU lifecycle and live model facts remain; no local port default |
+| vllm | Configured OpenAI-shaped HTTP serving and discovery | Transport/discovery/budget fixtures in [413](https://github.com/openclaw/clawrouter/pull/413). L07 host/GPU lifecycle and live model facts remain; no local port default |
 
 Source paths in this table refer to each family's directory at the frozen
 [extensions revision](https://github.com/openclaw/openclaw/tree/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions).
@@ -118,18 +124,23 @@ No local host, tunnel or runtime is provisioned by this campaign slice.
 
 | Family | Frozen wire/runtime contract | Disposition / exact blocker |
 | --- | --- | --- |
-| levanto | Sage `/decide` and `/decide/batch`; `content`, typed question(s), calibrated answer/abstention and reasoning metadata | **D01:** Native Sage codec, bounded batch/image validation, usage mapping and Decision V2 client/catalog registration; not OpenAI Decisions |
-| liquid-ai | `https://api.liquid.ai/decisions/v1/systemone`, typed questions and provider-specific result decoding | **D02:** Liquid System One codec, supported input/question limits and usage mapping; prepared Decision V2 consumer and protocol metadata required |
+| levanto | Native Sage single/batch, calibrated answers, abstention and reasoning | Codec [421](https://github.com/openclaw/clawrouter/pull/421), images [445](https://github.com/openclaw/clawrouter/pull/445), declarations/metadata [436](https://github.com/openclaw/clawrouter/pull/436). D01 common dispatch/accounting, batch metadata and actual DecisionV2 proof remain |
+| liquid-ai | Native hosted SystemOne, typed questions and aggregate usage | Codec [421](https://github.com/openclaw/clawrouter/pull/421), images [445](https://github.com/openclaw/clawrouter/pull/445), declarations/metadata [436](https://github.com/openclaw/clawrouter/pull/436). D02 common dispatch, image bounds and actual DecisionV2 proof remain |
 | onnx | `onnxruntime-node` InferenceSession/Tensor, model artifact loader and child worker process | **D03:** Native host executor, pinned model assets/adapters, deadlines and typed result transport; cannot run this Node native module/process in the Worker |
-| typesafe | Hosted `/v1/systemone` Jev; separately configured local Kev without inherited hosted auth | **D04:** System One codec, model discovery, hosted/local credential isolation and Decision V2 client/catalog bridge; local executor remains operator-owned |
+| typesafe | Native hosted SystemOne; local Kev is a separate product | Codec [421](https://github.com/openclaw/clawrouter/pull/421), referenced image assets/header [445](https://github.com/openclaw/clawrouter/pull/445), declarations/metadata [436](https://github.com/openclaw/clawrouter/pull/436). D04 runtime/discovery and actual DecisionV2 proof remain; no hosted credential inheritance for local Kev |
 
-The schema allows a string wire-format name, so a raw proxy manifest could
-compile. That would not provide these codecs or certify the consumer contract.
-ClawRouter's decision capability metadata currently declares only
-`openai-decisions` in `shared/native-capabilities.ts` and the compiler validates
-that declaration against `openai.decisions`. The smoke harness has no native
-Sage/System One request template. These shared contracts need their source
-owners before provider-specific adapters can be exposed as usable offers.
+The shared compiler now qualifies the three native decision protocols in
+[433](https://github.com/openclaw/clawrouter/pull/433). Source manifests use
+`levanto.sage`, `liquid.systemone` and `typesafe.systemone`, with text/JSON
+metadata preserving native question semantics. `levanto.sage_batch` stays
+separate and needs explicit compiler/client admission. Shared dispatch/accounting
+and smoke templates must select the same format IDs before activation.
+
+Image wire envelopes are implemented. Provider-neutral dimensions and actual
+consumer proof remain code integration tasks; image eligibility is not advertised
+by these manifests. Sage exposes a separate image counter whose overlap with
+input tokens is unqualified, so its image token charge remains unknown. Liquid's
+aggregate usage explicitly includes images. No inferred zero price is installed.
 
 TypeSafe's frozen README also identifies the prepared Decision V2 host/plugin
 release dependency; an older package's installation floor does not prove V2
@@ -146,24 +157,25 @@ compatibility. Do not copy static zero-output-price claims into router tariffs.
 - **R01, Radius:** frozen `extensions/radius/stream.ts` sends `{model, context,
   options}` to `/messages`, consumes Pi `text_*`, `thinking_*`, `toolcall_*` and
   terminal `done`/`error` events. `catalog.ts` loads `/config` with constrained
-  origin selection. Implement bounded native event/usage observation, dynamic
-  catalog authorization and API-key/OAuth lifecycle before advertising parity.
+  origin selection. The landed codec implements bounded native event/usage observation and scoped
+  catalog filtering. Common dispatch, catalog authorization and API-key/OAuth
+  lifecycle integration remain required before advertising parity.
   Runtime, catalog and integration owners must cover malformed/unfinished tools,
   cancellation, missing terminal usage and credential-scoped discovery. The
   [official service docs](https://radius.earendil.com/docs) describe Pi-native
   services; OpenRouter backing does not make Radius an OpenRouter wire alias.
 - **E01, Vertex:** frozen `extensions/anthropic-vertex/stream-runtime.ts` uses
   `GoogleAuth` with cloud-platform scope and `AnthropicVertex`; region/project
-  selection belongs to the resource. Implement renewable Google credential
-  materialization and project/region/publisher route binding under the runtime
-  owner's contracts, then native Anthropic request/stream fixtures. Do not reuse
+  selection belongs to the resource. Scoped assertion, token-response and project/region/publisher bindings are
+  implemented. The runtime owner must materialize/refresh the credential before
+  warm-path use and connect native request/stream fixtures. Do not reuse
   Anthropic API keys or AI Studio credentials.
 - **S01, Copilot:** frozen `runtime-auth.ts` reads account metadata, validates
   the returned API origin against the selected GitHub/enterprise domain, then
   sends the original GitHub token. It explicitly does not use the retired
-  `/v2/token` exchange. Device/enterprise-device login, model endpoint selection,
-  entitlement and subscription accounting need an owner-bound auth lifecycle
-  and fixtures before a router credential contract is offered.
+  `/v2/token` exchange. The landed codec validates account origins and advertised model endpoint
+  formats. Device/enterprise-device login, entitlement and subscription accounting
+  still need the credential owner’s lifecycle and actual runtime fixtures.
 - **S02 and L01–L07, host bridges:** require a named reachable host, its explicit
   authentication/trust boundary, model identity and supported operations. Keep
   host installation/loading, readiness, cancellation and cleanup authority
@@ -180,6 +192,13 @@ compatibility. Do not copy static zero-output-price claims into router tariffs.
   ownership and enforce bounded operations. ONNX Web/WASM would be a new backend
   requiring model/operator qualification, not parity with `onnxruntime-node`.
   Codex inference routing must not be presented as native tools or supervision.
+
+For N01, [413](https://github.com/openclaw/clawrouter/pull/413) retains a failing
+fixture until the common model-discovery implementation selects OpenAI envelopes
+by request format rather than literal provider ID. Its native Ollama fixtures
+already exercise the landed runtime. Optional-auth inference is implemented;
+metadata access without an API-key grant still needs explicit qualification.
+None of these transport tasks requires provisioning a GPU host.
 
 These are implementation dependencies, not requests to provision credentials,
 change accounts, deploy production or install extra dependency trees. Every
