@@ -277,8 +277,10 @@ function validateManifest(manifest) {
 }
 
 function validateModels(manifest) {
+  const stopped = new Set((manifest.models?.entries ?? []).filter(model => model.availability?.status === "stopped").map(model => model.upstream));
   for (const model of manifest.models?.entries ?? []) {
     validateModelAvailability(model);
+    if (model.capabilities?.length && stopped.has(model.upstream)) throw new Error(`model ${model.id} availability stopped upstream cannot be exposed through another model identity`);
     for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
     for (const [id, parameters] of Object.entries(model.requestParameters ?? {})) {

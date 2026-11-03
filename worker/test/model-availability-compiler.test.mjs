@@ -121,4 +121,7 @@ test("stopped models reject live capabilities, request facts and every model tar
     const manifest = fixture(); Object.assign(manifest.models.entries[1], extra);
     assert.throws(() => compile(manifest), /availability stopped/, JSON.stringify(extra));
   }
+  const manifest = fixture();
+  manifest.models.entries.push({ id: "availability-fixture/other-name", upstream: "stopped", capabilities: ["llm.chat"] });
+  assert.throws(() => compile(manifest), /availability stopped upstream/, "a second live router ID cannot revive the same stopped native identity");
 });

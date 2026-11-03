@@ -32,6 +32,7 @@ targets such as `ark-code-latest`.
   native/request facts. Keep the row rather than dropping it: known-model
   selection rejects it before dispatch, including on endpoints that permit
   unknown model passthrough. Historical facts belong in disposition records.
+  Another executable row cannot expose the same stopped native identity.
 - `deprecated`: a published deprecation is not proof that every existing
   account has lost access. Existing capabilities require their own evidence.
   Account eligibility, model access and current route admission remain separate.
