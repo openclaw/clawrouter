@@ -10,8 +10,10 @@ For the xAI outcome variant, admission freezes the selected native model and
 version alongside the original caller, provider, credential and accounting event.
 It uses `estimateModelCost` with the qualified outcome card. This preserves the
 full model output reserve and adds the possible outcome charge exactly once.
-Only this path can discharge `request_fee`; independent tool, tier, media and
-ancestry bounds still apply. A post-request receipt never supplies a pre-egress
+Only the source-owned `outcomeRequestPricingGap` helper can discharge `request_fee`;
+independent tool, tier, media and ancestry bounds still apply. Native hosted tools,
+implicit file search, legacy search selectors and unqualified retained ancestry
+remain closed. Inventory completeness still uses the existing generic witness. A post-request receipt never supplies a pre-egress
 bound. Background operations and WebSockets are outside this variant.
 
 The selected dispatch URL must be the qualified global native endpoint. Redirects

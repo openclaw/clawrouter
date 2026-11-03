@@ -5,7 +5,7 @@ import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from ".
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
-import { actualCharacterCost, actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint, type RequestCostReceipt } from "./pricing";
+import { actualCharacterCost, actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, outcomeRequestPricingGap, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint, type RequestCostReceipt } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
@@ -206,13 +206,13 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   if (requestTariff?.kind === "successful_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
-  // Only this complete outcome path discharges request_fee. Run the same
-  // classifier again so independent tool/media/ancestry gaps remain enforced.
+  // Only the source-qualified outcome classifier can discharge request_fee.
+  // Inventory completeness is independent of a known positive pricing gap.
   const outcomePricing = requestTariff?.kind === "outcome_request" ? requestTariff.pricing : undefined;
   const inventoryKnown = !outcomePricing || retainedToolBase(body, parentTools ?? "token_only") === "token_only"
     && (body.tools === undefined || retainedToolBase({ input: [{ type: "additional_tools", tools: body.tools }] }, "token_only") === "token_only");
-  const pricingGap = requestPricingGap(outcomePricing && pricing?.unit == null && pricing ? { ...pricing, unpricedCosts: undefined } : pricing, body, endpoint.request_format, parentTools)
-    ?? (inventoryKnown ? null : "retained_tool_unknown");
+  const pricingGap = (outcomePricing ? outcomeRequestPricingGap(pricing, body, endpoint.request_format, outcomePricing, parentTools)
+    : requestPricingGap(pricing, body, endpoint.request_format, parentTools)) ?? (inventoryKnown ? null : "retained_tool_unknown");
   if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null, ...(requestTariff ? { requestTariff } : {}) };
   if (!pricing) return requestTariff ? { reserveMicros: 0, basis: "unpriced_request", pricingGap: "model_request_fee", inputTokens: null, outputTokens: null, requestTariff }
     : { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
