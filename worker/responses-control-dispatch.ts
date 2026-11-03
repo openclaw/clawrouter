@@ -47,8 +47,12 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
       const { managedFileRoute, managedFileBase } = await import("./managed-files.ts");
       const { endpoints } = managedFileRoute(provider, create);
       managedFileBase(provider, upstream.baseUrl);
-      parts.push(["managed-files", ...(["metadata", "download"] as const).map(action => {
+      const actions = endpoints.metadata ? ["metadata", "download"] as const : ["download"] as const;
+      // Keep existing metadata-backed job digests byte-identical. A new mode
+      // must be pinned so changing it cannot repurpose an already-owned job.
+      parts.push(["managed-files", ...(endpoints.metadata ? [] : ["download_only"]), ...actions.map(action => {
         const endpoint = endpoints[action];
+        if (!endpoint) unavailable();
         if (upstream.transport?.endpointPaths[endpoint.id]) unavailable();
         return [action, endpoint.id, endpoint.method, endpoint.path, endpoint.path_params, endpoint.request_format,
           endpoint.response_format, Object.entries(endpoint.query).sort()];
@@ -112,7 +116,9 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
     || !["metadata", "download"].includes(input.file.action))) unavailable();
   if (input.file) {
     (await import("./managed-files.ts")).validateManagedFile(input.file.descriptor);
-    if (input.file.action === "download" && (input.file.state?.id !== input.file.descriptor.id || input.file.state.status !== "active")) unavailable();
+    if (fileContract!.adapter.mode === "download_only") {
+      if (input.file.action !== "download" || input.file.state !== undefined) unavailable();
+    } else if (input.file.action === "download" && (input.file.state?.id !== input.file.descriptor.id || input.file.state.status !== "active")) unavailable();
   }
   const endpoint = input.file ? fileContract?.endpoints[input.file.action] : managed ? contract?.controls[input.action]
     : provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action as "retrieve" | "cancel"]);

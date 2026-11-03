@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
 
+- Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
 
 - Qualify the six frozen Kie Hailuo video bodies in the managed preparation path, enforcing duration/resolution combinations while keeping unowned image routes and unknown upstream costs closed.
@@ -23,6 +23,7 @@
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
+- Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
 - Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
