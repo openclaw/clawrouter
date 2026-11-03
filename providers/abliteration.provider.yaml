@@ -1,0 +1,48 @@
+# Chat API only; qualification: docs/hosted-specialist-providers.md.
+# Endpoint/model source checked 2026-11-03: https://docs.abliteration.ai/models
+schema: clawrouter.service-provider.v1
+id: abliteration
+displayName: Abliteration
+status: experimental
+class: openai_compatible
+service:
+  platform: abliteration
+  kind: model_provider
+  upstreamService: abliteration
+  configKeys: [ABLITERATION_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.abliteration.ai/v1
+routing:
+  nativePrefixes: [clawrouter-abliteration, abliteration]
+  modelPrefixes: [abliteration/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: abliteration/abliterated-model-large-v2
+      upstream: abliterated-model-large-v2
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

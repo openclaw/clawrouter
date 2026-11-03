@@ -1,0 +1,48 @@
+# Chat API only; qualification: docs/hosted-specialist-providers.md.
+# Endpoint/model source checked 2026-11-03: https://dev.meta.ai/docs/cookbook/quickstart-chat-completions
+schema: clawrouter.service-provider.v1
+id: meta
+displayName: Meta Model API
+status: experimental
+class: openai_compatible
+service:
+  platform: meta
+  kind: model_provider
+  upstreamService: meta
+  configKeys: [MODEL_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.meta.ai/v1
+routing:
+  nativePrefixes: [clawrouter-meta, meta]
+  modelPrefixes: [meta/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: meta/muse-spark-1.3
+      upstream: muse-spark-1.3
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
