@@ -14,6 +14,7 @@
 - Add bounded Kie Market job helpers and executable wire/result fixtures that reject HTTP-200 API errors, preserve partial-job state and keep credit usage distinct from dollar settlement. Runtime activation remains separately qualified.
 - Add a bounded Wan video lifecycle adapter and synthetic native fixtures, preserving model-specific inputs, regional credential boundaries and expired observations. Shared durable route activation remains separately qualified.
 - Add concrete managed lifecycle adapters for Replicate, fal, Kie and Vydra, with bounded native reads, scoped control-path construction and explicit result/cancel support for the shared durable controller.
+- Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.

@@ -632,14 +632,104 @@
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
         "lifecycle": {
-          "type": "object",
-          "required": ["protocol", "retrieve", "cancel"],
-          "additionalProperties": false,
-          "properties": {
-            "protocol": { "const": "replicate.predictions" },
-            "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
-            "cancel": { "type": "string", "minLength": 1, "maxLength": 64 }
-          }
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve",
+                "cancel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "replicate.predictions"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "cancel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve",
+                "result",
+                "cancel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "fal.queue"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "result": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "cancel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "kie.jobs"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve",
+                "cancel"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "vydra.jobs"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "cancel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            }
+          ]
         },
         "responsesLifecycle": {
           "type": "object",
