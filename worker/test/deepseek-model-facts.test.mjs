@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-import { providerModel } from "../providers.ts";
-import { prepareManifestRequest } from "../proxy-selection.ts";
-import { estimateModelCost } from "../pricing.ts";
+const { providerModel } = await import("../providers.ts");
+const { prepareManifestRequest } = await import("../proxy-selection.ts");
+const { estimateModelCost } = await import("../pricing.ts");
 
 const manifest = parse(readFileSync(new URL("../../providers/deepseek.provider.yaml", import.meta.url), "utf8"));
 const snapshot = compileProviderSnapshot([manifest]), provider = snapshot.providers[0];
