@@ -61,13 +61,14 @@ export function googleVeoAssets(body: Record<string, unknown>, maxBytes: number)
 
 /** Trusted server configuration only, never a base supplied by a job response. */
 export function googleVeoApiBase(value: string): string {
+  requireVeo(typeof value === "string" && value.length <= 8192, "api_base");
   let url: URL;
   try { url = new URL(value); } catch { throw new Error("invalid_google_veo_api_base"); }
   requireVeo(url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && !url.port
     && !/[\\%\s]/.test(value) && !/(?:^|\/)\.{1,2}(?:\/|$)/.test(value), "api_base");
   let path = url.pathname.replace(/\/+$/, "");
   if (!/(?:^|\/)v\d+(?:alpha\d*|beta\d*)?(?:\/|$)/.test(path)) path += "/v1beta";
-  requireVeo(/^\/(?:[A-Za-z0-9_-]+\/?)+$/.test(path), "api_base");
+  requireVeo(path.startsWith("/") && path.slice(1).split("/").every(segment => /^[A-Za-z0-9_-]+$/.test(segment)), "api_base");
   return url.origin + path;
 }
 
