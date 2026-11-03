@@ -2,8 +2,9 @@
 
 This schema/compiler contract composes the published OpenRouter video codec with
 the download-only file ABI from
-[PR624](https://github.com/openclaw/clawrouter/pull/624), source head
-`fdeb0ee04badd05806fc4a984a9214e6e46993dd`. It adds no provider declaration,
+[PR624](https://github.com/openclaw/clawrouter/pull/624), final source head
+`8384d7c515f1a7fc4051bfaaa438de5d3abb3a67`, landed as
+`f0c58945e14fb5ed391fa31b4e23be7977b6f1de`. It adds no provider declaration,
 snapshot, registry entry, retention admission or live route.
 
 The provider remains `openrouter`, with base `https://openrouter.ai/api` and its
