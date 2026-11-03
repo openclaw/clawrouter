@@ -1,0 +1,48 @@
+# API-key subset; remaining contracts: docs/cloud-key-providers.md.
+# Endpoint/model source checked 2026-11-03: https://www.kimi.com/code/docs/en/kimi-code/models
+schema: clawrouter.service-provider.v1
+id: kimi
+displayName: Kimi Coding overseas
+status: experimental
+class: openai_compatible
+service:
+  platform: kimi
+  kind: model_provider
+  upstreamService: kimi
+  configKeys: [KIMI_CODING_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.kimi.ai/coding/v1
+routing:
+  nativePrefixes: [clawrouter-kimi, kimi]
+  modelPrefixes: [kimi/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: kimi/k3.1-pro
+      upstream: k3.1-pro
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
