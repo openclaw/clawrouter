@@ -35,8 +35,16 @@ export class GoogleContinuation {
   private published = new Set<string>();
   private invalid = false;
 
-  private constructor(private env: Env, private scope: string, private selection: ProxySelection,
-    private signal: AbortSignal, private previous: ContinuationOwner | null, requested: boolean) {
+  private env: Env;
+  private scope: string;
+  private selection: ProxySelection;
+  private signal: AbortSignal;
+  private previous: ContinuationOwner | null;
+
+  private constructor(env: Env, scope: string, selection: ProxySelection,
+    signal: AbortSignal, previous: ContinuationOwner | null, requested: boolean) {
+    this.env = env; this.scope = scope; this.selection = selection;
+    this.signal = signal; this.previous = previous;
     this.requested = requested;
     this.pinned = !requested ? undefined : previous?.grantKey && previous.lineage
       ? { key: previous.grantKey, lineage: previous.lineage } : { key: null, revision: null };
