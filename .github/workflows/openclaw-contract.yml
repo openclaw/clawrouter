@@ -40,12 +40,28 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        # Temporary first-call diagnostic. Restore the full matrix before landing.
         include:
+          - consumer: search
+            ref: 1c72f546f839d2790168cd15a9f9d18afaf014ff
+            test: test/openclaw-search.test.mjs
+          - consumer: embeddings
+            ref: 9d2be9d82c2a6973ae1b025eac4a636964397c28
+            test: test/openclaw-embeddings.test.mjs
+          - consumer: speech
+            ref: 70fcd8cb826f1e70ee59aacaf442e4cf411c7ca4
+            test: test/openclaw-speech.test.mjs
+          - consumer: native-memory
+            ref: 60e29ff604075d6961e19469a60530782fb644f7
+            test: test/openclaw-native-embeddings.test.mjs
+          - consumer: cohere
+            ref: b566e9a6b22a863bf0f1f869f106a2a91b062f16
+            test: test/openclaw-cohere.test.mjs
+          - consumer: gradium
+            ref: d2e88f6ff4b34b2141ee67b30a4c2783adf0f38c
+            test: test/openclaw-gradium.test.mjs
           - consumer: vercel
             ref: 0093b58c0d132ae1707f9553839f1cf297fb9a25
             test: test/openclaw-vercel.test.mjs
-            diagnostic: first
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -85,7 +101,6 @@ jobs:
         env:
           CONTRACT_TEST: ${{ matrix.test }}
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
-          CLAWROUTER_VERCEL_DIAGNOSTIC: ${{ matrix.diagnostic }}
 
 
   search-consumer:
@@ -96,8 +111,6 @@ jobs:
     steps:
       - name: Require every selected consumer
         run: |
-          echo "First-call diagnostic only; the full consumer matrix must be restored before landing."
-          exit 1
           if [ "$SELECTION_RESULT" = success ] && [ "$CONSUMERS_REQUIRED" = false ]; then
             test "$CONSUMER_RESULT" = skipped
           else

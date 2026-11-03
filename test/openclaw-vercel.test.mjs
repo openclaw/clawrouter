@@ -8,7 +8,6 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const diagnostic = process.env.CLAWROUTER_VERCEL_DIAGNOSTIC === "first";
 const sourceHead = "0093b58c0d132ae1707f9553839f1cf297fb9a25";
 const modelId = "vercel-ai-gateway/anthropic/claude-sonnet-4.6";
 const ids = ["vercel_stream", "vercel_simple", "vercel_error", "vercel_cancel", "vercel_unpriced", "vercel_foreign", "vercel_chat_only"];
@@ -36,31 +35,19 @@ test("actual Vercel catalog, replay, Anthropic SDK and SQLite accounting", { ski
     const offers = catalog.providers.find(row => row.id === provider.id).offers;
     assert.ok(offers.some(offer => offer.modelId === modelId && offer.endpoint === "chat_completions" && offer.eligible));
     assert.ok(offers.some(offer => offer.modelId === modelId && offer.endpoint === "messages" && !offer.eligible && offer.reasonCode === "pricing_required"));
-    let consumerError;
-    try {
-      await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-vercel-contract.test.ts", import.meta.url),
-        testPath: "src/agents/worker-contract.test.ts", testNamePattern: diagnostic ? "simple=false" : undefined,
-        env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_VERCEL_DIAGNOSTIC: diagnostic ? "first" : "" } });
-    } catch (error) { consumerError = error; }
+    await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-vercel-contract.test.ts", import.meta.url),
+      testPath: "src/agents/worker-contract.test.ts", env: { CLAWROUTER_CONTRACT_ORIGIN: origin } });
     const upstream = await mf.getWorker("upstream");
-    if (diagnostic || consumerError) {
-      const observed = await (await upstream.fetch("https://fixture.example/state")).json();
-      const usage = await (await fetch(`${origin}/v1/usage`, { headers: { authorization: "Bearer clawrouter-live-vercel_stream-fixture-secret" } })).json();
-      t.diagnostic(JSON.stringify({ phase: "first-call-worker-evidence", upstreamHits: observed.length, spentMicros: usage.budget.spentMicros,
-        events: usage.usage.events.map(event => ({ status: event.status, basis: event.cost_basis, cost: event.actual_cost_micros,
-          input: event.input_tokens, output: event.output_tokens, total: event.total_tokens })) }));
-    }
-    if (consumerError) throw consumerError;
     let calls;
     for (let attempt = 0; attempt < 150; attempt++) {
       calls = await (await upstream.fetch("https://fixture.example/state")).json();
       const cancelled = calls.find(call => JSON.stringify(call.body.messages).includes("vercel_cancel"));
-      if (diagnostic || cancelled?.cancelled || cancelled?.aborted) break;
+      if (cancelled?.cancelled || cancelled?.aborted) break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
-    assert.equal(calls.length, diagnostic ? 1 : 4, "denied calls have zero egress; failed generation does not replay or fall back to Chat");
+    assert.equal(calls.length, 4, "denied calls have zero egress; failed generation does not replay or fall back to Chat");
     const cancelled = calls.find(call => JSON.stringify(call.body.messages).includes("vercel_cancel"));
-    if (!diagnostic) { assert.ok(cancelled?.cancelled || cancelled?.aborted); assert.notEqual(cancelled.fixtureExpired, true); }
+    assert.ok(cancelled?.cancelled || cancelled?.aborted); assert.notEqual(cancelled.fixtureExpired, true);
     for (const call of calls) {
       assert.equal(call.url, "https://ai-gateway.vercel.sh/v1/messages");
       assert.equal(call.headers.authorization, "Bearer fixture-upstream-vercel");
@@ -73,7 +60,7 @@ test("actual Vercel catalog, replay, Anthropic SDK and SQLite accounting", { ski
       assert.equal(answer.tool_use_id, use.id); assert.equal(answer.content, "synthetic record");
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback|clawrouterRoute/);
     }
-    for (const id of ids.slice(0, diagnostic ? 1 : 4)) {
+    for (const id of ids.slice(0, 4)) {
       let usage;
       for (let attempt = 0; attempt < 150; attempt++) {
         usage = await (await fetch(`${origin}/v1/usage`, { headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret` } })).json();
