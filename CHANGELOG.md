@@ -219,6 +219,7 @@
 - Exercise the actual OpenClaw memory factory against native Cohere embedding offers, including scoped billing, budget admission and incomplete-response handling.
 
 - Verify actual OpenClaw memory embedding batch ordering, credential refresh and usage through workerd for concrete OpenAI-format models. Native embedding formats and deployment placeholders remain separately qualified.
+- Add xAI Responses with sourced Grok 4.7 facts and token tariffs, retaining the unpriced request-fee guard. Add the live-catalog-qualified OpenRouter GPT-6.1 Terra Responses row without inheriting direct-provider prices or broadening wildcard models.
 
 ## 0.5.0 - 2026-10-22
 

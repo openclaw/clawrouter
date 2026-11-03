@@ -25,10 +25,20 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  responses:
+    modelPassthrough: {}
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
   chat_completions:
     modelPassthrough: {}
     path: /v1/chat/completions
@@ -38,6 +48,60 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: xai/grok-4.7
+      upstream: grok-4.7
+      capabilities: [llm.responses]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        responses:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.7
+            - https://docs.x.ai/developers/model-capabilities/text/best-practices
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: high
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.7
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 500000
+      pricingRef: xai-grok-4-7-token-rates-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://docs.x.ai/developers/models/grok-4.7
+        # Responses can charge $0.05 before generation. Token rates do not
+        # qualify whole-request budgets: https://docs.x.ai/developers/pricing
+        unpricedCosts: [request_fee]
+        inputMicrosPerMillion: 2000000
+        cachedInputMicrosPerMillion: 500000
+        outputMicrosPerMillion: 6000000
+        maxInputTokens: 500000
+        defaultMaxOutputTokens: 500000
+        longContext: &grok47LongContext
+          # The upstream tariff starts at >=200k; the runtime compares >.
+          thresholdInputTokens: 199999
+          inputMicrosPerMillion: 4000000
+          cachedInputMicrosPerMillion: 1000000
+          outputMicrosPerMillion: 12000000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 500000
+            outputMicrosPerMillion: 6000000
+            longContext: *grok47LongContext
+          - id: priority
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 1000000
+            outputMicrosPerMillion: 12000000
+            longContext:
+              thresholdInputTokens: 199999
+              inputMicrosPerMillion: 8000000
+              cachedInputMicrosPerMillion: 2000000
+              outputMicrosPerMillion: 24000000
     - id: xai/grok-4.3
       upstream: grok-4.3
       capabilities: [llm.chat]

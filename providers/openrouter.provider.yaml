@@ -52,6 +52,32 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: openrouter/openai/gpt-6.1-terra
+      upstream: openai/gpt-6.1-terra
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        responses:
+          sources:
+            - https://openrouter.ai/api/v1/models
+            - https://openrouter.ai/docs/api_reference/responses/overview
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: medium
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses: &terraCapabilities
+            sources:
+              - https://openrouter.ai/api/v1/models
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1050000
+            maxOutputTokens: 128000
+          chat_completions: *terraCapabilities
+      # The live catalog advertises the endpoint, but routing/plugin fees and
+      # actual billed usage still need qualification. Do not inherit direct rates.
+      pricingRef: openrouter-gpt-6-1-terra-unqualified-2026-11-03
     - id: openrouter/auto
       upstream: openrouter/auto
       capabilities: [llm.chat]
