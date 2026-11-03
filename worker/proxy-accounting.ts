@@ -1,3 +1,4 @@
+import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { nativeEmbeddingMode } from "./native-embeddings.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
@@ -144,6 +145,8 @@ export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
   const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, undefined, selection.nativeResponse?.tariff);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
+  const billingBinding = { providerId, capability, requestFormat: selection.endpoint.request_format, method: selection.method, selectedModel: model?.upstream ?? null };
+  let chargedUpstreamResponse = false;
   const google = selection.endpoint.request_format === "google.generate_content";
   const count = selection.endpoint.request_format === "openai.responses_input_tokens";
   const requestedTier = google ? googleServiceTier(googleField(selection.body, "serviceTier", "service_tier"))
@@ -182,7 +185,12 @@ export function createProxyAccounting(options: AccountingContext) {
     },
   };
   function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null, hostedSearch?: HostedSearchUsage, requestTariffOutcome?: RequestTariffOutcome, requestCostReceipt?: RequestCostReceipt) {
-    const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt });
+    const outcome: AccountingOutcome = { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt };
+    // Error payloads are not a qualified usage receipt. Keep the dispatched
+    // reservation conservative, separately from any explicit policy tariff.
+    if (chargedUpstreamResponse) Object.assign(outcome, { billable: true, tokens: null, characterEstimate: null,
+      pricingUnavailable: facts.fixed == null, hostedSearch: undefined, requestTariffOutcome: "unknown", requestCostReceipt: undefined });
+    const event = accountingReceipt(facts, outcome);
     return finalizeAccounting(env, reservation, event.actual_cost_micros, event);
   }
   return {
@@ -195,6 +203,10 @@ export function createProxyAccounting(options: AccountingContext) {
     requestId,
     facts,
     setGrant(key: string | null, lane: import("./types").GrantLane) { facts.event.grant_key = key; facts.event.grant_lane = lane; },
+    observeUpstreamResponse(response: Response, url: URL) {
+      chargedUpstreamResponse ||= upstreamGenerationMayBeCharged(billingBinding, url, response.status);
+    },
+    get upstreamChargePossible() { return chargedUpstreamResponse; },
     fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
       // Missing response headers cannot prove that dispatched upstream work was free.
       context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"));
