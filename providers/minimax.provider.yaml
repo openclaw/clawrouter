@@ -38,6 +38,18 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: minimax/MiniMax-M2.7
+      upstream: MiniMax-M2.7
+      capabilities: [llm.chat]
+      pricingRef: minimax-m2-7-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://platform.minimax.io/docs/guides/pricing-paygo
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 60000
+        outputMicrosPerMillion: 1200000
+        maxInputTokens: 204800
+        defaultMaxOutputTokens: 131072
     - id: minimax/MiniMax-M3.1-Flash
       upstream: MiniMax-M3.1-Flash
       capabilities: [llm.chat]
@@ -72,18 +84,6 @@ models:
         # default output limit. Explicit max_completion_tokens includes thinking.
         defaultMaxOutputTokens: 1000000
         # M3.1-Flash does not support service_tier; do not inherit M3's tiers.
-    - id: minimax/MiniMax-M2.7
-      upstream: MiniMax-M2.7
-      capabilities: [llm.chat]
-      pricingRef: minimax-m2-7-standard-2026-06-22
-      pricing:
-        effectiveAt: "2026-06-22"
-        source: https://platform.minimax.io/docs/guides/pricing-paygo
-        inputMicrosPerMillion: 300000
-        cachedInputMicrosPerMillion: 60000
-        outputMicrosPerMillion: 1200000
-        maxInputTokens: 204800
-        defaultMaxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
