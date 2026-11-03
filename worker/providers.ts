@@ -14,7 +14,7 @@ import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuot
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
-import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -139,7 +139,7 @@ export function providerReadinessForState(provider: CompiledProvider, env: Env, 
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
   const providerGrants = grants.filter((entry) => entry.grant.enabled !== false && entry.grant.provider === provider.id && grantUsable(entry.grant));
   const hasGrant = providerGrants.length > 0;
-  const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(provider, key, providerGrants));
+  const missingConfig = requiredConfig.filter((key) => !providerConfigPresent(provider, key, env) && !grantSatisfiesConfig(provider, key, providerGrants));
   const configPresent = missingConfig.length === 0;
   const executableEndpoints = operation?.executableEndpoints ?? (configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : []);
   const checked = health?.checkedAt ? Date.parse(health.checkedAt) : NaN;
