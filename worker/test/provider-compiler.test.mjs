@@ -12,7 +12,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...files], { encoding: "utf8" }));
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
-  assert.equal(compiled.providers.length, 22);
+  assert.deepEqual(compiled.providers.map(provider => provider.id).sort(), files.map(file => parse(readFileSync(file, "utf8")).id).sort(), "every source manifest must appear exactly once in the compiled inventory");
   const deepseek = compiled.providers.find(provider => provider.id === "deepseek");
   assert.deepEqual(deepseek.models.map(model => model.upstream), ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-v4-flash-vision-exp"]);
   for (const model of deepseek.models) {
@@ -31,6 +31,9 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).filter(model => model.id !== "openai/gpt-realtime-2.1").every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   const gemini = compiled.model_index["google/gemini-3.5-flash"];
+  const google = compiled.providers.find(provider => provider.id === "google-gemini");
+  assert.deepEqual(google.endpoints.find(endpoint => endpoint.id === "stream_generate_content").query, { alt: "sse" });
+  assert.deepEqual(google.endpoints.find(endpoint => endpoint.id === "generate_content").query, {});
   assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");
   assert.equal(gemini.pricing.effectiveAt, "2026-09-23");
   assert.deepEqual(gemini.pricing.serviceTiers.map(({ id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion }) => [id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion]), [

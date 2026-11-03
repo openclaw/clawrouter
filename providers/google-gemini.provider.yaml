@@ -42,6 +42,7 @@ endpoints:
     modelPassthrough: {}
     path: /v1beta/models/${model}:streamGenerateContent
     pathParams: [model]
+    query: { alt: sse }
     requestFormat: google.generate_content
     responseFormat: google.stream_generate_content
     streaming: sse
