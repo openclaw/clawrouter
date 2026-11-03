@@ -8,6 +8,10 @@ identities and preserves the existing default and native generate/stream routes.
 Checked 2026-11-03 against Google's [pricing](https://ai.google.dev/gemini-api/docs/pricing),
 [Flash-Lite facts](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)
 and [Pro Preview facts](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview).
+The current unlocalized [deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations)
+announces no shutdown date for either identity. They are distinct from the three
+retired Veo 3.1 previews, which this manifest does not advertise or alias.
+
 Both accept text, image, video and audio, with 1,048,576 input tokens and 65,536
 output tokens. PDF support is documented upstream but is not relabeled as a
 separate router modality. These are source facts, not client acceptance proof.
