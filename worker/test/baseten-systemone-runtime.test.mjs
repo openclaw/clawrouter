@@ -46,7 +46,7 @@ async function failure(response, status = 502) {
 }
 async function settled(f, cost = 700) {
   await f.drain(); const events = await f.events(); assert.equal(events.length, 1);
-  assert.equal(events[0].actual_cost_micros, cost); assert.equal(events[0].cost_basis, "policy_fixed");
+  assert.equal(events[0].actual_cost_micros, cost); assert.equal(events[0].cost_basis, cost === 0 ? "none" : "policy_fixed");
   assert.equal(f.rows().length, 2); assert.ok(f.rows().every(row => row.settled === 1 && row.reserved_micros === cost));
   assert.equal(bodyBudgetCharged(), 0); return events[0];
 }
