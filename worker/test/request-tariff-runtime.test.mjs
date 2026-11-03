@@ -96,6 +96,12 @@ test("outcome admission uses the source combined estimate and leaves independent
   const plain = { ...input, tools: [{ type: "function", name: "web_search", parameters: { properties: { violation: { type: "string" } } } }] };
   assert.equal(estimateCost(model, plain, null, "llm.responses", endpoint).pricingGap, undefined);
   assert.equal(estimateCost(model, input, 7, "llm.responses", endpoint).basis, "policy_fixed");
+  const bounded = { ...model, pricing: { ...model.pricing, maxRequestInputTokens: model.pricing.maxInputTokens } };
+  const document = { ...input, input: [{ role: "user", content: [{ type: "input_file", file_id: "file_fixture" }] }] };
+  assert.ok(estimateCost(bounded, document, null, "llm.responses", endpoint).pricingGap, "a token envelope does not price implicit native document search");
+  for (const type of ["web_search", "x_search", "code_interpreter", "file_search", "image_generation", "mcp"]) {
+    assert.ok(estimateCost(bounded, { ...input, tools: [{ type }] }, null, "llm.responses", endpoint).pricingGap);
+  }
   const tiered = { ...model, pricing: { ...model.pricing, serviceTiers: [{ ...model.pricing, id: "default", aliases: [] }] } };
   assert.equal(estimateCost(tiered, { ...input, service_tier: "unqualified" }, null, "llm.responses", endpoint).basis, "unpriced_service_tier");
 });
