@@ -1,9 +1,11 @@
 # DeepInfra native catalog
 
-This focused codec implements the frozen catalog protocol; it does not activate
-refresh, model cards or tariffs. The existing Chat seed and opaque-model route
-remain unchanged. Common dispatch, authorization and publication remain runtime
-integration work, followed by real Worker and actual-client proof.
+The provider declaration adds seven frozen Chat identities, authenticated model
+discovery and a known, inactive GLM-5.1 alias disposition. It preserves the
+existing Chat seed and opaque-model route. The landed focused catalog codec
+remains separate from common background refresh and publication; no prices or
+replacement capabilities are inferred. Snapshot activation and actual-client
+acceptance remain separate integration gates.
 
 ## Qualified sources
 
@@ -92,9 +94,46 @@ A set of permitted IDs is the intersection of the frozen/authorized surface and
 that original policy; the codec itself performs no credential lookup or retry.
 Strict OpenAI discovery parsing remains unchanged.
 
-Source4's finite model declarations and real Worker inference fixtures follow
-this codec. Source3 owns fact/compiler support; runtime1 owns availability and
+The finite declarations have 46 real Worker/SQLite cases covering both routes,
+all seven active frozen IDs, native JSON/SSE reasoning/tool replay and usage,
+original credentials, metadata query isolation, known-alias denial, seed/image
+transport, errors and cancellation. Source3 owns fact/compiler support; runtime1 owns availability and
 tariff projection; client2 owns actual native client consumption; source6 owns
 snapshot serialization and end-to-end acceptance. None is replaced by these
-helper tests. No live inference, credential discovery, deployment or provisioning
+helper tests. A native Node import case also checks the leaf module without the
+test-only extension resolver, so consumer wiring can load its explicit `.ts`
+imports. No live inference, credential discovery, deployment or provisioning
 is part of this slice.
+
+## Finite declaration limits
+
+All inference tariffs stay unknown. The context limits come from the primary
+metadata endpoint; native `max_tokens` is not copied into `maxOutputTokens`.
+Kimi-K2.6 has current native vision tags and an inline-image transport fixture.
+The frozen Ultra card also asserted image input, but current DeepInfra metadata
+and public native tags do not corroborate that claim. Its declaration records
+only qualified text input; per-model vision qualification remains open rather
+than inferring either support or permanent lack of support from tag absence.
+
+Frozen V3.2 carried a deprecated flag and V4 replacement, but the current native
+inventory advertises it without a deprecation epoch or replacement. This slice
+preserves its selected identity and non-reasoning contract without inventing a
+dated retirement. GLM-5.1 instead has explicit native replacement evidence;
+its known row has no capabilities or inherited replacement facts/prices. It
+cannot revive through opaque Chat passthrough. Do not activate an alias card
+until common availability projection, serving-model and original-tariff proof.
+
+The public `/models` operation keeps strict `openai.models` decoding and the
+original selected Bearer grant. Its fixed `sort_by=openclaw&filter=with_meta`
+query is configured by the provider; caller overrides/cursors are rejected.
+It has a five-second deadline and zero inference charge. It does not invoke the
+separate public pricing feed or the new background catalog codec. That common
+refresh handoff still requires a credential-scoped cache, at most the frozen
+five-minute TTL, and original-grant revalidation before publication.
+
+Current inference wire references: [streaming](https://docs.deepinfra.com/chat/streaming),
+[tool calls](https://docs.deepinfra.com/chat/tool-calling),
+[reasoning](https://docs.deepinfra.com/chat/reasoning), and
+[prompt caching](https://docs.deepinfra.com/chat/prompt-caching).
+Fixtures preserve final-chunk usage, cache-hit token counts, native payloads and
+selected IDs; they do not establish live account entitlement or vendor costs.
