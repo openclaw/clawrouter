@@ -26,6 +26,8 @@ export const vydraManagedAdapter: ManagedLifecycleAdapter = {
   async read(response, context) {
     if (context.action === "result") throw new Error("unsupported_vydra_control");
     const { text, body } = await readMediaJson(response);
+    if (context.action !== "cancel" && ["workflow", "workflowSlug"].some(key =>
+      body[key] !== undefined && body[key] !== context.requestedVersion)) throw new Error("vydra_job_workflow_mismatch");
     if (context.action === "create") {
       const result = parseVydraSubmission(text, response.status);
       return { id: result.observation.id, nativeStatus: result.observation.status, terminal: null, body, followUp: "retrieve" };
