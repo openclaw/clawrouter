@@ -8,6 +8,7 @@ import type { Env } from "./types.ts";
 // Exhaustion/404/disconnect supplies no generation terminal and no refund.
 export async function collectBackground(env: Env, job: BackgroundJob, accept: (fact: ResponsesObservation, status: number) => Promise<void>): Promise<void> {
   if (!job.responseId || !job.route || Date.now() >= job.observeUntil) return;
+  if (job.managed) throw new Error("managed prediction requires its protocol collector");
   const operation = new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let inspector: Awaited<ReturnType<typeof import("./responses-usage.ts")["createResponsesUsageInspector"]>> | undefined;
