@@ -70,16 +70,19 @@ export function inputReceipt(job: BackgroundRecord | null, binding: ManagedInput
 }
 export function validateInputAllocation(input: ManagedInputAllocation): void {
   const { binding, admission, upload } = input;
+  if (Object.keys(input).sort().join() !== "admission,binding,upload" || !upload || Object.keys(upload).sort().join() !== "facts,plan") inputUnavailable();
   assertManagedInputLive(binding);
   if (binding.expiresAt > admission.admittedAt + 60_000 || admission.id !== binding.jobId
     || JSON.stringify(binding.owner) !== JSON.stringify(admission.owner) || admission.managed?.protocol !== "pixverse.video"
     || admission.managed.requestedVersion !== binding.model || admission.facts.event.model !== binding.modelId
+    || admission.stream || Object.keys(admission.route.pathParams).length || admission.route.organization !== null || admission.route.project !== null
     || admission.facts.event.capability !== "video.generate" || upload.facts.event.capability !== "pixverse.image_upload"
     || admission.facts.event.id === upload.facts.event.id || admission.facts.event.request_id === upload.facts.event.request_id
     || upload.plan.legs.some(leg => admission.plan.legs.some(other => leg.request.reservationId === other.request.reservationId))) inputUnavailable();
   for (const operation of [admission, upload]) {
     const fixed = operation.facts.fixed;
-    if (operation.facts.cost.basis !== "policy_fixed" || !Number.isSafeInteger(fixed) || fixed === null || fixed < 0
+    if (operation.facts.event.provider !== "pixverse" || operation.facts.event.grant_key !== binding.owner.grantKey || operation.facts.event.model !== binding.modelId
+      || operation.facts.cost.basis !== "policy_fixed" || !Number.isSafeInteger(fixed) || fixed === null || fixed < 0
       || fixed !== operation.facts.cost.reserveMicros || operation.plan.reservedMicros !== (operation.plan.legs.length ? fixed : 0)
       || operation.plan.legs.some(leg => leg.request.costMicros !== fixed || leg.request.capability !== operation.facts.event.capability)) inputUnavailable();
   }
@@ -92,6 +95,6 @@ export function bindManagedInput(receipt: ManagedInputReceipt, imageId: string):
 export function inputUnavailable(): never { throw new HttpError(409, "managed_input_unavailable", "the original input intent is unavailable or already attempted; never replay an upload or create"); }
 export function uploadJob(receipt: ManagedInputReceipt): BackgroundJob {
   const upload = receipt.upload;
-  if (upload.phase === "complete" || upload.phase === "expired") inputUnavailable();
+  if (upload.phase === "complete" || upload.phase === "expired" || !("legs" in upload)) inputUnavailable();
   return upload;
 }

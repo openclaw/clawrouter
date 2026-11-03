@@ -196,3 +196,33 @@ test("final receipt claim timeout prevents fetch after the persisted uncertainty
   } }; };
   await rejects(f.dispatch(binding, "upload")); assert.equal(f.sent.length, 0); assert.equal(f.row(binding).inputReceipt.state, "dispatch_unknown");
 });
+
+test("collection authority and public private-action attempts do not authorize uploads", async t => {
+  const f = await setup(t), binding = await f.allocate();
+  const body = encodeInputDispatch({ binding, authorization: { kind: "collection" }, action: "upload", deadline: binding.expiresAt, plan }, bytes);
+  const response = await f.env.GRANT_CREDENTIALS.get(grantKey).fetch("https://clawrouter.internal/managed-input/dispatch", { method: "POST", body });
+  assert.equal(response.status, 403); await response.text();
+  const publicAttempt = await f.call("/responses-background", { action: "input_claim_upload", binding });
+  assert.ok(publicAttempt.status >= 400); await publicAttempt.text(); assert.equal(f.sent.length, 0);
+});
+
+test("fresh policy revocation during owner preparation wins before the receipt claim", async t => {
+  const f = await setup(t), binding = await f.allocate(); let changed = false;
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    if (!changed && new URL(request.url).pathname === "/authorization/snapshot") {
+      changed = true; f.policy.enabled = false;
+      await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+    }
+  };
+  await rejects(f.dispatch(binding, "upload")); assert.equal(changed, true); assert.equal(f.sent.length, 0);
+  assert.equal(f.row(binding).inputReceipt.state, "pending");
+});
+
+for (const change of ["header", "query", "path", "oversize"]) test(`${change} cannot escape fixed input dispatch preparation`, async t => {
+  const f = await setup(t);
+  if (change === "header") f.provider.adapter.injectHeaders = { "API-KEY": "synthetic-static-substitute" };
+  if (change === "query") f.selection.endpoint.query = { redirect: "https://elsewhere.example" };
+  if (change === "path") f.selection.endpoint.path = "/openapi/v2/elsewhere";
+  if (change === "oversize") f.file.bytes = new Uint8Array(8 * 1024 * 1024 + 1);
+  await rejects(f.allocate()); assert.equal(f.sent.length, 0);
+});
