@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
+
 - Batch main CodeQL security scans every six hours while retaining pull request and manual analysis.
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
