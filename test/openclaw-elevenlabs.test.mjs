@@ -9,7 +9,7 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "dec94c877c3c891f27b4210a680c6445184d444f";
+const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const wire = JSON.parse(readFileSync(new URL("../providers/_fixtures/elevenlabs/speech.json", import.meta.url)));
 const cases = [
   { id: "elevenlabs_tts", text: "Synthetic café 😀", voice: "syntheticVoice1234567" },

@@ -1,4 +1,5 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { channel } from "node:diagnostics_channel";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { synthesizeSpeech } from "openclaw/plugin-sdk/tts-runtime";
@@ -105,10 +106,28 @@ describe("actual model-less ElevenLabs TTS and Talk through workerd", () => {
   it("cancels an incomplete synthesis at the actual caller deadline without replay", async () => {
     await withTempHome(async home => {
       const started = performance.now();
-      const result = await synthesizeSpeech({ text: "Synthetic cancel", cfg: config("elevenlabs_cancel"), prefsPath: home + "/tts-prefs.json", disableFallback: true, timeoutMs: 2000 });
-      expect(result.success).toBe(false);
-      expect(result.audioBuffer).toBeUndefined();
-      expect(result.error, JSON.stringify({ elapsedMs: Math.round(performance.now() - started), error: result.error })).toMatch(/timed out|abort/i);
+      const events: Record<string, unknown>[] = [];
+      const record = (phase: string) => (message: unknown) => {
+        const value = message as { request?: { path?: string }; error?: { name?: string; code?: string; cause?: { name?: string; code?: string } } };
+        events.push({ phase, elapsedMs: Math.round(performance.now() - started),
+          catalog: value.request?.path?.includes("/catalog") ?? false,
+          name: value.error?.name, code: value.error?.code,
+          causeName: value.error?.cause?.name, causeCode: value.error?.cause?.code });
+      };
+      const created = record("request"), failed = record("error");
+      channel("undici:request:create").subscribe(created);
+      channel("undici:request:error").subscribe(failed);
+      try {
+        const result = await synthesizeSpeech({ text: "Synthetic cancel", cfg: config("elevenlabs_cancel"), prefsPath: home + "/tts-prefs.json", disableFallback: true, timeoutMs: 2000 });
+        const observed = { elapsedMs: Math.round(performance.now() - started), error: result.error, events };
+        console.info("ElevenLabs caller deadline evidence: " + JSON.stringify(observed));
+        expect(result.success).toBe(false);
+        expect(result.audioBuffer).toBeUndefined();
+        expect(result.error, JSON.stringify(observed)).toMatch(/timed out|abort/i);
+      } finally {
+        channel("undici:request:create").unsubscribe(created);
+        channel("undici:request:error").unsubscribe(failed);
+      }
     }, environment);
   });
 });

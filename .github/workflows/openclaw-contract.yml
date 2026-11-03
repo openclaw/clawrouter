@@ -63,7 +63,7 @@ jobs:
             ref: 0093b58c0d132ae1707f9553839f1cf297fb9a25
             test: test/openclaw-vercel.test.mjs
           - consumer: elevenlabs
-            ref: dec94c877c3c891f27b4210a680c6445184d444f
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-elevenlabs.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
