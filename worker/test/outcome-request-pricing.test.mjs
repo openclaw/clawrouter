@@ -79,6 +79,27 @@ test("admission adds the possible outcome fee to real inference bounds and rejec
     assert.equal(requestOutcomeReserve({ ...tariff, ...changed }, 100), null);
 });
 
+test("opt-in outcome admission preserves the full output bound despite visible-output limits", () => {
+  const pricing = compile(fixture()).model_index["xai/grok-4.3"].pricing;
+  const endpoint = { request_format: "openai.responses" };
+  for (const limits of [{ max_output_tokens: 1 }, { max_tokens: 1, max_completion_tokens: 1 }, { n: 0 }, {}]) {
+    const body = { input: "synthetic", ...limits };
+    const estimate = estimateModelCost(pricing, body, endpoint, tariff);
+    const fullOutput = estimateModelCost(pricing, { ...body, max_output_tokens: pricing.defaultMaxOutputTokens, n: 1 }, endpoint);
+    assert.equal(estimate.outputTokens, pricing.defaultMaxOutputTokens);
+    // Input byte estimates differ with controls; calculate using the actual
+    // estimated input and the compiled rates, not a second request's bytes.
+    const inference = Math.ceil(estimate.inputTokens * pricing.inputMicrosPerMillion / 1e6)
+      + Math.ceil(pricing.defaultMaxOutputTokens * pricing.outputMicrosPerMillion / 1e6);
+    assert.equal(estimate.reserveMicros, inference + 50000);
+    assert.equal(fullOutput.outputTokens, estimate.outputTokens);
+  }
+  assert.equal(estimateModelCost(pricing, {}, { request_format: "openai.chat_completions" }, tariff).pricingAvailable, false);
+  assert.equal(estimateModelCost(pricing, {}, endpoint, { ...tariff, maximumAdditionalMicros: 0 }).pricingAvailable, false);
+  const overflow = { ...pricing, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER, outputMicrosPerMillion: Number.MAX_SAFE_INTEGER };
+  assert.equal(estimateModelCost(overflow, {}, endpoint, tariff).pricingAvailable, false);
+});
+
 test("native cost ticks settle the whole bill with upward micro rounding and no inferred violation surcharge", () => {
   for (const ticks of [0, 1, 9999, 10000, 10001, 158500, 500000000, 500000001, Number.MAX_SAFE_INTEGER]) {
     const expected = Number((BigInt(ticks) + 9999n) / 10000n);

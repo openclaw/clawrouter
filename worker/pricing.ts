@@ -196,7 +196,9 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
 
 export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit"> & Partial<Pick<CompiledEndpoint, "id">>;
 
-export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint): CostEstimate {
+export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint, requestPricing?: OutcomeRequestPricing): CostEstimate {
+  if (requestPricing && (!qualifiedOutcome(requestPricing) || pricing.unit != null || endpoint?.request_format !== "openai.responses"))
+    return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   if (pricing.unit === "image_token") return estimateImageCost(pricing, body);
   if (pricing.unit === "character") {
     // UTF-8 bytes bound code points without assuming an upstream tokenizer.
@@ -234,15 +236,15 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     : requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens;
   // No caller output-limit contract exists for compact. Use the authoritative
   // model maximum even if chat/ordinary-Responses-looking fields are present.
-  const outputTokens = compact ? pricing.defaultMaxOutputTokens : saturatingMultiply(output, choices);
+  // xAI's qualified Responses max_output_tokens bounds visible output only,
+  // excluding reasoning/function calls. Keep the full model output envelope.
+  const outputTokens = compact || requestPricing ? pricing.defaultMaxOutputTokens : saturatingMultiply(output, choices);
   const rates = resolveRates(pricing, inputTokens, google ? googleRequestServiceTier(body) : body.service_tier, true, google);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);
-  return {
-    reserveMicros: saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output)),
-    inputTokens,
-    outputTokens,
-  };
+  const inferenceMicros = saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output));
+  const reserveMicros = requestPricing ? requestOutcomeReserve(requestPricing, inferenceMicros) : inferenceMicros;
+  return reserveMicros == null ? { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false } : { reserveMicros, inputTokens, outputTokens };
 }
 
 // Bounds without a request: inspect every declared tier/context, including cache

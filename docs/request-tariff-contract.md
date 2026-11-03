@@ -72,6 +72,12 @@ after generation still incurs generation cost. This is independent of optional
 server tools. `requestOutcomeReserve` in `worker/pricing.ts` adds 50,000 USD micros
 to the ordinary inference reserve and rejects unknown bounds or integer overflow.
 The sum is conservative; it is not a claim that every request incurs both charges.
+`estimateModelCost(pricing, body, endpoint, requestPricing)` is the opt-in combined
+estimate: it preserves the full model output bound and adds this request component
+once. The native `max_output_tokens` limits visible output only, excluding
+reasoning and function-call tokens, so it cannot lower this total-output reserve.
+Malformed tariff/format combinations and overflow return `pricingAvailable: false`.
+Calls without the fourth argument retain their existing behavior.
 
 The qualified native charge signal is **`usage.cost_in_usd_ticks`** on the original
 complete Response. [Cost tracking](https://docs.x.ai/developers/cost-tracking) and
@@ -114,6 +120,6 @@ observation and settlement, with the following invariants before activation:
 - Keep `policy_fixed` precedence and its separate label. Do not report fixed
   policy charges or retained reservations as measured upstream bills.
 
-Synthetic receipt/error fixtures exercise the arithmetic and evidence boundary.
+Synthetic receipt/error fixtures exercise the arithmetic, full-output reservation and evidence boundary.
 No violation-triggering live prompts or fabricated violation error codes are
 needed. Shared runtime and client types remain owned by their respective lanes.
