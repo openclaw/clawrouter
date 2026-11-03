@@ -4,6 +4,7 @@
 
 - Observe Cohere v2 native token usage separately from billed units, settle token prices only from billed counters, and require complete streaming message-end events for final usage.
 - Enforce Google native service tiers against policy and proxy-key allowlists on unary and streaming routes, mapping Standard to Default and rejecting malformed native tiers before dispatch.
+- Add experimental Inworld native unary speech with unchanged voice/model parameters and JSON output. Character/credit tariffs remain unqualified; fixed policy charges are distinct from upstream cost.
 
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 
