@@ -35,9 +35,10 @@ test("credential errors are stable and never include supplied material", async (
 test("token response requires explicit lifetime and cloud-platform scope when supplied", () => {
   const value = { access_token: token.accessToken, token_type: "Bearer", expires_in: 3600, scope: vertexScope };
   assert.deepEqual(decodeVertexAccessToken(value, now), token);
-  for (const patch of [{ expires_in: undefined }, { expires_in: 0 }, { expires_in: 7200 }, { expires_in: 1.5 }, { token_type: "Other" }, { access_token: "value\r\nx-injected: 1" }, { scope: "unrelated-scope" }]) {
+  for (const patch of [{ expires_in: undefined }, { expires_in: 0 }, { expires_in: 7200 }, { expires_in: 1.5 }, { token_type: "Other" }, { access_token: "value\r\nx-injected: 1" }, { scope: "unrelated-scope" }, { scope: `${vertexScope}.evil.example` }, { scope: `https://evil.example/${vertexScope}` }]) {
     assert.throws(() => decodeVertexAccessToken({ ...value, ...patch }, now), /invalid_vertex/);
   }
+  assert.deepEqual(decodeVertexAccessToken({ ...value, scope: `other-scope ${vertexScope}` }, now), token);
 });
 
 test("global, multi-region and regional locations select their own resource URLs", () => {

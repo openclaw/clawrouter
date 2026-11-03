@@ -46,7 +46,7 @@ export function decodeVertexAccessToken(value: unknown, requestedAt: number): Ve
   seconds(requestedAt);
   const response = record(value);
   requireVertex(response && bearerToken(response.access_token) && response.token_type === "Bearer" && Number.isSafeInteger(response.expires_in) && (response.expires_in as number) > 0 && (response.expires_in as number) <= 3600, "token_response");
-  requireVertex(response.scope === undefined || (typeof response.scope === "string" && response.scope.split(/\s+/).includes(vertexScope)), "token_scope");
+  requireVertex(response.scope === undefined || (typeof response.scope === "string" && response.scope.split(/\s+/).some(scope => scope === vertexScope)), "token_scope");
   return { accessToken: response.access_token, expiresAt: requestedAt + (response.expires_in as number) };
 }
 
