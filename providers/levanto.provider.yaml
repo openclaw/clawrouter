@@ -1,0 +1,78 @@
+schema: clawrouter.service-provider.v1
+id: levanto
+displayName: Levanto Sage
+status: experimental
+class: custom_adapter
+service:
+  platform: levanto
+  kind: model_provider
+  upstreamService: levanto
+  configKeys: [SAGE_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://sage.levanto.ai
+routing:
+  nativePrefixes: [clawrouter-levanto, levanto]
+  modelPrefixes: [levanto/]
+adapter:
+  request: sage
+  response: sage
+  error: json_error
+capabilities:
+  - id: llm.decisions
+    endpoint: decisions
+    methods: [POST]
+  - id: llm.decisions.batch
+    endpoint: decisions_batch
+    methods: [POST]
+endpoints:
+  decisions:
+    path: /decide
+    requestFormat: levanto.sage
+    responseFormat: levanto.sage
+    timeoutMs: 120000
+  decisions_batch:
+    path: /decide/batch
+    requestFormat: levanto.sage_batch
+    responseFormat: levanto.sage_batch
+    timeoutMs: 120000
+models:
+  entries:
+    - id: levanto/levanto-sage-2
+      upstream: levanto-sage-2
+      capabilities: [llm.decisions, llm.decisions.batch]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          decisions:
+            sources: [https://docs.levanto.ai/quickstart]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: levanto-sage
+                questions:
+                  boolean: { probabilities: boolean, abstention: true }
+                  choice: { probabilities: categorical, abstention: true, minOptions: 2, maxOptions: 120 }
+                  score: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 26 }
+                  sort: { probabilities: none, abstention: false, minOptions: 2, maxOptions: 120 }
+                  tags: { probabilities: independent, abstention: true, minOptions: 1, maxOptions: 120 }
+                reasoning: { modes: [auto, off, on], metadata: true }
+                limits: { maxQuestions: 1 }
+                confidence: provider-specific
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: meta.usage.input_tokens
+      unit: token
+    - name: output_tokens
+      source: meta.usage.output_tokens
+      unit: token

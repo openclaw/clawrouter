@@ -1,0 +1,66 @@
+schema: clawrouter.service-provider.v1
+id: liquid-ai
+displayName: Liquid AI Decisions
+status: experimental
+class: custom_adapter
+service:
+  platform: liquid-ai
+  kind: model_provider
+  upstreamService: liquid-ai
+  configKeys: [LIQUID_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.liquid.ai/decisions/v1
+routing:
+  nativePrefixes: [clawrouter-liquid-ai, liquid-ai]
+  modelPrefixes: [liquid-ai/]
+adapter:
+  request: systemone
+  response: systemone
+  error: json_error
+capabilities:
+  - id: llm.decisions
+    endpoint: decisions
+    methods: [POST]
+endpoints:
+  decisions:
+    path: /systemone
+    requestFormat: liquid.systemone
+    responseFormat: liquid.systemone
+    timeoutMs: 120000
+models:
+  entries:
+    - id: liquid-ai/d1.1
+      upstream: d1.1
+      capabilities: [llm.decisions]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          decisions:
+            sources: [https://docs.liquid.ai/lfm/models/d1]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: liquid-ai-systemone
+                questions:
+                  boolean: { probabilities: boolean, abstention: false }
+                  choice: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 255 }
+                  score: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 10 }
+                confidence: provider-specific
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.input_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.output_tokens
+      unit: token

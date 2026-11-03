@@ -1,0 +1,66 @@
+schema: clawrouter.service-provider.v1
+id: typesafe
+displayName: TypeSafe
+status: experimental
+class: custom_adapter
+service:
+  platform: typesafe
+  kind: model_provider
+  upstreamService: typesafe
+  configKeys: [TYPESAFE_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.typesafe.ai/v1
+routing:
+  nativePrefixes: [clawrouter-typesafe, typesafe]
+  modelPrefixes: [typesafe/]
+adapter:
+  request: systemone
+  response: systemone
+  error: json_error
+capabilities:
+  - id: llm.decisions
+    endpoint: decisions
+    methods: [POST]
+endpoints:
+  decisions:
+    path: /systemone
+    requestFormat: typesafe.systemone
+    responseFormat: typesafe.systemone
+    timeoutMs: 120000
+models:
+  entries:
+    - id: typesafe/jev-latest
+      upstream: jev-latest
+      capabilities: [llm.decisions]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          decisions:
+            sources: [https://api.typesafe.ai/openapi.json]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: typesafe-systemone
+                questions:
+                  boolean: { probabilities: boolean, abstention: false }
+                  choice: { probabilities: provider-defined, abstention: false, minOptions: 2, maxOptions: 255 }
+                  score: { probabilities: provider-defined, abstention: false, minOptions: 2, maxOptions: 10 }
+                confidence: provider-specific
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.input_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.output_tokens
+      unit: token
