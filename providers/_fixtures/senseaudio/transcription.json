@@ -1,0 +1,26 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/senseaudio/media-understanding-provider.ts",
+  "request": {
+    "method": "POST",
+    "path": "/v1/audio/transcriptions",
+    "encoding": "multipart/form-data",
+    "authScheme": "Bearer",
+    "fields": { "model": "senseaudio-asr-pro-1.5-260319", "language": "zh" },
+    "file": {
+      "name": "synthetic.wav",
+      "type": "audio/wav",
+      "base64": "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  "response": { "text": "合成测试文本", "duration": 1.25, "audio_info": { "duration": 1250, "format": "wav" } },
+  "billing": {
+    "currency": "CNY",
+    "unit": "audio_hour",
+    "pricePerUnit": 3.6,
+    "actualProviderCostMicrousd": null,
+    "rounding": "unqualified",
+    "hardBudgetRequires": "explicit policy_fixed until whole-upload duration and currency conversion are qualified"
+  }
+}
