@@ -1,5 +1,5 @@
-import { createRouteCatalog } from "../shared/route-catalog.ts";
-export { modelSupportsEndpoint } from "../shared/route-catalog.ts";
+import { capabilityForPath, createRouteCatalog, unifiedPathForRequestFormat } from "../shared/route-catalog.ts";
+export { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { modelForEndpoint } from "./model-pricing.ts";
@@ -101,13 +101,9 @@ export function endpointForPath(provider: CompiledProvider, path: string): Compi
   return endpointId ? provider.endpoints.find((endpoint) => endpoint.id === endpointId) : undefined;
 }
 
-export function capabilityForPath(path: string): string | null {
-  return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/decisions" ? "llm.decisions" : path === "/v1/responses/compact" ? "llm.responses.compact" : path === "/v1/responses/input_tokens" ? "llm.count_tokens" : path === "/v1/moderations" ? "llm.moderations" : path === "/v1/embeddings" ? "llm.embeddings" : path === "/v1/audio/speech" ? "audio.speech" : path === "/v1/audio/transcriptions" ? "audio.transcription" : path === "/v1/images/generations" ? "image.generation" : null;
-}
-
 export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
   const format = endpoint.request_format;
-  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.decisions" ? "/v1/decisions" : format === "openai.responses_compact" ? "/v1/responses/compact" : format === "openai.responses_input_tokens" ? "/v1/responses/input_tokens" : format === "openai.moderations" ? "/v1/moderations" : format === "openai.embeddings" ? "/v1/embeddings" : format === "openai.audio_speech" ? "/v1/audio/speech" : format === "openai.audio_transcriptions" ? "/v1/audio/transcriptions" : format === "openai.images_generations" ? "/v1/images/generations" : null;
+  const path = unifiedPathForRequestFormat(format);
   const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
