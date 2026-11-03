@@ -1,5 +1,5 @@
-# Standard API only; region and plan contracts: docs/hosted-platform-providers.md.
-# Endpoint/model source checked 2026-11-03: https://www.stepfun.com/
+# Frozen standard API region/auth facts: docs/stepfun-native-catalog.md.
+# Primary endpoint/model contracts checked 2026-11-03.
 schema: clawrouter.service-provider.v1
 id: stepfun
 displayName: StepFun global standard API
@@ -19,18 +19,27 @@ auth:
 baseUrls:
   default: https://api.stepfun.ai/v1
 routing:
-  nativePrefixes: [clawrouter-stepfun, stepfun]
-  modelPrefixes: [stepfun/]
+  nativePrefixes: [clawrouter-stepfun, stepfun, stepfun-ai]
+  modelPrefixes: [stepfun/, stepfun-ai/]
 adapter:
   request: openai
   response: openai
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    streaming: none
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -43,6 +52,35 @@ models:
     - id: stepfun/step-3.7-flash
       upstream: step-3.7-flash
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.stepfun.ai/docs/en/guides/models/step-3.7-flash]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: medium
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.stepfun.ai/docs/en/guides/models/step-3.7-flash]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: stepfun/step-3.5-flash
+      upstream: step-3.5-flash
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.stepfun.ai/docs/en/guides/models/step-3.5-flash]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.stepfun.ai/docs/en/guides/models/step-3.5-flash]
+            checkedAt: "2026-11-03"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
