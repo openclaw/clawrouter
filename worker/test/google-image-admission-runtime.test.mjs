@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { googleContinuationFixture as setup, googleOriginalRequest as original } from "./google-continuation-fixture.mjs";
 const { estimateCost, createProxyAccounting, accountingReceipt } = await import("../proxy-accounting.ts");
+const { correlateIngressRequest } = await import("../correlation.ts");
 const { validateSelectedInput } = await import("../proxy-selection.ts");
 
 for (const stream of [false, true]) for (const manifest of [false, true]) for (const pooled of [false, true]) {
@@ -67,7 +68,7 @@ test("shared admission keeps image intent unpriced while explicit fixed-policy c
 test("frozen image classification prevents token-shaped output from creating a tariff in hard, soft or unmetered settlement", async t => {
   const f = await setup(t), endpoint = f.provider.endpoints.find(item => item.id === "generate_content");
   const body = { ...original, generationConfig: { responseModalities: ["IMAGE"] } };
-  const accounting = createProxyAccounting({ env: f.env, context: { waitUntil() {} }, request: new Request("https://router.example"),
+  const accounting = createProxyAccounting({ env: f.env, context: { waitUntil() {} }, request: correlateIngressRequest(new Request("https://router.example")).request,
     auth: { credentialId: "fixture", principalId: null, policyId: "fixture", policy: { ...f.policy, requestCostMicros: null }, authType: "proxy_key" },
     selection: { provider: f.provider, endpoint, model: f.model, body, method: "POST", capability: "llm.messages", pathParams: { model: f.model.upstream } } });
   assert.equal(accounting.facts.googleImage, true);
