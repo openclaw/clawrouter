@@ -1,3 +1,4 @@
+import { cloudflareClient, cloudflareError as firstCloudflareError } from "./cloudflare-diagnostics.mjs";
 import {
   buildProviderSmokePlan,
   compileProviderSnapshot,
@@ -37,6 +38,7 @@ const requiredDeployEnv = [
 ];
 
 const errors = [];
+const cloudflareFetch = cloudflareClient(errors);
 for (const name of requiredDeployEnv) {
   if (!process.env[name]) {
     errors.push(`missing required deploy env: ${name}`);
@@ -274,27 +276,4 @@ async function checkCloudflareKvWrite({ token, accountId, namespaceId }) {
     return;
   }
   console.log("cloudflare kv token: can write POLICY_KV");
-}
-
-async function cloudflareFetch(token, path, init = {}) {
-  let response;
-  let body;
-  try {
-    response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      ...init,
-      headers: {
-        ...(init.headers ?? {}),
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    body = await response.json().catch(() => ({}));
-  } catch (error) {
-    errors.push(`could not reach Cloudflare API: ${error.message}`);
-    return { ok: false, status: 0, body: {} };
-  }
-  return { ok: response.ok, status: response.status, body };
-}
-
-function firstCloudflareError(response) {
-  return response.body.errors?.[0]?.message ?? `HTTP ${response.status}`;
 }
