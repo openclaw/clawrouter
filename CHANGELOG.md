@@ -34,6 +34,7 @@
 - Keep native xAI unary speech unpriced before token-card admission and settlement, preserving separately authorized fixed policy charges without inferring an audio invoice from text or service defaults.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
 - Add the model-less xAI unary speech response leaf with complete binary delivery, bounded chunk storage, identity-encoding length validation and playable test audio; common credential and cost qualification remain separate.
+- Qualify the model-less xAI unary speech compiler contract with exact binary output, original credential binding and no OpenAI speech alias or inferred character tariff.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
 - Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
