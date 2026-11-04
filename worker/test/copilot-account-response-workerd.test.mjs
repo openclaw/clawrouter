@@ -13,6 +13,11 @@ async function barriers(t) {
   const pending=new Map(),released=new Set(),counts=new Map();
   const server=createServer((request,response)=>{
     const key=request.url;
+    if(request.method==="GET"&&!request.headers.authorization&&/^\/body\/(cancel|cancel-error|deadline|header)$/.test(key)){
+      counts.set(key,(counts.get(key)??0)+1);
+      response.setHeader("content-type",key.endsWith("/header")?"text/plain":"application/json; charset=utf-8");
+      response.write(" ");return; // A real socket owns the pending body until cancellation.
+    }
     if(request.method!=="GET"||request.headers.authorization||!/^\/(cancel|cancel-error|header)\/(abort|read|cleanup)$/.test(key)){response.writeHead(400);response.end();return;}
     counts.set(key,(counts.get(key)??0)+1);
     if(counts.get(key)!==1){response.writeHead(409);response.end();return;}
@@ -22,7 +27,7 @@ async function barriers(t) {
   await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
   return {origin:`http://127.0.0.1:${server.address().port}`,
     release(mode,phase){const key=`/${mode}/${phase}`;released.add(key);pending.get(key)?.end("released");pending.delete(key);},
-    count(mode,phase){return counts.get(`/${mode}/${phase}`)??0;}};
+    count(mode,phase){return counts.get(`/${mode}/${phase}`)??0;},bodyCount(mode){return counts.get(`/body/${mode}`)??0;}};
 }
 
 const router=`
@@ -111,7 +116,7 @@ const upstream=origin=>`export default {fetch(request){
  if(mode==='header')headers['content-type']='text/plain';
  if(mode==='mime')headers['content-type']='application/json;charset=latin1';
  if(mode==='encoding')headers['content-encoding']='fixture-unsupported';
- if(['cancel','cancel-error','deadline','header'].includes(mode))return new Response(new ReadableStream({start(c){c.enqueue(new Uint8Array([32]));}}),{headers});
+ if(['cancel','cancel-error','deadline','header'].includes(mode))return fetch(${JSON.stringify(origin)}+'/body/'+mode,{redirect:'manual',signal:request.signal});
  if(mode==='utf8')return new Response(new Uint8Array([123,34,120,34,58,34,0xed,0xa0,0x80,34,125]),{headers});
  const prefix='{"endpoints":{"api":"original"},"ignored":"',suffix='"}';
  const text=mode==='exact'||mode==='over'?prefix+'x'.repeat(16777216+(mode==='over'?1:0)-prefix.length-suffix.length)+suffix:
@@ -129,6 +134,7 @@ test("actual workerd account fetch, header, EOF, window and cancellation contrac
   const until=async predicate=>{let value;for(let i=0;i<100;i++){value=await call('/state');if(predicate(value))return value;await delay(10);}assert.fail(JSON.stringify(value));};
   for(const mode of ['json','created','accepted','partial-no-range','exact','over','reuse','empty-exact','empty-over','backing','wrong-url','redirect','followed','status','range','mime','encoding','length','unsafe-length','utf8','malformed','empty','unlock-error','late-abort','post-abort','deadline'])await t.test(mode,async()=>{
     const result=await call('/check?case='+mode);assert.equal(result.mode,mode);assert.equal(result.unlocked,true);
+    if(mode==='deadline')assert.equal(io.bodyCount(mode),1);
   });
   for(const mode of ['cancel','cancel-error','header'])await t.test(mode,async()=>{
     let state=await call('/start?case='+mode);assert.equal(state.settled,false);
@@ -140,6 +146,7 @@ test("actual workerd account fetch, header, EOF, window and cancellation contrac
       io.release(mode,'read');
     }else{assert.equal(state.reads,0);assert.equal(state.cancels,1);io.release(mode,'cleanup');}
     state=await until(s=>s.settled);assert.equal(state.error,'invalid_copilot_response_body');assert.equal(state.locked,false);assert.equal(state.listeners,0);assert.equal(state.cancels,1);assert.equal(state.cleanup,true);
+    assert.equal(io.bodyCount(mode),1);
     assert.equal(io.count(mode,'cleanup'),1);assert.equal(io.count(mode,'read'),mode==='header'?0:1);assert.equal(io.count(mode,'abort'),mode==='header'?0:1);
   });
 });
