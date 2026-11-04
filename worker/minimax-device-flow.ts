@@ -77,6 +77,7 @@ export class MiniMaxDeviceFlow {
           return this.start(request, record, descriptor);
         }
         if (!record || !attempt || input.attemptId !== attempt.id || actor !== attempt.actor || attempt.key !== body.key) conflict();
+        this.assertOwner(record, attempt);
         if (input.operation === "cancel") {
           if (attempt.phase !== "committed") {
             this.inFlight?.operation.stop("caller");
@@ -86,7 +87,6 @@ export class MiniMaxDeviceFlow {
           return { view: this.view(record.minimaxDeviceAttempt!) };
         }
         if (input.operation === "status" || attempt.phase !== "pending") return { view: await this.recover(record, attempt) };
-        this.assertOwner(record, attempt);
         if (Date.now() >= attempt.expiresAt) {
           record.minimaxDeviceAttempt = terminal(attempt, "expired"); await this.owner.save(record);
           return { view: this.view(record.minimaxDeviceAttempt) };
@@ -107,6 +107,11 @@ export class MiniMaxDeviceFlow {
         const result = attempt.phase === "begin_unknown"
           ? decodeMiniMaxDeviceAuthorization(text, upstream.status, attempt.session!, attempt.session!.ownerBinding, Date.now())
           : decodeMiniMaxTokenResponse(text, upstream.status, attempt.region, attempt.session!.ownerBinding, Date.now());
+        // The codec also labels unspecified non-success statuses pending. The
+        // owner permits another exchange only for the qualified native literal;
+        // slow_down, missing status and future statuses never become retries.
+        if ("status" in result && result.status === "pending" && JSON.parse(text).status !== "pending")
+          throw new Error("unqualified_minimax_pending_status");
         const view = await this.owner.order(async () => {
           await miniMaxDeviceAdmin(request, this.env, actor);
           operation.signal.throwIfAborted();
@@ -174,6 +179,7 @@ export class MiniMaxDeviceFlow {
   }
 
   private async recover(record: CredentialRecord, attempt: MiniMaxDeviceAttempt) {
+    this.assertOwner(record, attempt);
     if (active(attempt.phase) && (this.inFlight?.id !== attempt.id || this.inFlight.operation.signal.aborted)) {
       record.minimaxDeviceAttempt = terminal(attempt, "unknown"); await this.owner.save(record);
     } else if (attempt.phase === "pending" && Date.now() >= attempt.expiresAt) {

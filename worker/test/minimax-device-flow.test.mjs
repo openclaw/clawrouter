@@ -149,9 +149,9 @@ test("MiniMax foreign actor/grant and changed region cannot operate the original
   assert.equal(f.sent.length, 1);
 });
 
-for (const problem of ["state", "approval", "resource", "empty-refresh", "native-error", "redirect", "malformed", "network", "expiry", "empty-chunks"])
+for (const problem of ["state", "approval", "resource", "empty-refresh", "native-error", "slow-down", "missing-status", "redirect", "malformed", "network", "expiry", "empty-chunks"])
   test("MiniMax native " + problem + " is bounded unknown, never repeated", async t => {
-    const f = await fixture(t), tokenPhase = ["resource", "empty-refresh", "native-error"].includes(problem);
+    const f = await fixture(t), tokenPhase = ["resource", "empty-refresh", "native-error", "slow-down", "missing-status"].includes(problem);
     const begin = tokenPhase ? await body(await f.begin()) : null; f.advance();
     const reply = f.reply;
     f.reply = async (url, init) => {
@@ -166,6 +166,8 @@ for (const problem of ["state", "approval", "resource", "empty-refresh", "native
       if (problem === "resource") value.resource_url = "https://api.minimaxi.com/anthropic";
       if (problem === "empty-refresh") value.refresh_token = "";
       if (problem === "native-error") value.base_resp = { status_code: 1004 };
+      if (problem === "slow-down") value.status = "slow_down";
+      if (problem === "missing-status") delete value.status;
       return Response.json(value);
     };
     const result = await body(await (tokenPhase ? f.action("poll", begin.attemptId) : f.begin())); assert.equal(result.status, "unknown");
@@ -265,4 +267,14 @@ test("MiniMax owner restart cannot replay a pending exchange after cancellation"
   await body(await f.action("cancel", begin.attemptId)); f.restart();
   release.resolve(); await body(await pending);
   assert.equal((await body(await f.action("poll", begin.attemptId))).status, "cancelled"); assert.equal(f.sent.length, 2);
+});
+
+test("MiniMax committed status cannot cross a later owner generation or lineage", async t => {
+  const f = await fixture(t), begin = await body(await f.begin()); f.advance();
+  await body(await f.action("poll", begin.attemptId));
+  const current = await inspectGrantCredentials(f.env, key);
+  await putGrantCredentials(f.env, key, { ...current, label: "synthetic administrative update" }, true);
+  await body(await f.action("status", begin.attemptId), 409);
+  await body(await f.action("poll", begin.attemptId), 409);
+  assert.equal(f.sent.length, 2);
 });
