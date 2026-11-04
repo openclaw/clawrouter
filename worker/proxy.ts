@@ -953,6 +953,14 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
+  // Native MiniMax materialization may refresh inside its fenced owner. Known
+  // monetary denials must precede that external exchange, not only inference.
+  if (miniMaxAnthropicRoute(selection.provider, selection.endpoint) && !softBudgetPolicy(auth.policy)) {
+    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
+      selection.capability, selection.endpoint, undefined, undefined, selection.provider.id);
+    validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, connection,
+      auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
+  }
   let upstream: UpstreamAuth;
   const stickyHash = await grantStickyHash(request, auth);
   try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }); }
