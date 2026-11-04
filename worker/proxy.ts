@@ -406,6 +406,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     let prepared;
     try {
       const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission);
+      endpoint = nativeModelEndpoint(provider, matching, match[2], method, body) ?? endpoint;
       prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
     } catch (error) {
       if (error instanceof Response) return error;

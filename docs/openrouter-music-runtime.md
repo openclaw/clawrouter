@@ -6,6 +6,12 @@ native `openai.chat_completions` SSE route. The selected original credential and
 fixed `https://openrouter.ai/api/v1/chat/completions` destination remain under
 the normal Worker admission and dispatch controls.
 
+When Chat operations share a native path and wire format, the exact registered
+upstream `body.model` and its declared capability select the endpoint after
+authenticated JSON intake. Declaration order does not choose it. Multiple
+eligible endpoints deny as ambiguous; a router alias cannot substitute for the
+native upstream identity. Manifest endpoint selection remains explicit.
+
 This is partial frozen music support: prompt-only MP3/WAV requests, at most
 2 MiB decoded audio and 4 MiB original SSE wire. The leaf quarantines complete
 output and requires native `[DONE]` before any delivery. Reference images stay

@@ -93,3 +93,26 @@ test("OpenRouter music selected-grant policy cannot borrow an environment key af
   await putGrantCredentials(f.env, grantKey, { provider: "openrouter", kind: "api_key", enabled: false, credential: "synthetic-original-key" });
   const response = await f.request(); assert.ok(response.status >= 400); await response.text(); assert.equal(f.sent.length, 0);
 });
+
+test("same-wire native music selection follows the registered model capability in either declaration order", async t => {
+  const f = await setup(t); f.provider.endpoints.reverse();
+  const response = await f.request(); assert.equal(response.status, 200, await response.clone().text()); await response.text();
+  assert.equal(f.sent.length, 1); await settled(f, 700);
+});
+
+test("same-wire native model ambiguity and router aliases deny before egress", async t => {
+  const f = await setup(t), model = f.provider.models.find(value => value.upstream === musicModels[0]);
+  const alias = await f.request({ ...musicBody(), model: model.id }); assert.equal(alias.status, 400); await alias.text();
+  model.capabilities.push("llm.chat");
+  const ambiguous = await f.request(); assert.equal(ambiguous.status, 409); assert.equal((await ambiguous.json()).error.code, "native_route_ambiguous");
+  assert.equal(f.sent.length, 0);
+});
+
+test("same-wire selector preserves an ordinary registered OpenRouter Chat model", async t => {
+  const f = await setup(t), model = f.provider.models.find(value => value.capabilities.includes("llm.chat")); assert.ok(model);
+  f.upstream = () => Response.json({ model: model.upstream, choices: [{ message: { role: "assistant", content: "Synthetic response." }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } });
+  const response = await f.call(nativePath, { model: model.upstream, messages: [{ role: "user", content: "Synthetic request." }] });
+  assert.equal(response.status, 200, await response.clone().text()); await response.text(); assert.equal(f.sent.length, 1);
+  await f.drain(); assert.equal((await f.events())[0].capability, "llm.chat");
+});
