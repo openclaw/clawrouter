@@ -7,7 +7,7 @@ import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
-import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
+import { runProviderStaticCatalog } from "../../src/plugins/provider-discovery.js";
 import plugin from "./index.js";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
@@ -18,7 +18,12 @@ const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAU
 async function start(id: string, options: { simple?: boolean; image?: boolean; apiKey?: string; signal?: AbortSignal } = {}) {
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.id).toBe("minimax");
-  const catalog = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
+  const result = await runProviderStaticCatalog({ provider });
+  if (!result || !("providers" in result) || !result.providers?.minimax) {
+    throw new Error("expected the registered MiniMax static catalog map");
+  }
+  expect(Object.keys(result.providers)).toEqual(["minimax"]);
+  const catalog = result.providers.minimax;
   expect(catalog.api).toBe("anthropic-messages");
   const row = catalog.models.find(row => row.id === modelId);
   expect(row).toMatchObject({ id: modelId, contextWindow: 1_000_000, input: ["text", "image"], reasoning: true });
