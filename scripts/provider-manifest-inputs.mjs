@@ -7,12 +7,17 @@ import { PROVIDER_MANIFEST_SCHEMA } from "../packages/provider-plugin-contract/s
 export function loadProviderManifestInputs(manifestPaths, pluginPaths = []) {
   const manifests = [...manifestPaths].sort().map(path => parse(readFileSync(path, "utf8")));
   for (const plugin of loadProviderPlugins(pluginPaths)) {
-    const manifest = parse(plugin.manifestSource);
-    if (manifest?.schema !== PROVIDER_MANIFEST_SCHEMA) throw new Error(`provider plugin ${plugin.descriptor.id} requires ${PROVIDER_MANIFEST_SCHEMA}`);
-    if (manifest.id !== plugin.descriptor.id) throw new Error(`provider plugin ${plugin.descriptor.id} manifest id does not match descriptor`);
-    manifests.push(manifest);
+    manifests.push(providerPluginManifest(plugin));
   }
   return manifests;
+}
+
+/** Parse the already captured source; consumers must not reopen package files. */
+export function providerPluginManifest(plugin) {
+  const manifest = parse(plugin.manifestSource);
+  if (manifest?.schema !== PROVIDER_MANIFEST_SCHEMA) throw new Error(`provider plugin ${plugin.descriptor.id} requires ${PROVIDER_MANIFEST_SCHEMA}`);
+  if (manifest.id !== plugin.descriptor.id) throw new Error(`provider plugin ${plugin.descriptor.id} manifest id does not match descriptor`);
+  return manifest;
 }
 
 export function parseProviderCompilerArgs(args) {

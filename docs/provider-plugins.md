@@ -1,7 +1,7 @@
 # Provider plugins
 
-Status: packaging contract implemented; explicit local loader and compiler
-integration proposed for review. Existing `providers/*.provider.yaml` remain
+Status: packaging contract, explicit local loader, and compiler integration
+implemented. Package-index generation is proposed for review. Existing `providers/*.provider.yaml` remain
 the default production input. A descriptor does not activate itself.
 
 ## Start a provider
@@ -56,6 +56,28 @@ The loader reads bounded regular files and rejects symlinked files or resource
 directories. It hashes the descriptor and declared files. The compiler validates
 the captured manifest, including its schema and matching provider identity.
 Assets and fixtures are checked as files but are not rendered or executed.
+
+## Build a package index
+
+```sh
+node scripts/provider-package-index.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json \
+  --output /tmp/provider-package-index.json
+```
+
+The versioned index contains validated provider names, package versions and
+content digests. Documentation, licenses, fixtures, and light/dark logos are
+package-relative references with byte sizes and SHA-256 hashes. It contains no
+file contents, absolute paths, upstream URLs, credentials, or auth metadata.
+The generator validates execution manifests with the existing compiler and
+reads each package once, using the captured manifest for both validation and
+metadata. Repeat `--plugin` to select packages explicitly.
+
+This is a build-tool artifact, not a client catalogue or an admin API response.
+Its hashes identify content; they do not authenticate publishers, sanitize SVG,
+or authorize files for public serving. The Worker snapshot stays unchanged.
+A later asset publishing step must verify the captured hashes and apply its own
+admission rules before rendering or serving resources.
 
 ## Descriptor v1
 
@@ -164,8 +186,8 @@ proof that an account is entitled to upstream access.
 | Change | Landing policy | Boundary |
 | --- | --- | --- |
 | Packaging types, parser, example, architecture docs | Initial additive contracts may land after review | No runtime or compiler import. |
-| Explicit local loader, filesystem validation, collision handling | Draft only pending owner review | Pure build tooling; no auto-discovery or active provider edits. |
-| Compiler `--plugin` input alongside legacy inputs | Draft only pending owner review | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
+| Explicit local loader, filesystem validation, collision handling | Landed | Pure build tooling; no auto-discovery or active provider edits. |
+| Compiler `--plugin` input alongside legacy inputs | Landed | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
 | Generated package asset index and setup metadata | Separate future draft | Do not render untrusted SVG or add auth capabilities. |
 | Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |

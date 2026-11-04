@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
 - Allow the opt-in Fusion benchmark to use explicit native OpenAI/Anthropic credentials, report token-based tariff estimates, and carry uncertain prior spend within its existing $5 cap.
 
 
