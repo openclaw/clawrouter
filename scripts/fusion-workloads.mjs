@@ -2,8 +2,7 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|test)\/[A-Za-z0-9_./-]+$/.test(value)
@@ -90,12 +89,12 @@ export function validateEdits(task, edits) {
 }
 
 const writeProgram = `const fs=require('node:fs'),p=require('node:path');let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{for(const f of JSON.parse(input)){const target=p.resolve('/work',f.path);if(!target.startsWith('/work/')||fs.lstatSync(target).isSymbolicLink()||fs.realpathSync(target)!==target)process.exit(2);fs.writeFileSync(target,f.content)}});`;
-export async function writeFiles(box, files) { await box.exec(['node', '-e', writeProgram], { input: JSON.stringify(files) }); }
+export async function writeFiles(box, files, timeout = 120000) { await box.exec(['node', '-e', writeProgram], { input: JSON.stringify(files), timeout }); }
 
-export async function readSource(box, paths) {
+export async function readSource(box, paths, timeout = 120000) {
   if (!paths.every(safePath) || paths.length > 12) throw new Error('invalid_read_paths');
   const program = `const fs=require('node:fs'),p=require('node:path');const paths=JSON.parse(process.argv[1]);console.log(JSON.stringify(paths.map(path=>{const target=p.resolve('/work',path);if(fs.realpathSync(target)!==target||!fs.statSync(target).isFile()||fs.statSync(target).size>262144)throw Error('invalid_read');return {path,content:fs.readFileSync(target,'utf8')}})));`;
-  return JSON.parse((await box.exec(['node', '-e', program, JSON.stringify(paths)])).stdout.toString());
+  return JSON.parse((await box.exec(['node', '-e', program, JSON.stringify(paths)], { timeout })).stdout.toString());
 }
 
 export function testResult(result) {
@@ -107,8 +106,8 @@ export function testResult(result) {
     digest: hash(Buffer.concat([result.stdout, result.stderr])) };
 }
 
-export async function check(box, paths) {
-  const result = await box.exec(['node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout: 120000 });
+export async function check(box, paths, timeout = 120000) {
+  const result = await box.exec(['node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
   return { ...testResult(result), feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
 }
 
@@ -165,15 +164,3 @@ export async function qualify(task, options) {
     qualified: visible.passed && broken.valid && !broken.passed && oracle.passed };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [mode, nodeImage, output] = process.argv.slice(2);
-  if (mode !== 'qualify' || !output) throw new Error('usage: fusion-workloads.mjs qualify node@sha256:<digest> <receipt.json>');
-  const tasks = await loadTasks();
-  const receipts = [];
-  for (const task of tasks) {
-    const receipt = await qualify(task, { repo: process.cwd(), nodeImage }); receipts.push(receipt);
-    await writeFile(output, JSON.stringify({ version: 1, nodeImage, receipts }, null, 2) + '\n', { mode: 0o600 });
-    console.log(JSON.stringify({ task: task.id, qualified: receipt.qualified, visible: receipt.visible.passed, brokenFailures: receipt.broken.failures, oracle: receipt.oracle.passed }));
-    if (!receipt.qualified) { process.exitCode = 1; break; }
-  }
-}

@@ -20,7 +20,7 @@ declared source files are writable. Source dependencies remain readable.
 Use a Node 24.22.1 slim image pinned by its pulled manifest digest:
 
 ```sh
-node scripts/fusion-workloads.mjs qualify node@sha256:<digest> /tmp/qualification.json
+node scripts/qualify-fusion-workloads.mjs node@sha256:<digest> /tmp/qualification.json
 ```
 
 The command builds frozen dependency images from Git blobs, without installing
@@ -76,3 +76,39 @@ uncertainty clustered by task. Product rollout remains gated on those results.
   tasks, showing why environment and oracle qualification matter.
 - [Harbor's separate verifier](https://docs.harborframework.com/tasks/separate-verifier)
   is the interoperability target for a later full agent benchmark adapter.
+
+## Agent comparison
+
+The credential-free `Benchmark Fusion` package-only workflow also produces
+`fusion-agent-benchmark.mjs`. Run that artifact from this repository checkout
+with the qualified local task images and `GITHUB_SHA` set to the packaging SHA.
+Inject existing `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` only into the host process;
+they never enter the execution containers. Use the selected network proxy for
+Node explicitly when required by the local connection.
+
+```sh
+node /path/to/fusion-agent-benchmark.mjs /path/to/qualification.json /path/to/fresh-results
+node scripts/evaluate-fusion.mjs /path/to/fresh-results/runs.json --baseline strong --development
+```
+
+The initial calibration is four tasks, four strategies and one trial per pair:
+Luna, Sol, the existing Luna/Sol/Claude Panel, and a test-gated cascade. Every
+agent can inspect source, apply exact search/replace edits, and run the same
+visible tests. Sol is a multi-turn baseline with repair opportunities, not a
+one-shot answer. All agents get ten turns, a three-minute agent deadline and a
+$0.20 inference ceiling. Panel spends its extra calls within that same ceiling.
+The campaign also carries the previous $0.190914 usage/uncertainty ledger and
+has a $5 combined ceiling. Known settled savings may be used; unknown costs
+remain reserved and block more inference.
+
+Cascade gives Luna two turns. Passing the visible tests accepts that result;
+otherwise Sol continues in the same workspace. Hidden tests then measure false
+acceptance. This rule is deliberately inspectable, not a learned router or a
+claim that visible tests fully prove correctness.
+
+Records remain labeled `development`, and the evaluator requires an explicit
+`--development` flag. Results include final hidden-test success, all model
+charges, full trial wall time, tool time, escalation, invalid actions, failed
+advisers, public-test false acceptance and source hashes. Source and model
+responses are not saved. Exact private-test counts must match the known repair.
+No trained router, product strategy or deployment is enabled by this harness.

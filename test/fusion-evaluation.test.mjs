@@ -14,6 +14,13 @@ function fixture() {
   return { version: 1, evaluationId: "synthetic-test", datasetRevision: "synthetic-v1", graderRevision: "exact-v1", split: "test", records };
 }
 
+test('development evaluation requires explicit opt-in and retains its label', () => {
+  const input = { ...fixture(), split: 'development' };
+  assert.throws(() => evaluateFusion(input, 'single'), /held-out/);
+  assert.equal(evaluateFusion(input, 'single', 'development').split, 'development');
+  assert.throws(() => evaluateFusion(fixture(), 'single', 'development'), /development/);
+});
+
 test("paired evaluation exposes domain regressions, cost, latency and uncertainty", () => {
   const report = evaluateFusion(fixture(), "single"), panel = report.strategies.find((row) => row.strategy === "panel");
   assert.equal(panel.meanScore, 2 / 3);

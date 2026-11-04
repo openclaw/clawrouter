@@ -1,0 +1,209 @@
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, verify } from './fusion-workloads.mjs';
+import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
+import { priceBound, models } from './fusion-benchmark-accounting.mjs';
+
+const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits'], properties: {
+  action: { type: 'string', enum: ['read', 'edit', 'test', 'finish'] }, paths: { type: 'array', items: { type: 'string' } },
+  edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
+    properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
+} };
+export const defaultExperiment = Object.freeze({ strategies: ['cheap', 'strong', 'panel', 'cascade'], trials: 1,
+  maxTurns: 10, outputTokens: 2048, deadlineMs: 180000, trialBudgetMicros: 200000,
+  campaignBudgetMicros: 5000000, priorCostMicros: 190914 });
+
+export function validateExperiment(config, taskCount) {
+  if (JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(Object.keys(defaultExperiment).sort())) throw new Error('invalid_experiment_fields');
+  if (!Array.isArray(config.strategies) || !config.strategies.length || new Set(config.strategies).size !== config.strategies.length
+    || config.strategies.some(strategy => !defaultExperiment.strategies.includes(strategy))) throw new Error('invalid_strategies');
+  for (const [field, min, max] of [['trials', 1, 3], ['maxTurns', 1, 20], ['outputTokens', 256, 4096], ['deadlineMs', 1000, 300000],
+    ['trialBudgetMicros', 1, 1000000], ['campaignBudgetMicros', 1, 5000000], ['priorCostMicros', 0, 5000000]]) {
+    if (!Number.isSafeInteger(config[field]) || config[field] < min || config[field] > max) throw new Error(`invalid_${field}`);
+  }
+  const bound = taskCount * config.trials * config.strategies.length * config.trialBudgetMicros + config.priorCostMicros;
+  if (!Number.isSafeInteger(bound) || bound > config.campaignBudgetMicros) throw new Error('campaign_budget_exceeded');
+  return bound;
+}
+
+export class SpendLedger {
+  constructor(config, persist) { this.config = config; this.persist = persist; this.attempts = []; this.blocked = false; }
+  total(trialId) {
+    return this.attempts.filter(a => trialId === undefined || a.trialId === trialId)
+      .reduce((sum, a) => sum + (a.costMicros ?? a.reservationMicros), 0);
+  }
+  async reserve(trialId, model, reservationMicros) {
+    if (this.blocked) throw new Error('unknown_cost');
+    if (!Number.isSafeInteger(reservationMicros) || reservationMicros < 0) throw new Error('invalid_reservation');
+    if (this.total(trialId) + reservationMicros > this.config.trialBudgetMicros) throw new Error('trial_budget');
+    if (this.total() + reservationMicros + this.config.priorCostMicros > this.config.campaignBudgetMicros) throw new Error('campaign_budget');
+    const attempt = { trialId, model, reservationMicros, costMicros: null, httpStatus: null };
+    this.attempts.push(attempt); await this.persist(); return attempt;
+  }
+  async settle(attempt, costMicros, httpStatus) {
+    attempt.httpStatus = httpStatus;
+    if (!this.attempts.includes(attempt) || attempt.costMicros !== null || !Number.isSafeInteger(costMicros) || costMicros < 0) {
+      this.blocked = true; await this.persist(); throw new Error('unknown_cost');
+    }
+    attempt.costMicros = costMicros;
+    if (costMicros > attempt.reservationMicros) this.blocked = true;
+    await this.persist(); if (this.blocked) throw new Error('unknown_cost');
+  }
+}
+
+export function replaceEdits(task, files, edits) {
+  if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('invalid_edits');
+  const current = new Map(files.map(file => [file.path, file.content]));
+  for (const edit of edits) {
+    if (!task.editPaths.includes(edit?.path) || typeof edit.search !== 'string' || !edit.search.length
+      || typeof edit.replace !== 'string' || !current.has(edit.path)) throw new Error('invalid_edit');
+    const original = current.get(edit.path), index = original.indexOf(edit.search);
+    if (index < 0 || original.indexOf(edit.search, index + 1) !== -1) throw new Error('search_must_match_once');
+    current.set(edit.path, original.slice(0, index) + edit.replace + original.slice(index + edit.search.length));
+  }
+  return validateEdits(task, [...current].map(([path, content]) => ({ path, content })));
+}
+
+function bodyFor(messages, config) {
+  return { messages, max_tokens: config.outputTokens, response_format: { type: 'json_schema',
+    json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
+}
+
+async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
+  const box = await sandbox(image), started = performance.now();
+  const deadline = AbortSignal.timeout(config.deadlineMs);
+  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests repository paths; edit applies exact unique search/replace strings to allowed source files; test runs the fixed visible tests; finish submits. Supply empty paths/edits when unused. Tests and tools run in an isolated container. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
+    { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
+  let outcome = 'turn_limit', escalated = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
+  try {
+    for (; turns < config.maxTurns; turns++) {
+      if (deadline.aborted) { outcome = 'deadline'; break; }
+      const model = strategy === 'strong' || (strategy === 'cascade' && turns >= 2) ? models.strong : models.cheap;
+      if (strategy === 'cascade' && turns === 2) escalated = true;
+      // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
+      const context = [...messages.slice(0, 2), ...messages.slice(2).slice(-10)];
+      let response;
+      try {
+        let request = bodyFor(context, config);
+        if (strategy === 'panel') {
+          const fusion = engine.normalizeFusionConfig({ enabled: true, strategy: 'ensemble', aggregatorModel: model,
+            adviserModels: [models.strong, models.critic], maxOutputTokens: config.outputTokens, maxInputChars: 40000,
+            maxProposalChars: 3000, adviserTimeoutMs: 90000 });
+          const proposals = await engine.collectFusionProposals(fusion, request, async (worker, request) =>
+            Response.json(await invoke(trialId, worker, request, deadline)));
+          adviserFailures += proposals.failedModels.length;
+          request = engine.buildAggregatorBody(request, fusion, proposals.proposals);
+        }
+        response = await invoke(trialId, model, request, deadline);
+      } catch (error) {
+        if (error.message === 'unknown_cost') throw error;
+        if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
+        throw error;
+      }
+      const content = response.choices?.[0]?.message?.content;
+      let action;
+      try { action = JSON.parse(content); } catch { invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
+      if (typeof content !== 'string' || content.length > 40000) { invalidActions++; continue; }
+      messages.push({ role: 'assistant', content });
+      const toolStarted = performance.now();
+      const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
+      try {
+        if (action.action === 'read') {
+          const files = await readSource(box, action.paths, remaining());
+          messages.push({ role: 'user', content: JSON.stringify(files).slice(0, 40000) });
+        } else if (action.action === 'edit') {
+          const files = await readSource(box, task.editPaths, remaining());
+          await writeFiles(box, replaceEdits(task, files, action.edits), remaining());
+          const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
+        } else if (action.action === 'test' || action.action === 'finish') {
+          const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
+          if (action.action === 'finish') { outcome = 'submitted'; turns++; break; }
+        } else throw new Error('invalid_action');
+      } catch { if (deadline.aborted) { outcome = 'deadline'; break; }
+        invalidActions++; messages.push({ role: 'user', content: 'Invalid action or tool failure. Check allowed paths and exact unique search text.' }); }
+      finally { toolMs += performance.now() - toolStarted; }
+      // This is a development cascade using observable tests, not an oracle gate.
+      if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
+    }
+    const files = await readSource(box, task.editPaths);
+    return { files, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+      publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
+  } finally { await box.close(); }
+}
+
+export async function runExperiment({ qualificationPath, out, repo, config = defaultExperiment, env = process.env }) {
+  const tasks = await loadTasks(resolve(repo, 'benchmarks/fusion/workloads.json'));
+  const budgetBound = validateExperiment(config, tasks.length);
+  if (!/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? '')) throw new Error('exact_source_required');
+  const qualification = JSON.parse(await readFile(qualificationPath, 'utf8'));
+  for (const task of tasks) {
+    const receipts = qualification.receipts?.filter(receipt => receipt.taskId === task.id);
+    if (receipts?.length !== 1 || receipts[0].qualified !== true || receipts[0].taskDigest !== hash(JSON.stringify(task))) throw new Error('unqualified_task');
+  }
+  await mkdir(out, { recursive: false, mode: 0o700 });
+  const engine = await import('../worker/fusion.ts');
+  const pins = await nativePins(env);
+  const records = [], details = [];
+  let complete = false, tail = Promise.resolve();
+  const snapshot = () => {
+    tail = tail.then(async () => {
+      for (const [name, data] of [['runs', { version: 1, evaluationId: `workload-${env.GITHUB_SHA.slice(0, 12)}`,
+        datasetRevision: hash(JSON.stringify(tasks)), graderRevision: hash(JSON.stringify(qualification)), split: 'development', records }],
+      ['provenance', { sourceSha: env.GITHUB_SHA, datasetSplit: 'development', complete, config, budgetBound,
+        pins, costSource: 'published-tariff-estimate-from-native-usage', spentOrReservedMicros: ledger.total() + config.priorCostMicros,
+        attempts: ledger.attempts, details }]]) {
+        await writeFile(resolve(out, `${name}.json.tmp`), JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
+        await rename(resolve(out, `${name}.json.tmp`), resolve(out, `${name}.json`));
+      }
+    });
+    return tail;
+  };
+  const ledger = new SpendLedger(config, snapshot);
+  const invoke = async (trialId, model, body, signal) => {
+    const request = nativeRequest(model, body, env);
+    const attempt = await ledger.reserve(trialId, model, priceBound(request.body, pins[model].price));
+    try {
+      const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
+      attempt.httpStatus = response.status;
+      if (!response.ok) throw new Error('unknown_cost');
+      const result = nativeResult(model, await response.json());
+      await ledger.settle(attempt, result.costMicros, response.status);
+      return result.result;
+    } catch { ledger.blocked = true; await snapshot(); throw new Error('unknown_cost'); }
+  };
+  await snapshot();
+  try {
+    for (const [index, task] of tasks.entries()) for (let trial = 1; trial <= config.trials; trial++) {
+      const receipt = qualification.receipts.find(receipt => receipt.taskId === task.id);
+      for (let offset = 0; offset < config.strategies.length; offset++) {
+        const strategy = config.strategies[(index + trial - 1 + offset) % config.strategies.length];
+        const trialId = `${task.id}:${trial}:${strategy}`, started = performance.now();
+        const result = await runAgent(task, receipt.image, strategy, trialId, config, invoke, engine);
+        const graded = await verify(task, receipt.image, result.files, repo);
+        // Exact non-skipped test counts must match the qualified known repair.
+        const passed = graded.passed && graded.tests === receipt.oracle.tests && graded.skipped === receipt.oracle.skipped;
+        const { files, ...detail } = result;
+        details.push({ trialId, ...detail, verifier: graded, falsePublicAcceptance: result.publicPassed && !passed });
+        records.push({ caseId: task.id, domain: 'repository-regression-development', trial, strategy,
+          configurationId: hash(JSON.stringify({ strategy, config })), score: passed ? 1 : 0,
+          costMicros: ledger.total(trialId), latencyMs: Math.round(performance.now() - started),
+          callCount: ledger.attempts.filter(attempt => attempt.trialId === trialId).length, status: 'completed' });
+        await snapshot(); console.log(JSON.stringify({ completed: records.length, total: tasks.length * config.trials * config.strategies.length,
+          spentOrReservedMicros: ledger.total() + config.priorCostMicros }));
+      }
+    }
+    complete = true; await snapshot();
+  } catch { await snapshot(); throw new Error('workload_experiment_incomplete'); }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const [qualificationPath, out] = process.argv.slice(2);
+  if (!qualificationPath || !out) throw new Error('qualification receipt and fresh output directory required');
+  runExperiment({ qualificationPath, out, repo: process.cwd() }).catch(() => {
+    console.error('Workload experiment incomplete; inspect content-free checkpoint.'); process.exitCode = 1;
+  });
+}

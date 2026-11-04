@@ -46,7 +46,7 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - run: pnpm install --frozen-lockfile
       - name: Check benchmark accounting and composition
-        run: node --test test/fusion-benchmark.test.mjs test/fusion-native-provider.test.mjs test/fusion-evaluation.test.mjs worker/test/fusion.test.mjs
+        run: node --test test/fusion-benchmark.test.mjs test/fusion-native-provider.test.mjs test/fusion-evaluation.test.mjs test/fusion-workloads.test.mjs test/fusion-agent-benchmark.test.mjs worker/test/fusion.test.mjs
       - name: Package standalone runner
         run: |
           node --input-type=module <<'JS'
@@ -54,12 +54,16 @@ jobs:
           const { build } = createRequire(import.meta.resolve('wrangler/package.json'))('esbuild');
           await build({ entryPoints: ['scripts/benchmark-fusion.mjs'], bundle: true,
             platform: 'node', format: 'esm', outfile: process.env.RUNNER_TEMP + '/fusion-benchmark.mjs' });
+          await build({ entryPoints: ['scripts/fusion-agent-benchmark.mjs'], bundle: true,
+            platform: 'node', format: 'esm', outfile: process.env.RUNNER_TEMP + '/fusion-agent-benchmark.mjs' });
           JS
       - name: Retain standalone runner
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fusion-runner-${{ github.sha }}
-          path: ${{ runner.temp }}/fusion-benchmark.mjs
+          path: |
+            ${{ runner.temp }}/fusion-benchmark.mjs
+            ${{ runner.temp }}/fusion-agent-benchmark.mjs
           retention-days: 1
       - name: Run bounded native comparison
         if: ${{ !inputs.package_only && inputs.transport == 'native' }}
