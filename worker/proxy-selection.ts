@@ -1,3 +1,5 @@
+import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
+import { prepareVeniceChatResponse } from "./venice-chat-runtime.ts";
 import { prepareNativeMiniMaxSpeech } from "./native-minimax-speech.ts";
 import { miniMaxSpeechModels } from "./minimax-speech.ts";
 import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
@@ -57,7 +59,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
     ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection)
     ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
-    ?? prepareNativeElevenLabsSpeech(selection);
+    ?? prepareNativeElevenLabsSpeech(selection) ?? prepareVeniceChatResponse(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
     throw new HttpError(400, "native_image_route_required", "Google image generation requires its qualified nonstream native image route");
@@ -171,6 +173,8 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   const model = bodyModel ?? pathModel;
   if (!nativeModelEligible(endpoint.request_format, model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model is not qualified for this native protocol");
   const upstreamModel = bodyUpstream ?? pathUpstream;
+  if (native && provider.id === "venice" && endpoint.request_format === "openai.chat_completions" && upstreamModel)
+    prepareVeniceChatBinding(body, upstreamModel);
   const pathParams = { ...inputPathParams };
   for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
     if (upstreamModel) pathParams[name] = upstreamModel;

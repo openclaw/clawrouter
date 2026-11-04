@@ -246,15 +246,20 @@ function replayResponse(response: Response, reader: ReadableStreamDefaultReader<
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
-function sseEventBoundary(bytes: Uint8Array, start: number, length: number): { start: number; end: number } | null {
-  let lineStart = start;
-  for (let index = start; index < length; index += 1) {
+export interface SseBoundaryCursor { offset: number; lineStart: number; eof?: boolean }
+export function sseEventBoundary(bytes: Uint8Array, start: number, length: number, cursor?: SseBoundaryCursor): { start: number; end: number } | null {
+  let lineStart = cursor?.lineStart ?? start;
+  for (let index = cursor?.offset ?? start; index < length; index += 1) {
     if (bytes[index] !== 10 && bytes[index] !== 13) continue;
+    if (cursor && bytes[index] === 13 && index + 1 === length && !cursor.eof) {
+      cursor.offset = index; cursor.lineStart = lineStart; return null;
+    }
     const next = bytes[index] === 13 && index + 1 < length && bytes[index + 1] === 10 ? index + 2 : index + 1;
     if (index === lineStart) return { start: lineStart, end: next };
     lineStart = next;
     index = next - 1;
   }
+  if (cursor) { cursor.offset = length; cursor.lineStart = lineStart; }
   return null;
 }
 

@@ -25,7 +25,9 @@ export interface NativeResponse {
   query?: NativeQueryBinding;
   tariff?: RequestTariff;
   acquire(): BodyLease;
-  read(response: Response, signal: AbortSignal): Promise<{ response: Response; usage: ValidatedNativeUsage }>;
+  // Complete codecs supply usage; incremental gates keep the existing delivery observer.
+  read(response: Response, signal: AbortSignal): Promise<{ response: Response; usage: ValidatedNativeUsage }
+    | { response: Response; observeUsage: true }>;
 }
 
 export function nativeResponseLease(bytes: number): BodyLease {
