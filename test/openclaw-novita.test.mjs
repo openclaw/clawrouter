@@ -82,7 +82,10 @@ test("actual OpenClaw Novita configured native client through workerd and SQLite
       assert.equal(event.provider, "novita"); assert.equal(event.model, `novita/${id.startsWith("novita_card") ? models[Number(id.slice("novita_card".length))] : models[0]}`);
       assert.equal(event.credential_id, id); assert.equal(event.policy_id, id);
       assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.actual_cost_micros, 7);
-      assert.equal(event.status, ["novita_error", "novita_interrupted"].includes(id) ? "provider_error" : id === "novita_cancel" ? "client_error" : "success");
+      // A received HTTP 499 keeps the existing non-5xx status classification;
+      // Novita's billable-interruption evidence independently retains its charge.
+      assert.equal(event.status, id === "novita_error" ? "provider_error" : ["novita_cancel", "novita_interrupted"].includes(id) ? "client_error" : "success", id);
+      if (id === "novita_interrupted") assert.equal(event.status_code, 499);
       assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], id === "novita_observed" ? [4, 3, 7] : [null, null, null]);
       assert.doesNotMatch(JSON.stringify(event), /synthetic-tool-result|fixture-upstream|must-not-fallback/);
     }
