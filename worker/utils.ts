@@ -18,7 +18,7 @@ const corsHeaders = {
   ].join(","),
   "access-control-expose-headers": [
     "retry-after", "server-timing", "request-id", "x-request-id", "x-clawrouter-request-id", "x-clawrouter-error-code", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
-    "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
+    "x-clawrouter-fusion-strategy", "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
     "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers", "x-clawrouter-background-recovery",
   ].join(","),
   "access-control-max-age": "600",

@@ -29,6 +29,7 @@ import { GoogleContinuation, googleContinuationRequested, googleContinuationRout
 import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
+import { fusionAdviserModels, fusionStrategy } from "../shared/fusion-strategy.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
@@ -288,7 +289,7 @@ async function proxyFusion(
   if (!fusionMessagesValid(body.messages)) return errorResponse("fusion_messages_invalid", "fusion messages must be an array of objects with string roles", 400);
   const requestId = correlationMetadata(request).requestId;
   const compoundRequestId = randomId("fusion");
-  const compoundRequestSize = config.adviserModels.length + 1;
+  const compoundRequestSize = fusionAdviserModels(config).length + 1;
   const fusionHeaders = new Headers(request.headers);
   fusionHeaders.set("x-request-id", requestId);
   // The original body was already parsed. Concrete routes serialize their transformed body separately.
@@ -331,6 +332,7 @@ async function proxyFusion(
     id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
   });
   const headers = new Headers(response.headers);
+  headers.set("x-clawrouter-fusion-strategy", fusionStrategy(config));
   headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
   headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
   headers.set("x-clawrouter-fusion-adviser-count", String(result.proposals.length));

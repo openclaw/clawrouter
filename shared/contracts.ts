@@ -149,6 +149,7 @@ export interface ProviderConnection {
 
 export interface FusionConfig {
   version: 1;
+  strategy?: "single" | "ensemble";
   enabled: boolean;
   modelId: "clawrouter/fusion";
   adviserModels: string[];

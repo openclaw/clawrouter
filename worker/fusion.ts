@@ -1,4 +1,5 @@
 import type { FusionConfig } from "../shared/contracts.ts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import type { CompiledEndpoint, CompiledModel } from "./types.ts";
 import { HttpError } from "./utils.ts";
@@ -10,6 +11,7 @@ const ADVISER_RESPONSE_OVERHEAD_BYTES = 16 * 1024;
 
 export const DEFAULT_FUSION_CONFIG: FusionConfig = {
   version: 1,
+  strategy: "ensemble",
   enabled: false,
   modelId: FUSION_MODEL_ID,
   adviserModels: ["local/qwen3:8b"],
@@ -38,6 +40,7 @@ type InvokeModel = (model: string, body: Record<string, unknown>, timeoutMs: num
 export function normalizeFusionConfig(input: unknown): FusionConfig {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "fusion_config_invalid", "fusion configuration must be a JSON object");
   const value = input as Partial<FusionConfig>;
+  if (value.strategy !== undefined && value.strategy !== "single" && value.strategy !== "ensemble") throw new HttpError(400, "fusion_strategy_invalid", "fusion strategy must be single or ensemble");
   const requestedAdvisers = value.adviserModels ?? DEFAULT_FUSION_CONFIG.adviserModels;
   if (!Array.isArray(requestedAdvisers) || requestedAdvisers.some((model) => !cleanModel(model))) throw new HttpError(400, "fusion_model_invalid", "fusion adviser model ids are invalid");
   const adviserModels = uniqueModels(requestedAdvisers).slice(0, MAX_ADVISERS);
@@ -45,6 +48,7 @@ export function normalizeFusionConfig(input: unknown): FusionConfig {
   if (!aggregatorModel) throw new HttpError(400, "fusion_model_invalid", "fusion aggregator model id is invalid");
   const config: FusionConfig = {
     version: 1,
+    strategy: value.strategy ?? "ensemble",
     enabled: value.enabled === true,
     modelId: FUSION_MODEL_ID,
     adviserModels,
@@ -55,7 +59,7 @@ export function normalizeFusionConfig(input: unknown): FusionConfig {
     maxProposalChars: boundedInteger(value.maxProposalChars, DEFAULT_FUSION_CONFIG.maxProposalChars, 256, 20_000),
     temperature: boundedNumber(value.temperature, DEFAULT_FUSION_CONFIG.temperature, 0, 2),
   };
-  if (config.enabled && !config.adviserModels.length) throw new HttpError(400, "fusion_advisers_required", "fusion requires at least one adviser model");
+  if (config.enabled && config.strategy === "ensemble" && !config.adviserModels.length) throw new HttpError(400, "fusion_advisers_required", "ensemble fusion requires at least one adviser model");
   if ([...config.adviserModels, config.aggregatorModel].includes(FUSION_MODEL_ID)) throw new HttpError(400, "fusion_recursive_model", "fusion cannot use itself as an adviser or aggregator");
   return config;
 }
@@ -97,7 +101,7 @@ export function prepareAdviserBody(body: Record<string, unknown>, model: Compile
 
 export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel): Promise<FusionRunResult> {
   const startedAt = Date.now();
-  const settled = await Promise.all(config.adviserModels.map(async (model, index) => {
+  const settled = await Promise.all(fusionAdviserModels(config).map(async (model, index) => {
     const controller = new AbortController();
     const deadline = Date.now() + config.adviserTimeoutMs;
     const timeout = setTimeout(() => controller.abort(new InternalHttpAbort("deadline", "fusion adviser deadline exceeded")), config.adviserTimeoutMs);
@@ -176,7 +180,7 @@ async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promi
 export function buildFusionReservationProposals(config: FusionConfig): FusionProposal[] {
   // JSON escapes NUL as six ASCII bytes, the maximum expansion per UTF-16 code unit.
   const content = "\0".repeat(config.maxProposalChars);
-  return config.adviserModels.map((model) => ({ model, content }));
+  return fusionAdviserModels(config).map((model) => ({ model, content }));
 }
 
 export function buildLocalMessages(messages: ChatMessage[], maxInputChars: number): ChatMessage[] {
