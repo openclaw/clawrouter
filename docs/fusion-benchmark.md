@@ -5,13 +5,14 @@ that exact ref. The workflow uses the existing repository OpenRouter test key.
 It does not deploy or change production configuration.
 
 The runner imports the real Fusion composition module. It compares GPT-6 Luna
-alone, GPT-6.1 Sol alone, and Luna synthesizing independent Sol and Claude Sonnet
-5.5 proposals. All calls use medium reasoning and a 4,096-token output cap.
+alone, GPT-6.1 Sol alone, Claude Sonnet 5.5 alone, and Luna synthesizing independent
+Sol and Sonnet proposals. Every pool member has its own baseline. All calls use
+medium reasoning and a 4,096-token output cap.
 Advisers have a 120-second deadline; individual HTTP requests have a 90-second
 deadline. No tools, retries, fallback models or model-generated graders run.
 
-Thirty BIG-Bench Hard tasks come from three domains at a pinned dataset commit.
-A fixed hash selects ten examples per domain without looking at answers. Each
+Twenty-four BIG-Bench Hard tasks come from three domains at a pinned dataset commit.
+A fixed hash selects eight examples per domain without looking at answers. Each
 strategy sees the same tasks. Execution order rotates between cases. Final JSON
 answers are scored by exact match against the dataset's answer key. This is a
 small public-task pilot: model training contamination is unknown, and one trial

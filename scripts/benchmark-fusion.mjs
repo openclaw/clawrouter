@@ -20,7 +20,7 @@ export function gradeAnswer(content, target) {
   } catch { return 0; }
 }
 
-export function selectCases(examples, domain, count = 10) {
+export function selectCases(examples, domain, count = 8) {
   if (!Array.isArray(examples) || examples.length < count) throw new Error('dataset incomplete');
   return examples.map((item, index) => ({ ...item, caseId: `${domain}:${index}`, domain, rank: digest(`fusion-pilot-v1:${domain}:${index}`) }))
     .sort((a, b) => a.rank.localeCompare(b.rank)).slice(0, count);
@@ -97,6 +97,7 @@ export async function main(out) {
   const configurations = [
     { name: 'single', strategy: 'single', model: models.cheap, effort: 'medium', maxOutputTokens: limit },
     { name: 'strong-single', strategy: 'single', model: models.strong, effort: 'medium', maxOutputTokens: limit },
+    { name: 'claude-single', strategy: 'single', model: models.critic, effort: 'medium', maxOutputTokens: limit },
     { name: 'panel', strategy: 'ensemble', model: models.cheap, advisers: [models.strong, models.critic], effort: 'medium', maxOutputTokens: limit },
   ];
   const catalogResponse = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(30000) });
@@ -117,8 +118,8 @@ export async function main(out) {
   }
   const planned = cases.reduce((sum, item) => {
     const inputBytes = Buffer.byteLength(item.input) + 2048;
-    return sum + [models.cheap, models.strong, models.strong, models.critic, models.cheap]
-      .reduce((n, model, index) => n + priceBound({ padding: ' '.repeat(inputBytes + (index === 4 ? 72000 : 0)) }, pins[model].price), 0);
+    return sum + [models.cheap, models.strong, models.critic, models.strong, models.critic, models.cheap]
+      .reduce((n, model, index) => n + priceBound({ padding: ' '.repeat(inputBytes + (index === 5 ? 72000 : 0)) }, pins[model].price), 0);
   }, 0);
   const budgetMicros = 5000000;
   if (planned > budgetMicros) throw new Error('whole-run conservative cost bound exceeds $5');
@@ -166,7 +167,7 @@ export async function main(out) {
     }
   };
   const metadata = { sourceSha, datasetCommit, datasetHashes, pins, configurations,
-    selection: 'sha256(fusion-pilot-v1:domain:index), first 10 per domain',
+    selection: 'sha256(fusion-pilot-v1:domain:index), first 8 per domain',
     graderRevision: 'json-string-exact-v1', budgetMicros, plannedUpperBoundMicros: planned,
     scope: 'fusion composition; excludes gateway auth, routing, production concurrency and tool use',
     limitations: ['public tasks may be present in model training', 'one trial per case', 'provider aliases cannot attest hidden serving revisions'],

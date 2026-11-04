@@ -16,9 +16,9 @@ test('grader accepts only exact final JSON string answers', () => {
 test('selection is deterministic and independent of response quality', () => {
   const examples = Array.from({ length: 30 }, (_, i) => ({ input: `task ${i}`, target: 'A' }));
   const first = selectCases(examples, 'logic');
-  assert.equal(first.length, 10);
+  assert.equal(first.length, 8);
   assert.deepEqual(first, selectCases(examples, 'logic'));
-  assert.equal(new Set(first.map(x => x.caseId)).size, 10);
+  assert.equal(new Set(first.map(x => x.caseId)).size, 8);
   assert.throws(() => selectCases(examples.slice(0, 2), 'logic'), /incomplete/);
 });
 
