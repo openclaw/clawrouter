@@ -5,6 +5,7 @@ import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check,
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 
+const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude'];
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
   memory: { type: 'string' },
   action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
@@ -18,7 +19,7 @@ export const defaultExperiment = Object.freeze({ strategies: ['cheap', 'strong',
 export function validateExperiment(config, taskCount) {
   if (JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(Object.keys(defaultExperiment).sort())) throw new Error('invalid_experiment_fields');
   if (!Array.isArray(config.strategies) || !config.strategies.length || new Set(config.strategies).size !== config.strategies.length
-    || config.strategies.some(strategy => !defaultExperiment.strategies.includes(strategy))) throw new Error('invalid_strategies');
+    || config.strategies.some(strategy => !strategies.includes(strategy))) throw new Error('invalid_strategies');
   for (const [field, min, max] of [['trials', 1, 5], ['maxTurns', 1, 60], ['outputTokens', 256, 16384], ['deadlineMs', 1000, 900000],
     ['trialBudgetMicros', 1, 5000000], ['campaignBudgetMicros', 1, 100000000], ['priorCostMicros', 0, 100000000]]) {
     if (!Number.isSafeInteger(config[field]) || config[field] < min || config[field] > max) throw new Error(`invalid_${field}`);
@@ -72,6 +73,9 @@ const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invali
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
 export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
 
+export const executorModel = (strategy, turn, forced = false) => strategy === 'claude' ? models.critic
+  : strategy === 'strong' || (strategy === 'cascade' && (turn >= 2 || forced)) ? models.strong : models.cheap;
+
 export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
 
 export function sourceView(files, selectors, query = '') {
@@ -117,7 +121,7 @@ function bodyFor(messages, config) {
     json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
 }
 
-async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
+export async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
@@ -128,7 +132,7 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
   try {
     for (; turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      const model = strategy === 'strong' || (strategy === 'cascade' && (turns >= 2 || forceEscalation)) ? models.strong : models.cheap;
+      const model = executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
       const context = agentContext(messages, memory);

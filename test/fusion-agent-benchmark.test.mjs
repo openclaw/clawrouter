@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('every arm fits the predeclared campaign ceiling including previous uncertainty', () => {
@@ -94,4 +94,14 @@ test('working notes survive bounded context eviction without unbounded repeated 
   assert.equal(context.at(-1).content, 'new source'.repeat(25000));
   assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 384000);
   assert.equal(context.some(m => m.content.startsWith('old source')), false);
+});
+
+
+test('independent Claude baseline uses the same loop without changing cascade selection', () => {
+  assert.equal(executorModel('claude', 0), 'anthropic/claude-sonnet-5.5');
+  assert.equal(executorModel('strong', 0), 'openai/gpt-6.1-sol');
+  assert.equal(executorModel('cascade', 0), 'openai/gpt-6-luna');
+  assert.equal(executorModel('cascade', 0, true), 'openai/gpt-6.1-sol');
+  assert.equal(executorModel('cascade', 2), 'openai/gpt-6.1-sol');
+  assert.doesNotThrow(() => validateExperiment({...defaultExperiment, strategies:['claude']}, 4));
 });
