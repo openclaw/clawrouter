@@ -299,6 +299,7 @@
 
 - Add Google service-account and Anthropic Vertex request codecs with explicit project/region/model binding, token expiration checks and deterministic signature tests for credential-owner integration.
 - Bind preprovisioned Anthropic Vertex access tokens to original owner project/location and expiry, with fixed native dispatch, fresh post-budget authority checks and conservative settlement; service-account refresh remains separate.
+- Define an inactive, default-deny Vertex model/location predicate for the exact Sonnet 4.6 identity and four documented locations; catalog and dispatch integration remain separate from these support facts.
 
 - Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
