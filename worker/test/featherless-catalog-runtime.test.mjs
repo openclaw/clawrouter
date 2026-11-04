@@ -42,7 +42,7 @@ test("real keyed catalog follows short and empty pages, preserves facts and emit
   assert.equal(f.sent.length, 3);
   for (const [i, request] of f.sent.entries()) {
     assert.equal(request.url, `https://api.featherless.ai/v1/models?capabilities=chat&page=${i + 1}&per_page=100`);
-    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-original-key"]]);
   }
   await f.drain(); assert.equal(bodyBudgetCharged(), 0);
