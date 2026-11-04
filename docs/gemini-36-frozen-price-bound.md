@@ -44,15 +44,18 @@ They do not claim live model access, playback, newly qualified media consumers,
 account entitlement or invoice accuracy. Source6 owns serialized generated
 snapshot integration and actual client proof.
 
-## Local integration proof
+## Serialized integration proof
 
 The integration composes exact source `80d3dcd51406dd17d94b10afb9e86c01560d4b15`
-on frozen router base `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. Its complete
+on qualified landed router base `10b6ce3c1e40d5d96e2599523047daf8be883a9a`. Its complete
 40-line card and five source tests are preserved. Removing that card restores
 the base provider YAML byte-for-byte; existing rows, rates and protocols remain.
-All 85 manifests compile; five focused cases, Worker types and 1,035 existing
+All 86 manifests compile; five focused cases, Worker types and 1,051 existing
 manifest-driven Chat/consumer-selection cases pass. The Chat matrix is broader
 regression coverage, not evidence of a Google native client.
+Serial generated snapshot SHA256:
+`6be066e04763868e7fa7b983e546623e14ba3939a71cdded2321edfebf5b2bf2`.
+The generated snapshot changes only the Google provider from this base.
 
 `test/openclaw-gemini36.test.mjs` selects nine authored actual-client cases from
 the shared Google contract fixture. They import the registered plugin, static
@@ -60,8 +63,10 @@ catalog, replay policy and native transport from public OpenClaw
 `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. They target real Worker/SQLite with
 sanitized fragmented SSE, exact model/credential binding, tool replay, observed
 thinking/cache usage, explicit fixed versus upper-bound accounting, zero-egress
-denials and post-delivery cancellation. These cases are **AUTHORED/UNRUN**;
-syntax checks do not establish their runtime result. No SDK build or CI
-registration is performed in this local preparation. The fixture explicitly
+denials and post-delivery cancellation. These cases are enrolled in ordinary
+hosted CI and remain **AUTHORED/UNRUN** until the exact composed head passes.
+The pinned static-catalog return shape and actual GenerateContent registration
+are inspected directly; no helper or client implementation is copied. No new
+SDK report, local dependency install or live call is performed. The fixture explicitly
 configures GenerateContent; default Interactions, live discovery, video, account
 entitlement, vendor invoices and physical pre-header cancellation are separate.
