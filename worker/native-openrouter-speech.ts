@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { prepareOpenRouterSpeech, readOpenRouterSpeech } from "./openrouter-speech.ts";
@@ -37,22 +38,27 @@ export function prepareNativeOpenRouterSpeech(selection: ProxySelection): Native
       if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
         || response.headers.get("content-type")?.trim().toLowerCase() !== "audio/mpeg"
         || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
+        if (response.body) await inputRetirement(response.body.getReader()).retire("cancel");
+        invalid();
       }
       const headers = new Headers(response.headers);
       // Identity must not trigger the codec's encoded-body length exemption.
       headers.delete("content-encoding");
       let reads = 0, bytes = 0;
-      const bounded = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      const transform = new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, controller) {
           if (++reads > readLimit || !(chunk instanceof Uint8Array) || (bytes += chunk.byteLength) > outputLimit) invalid();
           controller.enqueue(chunk);
         },
         // Count the EOF read as well as every data/empty read.
         flush() { if (++reads > readLimit) invalid(); },
-      }));
+      });
+      const pipe = response.body.pipeTo(transform.writable);
+      void pipe.catch(() => undefined);
+      const bounded = transform.readable;
       try {
         const observed = await readOpenRouterSpeech(new Response(bounded, { status: 200, headers }), prepared, signal);
+        await pipe;
         signal.throwIfAborted();
         const outputHeaders = new Headers({
           "content-type": "audio/mpeg", "content-length": String(observed.audio.byteLength),
@@ -65,6 +71,7 @@ export function prepareNativeOpenRouterSpeech(selection: ProxySelection): Native
         return { response: new Response(audio, { status: 200, headers: outputHeaders }),
           usage: { tokens: null, outcome: "success" as const } };
       } catch { invalid(); }
+      finally { await pipe.catch(() => undefined); }
     },
   };
 }

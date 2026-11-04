@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { mediaObject } from "./managed-media-json.ts";
 import type { TranscriptionUpload } from "./transcription-body.ts";
 
@@ -58,20 +59,22 @@ export function observeGroqMistralAudio(provider: Provider, body: unknown, compl
 export async function readGroqMistralAudio(response: Response, provider: Provider, signal: AbortSignal): Promise<ReturnType<typeof observeGroqMistralAudio>> {
   select(provider);
   const length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body
+  if (!response.body) fail("response");
+  const reader = response.body.getReader(), input = inputRetirement(reader);
+  if (response.status !== 200 || response.redirected
     || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxResponse)) {
-    await response.body?.cancel().catch(() => undefined); fail("response");
+    await input.retire("cancel"); fail("response");
   }
-  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
-  const abort = () => { void reader.cancel().catch(() => undefined); };
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
-  let bytes = 0, json = "";
+  let bytes = 0, json = "", eof = false;
   try {
     signal.throwIfAborted();
     for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted();
-      if (chunk.done) break;
+      const chunk = await input.read(() => reader.read()); signal.throwIfAborted();
+      if (chunk.done) { eof = true; break; }
       bytes += chunk.value.byteLength; if (bytes > maxResponse) fail("size");
       json += decoder.decode(chunk.value, { stream: true });
     }
@@ -79,8 +82,8 @@ export async function readGroqMistralAudio(response: Response, provider: Provide
     if (!response.headers.has("content-encoding") && length !== null && Number(length) !== bytes) fail("truncated");
     return observeGroqMistralAudio(provider, JSON.parse(json), true);
   } catch {
-    await reader.cancel().catch(() => undefined); fail("response");
-  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+    await input.retire("cancel", signal.reason); fail("response");
+  } finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
 
 function select(provider: Provider): (typeof groqMistralAudio)[Provider] {

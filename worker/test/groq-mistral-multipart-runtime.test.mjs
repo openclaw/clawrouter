@@ -157,3 +157,25 @@ for (const id of ["groq", "mistral"]) {
     assert.equal(bodyBudgetCharged(), capacity); await response.body.cancel(); await settled(f); assert.equal(f.sent.length, 1);
   });
 }
+
+for (const id of ["groq", "mistral"]) for (const mode of ["headers", "abort", "overflow"]) {
+  test(`${id} response forwarding joins first source cancel for ${mode}`, { timeout: 5000 }, async t => {
+    const { readMultipartResponse } = await import("../transcription-protocol.ts");
+    const ready = Promise.withResolvers(), canceled = Promise.withResolvers(), cleanup = Promise.withResolvers();
+    const abort = new AbortController(); let cancels = 0, complete = false, sent = false;
+    const source = new ReadableStream({
+      pull(controller) { ready.resolve(); if (mode === "overflow" && !sent) { sent = true; controller.enqueue(new Uint8Array(2 * 1024 * 1024 + 1)); } },
+      cancel() { cancels++; abort.abort(); canceled.resolve(); return cleanup.promise; },
+    }, { highWaterMark: 0 });
+    t.after(() => cleanup.resolve());
+    const result = readMultipartResponse({ providerId: id }, new Response(source, {
+      status: mode === "headers" ? 502 : 200, headers: { "content-type": "application/json" },
+    }), abort.signal).finally(() => { complete = true; });
+    const rejected = assert.rejects(result);
+    if (mode === "abort") { await ready.promise; abort.abort(); }
+    await canceled.promise; await new Promise(setImmediate);
+    assert.equal(complete, false); assert.equal(source.locked, true); assert.equal(cancels, 1);
+    cleanup.resolve(); await rejected;
+    assert.equal(source.locked, false); assert.equal(cancels, 1);
+  });
+}
