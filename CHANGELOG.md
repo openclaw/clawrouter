@@ -408,6 +408,8 @@
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
+- Providers: qualify four frozen Abliteration Chat cards, native project discovery and canonical reasoning controls; retain the deprecated Large identity and project credential boundary.
+- Verify actual Abliteration static catalog, both stream hooks, effort ladders and tool/image replay through Worker/SQLite with original-key isolation and conservative usage.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
 - Verify Particle’s actual keyed catalog, native reasoning/cache controls and replay through Worker/SQLite; preserve public model identity, documented request alias and unknown-price denial.
