@@ -495,3 +495,37 @@ test("decoder-verified near-16-MiB MP3 remains native SSE with no aggregate vali
   reader.releaseLock(); assert.equal(hash.digest("hex"), createHash("sha256").update(original).digest("hex"));
   assert.equal(result.response.headers.get("content-type"), "text/event-stream"); assert.equal(result.usage.tokens, null);
 });
+
+for (const mode of ["done", "abort", "invalid-frame", "headers"]) test(`music ${mode} joins source cleanup before quarantine retirement`, { timeout: 5000 }, async t => {
+  const entered = Promise.withResolvers(), cleanup = Promise.withResolvers(), reading = Promise.withResolvers();
+  const abort = new AbortController(), native = prepare(selection()), baseline = bodyBudgetCharged(), lease = native.acquire();
+  let sent = false, cancels = 0, completed = false;
+  const source = new ReadableStream({ type: "bytes",
+    pull(controller) {
+      reading.resolve();
+      if (sent || mode === "abort") return;
+      sent = true; controller.enqueue(new TextEncoder().encode(mode === "invalid-frame" ? "data: {}\n\n" : wire()));
+    },
+    cancel() { cancels++; entered.resolve(); return cleanup.promise; },
+  }, { highWaterMark: 0 });
+  t.after(() => { cleanup.resolve(); lease.release(); });
+  const pending = native.read(response(source, mode === "headers" ? { "content-type": "application/json" } : {}), abort.signal)
+    .finally(() => { completed = true; });
+  const result = mode === "done" ? pending : assert.rejects(pending, invalid);
+  if (mode === "abort") { await reading.promise; abort.abort(); }
+  await entered.promise; await new Promise(setImmediate);
+  assert.equal(completed, false); assert.equal(source.locked, true); assert.equal(cancels, 1);
+  assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+  const other = new BodyLease(); assert.equal(other.grow(17 * 1024 * 1024), false); other.release();
+  cleanup.resolve(); const observed = await result;
+  assert.equal(source.locked, false); assert.equal(cancels, 1);
+  if (mode === "done") {
+    assert.deepEqual(observed.usage, { tokens: null, outcome: "success" });
+    const delivery = observeUsage(observed.response, new HttpOperation(), undefined, "openai.chat_completions", undefined, observed.usage);
+    const retired = delivery.retired.then(() => lease.release());
+    const reader = delivery.response.body.getReader();
+    assert.equal((await reader.read()).done, false); assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+    await reader.cancel(); reader.releaseLock(); await retired;
+  } else lease.release();
+  assert.equal(bodyBudgetCharged(), baseline);
+});

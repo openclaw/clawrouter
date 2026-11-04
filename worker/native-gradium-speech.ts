@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { validateGradiumSpeech } from "./gradium-speech.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -48,31 +49,32 @@ async function readAudio(response: Response, mime: string, signal: AbortSignal):
   const contentType = response.headers.get("content-type")?.trim().toLowerCase();
   const qualifiedMime = contentType === mime || mime === "audio/ogg" && /^audio\/ogg\s*;\s*codecs\s*=\s*(?:opus|"opus")$/.test(contentType ?? "");
   const declared = response.headers.get("content-length"), encoding = response.headers.get("content-encoding");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range") || !qualifiedMime
+  if (!response.body) throw new Error("invalid_gradium_binary_response");
+  const reader = response.body.getReader(), input = inputRetirement(reader);
+  if (response.status !== 200 || response.redirected || response.headers.has("content-range") || !qualifiedMime
     || encoding !== null && encoding.trim().toLowerCase() !== "identity"
     || declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) > outputLimit)) {
-    void response.body?.cancel().catch(() => undefined);
+    await input.retire("cancel");
     throw new Error("invalid_gradium_binary_response");
   }
-  const reader = response.body.getReader();
-  const abort = () => { void reader.cancel(signal.reason).catch(() => undefined); };
+  const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
-  let size = 0;
+  let size = 0, eof = false;
   try {
     signal.throwIfAborted();
     // One bounded buffer avoids an unbounded list of tiny transport chunks.
     const bytes = new Uint8Array(declared === null ? outputLimit : Number(declared));
     for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted();
-      if (chunk.done) break;
+      const chunk = await input.read(() => reader.read()); signal.throwIfAborted();
+      if (chunk.done) { eof = true; break; }
       if (size + chunk.value.byteLength > bytes.byteLength) throw new Error("gradium_binary_limit");
       bytes.set(chunk.value, size); size += chunk.value.byteLength;
     }
     if (!size || declared !== null && Number(declared) !== size) throw new Error("gradium_binary_incomplete");
     return bytes.subarray(0, size);
   } catch {
-    void reader.cancel().catch(() => undefined);
+    await input.retire("cancel", signal.reason);
     // No successful usage or free/nonbillable outcome escapes an incomplete read.
     throw new Error("invalid_gradium_binary_response");
-  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  } finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }

@@ -229,3 +229,33 @@ test("Venice SSE checks original credential expiry locally before later frames",
   f.advance(20000); release(); await assert.rejects(reader.read()); reader.releaseLock();
   assert.equal(canceled, true); assert.equal(f.sent.length, 1); await settled(f, 700);
 });
+
+for (const order of ["authority-first", "cleanup-first"]) test(`Venice delivery retirement joins held authority and source cleanup: ${order}`, { timeout: 5000 }, async t => {
+  const { prepareVeniceChatResponse } = await import("../venice-chat-runtime.ts");
+  const { observeUsage } = await import("../proxy-response.ts");
+  const { HttpOperation } = await import("../http-operation.ts");
+  const policy = Promise.withResolvers(), entered = Promise.withResolvers(), cleanup = Promise.withResolvers(), canceled = Promise.withResolvers();
+  const provider = snapshot.providers.find(value => value.id === "venice"), abort = new AbortController();
+  const endpoint = provider.endpoints.find(value => value.id === "chat_completions");
+  const native = prepareVeniceChatResponse({ provider, endpoint, model: { upstream: model, capabilities: ["llm.chat"] },
+    capability: "llm.chat", method: "POST", pathParams: {}, body: input({ stream: true }) },
+    { async revalidate() { entered.resolve(); await policy.promise; }, assertLive() {} });
+  const baseline = bodyBudgetCharged(), lease = native.acquire(); let sends = 0, cancels = 0, retired = false;
+  const source = new ReadableStream({ pull(controller) { if (!sends++) controller.enqueue(encoder.encode(frame())); },
+    cancel() { cancels++; canceled.resolve(); return cleanup.promise; } }, { highWaterMark: 0 });
+  t.after(() => { policy.resolve(); cleanup.resolve(); lease.release(); });
+  const prepared = await native.read(new Response(source, { headers: { "content-type": "text/event-stream" } }), abort.signal);
+  const observed = observeUsage(prepared.response, new HttpOperation(abort.signal));
+  const retirement = observed.retired.then(() => { retired = true; lease.release(); });
+  const reader = observed.response.body.getReader(), pendingRead = reader.read();
+  await entered.promise;
+  await reader.cancel("synthetic downstream cancellation"); // Public cancellation stays prompt.
+  await pendingRead; await canceled.promise;
+  (order === "authority-first" ? policy : cleanup).resolve(); await new Promise(setImmediate);
+  assert.equal(retired, false); assert.equal(bodyBudgetCharged(), baseline + 16 * 1024 * 1024);
+  const other = new BodyLease(); assert.equal(other.grow(41 * 1024 * 1024), false); other.release();
+  assert.equal(cancels, 1);
+  (order === "authority-first" ? cleanup : policy).resolve(); await retirement;
+  assert.equal(source.locked, false); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), baseline);
+  reader.releaseLock(); assert.equal((await observed.result).delivery, "canceled");
+});

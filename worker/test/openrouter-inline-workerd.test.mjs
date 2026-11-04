@@ -49,12 +49,16 @@ function* maximumWire() {
 // Workerd needs actual pending I/O for a stalled provider/read barrier. A bare
 // cross-request promise can instead be terminated as a hung Worker request.
 async function networkBarrier(t) {
-  let gate, released = false, closePending;
+  let gate, released = false, closePending, abortGate, abortReleased = false;
   const closed = new Promise(resolve => { closePending = resolve; });
   const metrics = { gates: 0, pending: 0, closed: 0 };
   const server = createServer((request, response) => {
     if (request.method !== "GET" || request.headers.authorization) { response.writeHead(400); response.end(); return; }
-    if (request.url === "/gate") {
+    if (request.url === "/abort-gate") {
+      abortGate = response; if (abortReleased) response.end("released");
+    } else if (request.url === "/release-abort") {
+      abortReleased = true; abortGate?.end("released"); response.end("released");
+    } else if (request.url === "/gate") {
       metrics.gates++; gate = response;
       if (released) response.end("released");
     } else if (request.url === "/pending") {
@@ -114,7 +118,7 @@ globalThis.fetch=async(input,init)=>{
 export default {async fetch(request,bindings,context){
  const env={...bindings,OPENROUTER_SITE_URL:'https://example.com'},path=new URL(request.url).pathname;
  if(path==='/fixture/phase')return Response.json({activeReads,readerLocks,cancels,settledCancels,upstreamAborted,outputBytes,outputEof,remaining:bodyBudgetCharged()});
- if(path==='/fixture/abort'){controlled.abort();return new Response('aborted');}
+ if(path==='/fixture/abort'){await (await original('https://openrouter.ai/__fixture_release_abort')).text();return new Response('aborted');}
  if(path==='/fixture/setup'){
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
@@ -130,6 +134,9 @@ export default {async fetch(request,bindings,context){
  if(request.headers.has('x-fixture-controlled')){
   controlled=new AbortController();const headers=new Headers(request.headers);headers.delete('x-fixture-controlled');
   request=new Request(request,{headers,signal:controlled.signal});
+  const owner=controlled;
+  // The control request releases I/O; only this original continuation aborts.
+  context.waitUntil(original('https://openrouter.ai/__fixture_abort_gate').then(response=>response.text()).then(()=>owner.abort()));
  }
  const gated=request.headers.has('x-fixture-gated');
  if(gated){const headers=new Headers(request.headers);headers.delete('x-fixture-gated');request=new Request(request,{headers});}
@@ -145,6 +152,8 @@ export default {async fetch(request,bindings,context){
 },queue:worker.queue};`;
 const upstream = networkOrigin => `${maximumWire.toString()}
 export default {async fetch(request){
+ if(request.url==='https://openrouter.ai/__fixture_abort_gate')return fetch(${JSON.stringify(networkOrigin)}+'/abort-gate');
+ if(request.url==='https://openrouter.ai/__fixture_release_abort')return fetch(${JSON.stringify(networkOrigin)}+'/release-abort');
  if(request.url==='https://openrouter.ai/__fixture_delivery_gate'&&request.method==='GET')return fetch(${JSON.stringify(networkOrigin)}+'/gate',{signal:request.signal});
  if(request.url!=='https://openrouter.ai/api/v1/chat/completions'||request.headers.get('authorization')!=='Bearer synthetic-original-key')return new Response('invalid original owner',{status:400});
  const body=await request.json();if(body.model!=='google/lyria-3-pro-preview'||body.audio.format!=='wav')return new Response('invalid model',{status:400});

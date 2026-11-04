@@ -1,4 +1,5 @@
 import { groqMistralAudio, prepareGroqMistralAudio, readGroqMistralAudio } from "./groq-mistral-audio.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import { modelSupportsEndpoint, providerById } from "./providers.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { TranscriptionUpload } from "./transcription-body.ts";
@@ -56,23 +57,30 @@ export function assertMultipartDestination(route: MultipartRoute, url: URL, head
 }
 
 export async function readMultipartResponse(route: MultipartRoute, response: Response, signal: AbortSignal) {
-  if (response.redirected || response.status !== 200 || response.headers.has("content-encoding") && response.headers.get("content-encoding") !== "identity") {
-    void response.body?.cancel().catch(() => undefined); throw new Error("invalid native transcription response");
-  }
-  const reader = response.body?.getReader(); let reads = 0, finished = false;
+  const reader = response.body?.getReader();
   if (!reader) throw new Error("missing native transcription response");
-  const close = () => { if (!finished) { finished = true; reader.releaseLock(); } };
+  const input = inputRetirement(reader);
+  if (response.redirected || response.status !== 200 || response.headers.has("content-encoding") && response.headers.get("content-encoding") !== "identity") {
+    await input.retire("cancel"); throw new Error("invalid native transcription response");
+  }
+  let reads = 0, finished = false;
+  const retire = (kind: "eof" | "cancel", reason?: unknown) => {
+    finished = true; return input.retire(kind, reason);
+  };
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
+        if (finished) return;
         if (++reads > 8192) throw new Error("native transcription chunk limit exceeded");
-        const next = await reader.read();
-        if (next.done) { close(); controller.close(); } else controller.enqueue(next.value);
-      } catch (error) { void reader.cancel(error).catch(() => undefined); close(); controller.error(error); }
+        const next = await input.read(() => reader.read());
+        if (finished) return;
+        if (next.done) { await retire("eof"); controller.close(); } else controller.enqueue(next.value);
+      } catch (error) { await retire("cancel", error); controller.error(error); }
     },
-    async cancel(reason) { try { await reader.cancel(reason); } finally { close(); } },
+    cancel(reason) { return retire("cancel", reason); },
   }, { highWaterMark: 0 });
   const headers = new Headers(response.headers);
   if (headers.get("content-encoding") === "identity") headers.delete("content-encoding");
-  return readGroqMistralAudio(new Response(body, { status: response.status, headers }), route.providerId, signal);
+  try { return await readGroqMistralAudio(new Response(body, { status: response.status, headers }), route.providerId, signal); }
+  finally { await retire("cancel", signal.reason); }
 }

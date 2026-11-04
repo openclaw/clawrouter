@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { nativeQuerySearch } from "./native-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -57,30 +58,31 @@ export function prepareNativeElevenLabsSpeech(selection: ProxySelection): Native
 
 async function readAudio(response: Response, signal: AbortSignal): Promise<Uint8Array> {
   const declared = response.headers.get("content-length"), encoding = response.headers.get("content-encoding");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
+  if (!response.body) throw new Error("invalid_elevenlabs_binary_response");
+  const reader = response.body.getReader(), input = inputRetirement(reader);
+  if (response.status !== 200 || response.redirected || response.headers.has("content-range")
     || response.headers.get("content-type")?.trim().toLowerCase() !== "audio/mpeg"
     || encoding !== null && encoding.trim().toLowerCase() !== "identity"
     || declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) > outputLimit)) {
-    void response.body?.cancel().catch(() => undefined);
+    await input.retire("cancel");
     throw new Error("invalid_elevenlabs_binary_response");
   }
-  const reader = response.body.getReader();
-  const abort = () => { void reader.cancel(signal.reason).catch(() => undefined); };
+  const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
-  let size = 0;
+  let size = 0, eof = false;
   try {
     signal.throwIfAborted();
     const bytes = new Uint8Array(declared === null ? outputLimit : Number(declared));
     for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted();
-      if (chunk.done) break;
+      const chunk = await input.read(() => reader.read()); signal.throwIfAborted();
+      if (chunk.done) { eof = true; break; }
       if (size + chunk.value.byteLength > bytes.byteLength) throw new Error("elevenlabs_binary_limit");
       bytes.set(chunk.value, size); size += chunk.value.byteLength;
     }
     if (!size || declared !== null && Number(declared) !== size) throw new Error("elevenlabs_binary_incomplete");
     return bytes.subarray(0, size);
   } catch {
-    void reader.cancel().catch(() => undefined);
+    await input.retire("cancel", signal.reason);
     throw new Error("invalid_elevenlabs_binary_response");
-  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  } finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }

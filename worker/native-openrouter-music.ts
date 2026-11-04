@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyBytes, utf8Length } from "./json-body.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { mediaObject } from "./managed-media-json.ts";
@@ -61,7 +62,8 @@ function musicResponse(context: OpenRouterMusicContext): NativeResponse {
         || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "text/event-stream"
         || encoding !== null && encoding.trim().toLowerCase() !== "identity"
         || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > wireLimit)) {
-        void response.body?.cancel().catch(() => undefined); invalid();
+        if (response.body) await inputRetirement(response.body.getReader()).retire("cancel");
+        invalid();
       }
       try {
         const wire = await quarantine(response.body, context, signal);
@@ -81,7 +83,8 @@ function musicResponse(context: OpenRouterMusicContext): NativeResponse {
 async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterMusicContext, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   let reader: ReadableStreamBYOBReader;
   try { reader = body.getReader({ mode: "byob" }); }
-  catch { void body.cancel().catch(() => undefined); invalid(); }
+  catch { if (!body.locked) await inputRetirement(body.getReader()).retire("cancel"); invalid(); }
+  const input = inputRetirement(reader);
   const inspection = createOpenRouterMusicInspector(context);
   let size = 0, reads = 0, events = 0, carriage = false;
   const frames = createSseFrames(frame => {
@@ -107,9 +110,7 @@ async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterM
     if (data !== "[DONE]") rejectErrorField(data);
     inspection.accept(data);
   }, true);
-  let cancellation: Promise<void> | undefined;
-  const cancel = () => { cancellation ??= reader.cancel().catch(() => undefined); };
-  const abort = () => { cancel(); };
+  const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
   try {
     signal.throwIfAborted();
@@ -119,7 +120,7 @@ async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterM
       if (++reads > readLimit) invalid();
       // Never lend quarantine to BYOB: read() transfers the supplied buffer.
       // No minimum fill: a small native DONE must complete on an open socket.
-      const part = await reader.read(window); signal.throwIfAborted();
+      const part = await input.read(() => reader.read(window)); signal.throwIfAborted();
       if (part.done) invalid(); // Only native [DONE], never socket EOF, completes music.
       if (!(part.value instanceof Uint8Array) || !part.value.byteLength || part.value.byteLength > windowLimit
         || !(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > windowLimit
@@ -144,8 +145,10 @@ async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterM
       window = new Uint8Array(part.value.buffer);
     }
   } finally {
-    cancel();
-    signal.removeEventListener("abort", abort); reader.releaseLock();
+    signal.removeEventListener("abort", abort);
+    // Preserve the codec's cleanup call on EOF rejection too. Native DONE
+    // requires cancellation of the open source, not an EOF retirement claim.
+    await input.retire("cancel", signal.reason);
   }
 }
 
