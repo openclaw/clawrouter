@@ -162,13 +162,16 @@ for (const failure of ["origin", "path", "authorization", "owner"]) test(`GMI re
   const response = await f.request(); assert.ok(response.status >= 400); assert.equal(f.sent.length, 0); await response.text();
 });
 
-test("GMI generation errors never reselect another account or retry an anonymous catalog", async t => {
+for (const route of ["native-chat", "native-catalog"]) test(`GMI ${route} rejection never reselects another account or retries anonymously`, async t => {
   const f = await setup(t, { accountId: "synthetic-organization" });
+  await putGrantCredentials(f.env, "oauth/fixture/gmi-other", { provider: "gmi", kind: "api_key", enabled: true,
+    credential: "synthetic-other-key", accountId: "synthetic-other-organization", priority: 200 });
   f.policy.grantRouting = { failover: true, environmentFallback: true };
   await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
   f.upstream = () => new Response("synthetic upstream refusal", { status: 429 });
-  for (const route of ["native-chat", "native-catalog"]) { const response = await f.request(route); assert.ok(response.status >= 400); await response.text(); }
-  assert.equal(f.sent.length, 2); assert.ok(f.sent.every(request => request.headers.get("authorization") === "Bearer synthetic-original-key"));
+  const response = await f.request(route); assert.ok(response.status >= 400); await response.text();
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-original-key");
+  assert.equal(f.sent[0].headers.get("x-organization-id"), "synthetic-organization");
 });
 
 for (const manifest of [false, true]) test(`GMI ${manifest ? "manifest" : "native"} streaming preserves original organization and token observation`, async t => {
@@ -187,7 +190,7 @@ for (const manifest of [false, true]) test(`GMI ${manifest ? "manifest" : "nativ
 test("GMI organization binding does not qualify unknown-dollar inference", async t => {
   const f = await setup(t, { accountId: "synthetic-organization" });
   delete f.policy.requestCostMicros; await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
-  const response = await f.request(); assert.equal(response.status, 402); await response.text(); assert.equal(f.sent.length, 0);
+  const response = await f.request(); assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required"); assert.equal(f.sent.length, 0);
 });
 
 test("GMI binding does not alter another provider's original auth or configured headers", async t => {
