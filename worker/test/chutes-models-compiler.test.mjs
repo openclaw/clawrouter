@@ -36,7 +36,7 @@ test("Chutes public catalog compiles a bodyless GET without forwarding the priva
   assert.deepEqual([...request.headers], [["accept", "application/json"]]);
   assert.equal(endpoint.auth, null);
   assert.equal(provider.auth.schemes[0].secretKind, "api_key");
-  assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+  assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
 });
 
 test("Chutes catalog rejects alternate methods, native format aliases, query/body features and duplicate discovery routes", () => {
