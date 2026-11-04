@@ -1,4 +1,7 @@
 import { prepareOpenRouterPcmOwner } from "./openrouter-pcm-owner.ts";
+import { prepareInlineMusicOwner } from "./openrouter-music-owner.ts";
+import { inlineMusicInput, prepareInlineMusicInput, type InlineMusicInput } from "./openrouter-music-runtime.ts";
+import { readInlineMusicJson } from "./openrouter-music-input.ts";
 import { nativeResponseLease } from "./native-response.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
@@ -50,7 +53,7 @@ import {
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { prepareContentRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
+import { prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
 import { correlationMetadata, logCorrelationError } from "./correlation.ts";
 import {
   FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
@@ -100,7 +103,11 @@ class JsonAdmission implements JsonIntake {
   completion?: Promise<unknown>;
   expanded = false;
   private authenticated = false;
-  private readonly lease = new BodyLease();
+  private lease = new BodyLease();
+  private input?: InlineMusicInput;
+  private intakeOperation?: HttpOperation;
+  private intakeStartedAt = 0;
+  private intakeBytes = 0;
   private readonly request: Request;
   private readonly env: Env;
   private readonly mode: AuthMode;
@@ -119,6 +126,34 @@ class JsonAdmission implements JsonIntake {
     await this.authenticate();
     this.expanded = true;
   };
+  async musicCandidate(): Promise<unknown> {
+    // This shared native URL still resolves Chat/music by the existing model
+    // selector. Byte-zero parsing changes no ordinary Chat capacity threshold.
+    try { await this.authenticate(); }
+    catch (error) { void this.request.body?.cancel().catch(() => undefined); throw error; }
+    this.intakeStartedAt = Date.now();
+    this.intakeOperation = new HttpOperation(this.request.signal, 120_000);
+    const parsed = await readInlineMusicJson(this.request, this.intakeOperation, true);
+    this.lease = parsed.lease;
+    this.intakeBytes = parsed.bytes;
+    this.expanded = parsed.bytes > maxJsonBodyBytes;
+    const value = parsed.value; parsed.value = undefined;
+    return value;
+  }
+  async prepareMusic(selection: ProxySelection): Promise<void> {
+    if (!this.intakeOperation) return;
+    // Carry elapsed intake time into the selected endpoint's deadline, without
+    // applying a music endpoint timeout to an ordinary Chat selection.
+    this.intakeOperation.stop("complete");
+    if (selection.capability !== "music.generate") { this.intakeOperation = undefined; return; }
+    if (this.intakeBytes > 12 * 1024 * 1024) { selection.body = {}; throw new HttpError(413, "request_too_large", "music JSON exceeds its input envelope"); }
+    const remaining = Math.min(selection.timeoutMs ?? 120_000, selection.endpoint.timeout_ms ?? 120_000) - (Date.now() - this.intakeStartedAt);
+    if (remaining <= 0) throw new HttpError(504, "request_timeout", "music input deadline expired");
+    this.intakeOperation = new HttpOperation(this.request.signal, remaining);
+    try { this.input = await prepareInlineMusicInput(selection, this.lease, this.intakeOperation); }
+    catch (error) { selection.body = {}; throw error; }
+    if (!this.input) { this.intakeOperation.stop("complete"); this.intakeOperation = undefined; }
+  }
   private async authenticate(): Promise<void> {
     if (!this.authenticated) {
       const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
@@ -128,12 +163,23 @@ class JsonAdmission implements JsonIntake {
     if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
   }
   finish(context: ExecutionContext): void {
-    if (!this.lease.leased) return;
+    if (!this.lease.leased && !this.input) { this.intakeOperation?.stop("complete"); return; }
     context.waitUntil((async () => {
       try { await this.completion; }
-      finally { this.lease.release(); }
+      finally {
+        if (this.input) await this.input.finish();
+        else this.lease.release();
+        this.intakeOperation?.stop("complete"); this.intakeOperation = undefined;
+      }
     })());
   }
+}
+
+function openRouterMusicCandidate(provider: CompiledProvider, endpoint: CompiledEndpoint): boolean {
+  return provider.id === "openrouter" && endpoint.path === "/v1/chat/completions"
+    && endpoint.request_format === "openai.chat_completions"
+    && provider.capabilities.some(capability => capability.id === "music.generate"
+      && provider.endpoints.some(candidate => candidate.id === capability.endpoint && candidate.path === endpoint.path));
 }
 
 interface PreparedUpstream {
@@ -350,11 +396,14 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     try {
       if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
       else {
-        const value = await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
+        let value = openRouterMusicCandidate(provider, endpoint)
+          ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
         if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
         envelope = manifestEnvelope(value);
+        value = undefined;
       }
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
+      envelope.body = undefined;
     } catch (error) {
       if (error instanceof Response) return error;
       const auth = await preauthenticate(request, env, mode, provider.id);
@@ -367,7 +416,10 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
     if (preauthenticated instanceof Response) return preauthenticated;
     const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-    return await proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
+    const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    prepared.body = {};
+    await admission.prepareMusic(selection);
+    return await proxySelected(request, env, context, mode, selection, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
   } finally { admission.finish(context); }
 }
 
@@ -432,9 +484,11 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   try {
     let prepared;
     try {
-      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
+      let body = request.method === "GET" || request.method === "HEAD" ? {} : openRouterMusicCandidate(provider, endpoint)
+        ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
       endpoint = nativeModelEndpoint(provider, matching, match[2], method, body) ?? endpoint;
       prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
+      body = undefined;
     } catch (error) {
       if (error instanceof Response) return error;
       const auth = await preauthenticate(request, env, "proxy_key", provider.id);
@@ -443,6 +497,8 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     }
     const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
     const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    prepared.body = {};
+    await admission.prepareMusic(selection);
     const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
     if (preauthenticated instanceof Response) return preauthenticated;
     return await proxySelected(request, env, context, "proxy_key", selection, isModelDiscovery(endpoint) ? discoveryQuery(new URL(request.url).searchParams) : new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
@@ -473,6 +529,7 @@ async function proxyNativeRaw(request: Request, env: Env, context: ExecutionCont
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
+  const music = inlineMusicInput(selection);
   const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
@@ -547,7 +604,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const budgetStart = performance.now();
   let reservation = reservedBudget?.reservation;
   let retention: PreparedContentRetention | null;
-  try { retention = prepareContentRetention(env, auth, selection, requestId); }
+  try {
+    if (music) {
+      const pending = prepareInlineMusicRetention(env, auth, selection, requestId, music.operation.signal);
+      if (pending) music.retain(() => pending.discard());
+      retention = pending;
+    } else retention = prepareContentRetention(env, auth, selection, requestId);
+  }
   catch {
     accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
@@ -614,7 +677,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
-  const operation = new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const operation = music?.operation ?? new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
@@ -634,11 +697,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let priceGuard: AnthropicPriceGuard | undefined;
   let nativeLease: BodyLease | undefined;
   let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
+  let musicRead: Promise<unknown> | undefined;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    nativeLease = prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
+    nativeLease = music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
@@ -655,6 +719,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       context.waitUntil(soft.check);
     }
     response = await operation.wait(pending, "upstream", discard);
+    if (music) {
+      await music.completeUpload();
+      prepared.requestBody = undefined;
+    }
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
@@ -697,7 +765,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       }, prepared.revalidateDiscovery ? () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined);
     }
     if (selection.nativeResponse) {
-      const validated = await operation.wait(selection.nativeResponse.read(response, signal), "upstream", discardNative);
+      const reading = selection.nativeResponse.read(response, signal);
+      if (music) musicRead = reading;
+      const validated = await operation.wait(reading, "upstream", discardNative);
       try { if (prepared.revalidateDelivery) await operation.wait(prepared.revalidateDelivery(signal), "publication"); }
       catch (error) { discardNative(validated); throw error; }
       response = validated.response;
@@ -722,6 +792,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       response = priceGuard.response;
     }
   } catch (error) {
+    if (music) {
+      operation.stop("upstream", error);
+      // The operation's rejection may win before a physical quarantined read
+      // has acknowledged cancellation. Keep its response charge until then.
+      await musicRead?.catch(() => undefined);
+    }
     nativeLease?.release();
     soft?.close();
     if (soft?.denial) {
@@ -793,7 +869,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}${cacheState ? `, cr-cache;desc=${cacheState}` : ""}${credential ? `, cr-credential;dur=${credential.ms.toFixed(1)};desc=${credential.cache}` : ""}`);
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
-  outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
+  outputHeaders.set("x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
 }
 
@@ -837,7 +913,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || inlineMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -939,6 +1015,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
     const pcmCheck = openRouterPcmRequirement({ ...selection, model: selection.model?.upstream })
       ? await prepareOpenRouterPcmOwner(env, auth, selection, upstream, url, headers) : undefined;
+    const music = inlineMusicInput(selection);
+    const musicCheck = music ? await prepareInlineMusicOwner(env, auth, selection, upstream, url, headers, music.evidence) : undefined;
     const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
       ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;
@@ -957,7 +1035,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : pcmCheck ? { revalidateAccount: pcmCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
