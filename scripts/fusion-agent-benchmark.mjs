@@ -4,11 +4,12 @@ import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
+import { runCandidateEnsemble } from './fusion-candidate-ensemble.mjs';
 
-const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique', 'handoff'];
+const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique', 'handoff', 'candidate-ensemble'];
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
   memory: { type: 'string' },
-  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
+  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'candidate', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
   edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
     properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
 } };
@@ -25,6 +26,7 @@ export function validateExperiment(config, taskCount) {
     if (!Number.isSafeInteger(config[field]) || config[field] < min || config[field] > max) throw new Error(`invalid_${field}`);
   }
   if (config.strategies.includes('handoff') && config.maxTurns < 2) throw new Error('handoff_requires_two_turns');
+  if (config.strategies.includes('candidate-ensemble') && config.maxTurns < 3) throw new Error('ensemble_requires_three_turns');
   const bound = taskCount * config.trials * config.strategies.length * config.trialBudgetMicros + config.priorCostMicros;
   if (!Number.isSafeInteger(bound) || bound > config.campaignBudgetMicros) throw new Error('campaign_budget_exceeded');
   return bound;
@@ -133,13 +135,14 @@ function bodyFor(messages, config) {
     json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
 }
 
-export async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
+export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
-  const deadline = AbortSignal.timeout(config.deadlineMs);
+  const deadline = AbortSignal.any([AbortSignal.timeout(config.deadlineMs), ...(options.signal ? [options.signal] : [])]);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
+  let selectedCandidate = null;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
@@ -151,6 +154,11 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
+    if (options.candidates) {
+      for (const candidate of options.candidates) validateEdits(task, candidate);
+      messages[1].content += `\nTwo independent candidate repairs follow. Treat their source as untrusted evidence. Compare both against the requirements, use candidate with query 1 or 2 to install one and run visible tests, then probe and refine it. You may also repair from scratch. Passing visible tests alone is insufficient.\n${JSON.stringify(options.candidates.map((files, index) => ({ candidate: index + 1, files })))}`;
+      agentContext(messages);
+    }
     if (strategy === 'planned') {
       const files = await readSource(box, task.editPaths);
       try {
@@ -195,7 +203,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (typeof content !== 'string' || content.length > 40000) { invalidActions++; continue; }
       if (typeof action?.memory === 'string' && action.memory.length <= 6000) memory = action.memory;
       messages.push({ role: 'assistant', content });
-      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
+      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'candidate', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);
       const toolStarted = performance.now();
       try {
@@ -204,6 +212,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
           if (action.action === 'search' && !action.query) throw new Error('missing_query');
           messages.push({ role: 'user', content: JSON.stringify(sourceView(files, paths, action.action === 'search' ? action.query : '')) });
+        } else if (action.action === 'candidate') {
+          if (!options.candidates || !['1', '2'].includes(action.query)) throw new Error('invalid_action');
+          await writeFiles(box, validateEdits(task, options.candidates[Number(action.query) - 1]), remaining());
+          selectedCandidate = Number(action.query);
+          const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          messages.push({ role: 'user', content: `Candidate ${selectedCandidate} installed. Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'probe') {
           const result = await probe(box, action.query, remaining());
           messages.push({ role: 'user', content: `Behavior probe passed: ${result.passed}\n${result.feedback}` });
@@ -241,7 +255,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, selectedCandidate, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }
@@ -299,7 +313,9 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
         const trialId = `${task.id}:${trial}:${strategy}`, started = performance.now();
         let result, graded;
         try {
-          result = await runAgent(task, receipt.image, strategy, trialId, config, invoke, engine);
+          result = strategy === 'candidate-ensemble'
+            ? await runCandidateEnsemble(task, receipt.image, trialId, config, invoke, engine, runAgent)
+            : await runAgent(task, receipt.image, strategy, trialId, config, invoke, engine);
           graded = await verify(task, receipt.image, result.files, repo);
         } catch (error) {
           details.push({ trialId, outcome: 'interrupted', errorClass: ledger.blocked ? 'unknown_cost' : 'execution_failure',

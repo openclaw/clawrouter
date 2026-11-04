@@ -162,3 +162,29 @@ Pass the manifest as the third qualifier/standalone-runner argument, or as
 `taskManifest` to `runExperiment`. Qualification still requires the broken parent
 to fail and the known repair to pass. CI qualifies every bundled workload set. Missing pinned commits and their parents
 are fetched explicitly, so aging beyond the shallow checkout does not break qualification.
+
+### Independent candidate ensemble
+
+`candidate-ensemble` runs Sol and Claude in separate source workspaces, then
+starts a fresh Claude agent with both candidate source snapshots. The final
+agent can install candidate `1` or `2`, run tests and behavior probes, and refine
+the selected code. It does not receive either worker's reasoning or hidden-test
+results. Workers run sequentially and each gets one third of the total turn
+allowance; synthesis gets the unused turns. All phases share one trial ID,
+inference budget and wall-clock deadline. Unknown charges stop the run.
+
+Candidate source stays in memory. Artifacts record only phase labels, action
+outcomes, source hashes, counts, costs and timings. A deterministic known-repair
+fixture verifies selection and isolated final grading; it is not evidence that
+models reliably choose the better repair. Compare live results against both
+independent baselines before enabling this approach in the product.
+
+After qualifying the original corpus, run the deterministic ensemble integration
+fixture without calling providers:
+
+```sh
+FUSION_DOCKER_QUALIFICATION=/path/to/qualification.json node --test test/fusion-candidate-ensemble.test.mjs
+```
+
+The fixture uses the pinned historical repair, two independent sandboxes and a
+fresh verifier. Ordinary unit-test runs skip this Docker-dependent fixture.
