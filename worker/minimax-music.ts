@@ -200,7 +200,7 @@ export async function readMiniMaxMusicStream(response: Response, model: string, 
     framing.push(decoder.decode()); framing.end();
     if (length !== null && Number(length) !== size) fail("stream_length");
     return state.result();
-  } catch { cancel(); fail("stream_response"); }
+  } catch { cancel(); return fail("stream_response"); }
   finally { signal.removeEventListener("abort", cancel); if (cancellation) await cancellation; reader.releaseLock(); }
 }
 
