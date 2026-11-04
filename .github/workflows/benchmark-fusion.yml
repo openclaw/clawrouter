@@ -7,6 +7,15 @@ on:
         description: Exact reviewed commit SHA (must match dispatch ref)
         required: true
         type: string
+      transport:
+        description: Explicit credential route; no automatic fallback
+        type: choice
+        options: [native, openrouter]
+        default: native
+      prior_reservation_micros:
+        description: Prior uncertain spend to reserve within the same $5 ceiling
+        type: string
+        default: "0"
 
 permissions:
   contents: read
@@ -32,9 +41,22 @@ jobs:
           node-version: 24.22.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - run: pnpm install --frozen-lockfile
-      - name: Run bounded live comparison
+      - name: Check benchmark accounting and composition
+        run: node --test test/fusion-benchmark.test.mjs test/fusion-native-provider.test.mjs test/fusion-evaluation.test.mjs worker/test/fusion.test.mjs
+      - name: Run bounded native comparison
+        if: inputs.transport == 'native'
+        env:
+          OPENAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_ANTHROPIC_API_KEY }}
+          FUSION_BENCHMARK_TRANSPORT: native
+          FUSION_BENCHMARK_PRIOR_RESERVATION_MICROS: ${{ inputs.prior_reservation_micros }}
+        run: node scripts/benchmark-fusion.mjs "$RUNNER_TEMP/fusion-results"
+      - name: Run bounded OpenRouter comparison
+        if: inputs.transport == 'openrouter'
         env:
           OPENROUTER_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_OPENROUTER_API_KEY }}
+          FUSION_BENCHMARK_TRANSPORT: openrouter
+          FUSION_BENCHMARK_PRIOR_RESERVATION_MICROS: ${{ inputs.prior_reservation_micros }}
         run: node scripts/benchmark-fusion.mjs "$RUNNER_TEMP/fusion-results"
       - name: Analyze paired runs
         run: node scripts/evaluate-fusion.mjs "$RUNNER_TEMP/fusion-results/runs.json" --baseline single > "$RUNNER_TEMP/fusion-results/report.json"

@@ -1,7 +1,9 @@
 # Live Fusion pilot
 
-Manually dispatch `Benchmark Fusion` with the full reviewed commit SHA, using
-that exact ref. The workflow uses the existing repository OpenRouter test key.
+Manually dispatch `Benchmark Fusion` on the reviewed named branch and supply its
+full commit SHA as `expected_sha`. The workflow rejects a different checkout.
+Select `native` for the existing OpenAI and Anthropic repository test keys, or
+`openrouter` for the existing OpenRouter key. Routes never fall back automatically.
 It does not deploy or change production configuration.
 
 The runner imports the real Fusion composition module. It compares GPT-6 Luna
@@ -22,13 +24,21 @@ The whole-run cost preflight uses conservative input byte bounds, full output
 allowances and the largest applicable published input/output price tiers. An
 input-byte upper bound rules out long-context tiers only when it is below their
 token threshold. A second guard
-reserves each call before dispatch and caps total reservations at $5. This is an
+reserves each call before dispatch and caps total reservations at $5. Set
+`prior_reservation_micros` to carry uncertain spend from a previous attempt into
+that same ceiling; an unknown charge must not be treated as zero. This is an
 application-side bound based on provider pricing and token-limit compliance,
 not an account-level spending limit. Missing usage cost, transport uncertainty,
 or a reported cost above its reservation stops further calls. Incomplete runs
 remain incomplete and must not be compared as if missing pairs scored zero.
 
-Artifacts contain only score records, provider-reported costs, timings, call
+Native calls use published standard-tier tariffs and measured token usage,
+including reasoning output and cache reads/writes. These are tariff estimates,
+not invoice totals. OpenRouter calls require its reported dollar cost. Native
+model discovery must succeed before inference, and unsupported usage or service
+tiers stop measurement. Pricing sources and the transport are recorded.
+
+Artifacts contain only score records, costs with their measurement basis, timings, call
 counts, serving model/provider IDs, configuration and dataset provenance, and
 the paired evaluator's report. Prompts, answers, reasoning and credentials are
 never written or logged. Atomic checkpoints preserve completed records and
