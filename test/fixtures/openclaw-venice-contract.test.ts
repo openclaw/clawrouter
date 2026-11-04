@@ -1,6 +1,8 @@
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.js";
 import { makeInMemorySessionManager, makeModelSnapshotEntry } from "../../src/agents/embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { sanitizeSessionHistory } from "../../src/agents/embedded-agent-runner/replay-history.js";
 import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../../src/agents/embedded-agent-runner/tool-call-argument-decoding.js";
@@ -43,8 +45,14 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
       sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: "venice", modelApi: model.api, modelId })]),
       messages: history });
   });
-  const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
-    tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: { value: { type: "string", minLength: 1 } } } }] };
+  const tools = finalizeAgentTools({
+    tools: [{ name: "lookup", label: "Lookup", description: "Synthetic lookup",
+      parameters: Type.Object({ value: Type.Optional(Type.String({ minLength: 1 })) }),
+      execute: async () => { throw new Error("fixture only observes native tool calls"); } }],
+    modelProvider: "venice", modelId, modelApi: model.api, modelCompat: model.compat,
+    hookContext: { sessionId: `venice-${id}` }, wrapBeforeToolCallHook: false,
+  });
+  const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages), tools };
   const wrapped = provider.wrapStreamFn?.({ provider: "venice", modelId, model, streamFn: streamSimple });
   expect(wrapped).toBeDefined();
   const hostStream = resolveToolCallArgumentsEncoding(model) === "html-entities"
