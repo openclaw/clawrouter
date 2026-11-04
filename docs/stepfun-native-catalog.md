@@ -120,38 +120,42 @@ Source1's cache accounting fix is required; schema/common/client/media files
 remain with their owners. No new secret, provisioning, login, account changes,
 live inference or manual deployment is performed here.
 
-## Local integration checkpoint
+## Serialized integration and actual-client qualification
 
-Local composition retains source `9d528b3cb448c17be1c94098b6d4c1756c89317f`
-on qualified base `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The source
-regional YAML and Worker fixture differ only by the exact owner correction
-below. The base already
-contains the provider-scoped `cached_tokens` observer; that old dependency is
-not the current blocker.
+The integrated candidate composes local source
+`33989aa286a40a25b60d755f057168351af1a5fa` onto landed router base
+`81da9416c6e45f5b1ce2114288dc541ede81ce99`. Dependency inputs match the
+qualified installation. The shared provider-scoped `cached_tokens` observer is
+present; its original source dependency is resolved.
 
 Owner corrections `bfcd3c1932353856a9991d6e3ef0c4e666bd045e` and
-`df59902c0a05a48981154e1347c9c2344e9567f2` are carried with authorship and
-exact final provider/test blobs. Both regional catalog endpoints now declare
-GET with no streaming property. All 86 manifests compile. Snapshot SHA256:
-`a4b9caf3906c7682c4b04fcb786c10fed7df65a7ee89765ffcf7224707e5c1a8`.
-Worker types and all 1,051 Chat matrix/consumer-selection cases pass.
+`df59902c0a05a48981154e1347c9c2344e9567f2` are carried with authorship.
+Both regional YAML files are byte-identical to the final correction: keyed
+catalog endpoints explicitly declare GET and omit streaming. The three
+undeclared native URL aliases now assert exact `404 provider_not_found` and
+zero upstream calls. Both canonical regions and the positive `stepfun-ai/…`
+model-prefix route retain their assertions. No URL alias was invented.
 
-Focused execution: 95 of 98 cases pass. Three existing URL-alias expectations
-fail with `404 provider_not_found`: `/v1/native/clawrouter-stepfun/...`,
-`/v1/native/stepfun-ai/...` and `/v1/native/clawrouter-stepfun-cn/...`.
-The frozen base's `proxyNative` calls exact `providerById`; it does not resolve
-`routing.nativePrefixes` as URL aliases. Canonical native/manifest routing and
-the positive `stepfun-ai/…` model-prefix case pass. Source4 must resolve these
-fixture expectations against the intended URL contract. No shared runtime or
-positive assertion was changed, and this checkpoint is not ready to land.
+On this composed source, all 98 focused cases, Worker types and all 1,051
+Chat matrix/consumer-selection cases pass. All 86 manifests compile. The
+snapshot is regenerated from those manifests; SHA256:
+`68133dc924b7a0bfa223ba22ef7905c4408968902038845788017c09f142cc34`.
+No generated JSON was merged by hand.
 
-Eight actual registered-client cases are authored in
-`test/fixtures/openclaw-stepfun-contract.test.ts` with the real Worker/SQLite
+Eight actual registered-client cases in
+`test/fixtures/openclaw-stepfun-contract.test.ts` use the real Worker/SQLite
 outer harness `test/openclaw-stepfun.test.mjs`, pinned to public OpenClaw
-`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. They cover both frozen cards on
-explicit global/China proxy routes, canonical low/max mapping, exact inline PNG,
-tool replay, cumulative usage/cache observation, original regional grants and
-zero-egress caller/product/unknown-price denial. These are AUTHORED/UNRUN; no SDK
-execution or hosted job was started. Automatic client region/profile selection,
-registered live discovery, Step Plan entitlement and live inference remain
-separate from this configured native-route fixture.
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. The unchanged fixture imports
+the registered standard provider, catalog, host replay policy and serializer.
+It covers both frozen cards on explicitly selected global/China proxy routes,
+canonical low/max mapping, exact inline PNG, tool replay, cumulative usage/cache
+observation, original regional grants and zero-egress caller/product/unknown-price
+denial. Ordinary hosted CI executes the pinned public source with its own frozen
+dependencies; no SDK report is regenerated. These cases remain authored until
+the final candidate's actual-client job passes; local Worker checks do not
+substitute for that execution.
+
+Automatic client region/profile selection, registered live discovery, Step Plan
+entitlement and live inference remain separate from this explicitly configured
+native-route fixture. Worker manifest coverage does not claim manifest-client
+selection. No new credential, account change or manual deployment is required.
