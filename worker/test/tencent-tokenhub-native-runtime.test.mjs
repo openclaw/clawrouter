@@ -15,10 +15,11 @@ const id = "tencent-tokenhub", base = "https://tokenhub.tencentmaas.com/v1";
 const { providers: [provider] } = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", `providers/${id}.provider.yaml`], { encoding: "utf8" }));
 
-test("tencent-tokenhub model discovery compiles as GET only", () => {
+test("tencent-tokenhub model discovery compiles as GET only without streaming", () => {
   const endpoint = provider.endpoints.find(e => e.id === "models_list");
   assert.equal(endpoint.method, "GET");
   assert.deepEqual(endpoint.methods, ["GET"]);
+  assert.equal(endpoint.streaming, null);
 });
 
 const models = ["hy3-preview", "hy3", "hy4-preview"], thinking = "hy4-preview";
