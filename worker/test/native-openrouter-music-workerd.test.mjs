@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { channel } from "node:diagnostics_channel";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -267,6 +268,48 @@ async function assertStatus(response, expected, origin) {
     assert.fail(JSON.stringify({expectedStatus:expected,actualStatus:response.status,proof:await readFixtureJson(new URL('/proof',origin))}));
 }
 
+// Observe only this host request. A socket close is not proof of a TCP RST or
+// an incoming Worker abort; neither the dispatcher nor the socket is changed.
+function observeMusicHostTransport(origin) {
+  const target=new URL('/?mode=quarantine-cancel',origin);
+  const state={origin:target.origin,path:target.pathname+target.search,requests:0,sequence:0,dropped:0,events:[]};
+  let request,socket;
+  const socketState=()=>socket&&({destroyed:socket.destroyed,readableEnded:socket.readableEnded,writableEnded:socket.writableEnded});
+  const record=(phase,fields={})=>{
+    const order=++state.sequence;
+    if(state.events.length<16)state.events.push({order,phase,...fields,socket:socketState()});else state.dropped++;
+    return order;
+  };
+  const matches=value=>value?.method==='GET'&&String(value.origin)===target.origin&&value.path===state.path;
+  const created=message=>{
+    if(!matches(message?.request))return;
+    state.requests++;
+    if(!request){request=message.request;record('request-created');}
+  };
+  const closed=hadError=>record('socket-close',{hadError:hadError===true});
+  const sent=message=>{
+    if(!request||message?.request!==request)return;
+    if(!socket){socket=message.socket;socket?.once('close',closed);}
+    record('headers-sent',{sameRequest:true,portMatches:socket?.remotePort===Number(target.port)});
+  };
+  const failed=message=>{
+    if(!request||message?.request!==request)return;
+    const error=message.error;
+    record('request-error',{sameRequest:true,
+      name:['Error','TypeError','AbortError','TimeoutError','RequestAbortedError','SocketError'].includes(error?.name)?error.name:'other',
+      code:['ABORT_ERR','ECONNRESET','UND_ERR_ABORTED','UND_ERR_SOCKET','UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT'].includes(error?.code)?error.code:'other'});
+  };
+  channel('undici:request:create').subscribe(created);
+  channel('undici:client:sendHeaders').subscribe(sent);
+  channel('undici:request:error').subscribe(failed);
+  return {snapshot:()=>({...state,socket:socketState()}),record,dispose(){
+    channel('undici:request:create').unsubscribe(created);
+    channel('undici:client:sendHeaders').unsubscribe(sent);
+    channel('undici:request:error').unsubscribe(failed);
+    socket?.removeListener('close',closed);
+  }};
+}
+
 test("workerd full-output music uses actual fetch BYOB, original wire, bounded delivery and cancellation", {timeout:120000}, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-full-music-workerd-")); t.after(() => rm(temporary, {recursive:true,force:true}));
   const network=await pendingMusicSource(t);
@@ -308,15 +351,18 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
     // Bypass Miniflare's unflagged entry Worker only for this caller-signal case.
     const origin=(await instance.unsafeGetDirectURL('router')).origin;
     const count=(await readFixtureJson(new URL('/usage',origin))).events.length;
-    return musicRequest(origin,'quarantine-cancel',async(pending,abort)=>{
+    const transport=observeMusicHostTransport(origin);
+    try { return await musicRequest(origin,'quarantine-cancel',async(pending,abort)=>{
       const reason=new DOMException('fixture music caller cancellation','AbortError');
       const host={phase:'fetch-pending',bytes:0,abortEvents:0,signalInitiallyAborted:abort.signal.aborted};
       abort.signal.addEventListener('abort',()=>{
         host.abortEvents++;host.signalAborted=abort.signal.aborted;host.reasonMatches=abort.signal.reason===reason;
+        transport.record('host-abort',{reasonMatches:host.reasonMatches});
       },{once:true});
       const outcome=pending.then(async response=>{
         host.phase='headers';host.status=response.status;host.mime=response.headers.get('content-type');
         host.headersBeforeAbort=!abort.signal.aborted;
+        transport.record('host-headers',{status:host.status,beforeAbort:host.headersBeforeAbort});
         if(!response.body){host.phase='no-body';return;}
         const reader=response.body.getReader();host.phase='read-pending';
         try {
@@ -324,24 +370,23 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
           if(host.bytes && host.bytes<=4096){
             try{const value=JSON.parse(new TextDecoder().decode(part.value));host.bodyErrorCode=typeof value?.error?.code==='string'?value.error.code:undefined;}catch{}
           }
-        } catch(error){host.phase='read-rejected';host.readErrorName=error?.name;host.readRejectedAfterAbort=abort.signal.aborted;}
+        } catch(error){host.phase='read-rejected';host.readErrorName=error?.name;host.readRejectedAfterAbort=abort.signal.aborted;transport.record('host-read-rejected',{afterAbort:host.readRejectedAfterAbort});}
         finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
-      },error=>{host.phase='fetch-rejected';host.fetchErrorName=error?.name;host.fetchReasonMatches=error===reason;host.fetchRejectedAfterAbort=abort.signal.aborted;});
-      let beforeAbort,barrier=false;
-      for(let attempt=0;attempt<100;attempt++){
-        beforeAbort=await readFixtureJson(new URL('/proof',origin));
-        const current=beforeAbort.mode==='quarantine-cancel';
-        if(current&&beforeAbort.nativeReaders===1&&beforeAbort.bytes>0&&beforeAbort.bytes<65536
-          &&beforeAbort.activeReads===1&&beforeAbort.status===undefined&&!beforeAbort.fixtureRequestAborted&&!beforeAbort.routedRequestAborted&&!beforeAbort.upstreamAborted){barrier=true;break;}
-        if((current&&beforeAbort.status!==undefined) || host.bytes || host.fetchErrorName || host.readErrorName)break;
-        await delay(20);
-      }
-      const hostBeforeAbort={...host},networkBeforeAbort={...network.metrics};abort.abort(reason);await outcome;
-      const afterAbort=await settled(origin),physical=await readFixtureJson(new URL('/physical-proof',origin));
-      if(barrier)await network.closed;
-      const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics});
-      let receipt;
+      },error=>{host.phase='fetch-rejected';host.fetchErrorName=error?.name;host.fetchReasonMatches=error===reason;host.fetchRejectedAfterAbort=abort.signal.aborted;transport.record('host-fetch-rejected',{afterAbort:host.fetchRejectedAfterAbort,reasonMatches:host.fetchReasonMatches});});
+      let beforeAbort,barrier=false,hostBeforeAbort,networkBeforeAbort,afterAbort,physical,receipt;
       try {
+        for(let attempt=0;attempt<100;attempt++){
+          beforeAbort=await readFixtureJson(new URL('/proof',origin));
+          const current=beforeAbort.mode==='quarantine-cancel';
+          if(current&&beforeAbort.nativeReaders===1&&beforeAbort.bytes>0&&beforeAbort.bytes<65536
+            &&beforeAbort.activeReads===1&&beforeAbort.status===undefined&&!beforeAbort.fixtureRequestAborted&&!beforeAbort.routedRequestAborted&&!beforeAbort.upstreamAborted){barrier=true;break;}
+          if((current&&beforeAbort.status!==undefined) || host.bytes || host.fetchErrorName || host.readErrorName)break;
+          await delay(20);
+        }
+        hostBeforeAbort={...host};networkBeforeAbort={...network.metrics};abort.abort(reason);await outcome;
+        afterAbort=await settled(origin);physical=await readFixtureJson(new URL('/physical-proof',origin));
+        if(barrier)await network.closed;
+        const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics});
         // Record the real ledger outcome before any signal-observation assertion.
         // Common first-cause status remains independently checked below.
         receipt=await settlement(origin,count+1,afterAbort.operationStatus);
@@ -374,11 +419,11 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
         }
         assertPhysical(afterAbort);
       } finally {
-        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics,
+        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics,transport:transport.snapshot(),
           receipt:receipt&&{status:receipt.status,cost:receipt.actual_cost_micros,basis:receipt.cost_basis,
             grant:receipt.grant_key,capability:receipt.capability,input:receipt.input_tokens,output:receipt.output_tokens,total:receipt.total_tokens}}));
       }
-    });
+    }); } finally { transport.dispose(); }
   });
   await t.test("full audio with missing native DONE is an atomic failure", () => musicRequest(origin,'truncated',async pending => {
     const response=await pending;await assertStatus(response,502,origin);
