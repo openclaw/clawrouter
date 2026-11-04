@@ -55,9 +55,8 @@ and incomplete traversal. They use the compiled YAML and real Worker fixture;
 they remain unrun while common dispatch is unavailable.
 
 The two owned compiler suites only strip the newly bundled catalog from their
-independent foundation inputs; all existing assertions remain unchanged. A
-source4-owned compatibility fixture still needs a portable correction:
-`worker/test/featherless-native-chat.test.mjs` currently expects only the Chat
-endpoint and selects it by array position. It must account for the catalog and
-select `chat_completions` explicitly, preserving its card, pricing and replay
-assertions. This candidate does not edit that source4 file.
+independent foundation inputs; all existing assertions remain unchanged. The
+explicitly authorized two-line correction in
+`worker/test/featherless-native-chat.test.mjs` checks both endpoint memberships
+independent of array order and selects `chat_completions` by ID. All other card,
+pricing and replay assertions in that source4 fixture remain unchanged.
