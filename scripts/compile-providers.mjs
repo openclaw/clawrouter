@@ -405,8 +405,8 @@ function validateModelAvailability(model) {
 function validateEndpoints(manifest) {
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    validateCatalogEndpoint(manifest, id, endpoint);
     validateUpstreamPath(manifest, id, endpoint);
+    validateCatalogEndpoint(manifest, id, endpoint);
     if (endpoint.requestPricing?.unit === "image") {
       if (manifest.id !== "xai" || !["xai.images_generations", "xai.images_edits"].includes(endpoint.requestFormat) || endpoint.responseFormat !== "xai.images")
         throw new Error(`endpoint ${id} requestPricing requires the qualified native xAI image contract`);
