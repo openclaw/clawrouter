@@ -42,6 +42,17 @@ test("scaffold rejects invalid IDs before writing files", t => {
   assert.throws(() => createProviderPlugin("valid", ""));
 });
 
+test("YAML scalar names remain strings and template-like names are replaced once", t => {
+  const root = temporary(t);
+  for (const id of ["true", "false", "null", "my-example"]) {
+    const path = createProviderPlugin(id, join(root, id));
+    const [provider] = compileProviderSnapshot(loadProviderManifestInputs([], [path])).providers;
+    assert.equal(provider.id, id);
+    assert.equal(provider.service_platform, id);
+    assert.equal(provider.display_name, id.split("-").map(word => word[0].toUpperCase() + word.slice(1)).join(" "));
+  }
+});
+
 test("scaffold refuses existing files, directories and symlinks without overwriting", t => {
   const root = temporary(t);
   const file = join(root, "file");

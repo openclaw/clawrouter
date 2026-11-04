@@ -18,7 +18,10 @@ export function createProviderPlugin(id: string, destination: string): string {
     let bytes: string | Buffer = readFileSync(join(source, path));
     const targetPath = path === template.descriptor.manifest ? descriptor.manifest : path;
     if (path === template.descriptor.manifest) {
-      bytes = bytes.toString("utf8").replaceAll("EXAMPLE_API_KEY", configKey).replaceAll("example", id).replace("displayName: Example", `displayName: ${title}`);
+      bytes = bytes.toString("utf8").replaceAll("EXAMPLE_API_KEY", configKey).replaceAll("example", id)
+        .replace(/^id: .+$/m, `id: ${JSON.stringify(id)}`)
+        .replace(/^  platform: .+$/m, `  platform: ${JSON.stringify(id)}`)
+        .replace("displayName: Example", `displayName: ${JSON.stringify(title)}`);
     } else if (path === template.descriptor.documentation) {
       bytes = `# ${title} provider plugin\n\n` +
         `This is a starter integration, not a configured live service. Replace the\n` +
