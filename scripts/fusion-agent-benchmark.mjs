@@ -144,13 +144,18 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   try {
     if (strategy === 'planned') {
       const files = await readSource(box, task.editPaths);
-      const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config), deadline);
-      const plan = response.choices?.[0]?.message?.content;
-      planUsed = typeof plan === 'string' && !!plan.trim();
-      if (planUsed) messages[1].content += `\nIndependent plan; verify its claims and anchors before using them:\n${plan.slice(0, 16000)}`;
-      else adviserFailures++;
+      try {
+        const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config), deadline);
+        const plan = response.choices?.[0]?.message?.content;
+        planUsed = typeof plan === 'string' && !!plan.trim();
+        if (planUsed) messages[1].content += `\nIndependent plan; verify its claims and anchors before using them:\n${plan.slice(0, 16000)}`;
+        else adviserFailures++;
+      } catch (error) {
+        if (['trial_budget', 'campaign_budget'].includes(error.message)) outcome = 'budget';
+        else throw error;
+      }
     }
-    for (; turns < config.maxTurns; turns++) {
+    for (; outcome !== 'budget' && turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
       const model = executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
