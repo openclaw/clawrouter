@@ -104,3 +104,33 @@ source2 retains actual frozen Tencent client behavior. Native returned-model
 observations do not authorize silently changing a policy-selected tariff.
 Source3 retains the compiler. No shared source, client, media file, snapshot,
 production deployment, login or live account provisioning is changed here.
+
+## Local integration checkpoint
+
+Exact source `1df3552c342f611d83ed23301777b8eb5d34984c` is retained on
+qualified `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The provider YAML and
+57-case Worker fixture remain byte-identical. Only the changelog insertion was
+composed with existing unrelated entries.
+
+All-manifest compilation stops before snapshot generation:
+`provider tencent-tokenhub endpoint models_list catalog protocol requires explicit GET`.
+The declaration owner must qualify this endpoint against the current compiler.
+The source tests, matrix and actual client cases are UNRUN on this composition;
+its snapshot remains the qualified base inventory. No shared runtime/compiler
+change or guard bypass is included.
+
+Six actual registered-client cases are AUTHORED/UNRUN in
+`test/fixtures/openclaw-tencent-contract.test.ts`, paired with the real
+Worker/SQLite harness `test/openclaw-tencent.test.mjs`. They pin actual public
+OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb` and import its Tencent
+plugin, static catalog, registered Hy3 wrapper, host replay and serializer.
+They cover the three selected IDs, Hy3 off/low mapping, positive tool/thinking
+history, cumulative native usage/cache, original TokenHub keys and zero-egress
+invalid caller/TokenPlan-only/unknown-dollar denial. The synthetic preview
+response reports `hy3` while the selected request and receipt remain
+`hy3-preview`; no static `replacedBy` metadata is used to rewrite requests.
+
+This local preparation does not execute or qualify the SDK, enroll CI, publish,
+or call a live provider. Actual discovery/profile selection, manifest-client
+transport and account billing remain separate from the configured native-route
+fixtures. Published client prices are never imported as router price facts.
