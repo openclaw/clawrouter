@@ -38,7 +38,7 @@ const check=(value,message)=>{if(!value)throw new Error(message);};
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return{promise,resolve};};
 let active;
 const state=()=>active?{mode:active.mode,reads:active.reads,cancels:active.cancels,cleanup:active.cleanup,settled:active.settled,
- error:active.error,locked:active.body.locked,released:active.released,listeners:active.listeners,readRetired:active.readRetired}:{};
+ error:active.error,locked:active.body.locked,released:active.released,listeners:active.listeners,readRetired:active.readRetired,readOutcome:active.readOutcome}:{};
 export default {async fetch(request,env,ctx){
  const requested=new URL(request.url);
  if(requested.pathname==='/state')return Response.json(state());
@@ -69,7 +69,12 @@ export default {async fetch(request,env,ctx){
     }
     if(mode==='backing')return{done:false,value:new Uint8Array(new ArrayBuffer(16385),0,1)};
     const reading=native.read(view);
-    if(held&&a.reads===2){ready.resolve();const part=await reading;await gate('read');a.readRetired=true;return part;}
+    if(held&&a.reads===2){
+     ready.resolve();
+     try{const part=await reading;a.readOutcome='fulfilled';return part;}
+     catch(error){a.readOutcome='rejected';throw error;}
+     finally{await gate('read');a.readRetired=true;}
+    }
     const part=await reading;if(part.value){maximumBacking=Math.max(maximumBacking,part.value.buffer.byteLength);previous=part.value;}return part;
    },
    async cancel(reason){a.cancels++;await native.cancel(reason);if(held){await gate('cleanup');a.cleanup=true;}if(mode==='cancel-error')throw new Error('synthetic cleanup failure');},
@@ -143,6 +148,7 @@ test("actual workerd account fetch, header, EOF, window and cancellation contrac
       assert.equal(state.locked,true);assert.equal(state.settled,false);
       io.release(mode,'cleanup');state=await until(s=>s.cleanup);
       assert.equal(state.settled,false);assert.equal(state.locked,true);assert.equal(state.readRetired,false);
+      assert.ok(['fulfilled','rejected'].includes(state.readOutcome));
       io.release(mode,'read');
     }else{assert.equal(state.reads,0);assert.equal(state.cancels,1);io.release(mode,'cleanup');}
     state=await until(s=>s.settled);assert.equal(state.error,'invalid_copilot_response_body');assert.equal(state.locked,false);assert.equal(state.listeners,0);assert.equal(state.cancels,1);assert.equal(state.cleanup,true);
