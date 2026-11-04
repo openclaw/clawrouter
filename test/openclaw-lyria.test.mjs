@@ -16,7 +16,7 @@ const entries = ["native", "manifest"].flatMap(route => [...dispatched, ...denie
   id: `lyria_${route}_${kind}`, route, kind, model: kind === "pro" ? models[1] : models[0],
 })));
 
-test("actual registered Lyria music tool through native/manifest Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
+for (const route of ["native", "manifest"]) test(`actual registered Lyria music tool through ${route} Worker and SQLite`, { skip: !source, timeout: 300_000 }, async t => {
   const mp3 = readFileSync(join(source, "test/fixtures/media/lyria-silence.mp3"));
   assert.equal(createHash("sha256").update(mp3).digest("hex"), "94bf451427043b32a9893976aefdea79d784323e5422f1f986fb22548615162b");
   const wav = silenceWav(), audio = { mp3: mp3.toString("base64"), wav: wav.toString("base64") };
@@ -24,9 +24,9 @@ test("actual registered Lyria music tool through native/manifest Worker and SQLi
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(audio));
+    mf = await startWorkerdFixture(temporary, routerFixture(route), upstreamFixture(audio));
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
-    for (const entry of entries) {
+    for (const entry of entries.filter(entry => entry.route === route)) {
       await kv.put(`policies/${entry.id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: entry.kind === "denied" ? ["openai"] : ["google-gemini"],
         models: models.map(id => `google/${id}`), tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: entry.kind === "budget" ? null : 7,
         budgetMode: "reserve", retainRequestContent: false }));
@@ -35,13 +35,13 @@ test("actual registered Lyria music tool through native/manifest Worker and SQLi
     await kv.put("connections/google-gemini", JSON.stringify({ providerId: "google-gemini", enabled: true }));
     const origin = String(await mf.ready).replace(/\/$/, "");
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-lyria-contract.test.ts", import.meta.url),
-      testPath: "src/agents/tools/worker-contract.test.ts", env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_AUDIO: JSON.stringify(audio) } });
+      testPath: "src/agents/tools/worker-contract.test.ts", env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_ROUTE: route, CLAWROUTER_CONTRACT_AUDIO: JSON.stringify(audio) } });
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
-    assert.equal(calls.length, dispatched.length * 2, "denials never dispatch and uncertain paid requests never replay");
+    assert.equal(calls.length, dispatched.length, "denials never dispatch and uncertain paid requests never replay");
     const incoming = await (await fetch(origin + "/fixture/requests")).json();
     assert.equal(incoming.filter(call => call.path === "/fixture/alternate").length, 0, "the configured alternate is never used after a paid attempt or explicit selection");
-    for (const entry of entries) {
+    for (const entry of entries.filter(entry => entry.route === route)) {
       const matched = calls.filter(call => call.body.contents[0].parts[0].text.startsWith(`Synthetic ${entry.id}`));
       const receipt = await settledUsage(origin, entry.id, dispatched.includes(entry.kind));
       if (!dispatched.includes(entry.kind)) {
@@ -94,8 +94,11 @@ async function settledUsage(origin, id, charged) {
   }
   return receipt;
 }
-function routerFixture() {
+function routerFixture(transport) {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
+    import { snapshot } from "./worker/providers.ts";
+    // Exercise actual manifest discovery in its own isolate, matching existing media fixtures.
+    ${transport === "manifest" ? 'snapshot.providers.find(provider => provider.id === "google-gemini").endpoints.find(endpoint => endpoint.id === "music_generate").native_proxy = false;' : ""}
     const requests = [];
     export default { ...handler, async fetch(request, env, context) {
       const path = new URL(request.url).pathname;

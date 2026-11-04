@@ -15,6 +15,8 @@ import { snapshot } from "./media-resource-fixtures.test-support.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
+const route = process.env.CLAWROUTER_CONTRACT_ROUTE;
+if (route !== "native" && route !== "manifest") throw new Error("explicit Lyria fixture transport required");
 const audio = JSON.parse(process.env.CLAWROUTER_CONTRACT_AUDIO!) as { mp3: string; wav: string };
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVQI12NkYPj/n4GBgYGJAQoAHRkCAhxhMhsAAAAASUVORK5CYII=";
 const CLIP = "google/lyria-3-clip-preview", PRO = "google/lyria-3-pro-preview";
@@ -27,7 +29,7 @@ let alternate: ReturnType<typeof writePlugin>;
 
 function configuration(id: string): OpenClawConfig {
   return {
-    plugins: { allow: ["clawrouter", alternate.id], entries: { clawrouter: { enabled: true } }, load: { paths: [alternate.file] }, slots: { memory: "none" } },
+    plugins: { allow: ["clawrouter", alternate.id], entries: { clawrouter: { enabled: true }, [alternate.id]: { enabled: true } }, load: { paths: [alternate.file] }, slots: { memory: "none" } },
     models: { providers: { clawrouter: { baseUrl: origin, apiKey: `clawrouter-live-${id}-fixture-secret`, models: [], request: { allowPrivateNetwork: true },
       headers: { "x-goog-api-key": "must-not-forward", "x-api-key": "must-not-forward" } } } },
     agents: { defaults: { workspace: state.workspaceDir, mediaModels: { music: { primary: `clawrouter/${id.endsWith("_pro") ? PRO : CLIP}`, fallbacks: [`${alternate.id}/fixture`] } } } },
@@ -56,7 +58,8 @@ beforeAll(async () => {
   await state.writeJson("alternate/openclaw.plugin.json", { id: alternate.id, contracts: { musicGenerationProviders: [alternate.id] }, configSchema: { type: "object", additionalProperties: false, properties: {} } });
   await state.writeAuthProfiles({ version: 1, profiles: { "google:native": { type: "api_key", provider: "google", key: "must-not-fallback" } } });
   await fs.writeFile(`${state.workspaceDir}/lyria-reference.png`, Buffer.from(png, "base64"));
-  acquired = await acquirePluginRegistryForInspection({ config: configuration("lyria_native_clip") });
+  acquired = await acquirePluginRegistryForInspection({ config: configuration(`lyria_${route}_clip`) });
+  expect(acquired.registry.musicGenerationProviders.some(entry => entry.provider.id === alternate.id)).toBe(true);
 });
 afterEach(() => { vi.restoreAllMocks(); resetGeneratedMediaTaskActivityForTests(); });
 afterAll(async () => {
@@ -64,7 +67,7 @@ afterAll(async () => {
   await acquired?.release(); clearPluginMetadataLifecycleCaches(); resetPluginLoaderTestStateForTest(); await state?.cleanup();
 });
 
-for (const route of ["native", "manifest"] as const) describe(`actual registered Lyria ${route} through Worker`, () => {
+describe(`actual registered Lyria ${route} through Worker`, () => {
   it("discovers the two entitled music models through the actual registered catalog", async () => {
     await select(`lyria_${route}_clip`);
     const selected = acquired.registry.modelCatalogProviders.find(entry => entry.provider.provider === "clawrouter" && entry.provider.kinds.includes("music_generation"))!.provider;
