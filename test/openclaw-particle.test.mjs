@@ -16,7 +16,8 @@ const charged = ["particle_catalog", "particle_off", "particle_low", "particle_h
 const ids = [...charged, "particle_unpriced", "particle_foreign", "particle_empty"];
 
 test("actual OpenClaw Particle configured native client through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
-  assert.ok(endpoint); assert.ok(models.every(id => provider.models.some(model => model.upstream === id)));
+  assert.ok(endpoint);
+  assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), [["particle/particle-ai/particle-1", "particle-1"]]);
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-particle-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
