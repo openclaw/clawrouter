@@ -66,7 +66,7 @@ test("Sage batch rejects foreign provider, origin, endpoint, model and capabilit
     m => { row(m).upstream = "other"; },
     m => { row(m).capabilities.push("llm.chat"); },
     m => { m.capabilities[0].id = row(m).capabilities[0] = "llm.decisions"; },
-    m => { delete row(m).nativeCapabilities; },
+    m => { delete facts(m).inference.decision; },
     m => { facts(m).inference.chat = true; },
   ]);
 });
@@ -110,6 +110,19 @@ test("the first Sage batch metadata qualification is text/list only", () => {
     m => { decision(m).questions.choice.maxImageOptions = 20; },
     m => { decision(m).limits = { image: { maxBytes: 4194304, mimeTypes: ["image/png"], remoteUrls: false } }; },
   ]);
+});
+
+test("an existing declaration without support metadata stays unqualified and does not break singular fixtures", () => {
+  const m = fixture();
+  delete row(m).nativeCapabilities;
+  m.capabilities.unshift({ id: "llm.decisions", endpoint: "decisions", methods: ["POST"] });
+  m.endpoints.decisions = { method: "POST", path: "/decide", requestFormat: "levanto.sage", responseFormat: "levanto.sage" };
+  row(m).capabilities.unshift("llm.decisions");
+  const snapshot = compile(m);
+  assert.equal(snapshot.model_index[row(m).id].nativeCapabilities, undefined);
+  assert.equal(snapshot.providers[0].models[0].nativeCapabilities, undefined);
+  assert.equal(snapshot.providers[0].endpoints.find(e => e.id === "decisions").request_format, "levanto.sage");
+  assert.equal(snapshot.providers[0].endpoints.find(e => e.id === "decisions_batch").request_format, "levanto.sage_batch");
 });
 
 test("adding batch metadata leaves the singular model endpoint and capability unchanged", () => {

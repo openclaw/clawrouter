@@ -31,6 +31,11 @@ for text and list content. It excludes image facts, query/path overrides,
 passthrough models and streaming. Singular Sage and SystemOne mappings do not
 change.
 
+Support metadata remains optional. An existing declaration that omits it stays
+without batch support facts; the compiler does not synthesize a profile or infer
+execution from an endpoint alone. When present, the batch profile must satisfy
+the finite text/list contract above.
+
 The existing `prepareSageRequest(body, true)` codec accepts grouped `requests`
 and optional `reasoning`. Sage selects the model upstream: native bodies must
 not contain a `model` field. Batch question/reasoning facts retain their existing

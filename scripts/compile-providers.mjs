@@ -1156,10 +1156,12 @@ function validateSageBatch(manifest) {
   if (models.length !== 1) fail();
   const model = models[0], facts = model.nativeCapabilities?.endpoints?.[id];
   if (model.id !== "levanto/levanto-sage-2" || model.upstream !== "levanto-sage-2" || model.availability?.status === "upstream_alias"
-    || model.capabilities.some(value => !["llm.decisions", capability].includes(value))
-    || !facts || facts.inference?.decision?.protocol !== "levanto-sage" || facts.inference.chat === true
+    || model.capabilities.some(value => !["llm.decisions", capability].includes(value))) fail();
+  // Existing singular-runtime fixtures carry the closed batch endpoint without
+  // support facts. Preserve omission; it must not manufacture batch support.
+  if (facts && (facts.inference?.decision?.protocol !== "levanto-sage" || facts.inference.chat === true
     || facts.input?.length !== 2 || !facts.input.includes("text") || !facts.input.includes("json")
-    || facts.inference.decision.limits?.image || facts.inference.decision.questions.choice?.maxImageOptions !== undefined) fail();
+    || facts.inference.decision.limits?.image || facts.inference.decision.questions.choice?.maxImageOptions !== undefined)) fail();
 }
 
 function validateBasetenSystemOne(manifest) {
