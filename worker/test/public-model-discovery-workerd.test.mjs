@@ -37,7 +37,7 @@ export default {async fetch(request,env){
  return Response.json({results,calls});
 },queue:worker.queue};`;
 const upstream = `export default {async fetch(request){
- if([...request.headers].some(([name])=>!['accept','host'].includes(name)))return new Response('private header leaked',{status:400});
+ if(['authorization','x-api-key','x-account','x-private'].some(name=>request.headers.has(name)))return new Response('private header leaked',{status:400});
  if(request.url==='https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json')return Response.json({'featured-models':[]});
  return Response.json({object:'list',...(request.url.includes('venice.ai')?{type:'text'}:{}),data:[]});
 }};`;

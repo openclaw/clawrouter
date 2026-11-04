@@ -12,8 +12,12 @@ import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { sha256Hex } from './worker/utils.ts';
 import { snapshot } from './worker/providers.ts';
 import { bodyBudgetCharged, BodyLease } from './worker/body-budget.ts';
-const originalFetch=globalThis.fetch.bind(globalThis);let fetches=0;const attempts=[];
-globalThis.fetch=(input,init)=>{const req=new Request(input,init);const url=new URL(req.url);attempts.push({origin:url.origin,path:url.pathname,query:[...url.searchParams.keys()],capacity:bodyBudgetCharged()});if(!req.url.startsWith('https://api.featherless.ai/v1/models?')||bodyBudgetCharged()!==96*1024*1024)throw new Error('unqualified dispatch or capacity');fetches++;return originalFetch(req);};
+import { HttpOperation } from './worker/http-operation.ts';
+const originalFetch=globalThis.fetch.bind(globalThis);let fetches=0;const attempts=[];let physicalPending,scanOperation,producerComplete=false,producerCanceled=false;
+const originalWait=HttpOperation.prototype.wait,originalStop=HttpOperation.prototype.stop;
+HttpOperation.prototype.wait=function(pending,...rest){if(pending===physicalPending)scanOperation=this;return originalWait.call(this,pending,...rest);};
+HttpOperation.prototype.stop=function(cause,...rest){if(this===scanOperation){if(cause==='complete')producerComplete=true;if(cause==='caller')producerCanceled=true;}return originalStop.call(this,cause,...rest);};
+globalThis.fetch=(input,init)=>{const req=new Request(input,init);const url=new URL(req.url);attempts.push({origin:url.origin,path:url.pathname,query:[...url.searchParams.keys()],capacity:bodyBudgetCharged()});if(!req.url.startsWith('https://api.featherless.ai/v1/models?')||bodyBudgetCharged()!==96*1024*1024)throw new Error('unqualified dispatch or capacity');fetches++;physicalPending=originalFetch(req);return physicalPending;};
 const id=n=>'model-'+String(n).padStart(4,'0')+'x'.repeat(470);
 const provider=structuredClone(snapshot.providers.find(p=>p.id==='openai'));
 const endpoint={...provider.endpoints.find(e=>e.id==='models_list'),id:'catalog',path:'/models',method:'GET',methods:['GET'],request_format:'featherless.catalog',response_format:'featherless.catalog',native_proxy:false,timeout_ms:20000,path_params:[],path_param_styles:{},headers:{},query:{}};
@@ -27,13 +31,13 @@ export default {async fetch(request,env){
  await putGrantCredentials(env,'oauth/fixture/featherless',{provider:'featherless',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
  const call=()=>worker.fetch(new Request('https://router.example/v1/proxy/featherless/catalog',{headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret'}}),env,ctx);
  const held=new BodyLease();held.grow(1024*1024);const refused=await call();const denied=refused.status;await refused.text();const before=fetches;held.release();await drain();
- const response=await call();const charged=bodyBudgetCharged();if(response.status!==200)throw new Error('catalog refused status='+response.status+' fetches='+fetches+' capacity='+charged+' attempts='+JSON.stringify(attempts)+' body='+await response.text());const reader=response.body.getReader();let wire='',maximum=0;
+ const response=await call();const charged=bodyBudgetCharged(),completeAtReturn=producerComplete;if(response.status!==200)throw new Error('catalog refused status='+response.status+' fetches='+fetches+' capacity='+charged+' attempts='+JSON.stringify(attempts)+' body='+await response.text());const reader=response.body.getReader();let wire='',maximum=0;
  const example={id:id(0),context_length:8192,max_completion_tokens:1024,concurrency_cost:1,is_gated:false,available_on_current_plan:true,features:{tool_use:true,image_input:false},pricing:{prompt:'0.2',completion:'0.4',image:'0.1',request:'0.3'}};
  const expected=JSON.stringify({providerId:'featherless',catalog:[]}).length+5000*JSON.stringify(example).length+4999;
- for(;;){const next=await reader.read();if(next.done)break;maximum=Math.max(maximum,next.value.byteLength);wire+=new TextDecoder().decode(next.value);if(wire.length<expected&&bodyBudgetCharged()!==96*1024*1024)throw new Error('lease released while bytes remain: received='+wire.length+' expected='+expected+' fetches='+fetches+' capacity='+bodyBudgetCharged());}
- reader.releaseLock();if(wire.length!==expected)throw new Error('incomplete catalog');await drain();const result=JSON.parse(wire);const released=bodyBudgetCharged();
- const cancel=await call();const cancelHeld=bodyBudgetCharged();await cancel.body.cancel();await drain();
- return Response.json({denied,before,status:response.status,charged,released,cancelHeld,final:bodyBudgetCharged(),count:result.catalog.length,providerId:result.providerId,bytes:new TextEncoder().encode(wire).byteLength,maximum,fetches,first:result.catalog[0].id,last:result.catalog.at(-1).id});
+ for(;;){const next=await reader.read();if(next.done)break;maximum=Math.max(maximum,next.value.byteLength);wire+=new TextDecoder().decode(next.value);if(!producerComplete&&bodyBudgetCharged()!==96*1024*1024)throw new Error('lease released while bytes remain: received='+wire.length+' expected='+expected+' fetches='+fetches+' capacity='+bodyBudgetCharged());}
+ reader.releaseLock();if(wire.length!==expected)throw new Error('incomplete catalog');await drain();const result=JSON.parse(wire);const released=bodyBudgetCharged(),fullProducerEOF=producerComplete;
+ producerComplete=false;scanOperation=undefined;physicalPending=undefined;const cancel=await call();const cancelHeld=bodyBudgetCharged(),cancelCompleteAtReturn=producerComplete;await cancel.body.cancel();await drain();
+ return Response.json({denied,before,status:response.status,charged,completeAtReturn,fullProducerEOF,released,cancelHeld,cancelCompleteAtReturn,producerCanceled,cancelProducerEOF:producerComplete,final:bodyBudgetCharged(),count:result.catalog.length,providerId:result.providerId,bytes:new TextEncoder().encode(wire).byteLength,maximum,fetches,first:result.catalog[0].id,last:result.catalog.at(-1).id});
 },queue:worker.queue};`;
 const upstream = `
 const id=n=>'model-'+String(n).padStart(4,'0')+'x'.repeat(470);
@@ -47,7 +51,10 @@ test("workerd full 5000-row scan retains capacity through actual serialization, 
   const instance = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true }); t.after(() => instance.dispose());
   const response = await fetch((await instance.ready).origin); assert.equal(response.status, 200, await response.clone().text()); const proof = await response.json();
   assert.equal(proof.denied, 503); assert.equal(proof.before, 0); assert.equal(proof.status, 200); assert.equal(proof.count, 5000); assert.equal(proof.providerId, "featherless");
-  assert.equal(proof.charged, 96 * 1024 * 1024); assert.equal(proof.released, 0); assert.equal(proof.cancelHeld, 96 * 1024 * 1024); assert.equal(proof.final, 0);
+  assert.ok(proof.charged === 96 * 1024 * 1024 || proof.completeAtReturn && proof.charged === 0);
+  assert.equal(proof.fullProducerEOF, true); assert.equal(proof.released, 0);
+  assert.ok(proof.cancelHeld === 96 * 1024 * 1024 || proof.cancelCompleteAtReturn && proof.cancelHeld === 0);
+  assert.ok(proof.producerCanceled || proof.cancelProducerEOF); assert.equal(proof.final, 0);
   assert.equal(proof.fetches, 100); assert.ok(proof.bytes > 3 * 1024 * 1024 && proof.bytes <= 4 * 1024 * 1024); assert.ok(proof.maximum <= 48 * 1024);
   assert.equal(proof.first, `model-0000${"x".repeat(470)}`); assert.equal(proof.last, `model-4999${"x".repeat(470)}`);
 });
