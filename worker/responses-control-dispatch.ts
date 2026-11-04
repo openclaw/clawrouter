@@ -45,6 +45,7 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
     const { managedRoute } = await import("./managed-routes.ts");
     const { adapter, controls, retained } = managedRoute(provider, create, pathParams);
     if (retained) parts.push(["managed-job-params", retained]);
+    if (create.inputProfile !== undefined) parts.push(["managed-input-profile", create.inputProfile, create.id, create.request_format, create.response_format]);
     if (adapter.prepareAdmitted) parts.push(["managed-upstream-retention", "v1"]);
     if (lifecycle.files) {
       const { managedFileRoute, managedFileBase } = await import("./managed-files.ts");

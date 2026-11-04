@@ -4,10 +4,12 @@ import test from "node:test";
 import { managedCreateAdapter, managedLifecycleAdapter } from "../managed-lifecycle-adapters.ts";
 const fixture = JSON.parse(readFileSync(new URL("../../providers/_fixtures/pixverse/lifecycle.json", import.meta.url), "utf8"));
 
-test("PixVerse registry selects only text creation and retains the scoped native retrieve contract", async () => {
+test("PixVerse registry retains text creation and resolves image controls without unbound preparation", async () => {
   const adapter = managedCreateAdapter("pixverse.video", "pixverse.text_video"); assert.ok(adapter);
   assert.equal(managedLifecycleAdapter("pixverse.video"), adapter);
-  for (const format of ["pixverse.image_video", "pixverse.image_upload", "pixverse.video_get"]) assert.equal(managedCreateAdapter("pixverse.video", format), undefined);
+  const image = managedCreateAdapter("pixverse.video", "pixverse.image_video"); assert.ok(image);
+  assert.throws(() => image.prepare(fixture.image.body, new Headers(), {}, new URLSearchParams()), /pixverse_upload_scope_required/);
+  for (const format of ["pixverse.image_upload", "pixverse.video_get"]) assert.equal(managedCreateAdapter("pixverse.video", format), undefined);
   assert.equal(adapter.supportsCancel, false); assert.equal(adapter.supportsResult, false);
   const prepared = adapter.prepare(fixture.text.body, new Headers({ "Ai-trace-id": "caller-trace" }), {}, new URLSearchParams());
   const observation = await adapter.read(Response.json(fixture.text.response), { action: "create", requestedVersion: prepared.requestedVersion, pathParams: prepared.pathParams });

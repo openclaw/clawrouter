@@ -64,7 +64,7 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     endpoints: provider.capabilities.filter(capability => legacyUnifiedCapability(provider, capability.id))
       .map((capability) => unifiedPathForCapability(capability.id)).filter(Boolean),
   }));
-  const manifestProxy = providers.flatMap((provider) => provider.endpoints.map((endpoint) => ({
+  const manifestProxy = providers.flatMap((provider) => provider.endpoints.filter(endpoint => endpoint.inputProfile === undefined).map((endpoint) => ({
     provider: provider.id,
     endpoint: endpoint.id,
     route: `/v1/proxy/${provider.id}/${endpoint.id}`,

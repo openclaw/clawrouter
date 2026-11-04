@@ -7,6 +7,7 @@
 
 - Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
 - Add an internal one-job PixVerse byte-input receipt with original-credential upload ordering, single-attempt create claims and separate conservative upload/generation accounting; public image/upload routes remain closed.
+- Add a bounded PixVerse image multipart parser with zero-copy PNG/JPEG/WebP container validation and strict native-plan fields; public intake, credential authority and accounting remain separate.
 - Define the optional PixVerse composed-image input profile in schema, compiler metadata and catalog types while keeping image lifecycle activation and discovery projection closed.
 - Add a bounded PixVerse image multipart parser with zero-copy PNG/JPEG/WebP container validation and strict native-plan fields; public intake, credential authority and accounting remain separate.
 - Add a bounded Microsoft Edge speech request/frame codec with request-ID binding, complete-audio delivery and explicit interruption handling, without activating a route or assuming upstream cost.
@@ -142,6 +143,7 @@
 - Declare and register canonical Alibaba Wan text-video creation with original Standard regional credential checks before every dispatch, scoped retrieval and conservative expired-task settlement; keep all image/reference creates closed until input assets are bound.
 - Exercise the compiled Wan lifecycle through Worker/SQLite and the actual OpenClaw native video host, preserving proxy credentials, unknown-price denial and one conservative settlement through observation loss.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
+- Support authenticated one-job PixVerse image intake with bounded multipart bytes, original-owner upload/create ordering, dual operation reservations and acknowledged native-response delivery; generic JSON and unowned image IDs remain closed.
 - Qualify PixVerse fresh trace UUIDs and Runway stable version headers against the shared managed dispatch contract, preserving route identity and scoped asset prerequisites. Require both scoped Replicate read/cancel paths when rewriting controls.
 - Add the experimental Gradium unary speech manifest, binary-mode guard and native fixtures, with conservative plan-dependent credit accounting and explicit runtime activation requirements.
 - Route model-less Gradium unary speech through bounded native binary validation, original credentials and conservative reservation settlement without replaying synthesis.

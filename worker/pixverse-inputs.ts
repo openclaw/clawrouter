@@ -8,35 +8,39 @@ import { HttpOperation } from "./http-operation.ts";
 import type { BackgroundRecord, ManagedAdmission } from "./background-store.ts";
 import { assertManagedInputLive, inputUnavailable, managedInputMaxBytes, sameManagedInput, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
 import { assertInputOperationPolicy, encodeInputDispatch, inputBytesDigest, inputPlanDigest, inputRouteDigest } from "./pixverse-input-dispatch.ts";
-import { createPixVerseManagedAdapter, preparePixVerseImagePlan, preparePixVerseImageUpload, readPixVerseImageUpload } from "./managed-pixverse.ts";
+import { createPixVerseManagedAdapter, preparePixVerseImagePlan, readPixVerseImageUpload } from "./managed-pixverse.ts";
 import { publicControlAuthorization } from "./response-control-authorization.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import type { AuthorizedIdentity, Env } from "./types.ts";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
 import { HttpError, randomId, sha256Hex } from "./utils.ts";
 
-// Internal foundation only. No index.ts route, schema or registry activation.
+// The public profile and internal foundation share the same scoped row/outbox.
 export async function allocatePixVerseInput(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
   selection: ProxySelection, file: Readonly<{ bytes: Uint8Array<ArrayBuffer>; type: string }>): Promise<ManagedInputBinding> {
   publicControlAuthorization(auth);
   const plan = preparePixVerseImagePlan(selection.body), model = selection.model;
   if (!file || Object.keys(file).sort().join() !== "bytes,type" || !(file.bytes instanceof Uint8Array)
-    || !file.bytes.length || file.bytes.length > managedInputMaxBytes
+    || !file.bytes.length || file.bytes.length > managedInputMaxBytes || !["image/png", "image/jpeg", "image/webp"].includes(file.type)
     || selection.provider.id !== "pixverse" || selection.method !== "POST" || selection.capability !== "video.generate"
     || !model || model.upstream !== plan.model || !selection.provider.models.includes(model)
-    || !modelSupportsEndpoint(selection.provider, model, selection.endpoint) || Object.keys(selection.pathParams).length
+    || !modelSupportsEndpoint(selection.provider, model, selection.endpoint)
+    || selection.endpoint.inputProfile !== undefined && (!model.capabilities.includes("video.generate")
+      || !selection.provider.capabilities.some(value => value.id === "video.generate" && value.endpoint === selection.endpoint.id))
+    || Object.keys(selection.pathParams).length
     || new URL(request.url).search) inputUnavailable();
-  // Existing helper validation, with the URL branch deliberately unreachable.
-  preparePixVerseImageUpload({ file: { bytes: file.bytes, type: file.type, name: "input-image" } });
   assertPolicyModel(auth.policy, selection); assertInputOperationPolicy(auth.policy);
   const key = request.headers.get("Idempotency-Key");
   if (!key || !/^[a-zA-Z0-9._:-]{1,128}$/.test(key)) throw new HttpError(400, "invalid_idempotency_key", "one-job input allocation requires a stable bounded Idempotency-Key");
   const scope = await continuationScope(auth), digest = await inputBytesDigest(file.bytes), createDigest = await inputPlanDigest(plan);
   const managed: ManagedAdmission = { protocol: "pixverse.video", providerId: "pixverse", requestedVersion: model.upstream,
-    idempotencyKey: await sha256Hex(key), requestDigest: await sha256Hex(JSON.stringify([selection.endpoint.id, model.id, digest, createDigest, file.type, file.bytes.length])) };
+    idempotencyKey: await sha256Hex(key), requestDigest: await sha256Hex(JSON.stringify([selection.endpoint.id, model.id, digest, createDigest, file.type, file.bytes.length, ...(selection.endpoint.inputProfile ? [selection.endpoint.inputProfile] : [])])) };
   const lookup = () => backgroundCall<BackgroundRecord | null>(env, scope, { action: "managed_lookup", managed, policyGeneration: auth.policy.generation });
   const previous = await lookup();
-  if (previous) { if (!previous.inputReceipt) inputUnavailable(); return previous.inputReceipt.binding; }
+  if (previous) {
+    if (!previous.inputReceipt || previous.inputReceipt.binding.inputProfile !== selection.endpoint.inputProfile) inputUnavailable();
+    return previous.inputReceipt.binding;
+  }
   const connection = await assertProviderAccess(selection.provider, auth, env);
   const upstream = await upstreamAuth(selection.provider, auth, env, new Set(), null, true, undefined,
     { provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: model.upstream });
@@ -56,12 +60,13 @@ export async function allocatePixVerseInput(request: Request, env: Env, context:
   const generation = facts("video.generate"), upload = facts("pixverse.image_upload");
   const background = await HttpBackground.prepare(request, env, auth, owner, generation, connection, {}, new Headers(), false);
   background.admission.managed = managed;
-  const binding: ManagedInputBinding = { version: "clawrouter.managed-input.v1", scope, jobId: background.admission.id, owner,
+  const binding: ManagedInputBinding = { version: "clawrouter.managed-input.v1",
+    ...(selection.endpoint.inputProfile ? { inputProfile: selection.endpoint.inputProfile } : {}), scope, jobId: background.admission.id, owner,
     generation: grant.credentialGeneration!, product: "pixverse.video", origin: destination.origin, region: destination.region,
     modelId: model.id, model: plan.model as "v6" | "c1", slot: "image", digest, createDigest, size: file.bytes.length,
     mime: file.type as ManagedInputBinding["mime"], expiresAt: background.admission.admittedAt + 60_000 };
   try {
-    const ack = await backgroundCall<{ allocated: boolean; receipt: ManagedInputReceipt }>(env, scope, { action: "input_allocate", input: {
+    const ack = await backgroundCall<{ allocated: boolean; receipt: Pick<ManagedInputReceipt, "binding"> }>(env, scope, { action: "input_allocate", ...(binding.inputProfile ? { summary: true } : {}), input: {
       binding, admission: background.admission, upload: { facts: upload, plan: planBudgetReservation(auth, "pixverse.image_upload", upload.cost, connection, background.admission.admittedAt) } } });
     if (!ack?.allocated || !sameManagedInput(ack.receipt.binding, binding)) inputUnavailable();
     return binding;
@@ -69,7 +74,7 @@ export async function allocatePixVerseInput(request: Request, env: Env, context:
     // Lost allocation ACK or a concurrent same-key attempt resolves only the
     // already committed row. It never invents a second job or reservation.
     const existing = await lookup();
-    if (existing?.inputReceipt) return existing.inputReceipt.binding;
+    if (existing?.inputReceipt && existing.inputReceipt.binding.inputProfile === selection.endpoint.inputProfile) return existing.inputReceipt.binding;
     throw error;
   }
 }
@@ -110,4 +115,16 @@ export async function dispatchPixVerseInput(request: Request, env: Env, auth: Au
     if (!ack?.bound) inputUnavailable();
     return getPixVerseInput(env, auth, binding);
   } finally { operation.stop("complete"); void response?.body?.cancel().catch(() => undefined); }
+}
+
+// Advisory caller-specific catalog qualification. Dispatch still rechecks the
+// selected original owner, policy and consent at each paid POST boundary.
+export async function qualifyPixVerseInputCatalog(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env): Promise<void> {
+  if (!endpoint.native_proxy || endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1") inputUnavailable();
+  assertInputOperationPolicy(auth.policy);
+  const upstream = await upstreamAuth(provider, auth, env, new Set(), null, true, undefined, { provider, endpoint, mode: "http" });
+  if (!upstream.grantKey || !upstream.grant || upstream.grant.credentialStore !== "durable_object" || !upstream.grant.credentialLineage) inputUnavailable();
+  const destination = await inputRouteDigest(provider, endpoint, upstream.grant, env);
+  requireManagedCreateAdmission(auth.policy, env, { providerId: provider.id, endpointId: endpoint.id, grantKey: upstream.grantKey,
+    lineage: upstream.grant.credentialLineage, routeSha256: destination.digest, policyGeneration: auth.policy.generation }, "pixverse.video");
 }

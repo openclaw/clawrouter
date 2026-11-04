@@ -8,6 +8,7 @@ export const managedInputMaxBytes = 8 * 1024 * 1024;
 // Private, server-derived receipt. A handle selects this row; it grants nothing.
 export interface ManagedInputBinding {
   version: "clawrouter.managed-input.v1";
+  inputProfile?: "clawrouter.pixverse-image-input.v1";
   scope: string;
   jobId: string;
   owner: ContinuationOwner;
@@ -32,6 +33,15 @@ export interface ManagedInputReceipt {
   // Same scoped row/outbox, but a distinct operation, reservation and event.
   upload: BackgroundRecord;
 }
+// Bounded private control ACK; the embedded upload ledger is not copied across
+// every composed phase. Full receipts remain available to existing callers.
+export type ManagedInputState = Omit<ManagedInputReceipt, "upload"> & { upstreamId: string | null };
+export function managedInputState(job: BackgroundRecord | null, binding: ManagedInputBinding): ManagedInputState {
+  if (binding.inputProfile !== "clawrouter.pixverse-image-input.v1") inputUnavailable();
+  const receipt = inputReceipt(job, binding);
+  return { binding: receipt.binding, state: receipt.state, imageId: receipt.imageId, createClaimed: receipt.createClaimed,
+    upstreamId: job?.managed?.submission === "bound" ? job.managed.upstreamId : null };
+}
 export interface ManagedInputAllocation {
   binding: ManagedInputBinding;
   admission: BackgroundAdmission;
@@ -39,7 +49,8 @@ export interface ManagedInputAllocation {
 }
 const digest = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 export function validateManagedInput(binding: ManagedInputBinding): void {
-  if (!binding || Object.keys(binding).sort().join() !== "createDigest,digest,expiresAt,generation,jobId,mime,model,modelId,origin,owner,product,region,scope,size,slot,version"
+  if (!binding || Object.keys(binding).filter(key => key !== "inputProfile").sort().join() !== "createDigest,digest,expiresAt,generation,jobId,mime,model,modelId,origin,owner,product,region,scope,size,slot,version"
+    || Object.hasOwn(binding, "inputProfile") && binding.inputProfile !== "clawrouter.pixverse-image-input.v1"
     || binding.version !== "clawrouter.managed-input.v1" || !/^http-continuations:[a-f0-9]{64}$/.test(binding.scope)
     || !/^bg_[a-f0-9]{32}$/.test(binding.jobId) || binding.product !== "pixverse.video" || binding.slot !== "image"
     || !Object.hasOwn(pixVerseOrigins, binding.region) || binding.origin !== pixVerseOrigins[binding.region]
@@ -56,7 +67,7 @@ export function validateManagedInput(binding: ManagedInputBinding): void {
 }
 export function sameManagedInput(a: ManagedInputBinding, b: ManagedInputBinding): boolean {
   validateManagedInput(a); validateManagedInput(b);
-  return Object.keys(a).every(key => key === "owner"
+  return a.inputProfile === b.inputProfile && Object.keys(a).every(key => key === "owner"
     ? Object.keys(a.owner).every(field => a.owner[field as keyof ContinuationOwner] === b.owner[field as keyof ContinuationOwner])
     : a[key as keyof ManagedInputBinding] === b[key as keyof ManagedInputBinding]);
 }

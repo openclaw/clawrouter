@@ -10,6 +10,10 @@ import { togetherManagedAdapter } from "./managed-together-wrapper.ts";
 import { wanManagedAdapter } from "./managed-wan.ts";
 import { vydraManagedAdapter } from "./managed-vydra.ts";
 
+// Route/control lookup only: without a receipt-bound image ID, prepare denies.
+// The input controller supplies that ID to its separate per-job image factory.
+const pixVerseImageControlAdapter = createPixVerseManagedAdapter("image");
+
 const adapters: readonly ManagedLifecycleAdapter[] = [
   replicateManagedAdapter, falManagedAdapter, kieManagedAdapter, vydraManagedAdapter, togetherManagedAdapter, googleOmniManagedAdapter,
   openRouterVideoManagedAdapter, wanManagedAdapter, createPixVerseManagedAdapter("text"), createRunwayManagedAdapter("text"),
@@ -21,6 +25,7 @@ export function managedLifecycleAdapter(protocol: string): ManagedLifecycleAdapt
 }
 
 export function managedCreateAdapter(protocol: string, requestFormat: string): ManagedLifecycleAdapter | undefined {
+  if (protocol === "pixverse.video" && requestFormat === "pixverse.image_video") return pixVerseImageControlAdapter;
   const adapter = managedLifecycleAdapter(protocol);
   return adapter?.requestFormats.includes(requestFormat) ? adapter : undefined;
 }

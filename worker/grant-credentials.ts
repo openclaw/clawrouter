@@ -51,6 +51,23 @@ export class GrantCredentialObject implements DurableObject {
     if (request.method === "POST" && new URL(request.url).pathname === OWNERSHIP_CURRENT) {
       return this.state.storage.get<CredentialRecord>("credential").then(record => json({ exists: !!record, refreshToken: record?.refreshToken ?? null }));
     }
+    if (request.method === "POST" && new URL(request.url).pathname === "/managed-input/compose") {
+      return import("./pixverse-input-compose.ts").then(async ({ composePixVerseInput }) => {
+        const { authorizeInputUnderOwner, dispatchInputUnderOwner } = await import("./pixverse-input-dispatch.ts");
+        const ordered = <T>(run: (record: CredentialRecord | undefined, grant: UpstreamGrant | undefined) => Promise<T>) => {
+          const operation = this.tail.then(async () => {
+            const record = await this.state.storage.get<CredentialRecord>("credential");
+            return run(record, record && canonicalRecord(record) ? materializedGrant(metadataGrant(record), record) : undefined);
+          });
+          this.tail = operation.then(() => undefined, () => undefined);
+          return operation;
+        };
+        return composePixVerseInput(request, this.env,
+          (prepared, signal) => ordered((record, grant) => dispatchInputUnderOwner(this.env, prepared, record, grant, signal)),
+          (input, signal) => ordered((record, grant) => authorizeInputUnderOwner(this.env, input, record, grant, signal)));
+      }).catch(error => error instanceof HttpError ? errorResponse(error.code, error.message, error.status)
+        : errorResponse("managed_input_unavailable", "original composed input dispatch could not be confirmed", 503));
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/managed-input/dispatch") {
       // Bounded bytes/multipart preparation must not hold credential ordering.
       return import("./pixverse-input-dispatch.ts").then(async ({ prepareInputDispatch, dispatchInputUnderOwner }) => {

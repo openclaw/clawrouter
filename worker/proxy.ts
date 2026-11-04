@@ -388,6 +388,14 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     if (auth instanceof Response) return auth;
     throw error;
   }
+  if (matching.some(candidate => candidate.inputProfile !== undefined)) {
+    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (auth instanceof Response) return auth;
+    if (!auth || matching.length !== 1 || endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1")
+      throw new HttpError(409, "managed_input_unavailable", "composed input requires one exact registered profile");
+    return (await import("./pixverse-input-native.ts")).proxyPixVerseImageInput(request, env, context, provider, endpoint, auth,
+      selection => preauthenticate(request, env, "proxy_key", provider.id, undefined, selection));
+  }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
     let prepared;
@@ -428,6 +436,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     && (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(request.headers.get("content-type")?.trim() ?? "")
       || ![null, "identity"].includes(request.headers.get("content-encoding"))))
     throw new HttpError(400, "invalid_native_transcription_content_type", "native transcription requires uncompressed UTF-8 JSON");
+  if (selection.endpoint.inputProfile !== undefined)
+    throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
   validateSelectedInput(selection);
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
