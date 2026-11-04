@@ -13,6 +13,9 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
 export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.endpoint.inputProfile !== undefined && (requirement.endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1"
+    || requirement.provider.id !== "pixverse" || requirement.mode !== "http" || !grant || grant.kind !== "api_key"
+    || grant.credentialStore !== "durable_object" || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration))) return false;
   if (requirement.endpoint.request_format === "minimax.speech" && grant && !miniMaxMediaProjection(grant)) return false;
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
   if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;

@@ -1,16 +1,19 @@
+import { assertInputOperationPolicy } from "./pixverse-input-policy.ts";
+export { assertInputOperationPolicy } from "./pixverse-input-policy.ts";
 import { resolveConnection } from "./authority.ts";
+import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import { BodyLease } from "./body-budget.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import { configuredUpstream, modelSupportsEndpoint, providerById } from "./providers.ts";
 import { backgroundCall } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { assertManagedInputLive, inputUnavailable, managedInputMaxBytes, sameManagedInput, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
+import { assertManagedInputLive, inputUnavailable, managedInputMaxBytes, sameManagedInput, type ManagedInputBinding, type ManagedInputState, type ManagedInputReceipt } from "./managed-input-receipt.ts";
 import { createPixVerseManagedAdapter, pixVerseOrigins, preparePixVerseImagePlan, preparePixVerseImageUpload } from "./managed-pixverse.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlScope, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { readBounded } from "./transcription-body.ts";
-import type { AccessPolicy, CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
+import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
 export interface PixVerseInputDispatch {
@@ -28,13 +31,6 @@ export async function inputBytesDigest(bytes: Uint8Array<ArrayBuffer>): Promise<
 export function inputPlanDigest(plan: Record<string, unknown>): Promise<string> {
   return sha256Hex(JSON.stringify(plan, Object.keys(plan).sort()));
 }
-export function assertInputOperationPolicy(policy: AccessPolicy): void {
-  for (const capability of ["pixverse.image_upload", "video.generate"]) {
-    const value = policy.requestCostsMicros?.[capability];
-    if (!Object.hasOwn(policy.requestCostsMicros ?? {}, capability) || !Number.isSafeInteger(value) || value! < 0)
-      throw new HttpError(400, "pricing_required", "input upload and generation each require their own explicit policy operation price");
-  }
-}
 export async function inputRouteDigest(provider: CompiledProvider, endpoint: CompiledEndpoint, grant: UpstreamGrant, env: Env): Promise<{ digest: string; origin: string; region: "international" | "cn" }> {
   const upstream = configuredUpstream(provider, grant, env), origin = upstream.baseUrl;
   const region = origin === pixVerseOrigins.international ? "international" : origin === pixVerseOrigins.cn ? "cn" : null;
@@ -46,13 +42,20 @@ export async function inputRouteDigest(provider: CompiledProvider, endpoint: Com
     || scheme?.type !== "api_key" || scheme.header.toLowerCase() !== "api-key" || scheme.secretKind !== "api_key"
     || grant.kind !== "api_key" || typeof grant.credential !== "string" || !/^[\x21-\x7e]{1,8192}$/.test(grant.credential)
     || upstream.headers.get("api-key") !== grant.credential || [...upstream.headers.keys()].some(name => name !== "api-key")) inputUnavailable();
+  if (endpoint.inputProfile !== undefined) {
+    if (endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1" || endpoint.lifecycle?.protocol !== "pixverse.video") inputUnavailable();
+    return { origin, region, digest: await responseRouteDigest(provider, upstream, new URL(origin + endpoint.path),
+      new Headers(upstream.headers), upstream.grantKey, endpoint.lifecycle, env) };
+  }
+  // Only existing unprofiled internal v1 receipts use this identity. Never try
+  // it as a fallback for a profiled lifecycle route that fails verification.
   return { origin, region, digest: await sha256Hex(JSON.stringify(["clawrouter.managed-input.v1", provider.id, endpoint.id,
     endpoint.path, endpoint.request_format, endpoint.response_format, origin, grant.credentialLineage, pixVerseInputPaths.upload])) };
 }
 
 export interface PreparedInputDispatch {
   input: PixVerseInputDispatch;
-  upload?: { body: FormData; headers: Headers };
+  upload?: { body: FormData | ReadableStream<Uint8Array>; headers: Headers; length?: number };
   lease: BodyLease;
 }
 // Fixed internal binary envelope, never public multipart/body/path override.
@@ -67,6 +70,7 @@ export async function prepareInputDispatch(request: Request): Promise<PreparedIn
     const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw.subarray(4, size + 4))) as PixVerseInputDispatch;
     if (!input || Object.keys(input).sort().join() !== "action,authorization,binding,deadline,plan" || !["upload", "create"].includes(input.action)) inputUnavailable();
     assertInputDeadline(input);
+    if (input.binding.inputProfile !== undefined) inputUnavailable();
     const plan = preparePixVerseImagePlan(input.plan);
     if (plan.model !== input.binding.model || await inputPlanDigest(plan) !== input.binding.createDigest
       || await publicControlScope(input.authorization) !== input.binding.scope) inputUnavailable();
@@ -92,11 +96,10 @@ export function assertInputDeadline(input: PixVerseInputDispatch): void {
   if (!Number.isSafeInteger(input.deadline) || Date.now() >= input.deadline || input.deadline > input.binding.expiresAt) inputUnavailable();
 }
 
-// Called only within the original credential owner's mutation tail. The scoped
-// receipt claim is the last await. Its owner never calls this credential owner.
-export async function dispatchInputUnderOwner(env: Env, prepared: PreparedInputDispatch, record: CredentialRecord | undefined,
-  grant: UpstreamGrant | undefined, signal: AbortSignal): Promise<{ response: Promise<Response> }> {
-  const { input } = prepared, { binding } = input;
+// Both dispatch and recovery use the same current original owner/policy checks.
+export async function authorizeInputUnderOwner(env: Env, input: PixVerseInputDispatch, record: CredentialRecord | undefined,
+  grant: UpstreamGrant | undefined, signal: AbortSignal): Promise<ManagedInputState | ManagedInputReceipt> {
+  const { binding } = input;
   if (!record || !grant || record.version !== 1 || record.providerId !== "pixverse" || record.grantKey !== binding.owner.grantKey
     || record.kind !== "api_key" || record.generation !== binding.generation || record.lineage !== binding.owner.lineage
     || record.enabled !== true || record.revokedAt || record.status !== "active" || typeof record.credential !== "string"
@@ -104,28 +107,46 @@ export async function dispatchInputUnderOwner(env: Env, prepared: PreparedInputD
   const provider = providerById("pixverse"), endpoint = provider?.endpoints.find(value => value.id === binding.owner.endpointId);
   const model = provider?.models.find(value => value.id === binding.modelId && value.upstream === binding.model);
   if (!provider || !endpoint || !model || !modelSupportsEndpoint(provider, model, endpoint)) inputUnavailable();
+  if (endpoint.inputProfile !== binding.inputProfile) inputUnavailable();
   const destination = await inputRouteDigest(provider, endpoint, grant, env);
   if (destination.digest !== binding.owner.routeSha256 || destination.origin !== binding.origin || destination.region !== binding.region) inputUnavailable();
   if ((await resolveConnection(env, provider.id))?.enabled === false) inputUnavailable();
   const policy = await authorizeResponseControl(env, input.authorization, binding.owner, signal, "pixverse.video");
   if (!policy) inputUnavailable();
   assertPolicyModel(policy, { model, endpoint, capability: "video.generate" }); assertInputOperationPolicy(policy);
-  const receipt = await backgroundCall<ManagedInputReceipt>(env, binding.scope, { action: "input_get", binding });
+  const receipt = await backgroundCall<ManagedInputReceipt | ManagedInputState>(env, binding.scope, { action: "input_get", binding, ...(binding.inputProfile ? { summary: true } : {}) });
   if (!sameManagedInput(receipt.binding, binding)) inputUnavailable();
+  signal.throwIfAborted(); assertControlCallerLive(input.authorization);
+  if (record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= Date.now())
+    || !upstreamRetentionBindingAllowed(env, binding.owner, "pixverse.video")) inputUnavailable();
+  return receipt;
+}
+
+// Called only within the original credential owner's mutation tail. The scoped
+// receipt claim is the last await. Its owner never calls this credential owner.
+export async function dispatchInputUnderOwner(env: Env, prepared: PreparedInputDispatch, record: CredentialRecord | undefined,
+  grant: UpstreamGrant | undefined, signal: AbortSignal): Promise<{ response: Promise<Response> }> {
+  const { input } = prepared, { binding } = input;
+  const receipt = await authorizeInputUnderOwner(env, input, record, grant, signal);
   const headers = input.action === "upload" ? prepared.upload!.headers : createPixVerseManagedAdapter("image", receipt.imageId ?? undefined)
     .prepare({ ...input.plan, img_id: Number(receipt.imageId) }, new Headers(), {}, new URLSearchParams()).headers;
   const body = input.action === "upload" ? prepared.upload!.body : JSON.stringify({ ...input.plan, img_id: Number(receipt.imageId) });
-  const outbound = new Request(binding.origin + pixVerseInputPaths[input.action], { method: "POST", headers, body, redirect: "manual", signal });
-  outbound.headers.set("API-KEY", record.credential);
+  const outbound = new Request(binding.origin + pixVerseInputPaths[input.action], { method: "POST", headers, body, redirect: "manual", signal, duplex: "half" } as RequestInit);
+  outbound.headers.set("API-KEY", record!.credential!);
+  const length = input.action === "upload" ? prepared.upload?.length : undefined;
+  if (length !== undefined) {
+    if (!Number.isSafeInteger(length) || length < 1 || length > managedInputMaxBytes + 1024) inputUnavailable();
+    outbound.headers.set("content-length", String(length));
+  }
   // Validate generated headers before the final owner call; never copy caller headers.
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(outbound.headers.get("ai-trace-id") ?? "")
-    || [...outbound.headers.keys()].some(name => !["api-key", "ai-trace-id", "content-type"].includes(name))) inputUnavailable();
-  const ack = await backgroundCall<{ claimed: boolean; receipt: ManagedInputReceipt }>(env, binding.scope,
-    { action: input.action === "upload" ? "input_claim_upload" : "input_claim_create", binding });
+    || [...outbound.headers.keys()].some(name => !["api-key", "ai-trace-id", "content-type", ...(length === undefined ? [] : ["content-length"])].includes(name))) inputUnavailable();
+  const ack = await backgroundCall<{ claimed: boolean; receipt: ManagedInputReceipt | ManagedInputState }>(env, binding.scope,
+    { action: input.action === "upload" ? "input_claim_upload" : "input_claim_create", binding, ...(binding.inputProfile ? { summary: true } : {}) });
   signal.throwIfAborted(); assertInputDeadline(input); assertControlCallerLive(input.authorization);
   if (!ack?.claimed || !sameManagedInput(ack.receipt.binding, binding)
     || input.action === "create" && ack.receipt.imageId !== receipt.imageId
-    || record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= Date.now())
+    || record!.expiresAt && (!Number.isFinite(Date.parse(record!.expiresAt)) || Date.parse(record!.expiresAt) <= Date.now())
     || !upstreamRetentionBindingAllowed(env, binding.owner, "pixverse.video")) inputUnavailable();
   return { response: fetch(outbound, { signal }) };
 }

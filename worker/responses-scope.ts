@@ -1,4 +1,4 @@
-import { inputUnavailable, type ManagedInputAllocation, type ManagedInputBinding } from "./managed-input-receipt.ts";
+import { inputUnavailable, managedInputState, type ManagedInputAllocation, type ManagedInputBinding } from "./managed-input-receipt.ts";
 import { markBudgetDispatched, reserveLedgerIntent } from "./accounting.ts";
 import { collectBackground } from "./background-collection.ts";
 import { BackgroundStore, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
@@ -14,7 +14,7 @@ import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
 import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
 
-type Input = { input?: ManagedInputAllocation; binding?: ManagedInputBinding; imageId?: string; action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files" | "input_allocate" | "input_get" | "input_claim_upload" | "input_bind_upload" | "input_claim_create"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
+type Input = { summary?: true; input?: ManagedInputAllocation; binding?: ManagedInputBinding; imageId?: string; action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files" | "input_allocate" | "input_get" | "input_claim_upload" | "input_bind_upload" | "input_claim_create"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
 
 // Continuation cleanup, collection and financial recovery share the object's
 // only alarm and serialized mutation tail. Network waits never hold that tail.
@@ -52,18 +52,20 @@ export class ResponsesScopeStore {
 
   async fetch(request: Request): Promise<Response> {
     const input = await readJson<Input>(request);
+    if (input.summary !== undefined && (input.summary !== true || !input.action.startsWith("input_"))) inputUnavailable();
     if (input.action === "input_allocate" && input.input) {
       const job = await this.mutate(() => this.jobs.allocateInput(input.input!));
       await this.reserve(job);
       await this.reserve(job, true);
-      return json({ allocated: true, receipt: await this.serial(() => this.jobs.getInput(input.input!.binding), false) });
+      return json({ allocated: true, receipt: await this.serial(() => input.summary ? managedInputState(this.jobs.get(input.input!.binding.jobId), input.input!.binding) : this.jobs.getInput(input.input!.binding), false) });
     }
     if (input.action.startsWith("input_")) {
       if (!input.binding) inputUnavailable();
       const binding = input.binding;
-      if (input.action === "input_get") return this.serial(() => json(this.jobs.getInput(binding)), false);
+      const receipt = () => input.summary ? managedInputState(this.jobs.get(binding.jobId), binding) : this.jobs.getInput(binding);
+      if (input.action === "input_get") return this.serial(() => json(receipt()), false);
       if (input.action === "input_bind_upload" && typeof input.imageId === "string")
-        return this.mutate(() => json({ bound: true, receipt: this.jobs.bindInputUpload(binding, input.imageId!) }));
+        return this.mutate(() => { this.jobs.bindInputUpload(binding, input.imageId!); return json({ bound: true, receipt: receipt() }); });
       if (input.action === "input_claim_upload" || input.action === "input_claim_create") {
         const upload = input.action === "input_claim_upload";
         const operation = await this.mutate(() => upload ? this.jobs.claimInputUpload(binding) : this.jobs.claimInputCreate(binding));
@@ -76,7 +78,7 @@ export class ResponsesScopeStore {
           await this.mutate(() => this.jobs.dispatched(binding.jobId, index, upload));
         }
         if (!upload) await this.mutate(() => this.jobs.beginEgress(binding.jobId));
-        return this.serial(() => json({ claimed: true, receipt: this.jobs.getInput(binding) }), false);
+        return this.serial(() => json({ claimed: true, receipt: receipt() }), false);
       }
       inputUnavailable();
     }
