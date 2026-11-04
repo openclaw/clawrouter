@@ -376,6 +376,7 @@
 - Exercise the actual configured Novita catalog and replay hooks through native SDK streams, Worker admission and SQLite, preserving frozen identities, original grants, cancellation and conservative HTTP 499 charges. Strict native discovery remains separately declared.
 - Providers: add the frozen LongCat 2.0 contract, canonical Meituan routing alias and keyed model discovery while retaining the existing seed and native thinking/replay behavior.
 - Verify LongCat's actual strict native catalog and registered thinking/replay wrapper through the Worker, preserving original credentials, zero-cost discovery and conservative stream settlement.
+- Define bodyless native Baseten, Arcee and Novita catalog routes with original managed-key authority, preserving inference cards and unknown facts while runtime/client activation remains separately qualified.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
