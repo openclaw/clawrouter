@@ -83,7 +83,8 @@ for (const id of Object.keys(contracts)) {
 
   test(`${id} caller query and unbound environment authority never reach public metadata`, async t => {
     const f = await setup(t, id);
-    const query = await f.metadata(false, "?url=https%3A%2F%2Fother.example%2Fmodels"); assert.equal(query.status, 400); await query.text();
+    const query = await f.metadata(false, "?url=https%3A%2F%2Fother.example%2Fmodels"); assert.equal(query.status, 400);
+    assert.equal((await query.json()).error.code, "invalid_model_discovery");
     assert.equal(f.sent.length, 0);
     await f.disable(); const response = await f.metadata(); assert.ok(response.status >= 400); await response.text(); assert.equal(f.sent.length, 0);
   });

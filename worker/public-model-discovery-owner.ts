@@ -17,6 +17,8 @@ export function assertPublicDiscoveryEnvelope(value: unknown): void {
 // No inference headers or credential bytes cross the public leaf ABI.
 export async function preparePublicDiscoveryOwner(request: Request, env: Env, auth: AuthorizedIdentity,
   selection: ProxySelection, upstream: UpstreamAuth) {
+  if (new URL(request.url).search)
+    throw new HttpError(400, "invalid_model_discovery", "public catalog requests do not accept caller query parameters");
   const { provider, endpoint } = selection, grant = upstream.grant, key = upstream.grantKey;
   const providerId = publicCatalogProvider(endpoint.request_format);
   if (!providerId || provider.id !== providerId || endpoint.response_format !== endpoint.request_format || !key || !qualified(grant, provider.id)
@@ -25,7 +27,7 @@ export async function preparePublicDiscoveryOwner(request: Request, env: Env, au
     || selection.method !== "GET" || endpoint.method !== "GET" || endpoint.path_params.length || Object.keys(selection.pathParams).length
     || endpoint.auth != null || endpoint.upstreamPath !== undefined || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
     || endpoint.inputProfile !== undefined || endpoint.requestPricing !== undefined || endpoint.modelPassthrough
-    || Object.keys(selection.body).length || Object.keys(endpoint.query).length || new URL(request.url).search
+    || Object.keys(selection.body).length || Object.keys(endpoint.query).length
     || upstream.query.size || upstream.transport !== null) unavailable();
   const identity = ownerIdentity(grant);
   const caller = publicControlAuthorization(auth);
