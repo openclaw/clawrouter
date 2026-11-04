@@ -1,12 +1,18 @@
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { discoveryAllows } from "./model-discovery.ts";
-import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { authorizeResponseControl, assertControlCallerLive, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
+
+export function assertPublicDiscoveryEnvelope(value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).some(name => !["method", "body", "query", "pathParams"].includes(name)))
+    throw new HttpError(400, "invalid_model_discovery", "public catalog envelopes accept only the declared bodyless operation");
+}
 
 // No inference headers or credential bytes cross the public leaf ABI.
 export async function preparePublicDiscoveryOwner(request: Request, env: Env, auth: AuthorizedIdentity,
@@ -14,8 +20,11 @@ export async function preparePublicDiscoveryOwner(request: Request, env: Env, au
   const { provider, endpoint } = selection, grant = upstream.grant, key = upstream.grantKey;
   const providerId = publicCatalogProvider(endpoint.request_format);
   if (!providerId || provider.id !== providerId || endpoint.response_format !== endpoint.request_format || !key || !qualified(grant, provider.id)
+    || selection.capability !== "models.list" || selection.model !== null || endpoint.path !== "/models"
+    || manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.id !== "public_models"
     || selection.method !== "GET" || endpoint.method !== "GET" || endpoint.path_params.length || Object.keys(selection.pathParams).length
     || endpoint.auth != null || endpoint.upstreamPath !== undefined || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
+    || endpoint.inputProfile !== undefined || endpoint.requestPricing !== undefined || endpoint.modelPassthrough
     || Object.keys(selection.body).length || Object.keys(endpoint.query).length || new URL(request.url).search
     || upstream.query.size || upstream.transport !== null) unavailable();
   const identity = ownerIdentity(grant);

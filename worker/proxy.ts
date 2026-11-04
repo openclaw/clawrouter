@@ -1,6 +1,6 @@
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
-import { preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
+import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
@@ -330,7 +330,12 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   try {
     let envelope, prepared;
     try {
-      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission));
+      if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
+      else {
+        const value = await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission);
+        if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
+        envelope = manifestEnvelope(value);
+      }
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
     } catch (error) {
       if (error instanceof Response) return error;

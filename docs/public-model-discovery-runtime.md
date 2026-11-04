@@ -13,7 +13,10 @@ transports cannot substitute for this original owner.
 | `venice.models` | Native or manifest when declared | Native Venice text-list envelope |
 
 The aggregate formats are router metadata, not vendor-native endpoints. The
-runtime and caller catalog enforce manifest-only exposure independently of a
+aggregate endpoint ID is `public_models`; POST its manifest envelope with
+`method: "GET"` and empty body, query and path parameters. `/models` is the
+compiled selector, not the upstream URL. The runtime and caller catalog enforce
+manifest-only exposure independently of a
 snapshot's `native_proxy` flag. The compiler owns the finite declarations; this
 runtime change adds no provider manifest or generated snapshot.
 

@@ -14,6 +14,7 @@ const contracts = {
   venice: { base: "https://api.venice.ai/api/v1", format: "venice.models", urls: ["https://api.venice.ai/api/v1/models?type=text"] },
 };
 const ids = ["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-lightning-30b-a3b"];
+const endpointId = id => ["cerebras", "nvidia"].includes(id) ? "public_models" : "models_list";
 const modelIds = id => id === "nvidia" ? ids : ["one", "two"];
 function payload(id, values = modelIds(id)) {
   return { object: "list", ...(id === "venice" ? { type: "text" } : {}), data: values.map(value => ({ id: value, object: "model",
@@ -23,7 +24,7 @@ function rows(id, body) { return ["cerebras", "nvidia"].includes(id) ? body.cata
 
 async function setup(t, id, { restricted = false, timeout = 10000 } = {}) {
   const contract = contracts[id], original = [...snapshot.providers], template = structuredClone(original.find(provider => provider.id === "openai"));
-  const endpoint = { ...template.endpoints.find(value => value.id === "models_list"), id: "models_list", method: "GET", methods: ["GET"],
+  const endpoint = { ...template.endpoints.find(value => value.id === "models_list"), id: endpointId(id), method: "GET", methods: ["GET"],
     path: "/models", path_params: [], path_param_styles: {}, query: {}, headers: { "x-static-private": "synthetic-static-value" },
     request_format: contract.format, response_format: contract.format, timeout_ms: timeout,
     // Intentionally malformed for aggregate formats: common gates must still refuse native exposure.
@@ -33,7 +34,7 @@ async function setup(t, id, { restricted = false, timeout = 10000 } = {}) {
       native_prefixes: [id], routing: { nativePrefixes: [id], modelPrefixes: [`${id}/`], baseUrlParam: null, serviceParam: null },
       auth: { schemes: [{ type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key" }], grantTransports: {} },
       adapter: { ...template.adapter, injectHeaders: { "x-private-static": "synthetic-static-value" }, injectQuery: {}, passthroughHeaders: ["x-account"] },
-      capabilities: [{ id: "models.list", endpoint: "models_list", methods: ["GET"] }], endpoints: [endpoint],
+      capabilities: [{ id: "models.list", endpoint: endpointId(id), methods: ["GET"] }], endpoints: [endpoint],
       models: modelIds(id).map(upstream => ({ id: `${id}/${upstream}`, upstream, capabilities: [], pricing: null, pricing_ref: null })) });
   } });
   // Discovery projections are keyed by compiled provider object identity.
@@ -44,7 +45,7 @@ async function setup(t, id, { restricted = false, timeout = 10000 } = {}) {
   f.policy.models = restricted ? [`${id}/${modelIds(id)[0]}`] : null;
   await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
   f.upstream = request => Response.json(request.url.includes("featured-models.json") ? { "featured-models": [] } : payload(id));
-  f.metadata = (native = false, query = "", options = {}) => f.call(`${native ? `/v1/native/${id}/models` : `/v1/proxy/${id}/models_list`}${query}`, null,
+  f.metadata = (native = false, query = "", options = {}) => f.call(`${native ? `/v1/native/${id}/models` : `/v1/proxy/${id}/${endpointId(id)}`}${query}`, native ? null : { method: "GET", body: {}, query: {}, pathParams: {} },
     { ...options, headers: { "x-api-key": "synthetic-caller-key", "x-account": "foreign", ...options.headers } });
   f.disable = () => putGrantCredentials(f.env, grantKey, { provider: id, kind: "api_key", enabled: false, credential: "synthetic-original-key" });
   t.after(f.drain); return f;
@@ -92,8 +93,8 @@ for (const id of ["cerebras", "nvidia"]) test(`${id} manifest-only aggregate nev
   const f = await setup(t, id), denied = await f.metadata(true); assert.equal(denied.status, 404); await denied.text();
   const response = await f.call("/v1/catalog", null), body = await response.json(); assert.equal(response.status, 200, JSON.stringify(body));
   const provider = body.providers.find(value => value.id === id); assert.ok(provider);
-  const offers = provider.offers.filter(value => value.endpoint === "models_list"); assert.ok(offers.length);
-  assert.ok(offers.every(offer => offer.routeKind === "manifest" && offer.route === `/v1/proxy/${id}/models_list`));
+  const offers = provider.offers.filter(value => value.endpoint === endpointId(id)); assert.ok(offers.length);
+  assert.ok(offers.every(offer => offer.routeKind === "manifest" && offer.route === `/v1/proxy/${id}/${endpointId(id)}`));
   assert.equal(provider.routes[0].requestFormat, contracts[id].format); assert.equal(f.sent.length, 0);
 });
 
@@ -144,3 +145,11 @@ for (const change of ["origin", "format-pair", "auth", "path-override", "query"]
   if (change === "query") endpoint.query = { account: "foreign" };
   const response = await f.metadata(); assert.ok(response.status >= 400); await response.text(); assert.equal(f.sent.length, 0);
 });
+
+for (const [name, value] of Object.entries({ headers: { authorization: "Bearer synthetic-caller-key" }, transport: "oauth", url: "https://other.example/models",
+  model: "foreign", body: { model: "foreign" }, query: { account: "foreign" }, pathParams: { model_id: "foreign" }, method: "POST" })) {
+  test(`public aggregate manifest rejects caller ${name} overrides before fetch`, async t => {
+    const f = await setup(t, "cerebras"), response = await f.call("/v1/proxy/cerebras/public_models", { [name]: value });
+    assert.ok(response.status >= 400); await response.text(); assert.equal(f.sent.length, 0);
+  });
+}
