@@ -1,3 +1,4 @@
+import { vertexAnthropicRoute } from "./vertex-anthropic-dispatch.ts";
 import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { nativeEmbeddingMode } from "./native-embeddings.ts";
@@ -228,7 +229,8 @@ export function createProxyAccounting(options: AccountingContext) {
     facts,
     setGrant(key: string | null, lane: import("./types").GrantLane) { facts.event.grant_key = key; facts.event.grant_lane = lane; },
     observeUpstreamResponse(response: Response, url: URL) {
-      chargedUpstreamResponse ||= upstreamGenerationMayBeCharged(billingBinding, url, response.status);
+      chargedUpstreamResponse ||= upstreamGenerationMayBeCharged(billingBinding, url, response.status)
+        || vertexAnthropicRoute(selection.provider, selection.endpoint) && !response.ok;
     },
     get upstreamChargePossible() { return chargedUpstreamResponse; },
     fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
@@ -238,6 +240,7 @@ export function createProxyAccounting(options: AccountingContext) {
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
       if (google) responseTier = googleResponseServiceTier(googleRequestServiceTier(selection.body), observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
       const tokens = google && observed.tokens ? { ...observed.tokens, serviceTier: responseTier } : observed.tokens;
+      if (vertexAnthropicRoute(selection.provider, selection.endpoint) && (observed.nonbillable || termination || observed.outcome === "provider_error")) chargedUpstreamResponse = true;
       const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
       // Errors after generation starts do not undo dispatched billable work.
       // A received pre-output rejection is known-free even with HTTP-200 SSE.
