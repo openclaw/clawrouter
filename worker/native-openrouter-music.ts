@@ -2,7 +2,7 @@ import { jsonBodyBytes, utf8Length } from "./json-body.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { mediaObject } from "./managed-media-json.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
-import { createOpenRouterMusicInspector, openRouterMusicModels, prepareOpenRouterMusic, type OpenRouterMusicRequest } from "./openrouter-music.ts";
+import { createOpenRouterMusicInspector, openRouterMusicModels, prepareOpenRouterMusic, type OpenRouterMusicContext } from "./openrouter-music.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { createSseFrames } from "./token-usage.ts";
 import { HttpError } from "./utils.ts";
@@ -35,8 +35,14 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
   } catch {
     throw new HttpError(400, "invalid_native_openrouter_music_request", "OpenRouter music requires bounded text, explicit MP3 or WAV and native streaming");
   }
+  return musicResponse(Object.freeze({ model: prepared.model, format: prepared.format }));
+}
+
+// This closure scope receives only immutable response metadata, never selection
+// or the prepared request. Request/body ownership stays outside response lifetime.
+function musicResponse(context: OpenRouterMusicContext): NativeResponse {
   return {
-    origin: "https://openrouter.ai", path: prepared.path,
+    origin: "https://openrouter.ai", path: "/api/v1/chat/completions",
     acquire: () => nativeResponseLease(32 * 1024 * 1024),
     async read(response, signal) {
       const encoding = response.headers.get("content-encoding"), length = response.headers.get("content-length");
@@ -47,7 +53,7 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
         void response.body?.cancel().catch(() => undefined); invalid();
       }
       try {
-        const wire = await quarantine(response.body, prepared, signal);
+        const wire = await quarantine(response.body, context, signal);
         if (length !== null && Number(length) !== wire.byteLength) invalid();
         // The codec's scalar inspector already validated the original 16 MiB
         // audio bound. No aggregate base64, decoded audio or transcript is kept.
@@ -61,11 +67,11 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
   };
 }
 
-async function quarantine(body: ReadableStream<Uint8Array>, request: OpenRouterMusicRequest, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterMusicContext, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   let reader: ReadableStreamBYOBReader;
   try { reader = body.getReader({ mode: "byob" }); }
   catch { void body.cancel().catch(() => undefined); invalid(); }
-  const inspection = createOpenRouterMusicInspector(request);
+  const inspection = createOpenRouterMusicInspector(context);
   let size = 0, reads = 0, events = 0, carriage = false;
   const frames = createSseFrames(frame => {
     if (frame === null || ++events > eventLimit || frame.length > frameLimit || utf8Length(frame) > frameLimit

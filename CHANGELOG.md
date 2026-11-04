@@ -101,6 +101,7 @@
 - Add a bounded OpenRouter Lyria response leaf that quarantines complete music SSE before unchanged replay, preserving native diagnostics without token pricing; shared dispatch and asset authority remain separate.
 - Add scalar-only OpenRouter music inspection with incremental canonical base64 validation, retaining the original reader's decoded-output behavior and keeping larger response delivery behind actual Worker-path qualification.
 - Keep OpenRouter music response inspection and decoding bound to immutable model/format scalars without retaining prepared request bodies in state or reader callbacks.
+- Keep native OpenRouter music response callbacks and quarantine bound to frozen model/format metadata without retaining the prepared text request.
 - Route explicitly selected OpenRouter music through complete native SSE validation, original credentials and conservative policy-fixed accounting; keep unknown dollar prices and reference images closed.
 - Restore original OpenRouter music output bounds through scalar inspection and bounded BYOB quarantine/replay, preserving original SSE and response capacity through delivery; reference-image intake remains closed.
 - Keep Google music and speech output out of generic GenerateContent/SSE text dispatch and settlement, preserving selected-model and native AUDIO evidence until qualified audio routes are wired.
