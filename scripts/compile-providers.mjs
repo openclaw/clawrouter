@@ -287,6 +287,7 @@ function validateManifest(manifest) {
   validateNativeModels(manifest, "featherless", "https://api.featherless.ai/v1");
   validateNativeModels(manifest, "venice", "https://api.venice.ai/api/v1");
   validateNativeModels(manifest, "novita", "https://api.novita.ai/openai/v1");
+  validatePublicCatalog(manifest);
   validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
@@ -494,6 +495,31 @@ function validateUpstreamPath(manifest, id, endpoint) {
     const path = transport.endpointPaths?.[id];
     if (path !== undefined && path !== endpoint.upstreamPath) fail();
   }
+}
+
+function validatePublicCatalog(manifest) {
+  const bases = { cerebras: "https://api.cerebras.ai/v1", nvidia: "https://integrate.api.nvidia.com/v1" };
+  const formats = Object.keys(bases).map(provider => `${provider}.public_catalog`);
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => formats.some(format => value.startsWith(format)))
+    || Object.hasOwn(bases, manifest.id) && id === "public_models");
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("public_catalog requires its manifest-only public_models GET selector, canonical inference origin and original private caller binding"); };
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  if (!Object.hasOwn(bases, manifest.id) || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== bases[manifest.id])
+    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0], format = `${manifest.id}.public_catalog`;
+  if (id !== "public_models" || endpoint.requestFormat !== format || endpoint.responseFormat !== format
+    || endpoint.nativeProxy !== false || endpoint.method !== "GET" || endpoint.path !== "/models") fail();
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (capabilities.length !== 1 || capabilities[0].id !== "models.list"
+    || capabilities[0].methods?.length !== 1 || capabilities[0].methods[0] !== "GET"
+    || manifest.models?.entries?.some(model => model.capabilities?.includes("models.list"))) fail();
 }
 
 function validateNativeModels(manifest, providerId, baseUrl) {

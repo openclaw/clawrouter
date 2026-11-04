@@ -781,6 +781,12 @@
         },
         "then": { "$ref": "#/$defs/veniceModelsEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^(cerebras|nvidia)\\.public_catalog" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^(cerebras|nvidia)\\.public_catalog" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/publicCatalogEndpoint" }
+      }, {
         "if": { "required": ["inputProfile"] },
         "then": { "$ref": "#/$defs/pixVerseImageInputEndpoint" }
       }],
@@ -1093,6 +1099,29 @@
         { "required": ["upstreamPath"] }, { "required": ["streaming"] },
         { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
         { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "publicCatalogEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat", "nativeProxy"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "nativeProxy": { "const": false },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "headers": { "type": "object", "additionalProperties": false, "properties": { "accept": { "const": "application/json" } } }
+      },
+      "oneOf": [
+        { "properties": { "requestFormat": { "const": "cerebras.public_catalog" }, "responseFormat": { "const": "cerebras.public_catalog" } } },
+        { "properties": { "requestFormat": { "const": "nvidia.public_catalog" }, "responseFormat": { "const": "nvidia.public_catalog" } } }
+      ],
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["outputTokenLimit"] }
       ] }
