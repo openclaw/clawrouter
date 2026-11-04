@@ -6,8 +6,26 @@ the default production input. A descriptor does not activate itself.
 
 ## Start a provider
 
-Copy `examples/provider-plugin/` into a directory you own. Give the descriptor
-and provider manifest the same stable ID. Replace the example URL, endpoints,
+Generate a complete package in a new directory:
+
+```sh
+node scripts/create-provider-plugin.ts acme-ai ./acme-ai
+node scripts/compile-providers.mjs --plugin ./acme-ai/clawrouter.plugin.json
+```
+
+The generator sets the provider ID, manifest filename, display name, protocol
+namespace, and API-key binding name. It includes docs, a license placeholder,
+a logo, and a synthetic request/response fixture. The URL uses the reserved
+`.invalid` domain, so the generated package is not a live integration.
+
+Existing destinations, including empty directories and symlinks, are refused.
+The destination's parent directory must already exist. All template inputs are
+prepared before creating the directory. If an I/O error interrupts creation,
+partial files can remain. The descriptor is written last; treat a write error
+as an incomplete package and inspect the new directory before retrying.
+
+Alternatively, copy `examples/provider-plugin/` into a directory you own and
+give the descriptor and manifest the same ID. Replace the example URL, endpoints,
 auth declarations, documentation, license, and synthetic fixtures. Keep secrets
 in deployment bindings or scoped credential storage, never package files.
 
@@ -189,6 +207,7 @@ proof that an account is entitled to upstream access.
 | Explicit local loader, filesystem validation, collision handling | Landed | Pure build tooling; no auto-discovery or active provider edits. |
 | Compiler `--plugin` input alongside legacy inputs | Landed | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
 | Generated package asset index and setup metadata | Separate future draft | Do not render untrusted SVG or add auth capabilities. |
+| Complete-package scaffold command | Separate draft | Create only a new directory; never register or deploy a provider. |
 | Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |
 | Credential/connection and accounting migration | Separate future drafts | Preserve refresh ownership, reservations, and delayed execution settlement. |
