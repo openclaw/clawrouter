@@ -67,6 +67,7 @@
 - Add frozen OpenRouter custom-host Chat image codecs with explicit host qualification, reused image validation and honest partial-count delivery.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
 - Reserve the declared Google input window for native continuation tokens instead of pricing restored context from token or prompt bytes, preserving plain requests and explicit policy tariffs.
+- Add the frozen Gemini 3.6 Flash card with sourced token limits and explicitly labeled published price ceilings across Standard, Flex and Priority, preserving conservative tool and cache admission.
 - Bind Google continuation tokens to the original principal, model, request and credential, publishing ownership only from completed native candidate evidence and independently accounting for each HTTP hop.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
