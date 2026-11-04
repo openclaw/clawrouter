@@ -39,29 +39,30 @@ parity or live access proof. Source6 retains serialized snapshot integration
 and actual client qualification; no generated payload or production state is
 changed by this source PR.
 
-## Local integration proof
+## Serialized integration proof
 
 Exact source `e6b07bf53cad75ecca062cad9bc90695c109e555` is composed on qualified
-landed router base `10b6ce3c1e40d5d96e2599523047daf8be883a9a`. The complete 39-line
+landed router base `6d106ca12467b0e4dc68446a08b6e76afaddeb38`. The complete 39-line
 card and five source tests are unchanged; removing the new row restores the
 entire base YAML. All 86 manifests compile. Five focused cases, Worker types
 and 1,051 existing Chat/consumer-selection cases pass. The generic Chat matrix
 does not prove Google native client behavior.
 
 Serial snapshot SHA256:
-`951c93328fd5434622d02ab5f7908eac00f3952f6bb97edf60613b9fd71b7773`.
-Only `google/gemini-3.5-flash-lite` is added to the base model index. Unlanded
-Gemini 3.6 and Google-image declarations are excluded. Workflow configuration
-is unchanged; this checkpoint is local only and has no hosted enrollment.
+`08a7dd54d5304b4bf1a1f8df063be3691da7d4b300e4a5ac0041831a3a49b393`.
+Only `google/gemini-3.5-flash-lite` is added to the base model index. The landed
+Gemini 3.6 card is preserved; held Google-image declarations remain excluded.
 
 `test/openclaw-gemini35lite.test.mjs` authors nine actual registered Google
 consumer cases against public OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`,
 using the shared actual-source Worker/SQLite fixture. It preserves exact observed
 cache/thinking usage and the 415-micro standard-tier example, separate fixed
 charges, original credentials, tool replay, inline PNG bytes, denied calls,
-embedded errors and post-delivery cancellation. These cases are **AUTHORED/UNRUN**.
-Only syntax is checked locally; there is no new SDK build, hosted enrollment or
-live call. Explicit GenerateContent configuration does not certify default
+embedded errors and post-delivery cancellation. These cases are enrolled in
+ordinary hosted CI and remain **AUTHORED/UNRUN** until the exact composed head
+passes. The existing shared consumer fixture and its actual static-catalog
+return shape are unchanged. No new SDK report, local dependency install or live
+call is performed. Explicit GenerateContent configuration does not certify default
 Interactions, live discovery, other modality consumers, entitlement, vendor
 invoice totals or physical pre-header cancellation. Flex and Priority retain
 the exact source rates, independently exercised by the focused Worker cases.
