@@ -38,7 +38,7 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   // The proxy URL is explicit configuration; no live-discovery route is invented.
   const messages = await withOpenClawTestState({ label: "particle-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: "particle", modelId, modelApi: model.api, model, runtimeHandle: { provider: "particle", plugin: provider } });
-    expect(policy.dropReasoningFromHistory).toBe(false);
+    expect(policy.dropReasoningFromHistory).toBe(true);
     return sanitizeSessionHistory({ provider: "particle", modelId, modelApi: model.api, model, policy, config, env: {},
       workspaceDir: state.workspaceDir, sessionId: `particle-${id}`,
       sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: "particle", modelApi: model.api, modelId })]),

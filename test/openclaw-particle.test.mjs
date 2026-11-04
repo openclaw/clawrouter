@@ -74,7 +74,7 @@ test("actual OpenClaw Particle configured native client through workerd and SQLi
       const efforts = { particle_off: "none", particle_low: "low", particle_high: "high", particle_max: "max" };
       if (id in efforts) assert.equal(call.body.reasoning_effort, efforts[id]);
       assert.equal(call.body.tools[0].function.strict, undefined);
-      assert.ok(call.body.messages.some(message => message.reasoning_content === "synthetic-prior-thinking"));
+      assert.ok(call.body.messages.every(message => message.reasoning_content === undefined), "the frozen registered Particle host drops replay reasoning before serialization");
       assert.equal(call.body.prompt_cache_key, "synthetic-cache-affinity");
       assert.equal(call.body.prompt_cache_retention, undefined);
       assert.equal(call.body.tools[0].function.name, "lookup");
