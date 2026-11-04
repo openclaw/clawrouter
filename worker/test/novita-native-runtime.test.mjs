@@ -48,8 +48,8 @@ async function fixture(t, { ownGrant = true } = {}) {
   for (const policyId of ["paid", "unpriced"]) if (ownGrant) await putGrantCredentials(env, `oauth/${policyId}/novita`, {
     provider: "novita", kind: "api_key", enabled: true, credential: "synthetic-selected-novita" });
   const f = { env, events, sent, grantKey: "oauth/paid/novita", reply: async r => Response.json(response((await r.clone().json()).model)),
-    call(body, { manifest = false, policyId = "paid", nativePrefix = "novita" } = {}) {
-      const path = manifest ? "/v1/proxy/novita/chat_completions" : `/v1/native/${nativePrefix}/chat/completions`;
+    call(body, { manifest = false, unified = false, policyId = "paid", nativePrefix = "novita" } = {}) {
+      const path = unified ? "/v1/chat/completions" : manifest ? "/v1/proxy/novita/chat_completions" : `/v1/native/${nativePrefix}/chat/completions`;
       return worker.fetch(new Request(`https://router.example${path}`, { method: "POST",
         headers: { authorization: `Bearer clawrouter-live-${policyId}-fixture-${policyId}`, "content-type": "application/json", "x-api-key": "synthetic-caller-key", "x-organization-id": "synthetic-unbound-org" },
         body: JSON.stringify(manifest ? { body } : body),
@@ -197,11 +197,20 @@ for (const model of vision) for (const manifest of [false, true]) test(`Novita $
 });
 
 
-for (const nativePrefix of ["clawrouter-novita", "novita-ai", "novitaai"]) test(`Novita routing alias ${nativePrefix} retains the canonical provider grant and exact native model`, async t => {
+for (const modelPrefix of ["novita", "novita-ai", "novitaai"]) test(`Novita routing alias ${modelPrefix} retains the canonical provider grant and exact native model`, async t => {
   const f = await fixture(t), body = { model: models[0], messages: [{ role: "user", content: "synthetic-input" }] };
-  const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
+  const r = await f.call({ ...body, model: `${modelPrefix}/${body.model}` }, { unified: true }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
   assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
   assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-novita"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+});
+
+test("Novita native URL aliases remain unavailable without egress", async t => {
+  const f = await fixture(t);
+  for (const nativePrefix of ["clawrouter-novita", "novita-ai", "novitaai"]) {
+    const r = await f.call({ model: models[0], messages: [] }, { nativePrefix });
+    assert.equal(r.status, 404); assert.equal((await r.json()).error.code, "provider_not_found");
+  }
+  await f.drain(); assert.equal(f.sent.length, 0);
 });
 
 for (const manifest of [false, true]) for (const enabled of [false, true]) test(`Novita ${manifest ? "manifest" : "native"} keeps explicit thinking ${enabled} separate from effort menus`, async t => {

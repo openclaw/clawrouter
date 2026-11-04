@@ -368,6 +368,7 @@
 - Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
 - Qualify Novita native model-catalog declarations against the canonical keyed data-only contract, preserving exact caller filtering and unknown price units before runtime activation.
 - Providers: declare Novita's seven frozen Chat models with qualified tool, input and token-limit facts, preserving native reasoning/tool replay, original credentials and conservative interrupted-stream accounting.
+- Exercise the actual configured Novita catalog and replay hooks through native SDK streams, Worker admission and SQLite, preserving frozen identities, original grants, cancellation and conservative HTTP 499 charges. Strict native discovery remains separately declared.
 - Providers: add the frozen LongCat 2.0 contract, canonical Meituan routing alias and keyed model discovery while retaining the existing seed and native thinking/replay behavior.
 - Verify LongCat's actual strict native catalog and registered thinking/replay wrapper through the Worker, preserving original credentials, zero-cost discovery and conservative stream settlement.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
