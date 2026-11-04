@@ -13,7 +13,7 @@ import handler, { BudgetLedgerObject as RealBudgetLedger } from './worker/index.
 import { putGrantCredentials } from './worker/grant-credentials.ts';
 export * from './worker/index.ts';
 let delay = { authority: 15, ledger: 30 }, calls = { authority: 0, ledger: 0, held: 0 };
-let holdPath = '', releases = [];
+let holdPath = '', releases = [], observations = [], observing = false;
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(r) { if (new URL(r.url).pathname === '/fixture-rows') return Response.json([...this.fixtureSql.exec('SELECT settled, dispatch_started, reserved_micros FROM budget_reservations')]); return super.fetch(r); }
@@ -24,27 +24,32 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
   return (...args) => { const stub = target.get(...args); return { async fetch(...input) {
     const url = new URL(typeof input[0] === 'string' || input[0] instanceof URL ? input[0] : input[0].url);
     if (key === 'ledger' && url.pathname === holdPath) { calls.held++; await new Promise(resolve => releases.push(resolve)); }
-    if (key === 'authority' || url.pathname === '/status') { calls[key]++; await pause(delay[key]); }
-    return stub.fetch(...input);
+    const observed = key === 'authority' || url.pathname === '/status';
+    const started = Date.now();
+    if (observed) { calls[key]++; await pause(delay[key]); }
+    const dispatched = Date.now(), response = await stub.fetch(...input);
+    if (observing && observed && observations.length < 64) observations.push({ key, started, dispatched, completed: Date.now(), status: response.status });
+    return response;
   } }; };
 } }); }
 export default { async fetch(r, env, ctx) {
   const path = new URL(r.url).pathname;
   if (path === '/fixture-grant') { await putGrantCredentials(env, 'oauth/fixture/openai', { enabled: true, provider: 'openai', kind: 'api_key', credential: 'fixture-upstream-key' }); return new Response('ok'); }
   if (path === '/fixture-delay') { delay = await r.json(); return new Response('ok'); }
-  if (path === '/fixture-calls') return Response.json(calls);
+  if (path === '/fixture-observe') { observing = true; return new Response('ok'); }
+  if (path === '/fixture-calls') return Response.json({ ...calls, observations });
   if (path === '/fixture-hold') { const mode = await r.text(); holdPath = mode === 'on' ? '/status' : mode === 'dispatch' ? '/dispatch' : ''; if (!holdPath) { for (const release of releases) release(); releases = []; } return new Response('ok'); }
   return handler.fetch(r, { ...env, ACCESS_CONTROL: delayed(env.ACCESS_CONTROL, 'authority'), BUDGET_LEDGER: delayed(env.BUDGET_LEDGER, 'ledger') }, ctx);
 }, queue: handler.queue };
 `;
 const upstream = String.raw`
-let appends = [], outputs = 0, creates = 0, ticks = [];
+let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null;
 export default { async fetch(r) {
-  if (new URL(r.url).pathname === '/fixture-stats') return Response.json({ appends, outputs, creates, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])) });
+  if (new URL(r.url).pathname === '/fixture-stats') return Response.json({ appends, outputs, creates, closedAt, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])) });
   if (r.headers.get('authorization') !== 'Bearer fixture-upstream-key') throw Error('wrong route');
   const pair = new WebSocketPair(), ws = pair[1]; ws.accept(); let timer, active;
   const send = e => ws.send(JSON.stringify(e));
-  ws.addEventListener('close', () => clearInterval(timer));
+  ws.addEventListener('close', () => { closedAt = Date.now(); clearInterval(timer); });
   ws.addEventListener('error', () => clearInterval(timer));
   ws.addEventListener('message', event => { const e = JSON.parse(event.data);
     if (e.type === 'session.update') send({ type: 'session.updated', session: e.session });
@@ -68,14 +73,14 @@ const session = asr => ({ type: 'realtime', model: 'gpt-realtime-2.1', output_mo
     turn_detection: { type: 'server_vad', create_response: false, interrupt_response: false } },
   output: { format: { type: 'audio/pcmu' }, voice: 'marin' } }, tools: [], tool_choice: 'none' });
 function observe(ws) {
-  const events = [], errors = [], outputDelay = [], acks = []; let closedAt = null;
+  const events = [], errors = [], outputDelay = [], acks = []; let closedAt = null, errorAt = null;
   ws.addEventListener('message', e => { const value = JSON.parse(e.data); events.push(value);
-    if (value.type === 'error') errors.push(value.error.code);
+    if (value.type === 'error') { errorAt ??= Date.now(); errors.push(value.error.code); }
     if (value.type === 'rate_limits.updated') acks.push(value.rate_limits[0].remaining);
     if (value.type === 'response.output_audio.delta') outputDelay.push(Date.now() - value.fixture_at);
   });
   ws.addEventListener('close', () => { closedAt = Date.now(); });
-  return { events, errors, outputDelay, acks, get closed() { return closedAt !== null; }, get closedAt() { return closedAt; }, async next(type) {
+  return { events, errors, outputDelay, acks, get closed() { return closedAt !== null; }, get closedAt() { return closedAt; }, get errorAt() { return errorAt; }, async next(type) {
     for (let i = 0; i < 1500; i++) { const found = events.findIndex(e => e.type === type); if (found >= 0) return events.splice(found, 1)[0]; if (closedAt !== null) throw Error('closed: ' + errors); await sleep(5); }
     throw Error('missing ' + type + ': ' + errors);
   } };
@@ -138,6 +143,8 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
   if (!asr && ['asr-model', 'budget'].includes(kind)) continue;
   test('bounded media authority ' + kind + ', ASR=' + asr, { timeout: 15_000 }, async t => {
     const f = await fixture(t);
+    const diagnostic = asr && kind === 'revocation';
+    if (diagnostic) await f.control('/fixture-observe', 'on');
     if (kind === 'route') await f.control('/fixture-grant', 'put');
     const c = await f.open(asr, false);
     append(c, 0); await c.q.next('rate_limits.updated');
@@ -152,9 +159,15 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
     // Measure enforcement after authority acknowledges the mutation. Its own
     // storage/RPC latency is outside the socket's media freshness window.
     const changed = Date.now(), mutationMs = changed - mutationStarted;
-    let sent = 1;
-    while (!c.q.closed && Date.now() - changed < 1000) { append(c, sent++); await sleep(20); }
+    let sent = 1; const sentAt = [];
+    while (!c.q.closed && Date.now() - changed < 1000) { sentAt.push(Date.now()); append(c, sent++); await sleep(20); }
     const elapsed = Math.max(0, (c.q.closedAt ?? Date.now()) - changed), stats = await f.stats();
+    if (diagnostic) {
+      const calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
+      // A failed deadline must retain authority/RPC, sender and both socket
+      // observations; diagnostics after the assertion lose the failing state.
+      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls }));
+    }
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));
     assert.ok(elapsed <= 250, '100ms freshness plus observed RPC envelope: ' + elapsed);
     const code = { revocation: /authority_revoked/, principal: /caller_changed/, tenant: /caller_changed/, generation: /policy_changed|authority_revoked/, route: /grant|route/, 'asr-model': /model_not_allowed/, budget: /budget_exhausted/ }[kind];
