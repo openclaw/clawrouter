@@ -23,6 +23,7 @@ const catalogContracts = [
   ["baseten.models", "baseten.models", false],
   ["arcee.models", "arcee.models", false],
   ["novita.models", "novita.models", false],
+  ["requesty.models_managed", "requesty.models_managed", false],
   ["chutes.models", "chutes.models", false],
   ["venice.models", "venice.models", false],
   ["featherless.models", "featherless.models", false],
@@ -304,6 +305,7 @@ function validateManifest(manifest) {
   validateNativeModels(manifest, "featherless", "https://api.featherless.ai/v1");
   validateNativeModels(manifest, "venice", "https://api.venice.ai/api/v1");
   validateNativeModels(manifest, "novita", "https://api.novita.ai/openai/v1");
+  validateNativeModels(manifest, "requesty", "https://router.requesty.ai/v1", { format: "requesty.models_managed", path: "/models/managed", id: "models_managed" });
   validatePublicCatalog(manifest);
   validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
@@ -564,15 +566,15 @@ function validatePublicCatalog(manifest) {
     || manifest.models?.entries?.some(model => model.capabilities?.includes("models.list"))) fail();
 }
 
-function validateNativeModels(manifest, providerId, baseUrl) {
-  const format = `${providerId}.models`;
+function validateNativeModels(manifest, providerId, baseUrl, contract = { format: `${providerId}.models`, path: "/models" }) {
+  const { format, path } = contract;
   const catalogFormat = providerId === "featherless" ? "featherless.catalog" : null;
   const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
     [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format) || catalogFormat && value.startsWith(catalogFormat))
-    || manifest.id === providerId && (endpoint.path === "/models" || catalogFormat && id === "catalog"
+    || manifest.id === providerId && (endpoint.path === path || contract.id && id === contract.id || catalogFormat && id === "catalog"
       || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error(`${format}${catalogFormat ? ` or ${catalogFormat}` : ""} requires its qualified GET /models route, canonical inference origin and original Bearer API-key binding`); };
+  const fail = () => { throw new Error(`${format}${catalogFormat ? ` or ${catalogFormat}` : ""} requires its qualified GET ${path} route, canonical inference origin and original Bearer API-key binding`); };
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (manifest.id !== providerId || endpoints.length !== 1
     || Object.values(manifest.baseUrls).some(base => base !== baseUrl)
@@ -584,8 +586,9 @@ function validateNativeModels(manifest, providerId, baseUrl) {
   const [id, endpoint] = endpoints[0];
   const projection = catalogFormat !== null && id === "catalog", expectedFormat = projection ? catalogFormat : format;
   if (projection && (endpoint.nativeProxy !== false || manifest.models?.entries?.some(model => model.capabilities?.includes("models.list")))) fail();
+  if (contract.id && (id !== contract.id || manifest.models?.entries?.some(model => model.capabilities?.includes("models.list")))) fail();
   if (endpoint.requestFormat !== expectedFormat || endpoint.responseFormat !== expectedFormat
-    || endpoint.method !== "GET" || endpoint.path !== "/models" || endpoint.upstreamPath !== undefined
+    || endpoint.method !== "GET" || endpoint.path !== path || endpoint.upstreamPath !== undefined
     || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
     || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "accept" || value !== "application/json")) fail();
   const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
