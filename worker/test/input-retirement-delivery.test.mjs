@@ -36,3 +36,21 @@ test("native terminal data does not retire delivery before actual EOF", async ()
   await observed.retired; assert.equal((await observed.result).delivery, "complete"); assert.equal(cancels, 0); assert.equal(source.locked, false);
   reader.releaseLock();
 });
+
+test("delivery retirement joins an active inspection after prompt abort without late output", async () => {
+  const inspection = deferred(), entered = deferred(); const abort = new AbortController();
+  let calls = 0, results = 0, released = false;
+  const source = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('data: {"value":1}\n\n')); } }, { highWaterMark: 0 });
+  const lease = new BodyLease(); assert.equal(lease.grow(32 * 1024 * 1024), true);
+  const observed = observeUsage(new Response(source, { headers: { "content-type": "text/event-stream" } }), new HttpOperation(abort.signal), {
+    async push() { calls++; entered.resolve(); await inspection.promise; }, async end() {},
+  });
+  const retired = observed.retired.then(() => { released = true; lease.release(); });
+  observed.result.then(() => { results++; });
+  const reader = observed.response.body.getReader(); const read = assert.rejects(reader.read(), /synthetic abort/);
+  await entered.promise; abort.abort(new Error("synthetic abort")); await read;
+  assert.equal((await observed.result).delivery, "canceled");
+  assert.equal(released, false); assert.equal(bodyBudgetCharged(), 64 * 1024 * 1024);
+  inspection.resolve(); await retired; reader.releaseLock();
+  assert.equal(calls, 1); assert.equal(results, 1); assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0);
+});

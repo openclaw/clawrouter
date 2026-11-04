@@ -59,8 +59,18 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
+  let resolveRetired!: () => void, rejectRetired!: (reason: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolveRetired = yes; rejectRetired = no; });
+  void retired.catch(() => undefined);
+  let pulling: Promise<void> | undefined;
+  // Abort notifies delivery/accounting immediately. The actual callback must
+  // still settle before its retained chunk/inspection owner can retire.
+  async function publication<T>(pending: Promise<T>): Promise<T> {
+    try { return await pending; }
+    catch (error) { operation.stop("publication", error); throw error; }
+  }
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
-    if (finished) return input.retired;
+    if (finished) return retired;
     finished = true;
     signal.removeEventListener("abort", aborted);
     if (delivery === "canceled") operation.cancel(reason);
@@ -89,7 +99,11 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
-    return input.retire(delivery === "complete" ? "eof" : "cancel", reason);
+    const cleanup = input.retire(delivery === "complete" ? "eof" : "cancel", reason);
+    // finish() never awaits this from inside pull: joining our own active pull
+    // here is safe only because the pull returns without awaiting retirement.
+    void Promise.all([cleanup, pulling]).then(resolveRetired, rejectRetired);
+    return retired;
   }
   let downstream: ReadableStreamDefaultController<Uint8Array>;
   function aborted() {
@@ -99,7 +113,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   }
   const body = new ReadableStream<Uint8Array>({
     start(controller) { downstream = controller; },
-    async pull(controller) {
+    pull(controller) {
+      const work = (async () => {
       try {
         const next = await input.read(() => reader.read());
         if (finished) return; // A pending read can resolve after consumer cancellation.
@@ -114,15 +129,15 @@ export function observeUsage(response: Response, operation = new HttpOperation()
             } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
             text = ""; inspect = false;
           }
-          if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
-          if (responses) await (bodyInspection?.observe ? operation.wait(responses.end(), "publication") : responses.end()); if (finished) return;
-          if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication"); if (finished) return;
+          if (bodyInspection) await publication(bodyInspection.end()); if (finished) return;
+          if (responses) await (bodyInspection?.observe ? publication(responses.end()) : responses.end()); if (finished) return;
+          if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify()); if (finished) return;
           finish("complete"); controller.close(); return;
         }
         nonempty ||= next.value.byteLength > 0;
-        if (bodyInspection?.observe) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (bodyInspection?.observe) await publication(bodyInspection.push(next.value));
         if (finished) return;
-        if (responses) { await (bodyInspection?.observe ? operation.wait(responses.push(next.value), "publication") : responses.push(next.value)); if (finished) return; }
+        if (responses) { await (bodyInspection?.observe ? publication(responses.push(next.value)) : responses.push(next.value)); if (finished) return; }
         sse?.push(next.value);
         bedrock?.push(next.value);
         ollama?.push(next.value);
@@ -134,11 +149,14 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         }
         // Identity registration owns publication; the same reader still owns
         // demand, cancellation, and usage when the durable write fails.
-        if (bodyInspection && !bodyInspection.observe) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (bodyInspection && !bodyInspection.observe) await publication(bodyInspection.push(next.value));
         if (finished) return;
-        if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication");
+        if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify());
         if (!finished) controller.enqueue(next.value);
       } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }
+      })();
+      pulling = work;
+      return work.finally(() => { if (pulling === work) pulling = undefined; });
     },
     cancel(reason) { return finish("canceled", reason); },
   }, { highWaterMark: 0 });
@@ -146,7 +164,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   // Ingress abort is the authoritative caller-lifecycle signal in that case.
   if (signal.aborted) aborted();
   else signal.addEventListener("abort", aborted, { once: true });
-  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired: input.retired };
+  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired };
 }
 
 export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
