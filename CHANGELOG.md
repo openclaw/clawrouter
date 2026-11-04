@@ -312,6 +312,7 @@
 - Refresh explicitly authorized Vertex service-account credentials inside the existing durable owner, with fixed JWT exchange, request-start expiry, cancellation outside owner ordering and uncertainty fences that prevent replay or late credential installation.
 - Define an inactive, default-deny Vertex model/location predicate for the exact Sonnet 4.6 identity and four documented locations; catalog and dispatch integration remain separate from these support facts.
 - Enforce the qualified Vertex Sonnet 4.6 model/location pair in model-scoped catalog eligibility and final original-owner dispatch, preserving unknown billing, credential freshness and unrelated provider routes.
+- Declare the exact Vertex Sonnet 4.6 Messages model with sourced numeric limits, original-owner JSON/SSE routing and explicitly unknown pricing; keep snapshot and registered-client qualification separate.
 
 - Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
