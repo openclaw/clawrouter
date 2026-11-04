@@ -7,6 +7,7 @@ import { readCopilotResponseText } from "../copilot-response-body.ts";
 
 const failure = error => error.message === "invalid_copilot_response_body";
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const rawBodies = new Map([0, 2, 4, 8, 8192, 8193, 2097152, 2097153].map(size => [String(size), "x".repeat(size)]));
 let server, origin;
 before(async () => {
   server = createServer((request, response) => {
@@ -21,10 +22,10 @@ before(async () => {
     if (path === "/invalid-utf8") { response.end(Buffer.from([0xc3, 0x28])); return; }
     if (path === "/multibyte") { response.end('"' + "a".repeat(16382) + "é🦊" + '"'); return; }
     response.statusCode = Number(url.searchParams.get("status") ?? 200);
-    const requested = url.searchParams.has("bytes") ? Number(url.searchParams.get("bytes")) : 2;
-    const bytes = Number.isSafeInteger(requested) && requested >= 0 ? Math.min(requested, 2 * 1024 * 1024 + 1) : 0;
     if (url.searchParams.has("chunked")) response.setHeader("transfer-encoding", "chunked");
-    response.end(path === "/raw" ? "x".repeat(bytes) : "{}");
+    const payload = path === "/raw" ? rawBodies.get(url.searchParams.get("bytes") ?? "2") : "{}";
+    if (payload === undefined) { response.statusCode = 400; response.end(); return; }
+    response.end(payload);
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   origin = `http://127.0.0.1:${server.address().port}`;
