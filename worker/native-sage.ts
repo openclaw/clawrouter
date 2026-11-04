@@ -6,35 +6,44 @@ import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./utils.ts";
 
 // The common owner selects the model/grant before calling this pure wrapper.
-// Batch remains required separate work; its metadata admission is not qualified.
 export function prepareNativeSage(selection: ProxySelection): NativeResponse | undefined {
   const { provider, endpoint, model } = selection;
   if (endpoint.request_format !== "levanto.sage" && endpoint.request_format !== "levanto.sage_batch") return;
+  const batch = endpoint.request_format === "levanto.sage_batch";
+  const capability = batch ? "llm.decisions.batch" : "llm.decisions";
+  const endpointId = batch ? "decisions_batch" : "decisions", path = batch ? "/decide/batch" : "/decide";
+  const facts = model?.nativeCapabilities?.endpoints?.[endpointId];
   if (provider.id !== "levanto" || provider.base_urls.default !== "https://sage.levanto.ai"
     || !model || model.id !== "levanto/levanto-sage-2" || model.upstream !== "levanto-sage-2"
-    || !model.capabilities.includes("llm.decisions") || selection.capability !== "llm.decisions"
-    || !provider.capabilities.some(item => item.id === "llm.decisions" && item.endpoint === endpoint.id && item.methods.includes("POST"))
-    || selection.method !== "POST" || endpoint.method !== "POST" || endpoint.id !== "decisions"
-    || endpoint.path !== "/decide" || endpoint.request_format !== "levanto.sage" || endpoint.response_format !== "levanto.sage"
+    || !model.capabilities.includes(capability) || selection.capability !== capability
+    || !provider.capabilities.some(item => item.id === capability && item.endpoint === endpoint.id && item.methods.includes("POST"))
+    || selection.method !== "POST" || endpoint.method !== "POST" || endpoint.id !== endpointId
+    || endpoint.path !== path || endpoint.response_format !== endpoint.request_format
+    // The compiler preserves omitted metadata for old singular declarations.
+    // Only explicitly qualified text/list metadata admits the batch route.
+    || batch && (facts?.inference?.decision?.protocol !== "levanto-sage" || facts.inference.chat === true
+      || facts.input?.length !== 2 || !facts.input.includes("text") || !facts.input.includes("json")
+      || facts.inference.decision.limits?.image || facts.inference.decision.questions.choice?.maxImageOptions !== undefined)
     || endpoint.upstreamPath !== undefined || endpoint.path_params.length || Object.keys(selection.pathParams).length
     || Object.keys(endpoint.query).length || selection.nativeQuery !== undefined || endpoint.streaming || endpoint.websocket
     || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.modelPassthrough || endpoint.requestPricing) {
-    throw new HttpError(400, "invalid_native_sage_route", "Sage requires its selected singular native decision route");
+    throw new HttpError(400, "invalid_native_sage_route", "Sage requires its selected qualified native decision route");
   }
   let prepared;
   try {
     const body = decisionRecord(selection.body);
     if (!body || Object.hasOwn(body, "model") && body.model !== model.id && body.model !== model.upstream) throw new Error("model");
     const { model: _model, ...native } = body;
-    prepared = prepareSageRequest(native);
-    // 436 is text/JSON only. Image counters and batch admission remain separate.
-    if ("requests" in prepared || typeof prepared.content !== "string" && prepared.content.kind === "image") throw new Error("input");
+    prepared = prepareSageRequest(native, batch);
+    // Both qualified routes are text/list only; native image input stays closed.
+    const contents = "requests" in prepared ? prepared.requests.map(group => group.content) : [prepared.content];
+    if (contents.some(content => typeof content !== "string" && content.kind === "image")) throw new Error("input");
   } catch {
     throw new HttpError(400, "invalid_native_sage_request", "Sage requires valid native text or JSON decision input");
   }
   selection.body = { ...prepared };
   return {
-    origin: "https://sage.levanto.ai", path: "/decide",
+    origin: "https://sage.levanto.ai", path,
     acquire: () => nativeResponseLease(32 * 1024 * 1024),
     async read(response, signal) {
       return readNativeJson(boundedResponse(response, signal), signal, responseBytes, value => {
