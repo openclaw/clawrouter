@@ -1,4 +1,5 @@
-# Hosted Chat API only; finite catalog qualification: docs/nvidia-model-catalog.md.
+# Hosted Chat and public model metadata; finite catalog qualification: docs/nvidia-model-catalog.md.
+# Catalog exposure and authority: docs/public-catalog-declarations.md.
 schema: clawrouter.service-provider.v1
 id: nvidia
 displayName: NVIDIA hosted NIM
@@ -29,6 +30,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: models.list
+    endpoint: public_models
+    methods: [GET]
 endpoints:
   chat_completions:
     path: /chat/completions
@@ -36,6 +40,15 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  public_models:
+    method: GET
+    path: /models
+    nativeProxy: false
+    requestFormat: nvidia.public_catalog
+    responseFormat: nvidia.public_catalog
+    headers:
+      accept: application/json
+    timeoutMs: 10000
 models:
   entries:
     - id: nvidia/nvidia/nemotron-3-ultra-550b-a55b
