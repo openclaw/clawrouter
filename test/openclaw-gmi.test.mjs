@@ -86,8 +86,17 @@ test("actual OpenClaw GMI configured native client through workerd and SQLite", 
       else assert.equal(call.body.tools[0].function.name, "lookup");
       if (expected === models[7]) assert.equal(call.body.reasoning_effort, id === "gmi_notools" ? "high" : "none");
       assert.ok(call.body.messages.some(message => ["system", "developer"].includes(message.role) && message.content === "Synthetic instructions"), "the actual native serializer retains system instructions");
-      assert.ok(call.body.messages.some(message => message.role === "tool" && message.tool_call_id === "callfixture" && message.content === "synthetic-tool-result"));
-      assert.ok(call.body.messages.some(message => message.tool_calls?.[0]?.function?.name === "lookup"));
+      if (id === "gmi_notools") {
+        // Frozen replay retains undeclared tools as text, never executable calls.
+        const replay = call.body.messages.filter(message => message.role === "assistant").flatMap(message =>
+          typeof message.content === "string" ? [message.content] : (message.content ?? []).filter(part => part.type === "text").map(part => part.text));
+        assert.ok(replay.some(text => text.includes('[tool call id=callfixture name=lookup] {}')), id);
+        assert.ok(replay.some(text => text.includes('[tool result id=callfixture name=lookup] synthetic-tool-result')), id);
+        assert.ok(call.body.messages.every(message => message.role !== "tool" && message.tool_calls === undefined && message.tool_call_id === undefined), id);
+      } else {
+        assert.ok(call.body.messages.some(message => message.role === "tool" && message.tool_call_id === "callfixture" && message.content === "synthetic-tool-result"), id);
+        assert.ok(call.body.messages.some(message => message.tool_calls?.[0]?.function?.name === "lookup"), id);
+      }
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
     }
     for (const id of charged) {
