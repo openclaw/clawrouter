@@ -129,19 +129,21 @@ below. The base already
 contains the provider-scoped `cached_tokens` observer; that old dependency is
 not the current blocker.
 
-The exact owner correction `bfcd3c1932353856a9991d6e3ef0c4e666bd045e`
-adds explicit GET for China and one compiled-method regression. Its YAML and
-regression blobs are preserved. The changed compiler attempt advances to:
-`provider stepfun-cn endpoint models_list catalog protocol requires an omitted streaming property and no WebSocket transport`.
-Read-only inspection also finds `streaming: none` on both regions and no
-explicit GET on global StepFun. Source4 exclusively owns their declaration
-correction; no compiler/common-runtime relaxation was made. The existing
-endpoint-membership assertion assumes insertion order although the compiler
-sorts IDs; its semantics also need owner-preserving qualification.
+Owner corrections `bfcd3c1932353856a9991d6e3ef0c4e666bd045e` and
+`df59902c0a05a48981154e1347c9c2344e9567f2` are carried with authorship and
+exact final provider/test blobs. Both regional catalog endpoints now declare
+GET with no streaming property. All 86 manifests compile. Snapshot SHA256:
+`a4b9caf3906c7682c4b04fcb786c10fed7df65a7ee89765ffcf7224707e5c1a8`.
+Worker types and all 1,051 Chat matrix/consumer-selection cases pass.
 
-The now-97 Worker cases, matrix and actual-client composition remain unrun at
-this checkpoint, and the committed snapshot remains the qualified base
-inventory. No stale snapshot is claimed as activation proof.
+Focused execution: 95 of 98 cases pass. Three existing URL-alias expectations
+fail with `404 provider_not_found`: `/v1/native/clawrouter-stepfun/...`,
+`/v1/native/stepfun-ai/...` and `/v1/native/clawrouter-stepfun-cn/...`.
+The frozen base's `proxyNative` calls exact `providerById`; it does not resolve
+`routing.nativePrefixes` as URL aliases. Canonical native/manifest routing and
+the positive `stepfun-ai/…` model-prefix case pass. Source4 must resolve these
+fixture expectations against the intended URL contract. No shared runtime or
+positive assertion was changed, and this checkpoint is not ready to land.
 
 Eight actual registered-client cases are authored in
 `test/fixtures/openclaw-stepfun-contract.test.ts` with the real Worker/SQLite
