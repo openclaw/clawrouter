@@ -97,6 +97,71 @@ function inspect(frames) {
   return state;
 }
 
+test("metadata-only contexts preserve both selected models and output formats", () => {
+  for (const model of openRouterMusicModels) for (const format of ["mp3", "wav"]) {
+    const context = Object.freeze({ model, format });
+    const inspector = createOpenRouterMusicInspector(context), decoder = new OpenRouterMusicStream(context);
+    for (const state of [inspector, decoder]) {
+      feed(state, { ...audioFrame(fixture.audioBase64), model }); feed(state, "[DONE]");
+      assert.equal(state.result().format, format); assert.equal(state.result().upstreamCostMicros, null);
+    }
+    assert.equal(inspector.result().audioBytes, decoder.result().audio.length);
+    assert.deepEqual(decoder.result().audio, Uint8Array.from(Buffer.from(fixture.audioBase64, "base64")));
+  }
+});
+
+test("inspection and decoding snapshot scalars without consulting a prepared request again", () => {
+  const input = { ...request };
+  const { proxy, revoke } = Proxy.revocable(input, { get(target, key) {
+    assert.ok(key === "model" || key === "format", "response metadata must not read request payload or headers");
+    return target[key];
+  } });
+  const inspector = createOpenRouterMusicInspector(proxy), decoder = new OpenRouterMusicStream(proxy);
+  input.model = "changed-model"; input.format = request.format === "wav" ? "mp3" : "wav";
+  revoke();
+  for (const state of [inspector, decoder]) {
+    for (const frame of fixture.frames) feed(state, frame);
+    feed(state, "[DONE]"); assert.equal(state.result().format, request.format);
+    assert.equal(state.result().responseId, "gen-synthetic-music");
+  }
+  assert.equal(inspector.result().audioBytes, decoder.result().audio.length);
+});
+
+test("the pending default reader uses scalar state after the caller context is revoked", async () => {
+  const { proxy, revoke } = Proxy.revocable({ model: request.model, format: request.format }, {});
+  let source, canceled = false;
+  const body = new ReadableStream({ start(controller) { source = controller; }, cancel() { canceled = true; } });
+  const pending = readOpenRouterMusic(new Response(body, { headers: { "content-type": "text/event-stream" } }), proxy, new AbortController().signal);
+  revoke(); source.enqueue(encode(wire([...fixture.frames, "[DONE]"])));
+  const result = await pending;
+  assert.deepEqual(result.audio, Uint8Array.from(Buffer.from(fixture.audioBase64, "base64")));
+  assert.equal(result.format, request.format); assert.equal(result.transcript, "Synthetic transcript.");
+  assert.equal(canceled, true); assert.equal(result.upstreamCostMicros, null);
+});
+
+test("metadata-only inspection keeps selected identity, protocol failures and full audio bounds", () => {
+  const create = () => createOpenRouterMusicInspector({ model: request.model, format: "mp3" });
+  for (const patch of [{ model: "different-model" }, { error: { message: "synthetic failure" } },
+    { choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }] }]) {
+    const state = create(); assert.throws(() => feed(state, { ...audioFrame("AA=="), ...patch }));
+    assert.throws(() => state.result());
+  }
+  assert.throws(() => feed(create(), "x".repeat(2 * 1024 * 1024 + 1)));
+  const missing = create(); feed(missing, audioFrame("AA==")); assert.throws(() => missing.result());
+  const maximum = 16 * 1024 * 1024, block = "AAAA".repeat(16384), blockBytes = block.length / 4 * 3;
+  for (const extra of [0, 1]) {
+    const state = create();
+    for (let bytes = 0; bytes + blockBytes <= maximum; bytes += blockBytes) feed(state, audioFrame(block));
+    const tail = Buffer.alloc(maximum % blockBytes + extra).toString("base64");
+    if (extra) assert.throws(() => { feed(state, audioFrame(tail)); feed(state, "[DONE]"); state.result(); });
+    else {
+      feed(state, audioFrame(tail)); feed(state, "[DONE]");
+      assert.equal(state.result().audioBytes, maximum); assert.equal(state.result().format, "mp3");
+      assert.throws(() => feed(state, audioFrame("AA==")));
+    }
+  }
+});
+
 test("scalar inspection preserves native identity and diagnostics without returning audio or transcript", () => {
   const retained = accepted([...fixture.frames, "[DONE]"]).result();
   const state = inspect(fixture.frames);

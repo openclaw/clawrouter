@@ -8,6 +8,9 @@ const maxAudio = 16 * 1024 * 1024, maxEnvelope = 32 * 1024 * 1024, maxTranscript
 const encoder = new TextEncoder();
 type Json = Record<string, unknown>;
 export interface OpenRouterMusicRequest { model: string; path: "/api/v1/chat/completions"; body: Json; format: "mp3" | "wav"; headers: Headers }
+// Response metadata only; accepting this context grants no input-asset authority.
+// Existing prepared requests remain structurally compatible.
+export interface OpenRouterMusicContext { readonly model: string; readonly format: "mp3" | "wav" }
 export function prepareOpenRouterMusic(model: string, value: unknown): OpenRouterMusicRequest {
   const body = object(value); keys(body, ["model", "messages", "modalities", "audio", "stream"]);
   if (!(openRouterMusicModels as readonly string[]).includes(model) || body.model !== model || body.stream !== true
@@ -43,7 +46,7 @@ export interface OpenRouterMusicInspection { audioBytes: number; transcriptBytes
 
 export class OpenRouterMusicStream {
   private readonly state: MusicState;
-  constructor(request: OpenRouterMusicRequest) { this.state = new MusicState(request, true); }
+  constructor(context: OpenRouterMusicContext) { this.state = new MusicState(context.model, context.format, true); }
   accept(data: string): void { this.state.accept(data); }
   isDone(): boolean { return this.state.isDone(); }
   result(): OpenRouterMusicObservation { return this.state.result(); }
@@ -51,11 +54,16 @@ export class OpenRouterMusicStream {
 
 // Inspection keeps scalar evidence only. It does not retain/return audio,
 // base64 or transcript and does not grant capacity or input-image authority.
-export function createOpenRouterMusicInspector(request: OpenRouterMusicRequest): {
+export function createOpenRouterMusicInspector(context: OpenRouterMusicContext): {
   accept(data: string): void; isDone(): boolean; result(): OpenRouterMusicInspection;
 } {
-  const state = new MusicState(request, false);
-  return { accept: data => state.accept(data), isDone: () => state.isDone(), result: () => state.inspection() };
+  return musicInspector(new MusicState(context.model, context.format, false));
+}
+
+// Returned closures are created in a scope that never receives a caller's
+// prepared request. State owns primitive metadata, not a request/body reference.
+function musicInspector(state: MusicState) {
+  return { accept: (data: string) => state.accept(data), isDone: () => state.isDone(), result: () => state.inspection() };
 }
 
 class MusicState {
@@ -71,9 +79,10 @@ class MusicState {
   private stopped = false;
   private done = false;
   private failed = false;
-  private readonly request: OpenRouterMusicRequest;
+  private readonly model: string;
+  private readonly format: "mp3" | "wav";
   private readonly retain: boolean;
-  constructor(request: OpenRouterMusicRequest, retain: boolean) { this.request = request; this.retain = retain; }
+  constructor(model: string, format: "mp3" | "wav", retain: boolean) { this.model = model; this.format = format; this.retain = retain; }
 
   // Called only with a decoded SSE data payload; never execute embedded text.
   accept(data: string): void {
@@ -83,7 +92,7 @@ class MusicState {
       if (data === "[DONE]") { this.done = true; return; }
       if (!this.retain) inspectStructure(data);
       const frame = object(JSON.parse(data));
-      if (frame.error != null || frame.model != null && frame.model !== this.request.model) fail("frame");
+      if (frame.error != null || frame.model != null && frame.model !== this.model) fail("frame");
       if (frame.id !== undefined) {
         if (typeof frame.id !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(frame.id)
           || this.responseId !== null && frame.id !== this.responseId) fail("identity");
@@ -135,13 +144,13 @@ class MusicState {
     for (const character of this.transcript) { const code = character.codePointAt(0)!; if (code >= 0xd800 && code <= 0xdfff) fail("transcript_unicode"); }
     const encoded = canonicalMediaBase64(this.audioBase64, maxAudio, () => fail("base64"));
     const audio = Uint8Array.from(atob(encoded.base64), character => character.charCodeAt(0));
-    return { audio, transcript: this.transcript, format: this.request.format,
+    return { audio, transcript: this.transcript, format: this.format,
       usage: this.usage, responseId: this.responseId, upstreamCostMicros: null };
   }
   inspection(): OpenRouterMusicInspection {
     if (this.retain || this.failed || !this.done || !this.audioCharacters) fail("incomplete_audio");
     if (this.transcriptHigh) fail("transcript_unicode");
-    return { audioBytes: this.audioCounter.result(), transcriptBytes: this.transcriptBytes, format: this.request.format,
+    return { audioBytes: this.audioCounter.result(), transcriptBytes: this.transcriptBytes, format: this.format,
       usage: this.usage, responseId: this.responseId, upstreamCostMicros: null };
   }
 }
@@ -213,14 +222,20 @@ function inspectStructure(data: string): void {
   for (let offset = 0; offset < data.length; offset += 1024) tokens.push(data.slice(offset, offset + 1024));
   tokens.end();
 }
-export async function readOpenRouterMusic(response: Response, request: OpenRouterMusicRequest, signal: AbortSignal): Promise<OpenRouterMusicObservation> {
+export function readOpenRouterMusic(response: Response, context: OpenRouterMusicContext, signal: AbortSignal): Promise<OpenRouterMusicObservation> {
+  // Do not carry the caller's request into the pending async frame or its
+  // callbacks. Keep the public Promise-rejection behavior on preparation errors.
+  try { return readMusicResponse(response, new OpenRouterMusicStream(context), signal); }
+  catch (error) { return Promise.reject(error); }
+}
+
+async function readMusicResponse(response: Response, stream: OpenRouterMusicStream, signal: AbortSignal): Promise<OpenRouterMusicObservation> {
   const length = response.headers.get("content-length");
   if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
     || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "text/event-stream"
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxEnvelope)) {
     void response.body?.cancel().catch(() => undefined); fail("http");
   }
-  const stream = new OpenRouterMusicStream(request);
   const consume = (frame: string | null) => {
     if (frame === null) fail("frame_bound_or_utf8");
     const data: string[] = [];
