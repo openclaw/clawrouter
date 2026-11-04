@@ -74,6 +74,9 @@ jobs:
           - consumer: runway
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-runway.test.mjs
+          - consumer: chutes
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-chutes.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

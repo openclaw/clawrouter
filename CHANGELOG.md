@@ -337,6 +337,7 @@
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
 - Qualify Chutes public native catalog declarations while retaining private caller/grant authorization, credential-free upstream requests and unknown native pricing units.
 - Add the five frozen Chutes Chat cards with qualified native metadata and original-grant JSON/streaming fixtures that preserve missing usage and unknown pricing.
+- Include the frozen Chutes cards in the generated catalog and exercise their actual configured native SDK path through Worker/SQLite, preserving original keys, tool replay, absent versus observed usage and conservative cancellation settlement.
 - Add bounded Arcee native catalog codecs with original direct-credential filtering, distinct OpenRouter identities and independent unknown pricing.
 - Qualify the finite Arcee native catalog declaration with canonical original-key GET validation, exact policy identities and independent unknown price observations.
 - Qualify the three frozen direct Arcee Trinity Chat cards with native tool/reasoning replay, original-grant transport tests and unknown pricing.
