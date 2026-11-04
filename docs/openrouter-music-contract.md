@@ -18,6 +18,38 @@ sends credentials to it. Upload/file IDs, additional tracks/tools/options and
 newer model IDs are closed. Input text is bounded to 32,768 UTF-16 units; inline
 image bytes to 8 MiB; request JSON to 12 MiB.
 
+`prepareOpenRouterMusic` remains the owned-copy API: its returned body is an
+isolated, mutable clone. `prepareOpenRouterMusicBorrowed(model, body)` is an
+additive internal preparation seam. It accepts only a deeply frozen plain JSON
+data graph, rejecting mutable descendants, accessors, hidden/symbol fields and
+custom prototypes before reading values. It does not freeze or clone caller
+input. The frozen result is `{ownership:"borrowed",body,context,jsonBytes,path}`;
+`body` is the identical graph, and `context` is a separate frozen
+`OpenRouterMusicContext {model,format}` containing only strings. Pass that context
+alone to response inspection; the body-owning envelope has no response callbacks.
+
+Both preparation paths inspect the original inline data-URL range, without
+normalizing or copying its full base64 text. PNG/JPEG/WebP MIME declarations,
+standard and URL-safe sextets, optional canonical padding, unused tail bits and
+the full 8 MiB decoded-byte bound are checked without decoding the image. This
+qualifies encoding syntax and size, not raster validity or asset ownership.
+Original URL-safe spelling remains unchanged. JSON size uses the existing exact
+bounded-window byte measurement, including escapes and surrogate pairs; no
+whole-document stringify/UTF-8 copy is made for validation. The existing owned
+API still makes its explicit isolation clone after validation.
+
+The borrowing owner must supply a stable frozen graph from trusted JSON ingress,
+retain its charged source lifetime through actual upstream request EOF or
+cancellation, and prevent any mutable replacement graph from bypassing
+validation. No borrowed-input lease, capacity downshift, digest, receipt, fetch
+or credential authority is created here. Common `mediaJsonBody` temporarily
+mutates media fields and is incompatible with this frozen graph; source1 must
+qualify a non-mutating serialization route and the complete copy/phase ledger.
+HTTPS validation remains syntax only: original scope/grant/lineage/model/route,
+digest/MIME/size/expiry owned-asset mapping is still required. The 96 MiB phase
+transition, full input lifetime and reference-image activation remain internal
+common work. No GC or peak-memory claim follows from this pure codec seam.
+
 `OpenRouterMusicStream` consumes SSE data payloads. `readOpenRouterMusic`
 uses the existing strict `createSseFrames` parser, with 2 MiB frames, 8,192 data
 events, 32 MiB wire data, 16 MiB decoded audio and 1 MiB transcript limits.
@@ -51,7 +83,7 @@ admission, body reservation, deadlines and settlement. Source2 owns the actual
 music consumer; source6 owns native acceptance. No route activation or completed
 parity is claimed by this source codec.
 
-Exports: `openRouterMusicModels`, `prepareOpenRouterMusic`,
+Exports: `openRouterMusicModels`, `prepareOpenRouterMusic`, `prepareOpenRouterMusicBorrowed`,
 `OpenRouterMusicStream`, `readOpenRouterMusic`.
 Fixture: `providers/_fixtures/openrouter/music.json`.
 Checks: `node --test worker/test/openrouter-music.test.mjs`.
@@ -136,7 +168,7 @@ This remains partial original E12 until common dispatch and actual-client proof
 qualify. The frozen client defaults to WAV and permits a 180-second request;
 restored output bounds alone do not prove every such result fits. Reference-image
 ingress and ownership remain a separate **internal original dependency**:
-`prepareOpenRouterMusic` accepts one image and clones/serializes its JSON, while
+`prepareOpenRouterMusic` accepts one image and clones its validated JSON, while
 this leaf continues rejecting every image/reference. Source1 must qualify those
 copies and original asset/destination authority; source5 must qualify input
 bytes. Caller URLs, uploaded IDs or an unqualified boolean grant no authority.
@@ -145,7 +177,7 @@ Source2's frozen consumer and source6's composed proof must exercise that surfac
 Focused leaf checks: `node --test worker/test/native-openrouter-music.test.mjs`.
 
 An independent codec continuation exports
-`createOpenRouterMusicInspector(request: OpenRouterMusicRequest)`, with
+`createOpenRouterMusicInspector(context: OpenRouterMusicContext)`, with
 `accept(data: string)`, `isDone()` and `result()` methods. Its result is
 `{audioBytes, transcriptBytes, format, usage, responseId, upstreamCostMicros:null}`.
 It retains neither a whole base64 stream nor decoded audio nor transcript.

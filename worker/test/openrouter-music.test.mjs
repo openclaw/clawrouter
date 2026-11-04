@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { openRouterMusicModels, prepareOpenRouterMusic, OpenRouterMusicStream, readOpenRouterMusic, createOpenRouterMusicInspector } from "../openrouter-music.ts";
+import { openRouterMusicModels, prepareOpenRouterMusic, prepareOpenRouterMusicBorrowed, OpenRouterMusicStream, readOpenRouterMusic, createOpenRouterMusicInspector } from "../openrouter-music.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../../providers/_fixtures/openrouter/music.json", import.meta.url)));
 const prepare = body => prepareOpenRouterMusic(body.model, body);
@@ -9,6 +9,104 @@ const request = prepare(fixture.request);
 const encode = text => new TextEncoder().encode(text);
 const wire = frames => frames.map(frame => `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\r\n\r\n`).join("");
 const accepted = frames => { const stream = new OpenRouterMusicStream(request); for (const frame of frames) stream.accept(typeof frame === "string" ? frame : JSON.stringify(frame)); return stream; };
+
+function freezeInput(value) {
+  if (value && typeof value === "object") { Object.values(value).forEach(freezeInput); Object.freeze(value); }
+  return value;
+}
+function imageInput(url, text = "Synthetic reference-image instruction.") {
+  const body = structuredClone(fixture.request);
+  body.messages[0].content = [{ type: "text", text }, { type: "image_url", image_url: { url } }];
+  return body;
+}
+const borrow = body => prepareOpenRouterMusicBorrowed(body.model, body);
+
+test("borrowed maximum inline input validates the original range without whole-payload copies", t => {
+  // Protocol-bound test bytes, not a decoded-image or provider acceptance claim.
+  const encoded = Buffer.alloc(8 * 1024 * 1024, 255).toString("base64");
+  const body = freezeInput(imageInput("data:image/png;base64," + encoded));
+  const expected = Buffer.byteLength(JSON.stringify(body));
+  const stringify = JSON.stringify, slice = String.prototype.slice, replace = String.prototype.replace;
+  t.mock.method(JSON, "stringify", value => {
+    assert.ok(typeof value === "string" && value.length <= 4096 || typeof value === "boolean" || typeof value === "number");
+    return stringify(value);
+  });
+  t.mock.method(String.prototype, "slice", function (start, end) {
+    const result = slice.call(this, start, end); assert.ok(result.length <= 24578); return result;
+  });
+  t.mock.method(String.prototype, "replace", function (...args) {
+    assert.ok(this.length <= 4096); return replace.apply(this, args);
+  });
+  for (const method of ["structuredClone", "atob", "btoa"]) t.mock.method(globalThis, method, () => { throw new Error("whole-payload copy or decode forbidden"); });
+  t.mock.method(TextEncoder.prototype, "encode", () => { throw new Error("whole JSON encode forbidden"); });
+  const prepared = borrow(body);
+  assert.equal(prepared.body, body); assert.equal(prepared.body.messages[0].content[1].image_url.url, body.messages[0].content[1].image_url.url);
+  assert.equal(prepared.jsonBytes, expected); assert.ok(prepared.jsonBytes <= 12 * 1024 * 1024);
+  assert.deepEqual(prepared.context, { model: body.model, format: body.audio.format });
+});
+
+test("inline range validation preserves URL-safe spelling, exact padding, MIME and the full decoded bound", () => {
+  for (const mime of ["png", "jpeg", "webp"]) for (const payload of ["AA", "AA==", "AAA", "AAA=", "AAAA", "+/8=", "-_8=", "-_8"]) {
+    const url = `data:image/${mime};base64,${payload}`, input = freezeInput(imageInput(url));
+    assert.equal(borrow(input).body.messages[0].content[1].image_url.url, url);
+    assert.equal(prepare(input).body.messages[0].content[1].image_url.url, url);
+  }
+  for (const payload of ["", "A", "AB", "AB==", "AAB", "AAB=", "AA=", "AAA==", "AA===", "AA==AA", "=AAA", "AA\n==", "AA%3D%3D", "__9="]) {
+    const input = freezeInput(imageInput("data:image/png;base64," + payload));
+    assert.throws(() => borrow(input), /invalid_openrouter_music_image/); assert.throws(() => prepare(input));
+  }
+  for (const prefix of ["data:image/jpg;base64,", "data:image/PNG;base64,", "data:image/svg+xml;base64,", "data:image/png;charset=utf8;base64,", "data:image/png;base64;"]) {
+    assert.throws(() => borrow(freezeInput(imageInput(prefix + "AA=="))));
+  }
+  const tooLarge = freezeInput(imageInput("data:image/png;base64," + Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64")));
+  assert.throws(() => borrow(tooLarge), /invalid_openrouter_music_image/); assert.throws(() => prepare(tooLarge));
+});
+
+test("borrowed JSON byte counts match escaping and Unicode while original request bounds remain", () => {
+  for (const text of ['a"\\\n\u0000🦊', "a".repeat(4095) + "🦊", "\u0001".repeat(32768), "🦊".repeat(16384)]) {
+    const body = freezeInput(imageInput("https://example.com/音?label=\"reference\"", text));
+    assert.equal(borrow(body).jsonBytes, Buffer.byteLength(JSON.stringify(body)));
+  }
+  for (const text of ["a".repeat(32769), "🦊".repeat(16385), "\ud800", " "]) assert.throws(() => borrow(freezeInput(imageInput("https://example.com/reference", text))));
+  for (const url of ["http://example.com/reference", "https://user:pass@example.com/reference", "https://example.com/reference#fragment", "https://example.com/" + "x".repeat(2048)]) {
+    assert.throws(() => borrow(freezeInput(imageInput(url))));
+  }
+  const input = freezeInput(imageInput("https://example.com/reference")), prepared = borrow(input);
+  assert.equal(prepared.ownership, "borrowed"); assert.equal(prepared.path, "/api/v1/chat/completions");
+  for (const name of ["authority", "receipt", "digest", "credential", "headers"]) assert.equal(prepared[name], undefined);
+});
+
+test("borrowed graphs require deep immutable data while the existing owned preparation stays isolated", () => {
+  const input = imageInput("data:image/png;base64,AA==");
+  assert.throws(() => borrow(input), /immutable_input/); Object.freeze(input); assert.throws(() => borrow(input), /immutable_input/);
+  freezeInput(input); const prepared = borrow(input);
+  assert.equal(prepared.body, input); assert.equal(Object.isFrozen(prepared), true); assert.equal(Object.isFrozen(prepared.context), true);
+  assert.throws(() => { input.messages[0].content[1].image_url.url = "https://example.com/changed"; }, TypeError);
+  assert.throws(() => { input.audio.format = "changed"; }, TypeError);
+  const original = imageInput("data:image/png;base64,AA=="), owned = prepare(original);
+  assert.notEqual(owned.body, original); assert.notEqual(owned.body.messages[0].content, original.messages[0].content);
+  original.messages[0].content[1].image_url.url = "https://example.com/changed";
+  assert.equal(owned.body.messages[0].content[1].image_url.url, "data:image/png;base64,AA==");
+  owned.body.messages[0].content[0].text = "Owned copy remains mutable.";
+  assert.notEqual(original.messages[0].content[0].text, owned.body.messages[0].content[0].text);
+  let reads = 0;
+  const accessor = { ...input }; Object.defineProperty(accessor, "model", { enumerable: true, get() { reads++; return input.model; } });
+  Object.freeze(accessor); assert.throws(() => prepareOpenRouterMusicBorrowed(input.model, accessor), /immutable_input/); assert.equal(reads, 0);
+  for (const extra of [{ ...input, [Symbol("hidden")]: {} }, Object.create(input), { ...input, toJSON() { return input; } }]) {
+    Object.freeze(extra); assert.throws(() => prepareOpenRouterMusicBorrowed(input.model, extra), /immutable_input/);
+  }
+});
+
+test("the borrowed response context has no body or callback ownership and survives revoking the input view", () => {
+  const input = freezeInput(imageInput("data:image/png;base64,AA=="));
+  const { proxy, revoke } = Proxy.revocable(input, {}), prepared = prepareOpenRouterMusicBorrowed(input.model, proxy);
+  assert.equal(prepared.body, proxy); assert.deepEqual(Object.keys(prepared.context).sort(), ["format", "model"]);
+  assert.ok(Object.values(prepared.context).every(value => typeof value === "string"));
+  const inspector = createOpenRouterMusicInspector(prepared.context); revoke();
+  for (const frame of fixture.frames) inspector.accept(JSON.stringify(frame)); inspector.accept("[DONE]");
+  assert.equal(inspector.result().format, input.audio.format); assert.equal(inspector.result().audioBytes, 12);
+  assert.equal(inspector.result().upstreamCostMicros, null);
+});
 
 test("two frozen models preserve prompt-level music intent and native streaming audio shape", () => {
   for (const model of openRouterMusicModels) {
