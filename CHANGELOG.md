@@ -200,6 +200,7 @@
 - Qualify literal endpoint upstream-path mappings while preserving caller routes, native formats and selected credentials; reject ambiguous paths and conflicting grant transport overrides.
 - Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
 - Declare Google's stable 001 and 2 embedding models on the qualified native unary and synchronous batch routes; preserve unknown prices and deny upstream-dollar hard budgets before dispatch.
+- Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
 - Add the two frozen Gemini 2.5 native model cards with dated deprecation facts, conservative published rate ceilings and distinct served-tier cache prices, preserving unknown hosted costs.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
@@ -248,6 +249,7 @@
 - Verify the caller-scoped catalog through native Responses streaming and usage accounting, including tool/reasoning replay, HTTP-200 terminal errors, and credential revocation. These synthetic checks do not certify live-provider or client-runtime parity.
 - Declare Gemini streaming requests with `alt=sse` to match the endpoint's SSE contract. Check compiled provider inventory against source manifests instead of a fixed provider count.
 
+- Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
@@ -297,6 +299,7 @@
 - Add Google service-account and Anthropic Vertex request codecs with explicit project/region/model binding, token expiration checks and deterministic signature tests for credential-owner integration.
 - Bind preprovisioned Anthropic Vertex access tokens to original owner project/location and expiry, with fixed native dispatch, fresh post-budget authority checks and conservative settlement; service-account refresh remains separate.
 
+- Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
 
 - Add GitHub Copilot account and native request codecs with explicit public/enterprise identity, advertised model transports and credential-owner binding for runtime integration.
@@ -424,6 +427,8 @@
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
 - Fix global and China StepFun model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
+- Qualify three frozen Tencent TokenHub Chat identities and private model discovery, preserving the documented postpaid Hy3 preview alias, native reasoning/tool replay and separate TokenPlan credentials without inferring tariffs.
+- Fix Tencent TokenHub model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
@@ -460,9 +465,7 @@
 - Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
 - Qualify legacy speech offers against the OpenAI request and binary response pair, preserving provider-native speech routes and mixed Chat models without advertising an unsupported controller.
 
-- Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
-- Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
-- Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
+- Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
 
 ## 0.5.0 - 2026-10-22
 
