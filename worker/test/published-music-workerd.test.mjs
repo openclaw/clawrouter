@@ -110,7 +110,7 @@ export default {async fetch(request,bindings,context){
   const part=await reader.read();if(part.done){outputEof=true;reader.releaseLock();controller.close();}
   else{outputBytes+=part.value.byteLength;controller.enqueue(part.value);}
  },async cancel(reason){await reader.cancel(reason);reader.releaseLock();}},{highWaterMark:0}),response);
-}};
+},queue:worker.queue};
 `;
 async function start(t, held) {
   const temporary = await mkdtemp(join(tmpdir(), "published-music-workerd-")); t.after(() => rm(temporary, { recursive: true, force: true }));
@@ -136,6 +136,19 @@ async function publish(runtime) {
   return { body, digest: createHash("sha256").update(image).digest("hex") };
 }
 
+async function settledState(runtime) {
+  // waitUntil confirms queue publication, not ingestion by its separate event.
+  // Observe the real queue consumer's ledger; never inject a receipt here.
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const response = await runtime.dispatchFetch("https://router.example/fixture/state");
+    assert.equal(response.status, 200);
+    const state = await response.json();
+    if (state.events.length) return state;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  assert.fail("the real usage queue did not ingest the original music receipt");
+}
+
 test("published music actual R2/DO/fetch path holds maximum image and wire charges through downstream EOF", { timeout: 120000 }, async t => {
   const { runtime, io } = await start(t, false), { body, digest } = await publish(runtime);
   const expected = createHash("sha256"); for (const part of maximumWire()) expected.update(part);
@@ -150,7 +163,7 @@ test("published music actual R2/DO/fetch path holds maximum image and wire charg
   io.release();
   for (;;) { const part = await reader.read(); if (part.done) break; actual.update(part.value); bytes += part.value.length; }
   reader.releaseLock(); assert.equal(bytes, 32 * MiB); assert.equal(actual.digest("hex"), expected.digest("hex"));
-  const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
+  const state = await settledState(runtime);
   assert.equal(state.remaining, 0); assert.equal(state.fetches, 1); assert.equal(state.imageBytes, 8 * MiB); assert.equal(state.imageDigest, digest);
   assert.equal(state.outputEof, true); assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
   assert.equal(state.events[0].cost_basis, "policy_fixed"); assert.equal(state.events[0].grant_key, "oauth/fixture/openrouter");
@@ -167,7 +180,7 @@ test("controlled request cancellation retires the actual pending DO/provider rea
   assert.equal(phase.remaining, 80 * MiB); assert.equal(phase.upstreamAborted, false);
   assert.equal((await runtime.dispatchFetch("https://router.example/fixture/abort")).status, 200);
   const response = await pending; assert.equal(response.status, 502); await response.text(); await io.closed;
-  const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
+  const state = await settledState(runtime);
   assert.equal(state.fetches, 1); assert.equal(state.remaining, 0); assert.equal(state.upstreamAborted, true);
   assert.equal(io.metrics.closed, 1); assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
 });
