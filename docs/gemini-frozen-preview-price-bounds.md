@@ -48,12 +48,15 @@ card or duplicate Flash test. The superseded Flash-Lite pair is not reopened.
 ## Local Pro-only integration proof
 
 The integration carries only the Pro delta from exact source
-`e6e4937fd4040faf37e540baeb82af8f34494b30` onto frozen router base
-`274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The Pro card is byte-exact to source;
+`e6e4937fd4040faf37e540baeb82af8f34494b30` onto qualified landed router base
+`6d106ca12467b0e4dc68446a08b6e76afaddeb38`. The Pro card is byte-exact to source;
 removing it restores the entire base YAML. The source assertions retain all Pro
 selection, price, cache, admission, native/manifest and SQLite checks. Only the
-already-landed Flash model iteration is omitted. All 85 manifests compile;
-five focused cases, Worker types and 1,035 Chat/consumer-selection cases pass.
+already-landed Flash model iteration is omitted. All 86 manifests compile;
+five focused cases, Worker types and 1,051 Chat/consumer-selection cases pass.
+Only the Pro row is added to the base model index. The landed 3.6 card remains
+unchanged; unlanded Flash-Lite and Google-image changes are excluded. Serial
+snapshot SHA256: `f1084ff3e31167410b5c18dd79295b87b63439ab9cc23c0546027df492e231c8`.
 
 `test/openclaw-gemini31pro.test.mjs` authors nine actual registered Google
 consumer cases using public OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`
