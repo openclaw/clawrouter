@@ -1,6 +1,7 @@
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
@@ -142,6 +143,7 @@ interface PreparedUpstream {
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
+  revalidateDiscovery?: (signal: AbortSignal) => Promise<import("./types").AccessPolicy>;
   publicCatalog?: Awaited<ReturnType<typeof preparePublicDiscoveryOwner>>;
   revalidateDelivery?: (signal: AbortSignal) => Promise<void>;
 }
@@ -641,7 +643,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
     if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!accounting.upstreamChargePossible && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!accounting.upstreamChargePossible && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -677,7 +679,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         signal.throwIfAborted();
         const page = await operation.wait(fetch(pageUrl, { method: "GET", headers: prepared.headers, signal, redirect: "manual" }), "upstream", discard);
         return page;
-      });
+      }, prepared.revalidateDiscovery ? () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined);
     }
     if (selection.nativeResponse) {
       const validated = await operation.wait(selection.nativeResponse.read(response, signal), "upstream", discardNative);
@@ -886,6 +888,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         ?? prepareNativeBedrockConverseStream(selection, { origin: upstream.baseUrl });
     }
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
+    const gmiCheck = selection.provider.id === "gmi"
+      ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
       for (const name of openCodeSessionHeaders) headers.delete(name);
       const session = transport === "http" ? await openCodeSessionHeader(request, auth, selection, upstream, url) : null;
@@ -926,7 +930,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : gmiCheck ? { revalidateAccount: async (signal: AbortSignal) => { await gmiCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: gmiCheck } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
