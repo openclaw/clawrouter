@@ -121,7 +121,8 @@ async function start(t, held) {
     await request.arrayBuffer();
     ${held ? `return fetch(${JSON.stringify(io.origin + "/pending")});` : `const parts=maximumWire();return new Response(new ReadableStream({type:'bytes',pull(controller){const part=parts.next();if(part.done){controller.close();controller.byobRequest?.respond(0);}else controller.enqueue(part.value);},cancel(){parts.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream'}});`}
   }};`;
-  const runtime = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true, r2Buckets: ["CONTENT_ARCHIVE"] });
+  const runtime = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true, r2Buckets: ["CONTENT_ARCHIVE"],
+    bindings: { CLAWROUTER_PUBLIC_ORIGIN: "https://router.example", OPENROUTER_SITE_URL: "https://example.com" } });
   t.after(() => runtime.dispose()); assert.equal((await runtime.dispatchFetch("https://router.example/fixture/setup")).status, 200);
   return { runtime, io };
 }
