@@ -93,6 +93,104 @@ models:
             inputMicrosPerMillion: 2700000
             cachedInputMicrosPerMillion: 270000
             outputMicrosPerMillion: 16200000
+    - id: google/gemini-2.5-pro
+      upstream: gemini-2.5-pro
+      capabilities: [llm.generate, llm.stream]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        sources: [https://ai.google.dev/gemini-api/docs/deprecations]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+          stream_generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+      pricingRef: google-gemini-2.5-pro-published-upper-bound-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 2500000
+        cachedInputMicrosPerMillion: 250000
+        outputMicrosPerMillion: 15000000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 2500000
+            cachedInputMicrosPerMillion: 250000
+            outputMicrosPerMillion: 15000000
+          - id: flex
+            inputMicrosPerMillion: 1250000
+            cachedInputMicrosPerMillion: 250000
+            outputMicrosPerMillion: 7500000
+          - id: priority
+            inputMicrosPerMillion: 4500000
+            cachedInputMicrosPerMillion: 450000
+            outputMicrosPerMillion: 27000000
+    - id: google/gemini-2.5-flash
+      upstream: gemini-2.5-flash
+      capabilities: [llm.generate, llm.stream]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        sources: [https://ai.google.dev/gemini-api/docs/deprecations]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+          stream_generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+      pricingRef: google-gemini-2.5-flash-published-upper-bound-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 1000000
+        cachedInputMicrosPerMillion: 100000
+        outputMicrosPerMillion: 2500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 1000000
+            cachedInputMicrosPerMillion: 100000
+            outputMicrosPerMillion: 2500000
+          - id: flex
+            inputMicrosPerMillion: 500000
+            cachedInputMicrosPerMillion: 100000
+            outputMicrosPerMillion: 1250000
+          - id: priority
+            inputMicrosPerMillion: 1800000
+            cachedInputMicrosPerMillion: 180000
+            outputMicrosPerMillion: 4500000
     - id: google/gemini-embedding-001
       upstream: gemini-embedding-001
       capabilities: [llm.embeddings]
