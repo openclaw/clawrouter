@@ -46,6 +46,14 @@ export function copilotModelFormats(value: unknown): CopilotWireFormat[] {
   return (Object.keys(paths) as CopilotWireFormat[]).filter(format => supported.includes(paths[format]));
 }
 
+// Frozen native picker visibility, not inference entitlement. Missing/unknown
+// policy is preserved; only the credential owner can authorize execution.
+export function isCopilotCatalogModelVisible(value: unknown): boolean {
+  const model = record(value), state = record(model?.policy)?.state;
+  const policy = typeof state === "string" ? state.trim().toLowerCase() : undefined;
+  return model?.model_picker_enabled === true && policy !== "disabled" && policy !== "unconfigured";
+}
+
 export function filterCopilotModels(value: unknown, allowed: (model: string) => boolean): JsonRecord & { data: JsonRecord[] } {
   const body = record(value);
   requireCopilot(body && Array.isArray(body.data), "models");
@@ -54,8 +62,7 @@ export function filterCopilotModels(value: unknown, allowed: (model: string) => 
     const model = record(value);
     requireCopilot(model && typeof model.id === "string" && model.id.length && !seen.has(model.id), "model");
     seen.add(model.id);
-    const policy = record(model.policy);
-    return policy?.state !== "disabled" && copilotModelFormats(model).length > 0 && allowed(model.id);
+    return isCopilotCatalogModelVisible(model) && copilotModelFormats(model).length > 0 && allowed(model.id);
   });
   return { ...body, data };
 }
@@ -63,7 +70,7 @@ export function filterCopilotModels(value: unknown, allowed: (model: string) => 
 export function prepareCopilotRequest(value: unknown, identity: CopilotIdentity, selectedOwnerBinding: string, githubToken: string, model: JsonRecord, format: CopilotWireFormat): Request {
   requireCopilot(identity.ownerBinding === selectedOwnerBinding, "owner_binding");
   const base = qualifyApiBase(identity.apiBaseUrl, copilotGithubDomain(identity.githubDomain));
-  requireCopilot(typeof model.id === "string" && model.id.length && record(model.policy)?.state !== "disabled" && copilotModelFormats(model).includes(format), "model_transport");
+  requireCopilot(typeof model.id === "string" && model.id.length && isCopilotCatalogModelVisible(model) && copilotModelFormats(model).includes(format), "model_transport");
   const body = record(value);
   requireCopilot(body && (body.stream === undefined || typeof body.stream === "boolean"), "body");
   const headers = new Headers({ authorization: `Bearer ${token(githubToken)}`, "content-type": "application/json", accept: body.stream === true ? "text/event-stream" : "application/json" });

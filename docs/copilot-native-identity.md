@@ -21,6 +21,18 @@ must not add a foreground backend call to warm inference.
 
 `copilotModelFormats` qualifies only advertised `/chat/completions`, `/responses`
 and `/messages` endpoints. A Claude-like name alone is not transport evidence.
+`isCopilotCatalogModelVisible` implements the frozen picker rule: literal
+`model_picker_enabled: true`, excluding normalized `disabled` and `unconfigured`
+policy states. `filterCopilotModels` intersects this visibility with advertised
+transports and the supplied caller-policy predicate. Empty results stay empty;
+there is no static-seed fallback or automatic consent. Missing or unknown policy
+states remain facts, not evidence of inference entitlement. Deprecated model
+facts do not imply shutdown or permit replacing a selected ID.
+
+The request helper also rejects hidden and unconfigured rows, including manually
+supplied ones. This is a conservative admission prerequisite, not a grant of
+account access. The common owner must separately authorize inference against the
+current original grant, model and policy before any dispatch.
 `prepareCopilotRequest` binds the selected model and identity. The shared runtime
 owns caller policy, native format validation, tool/reasoning replay, continuation
 ownership, usage observation and settlement. A subscription allowance is not a
