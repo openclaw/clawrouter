@@ -50,7 +50,6 @@ workerd fixture exercises admin PUT, durable-owner materialization, native JSON,
 manifest SSE, and revocation after a real budget acknowledgement. Hosted results
 are required; neither fixture proves live IAM or account entitlement.
 
-Service-account JWT refresh is a required separate slice using the existing
-owner fence and qualified codec. Its held-exchange cancellation and late-write
-proof are not supplied by this preprovisioned implementation. Provider YAML,
+Service-account JWT refresh uses the separate [owner-fenced signing source](vertex-owner-jwt-refresh.md). Its held-exchange cancellation and late-write
+proof are separate from this preprovisioned implementation. Provider YAML,
 actual-client integration and end-to-end consumer qualification remain separate.

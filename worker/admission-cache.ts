@@ -123,7 +123,8 @@ function prefetchRememberedCredential(env: Env, key: string, request: CachedAdmi
   // Only the secret that earned the hint may start an owner call.
   if (!hint || !safeEqual(request.secretSha256, hint.secretSha256)) return;
   const provider = snapshot.providers.find(item => item.id === request.selection!.providerId);
-  if (!provider) return;
+  // Vertex signing/exchange must follow the foreground hard-budget check.
+  if (!provider || provider.id === "anthropic-vertex") return;
   prefetchGrantCredentials(env, hint.key, hint.grant, () => materializeGrantCredentials(env, hint.key, hint.grant, provider.id, provider.auth.refresh, false));
 }
 

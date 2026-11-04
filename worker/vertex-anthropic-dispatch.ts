@@ -1,4 +1,4 @@
-import { vertexAnthropicProjection, vertexAnthropicUnavailable, vertexOwnerBinding } from "./vertex-anthropic-binding.ts";
+import { vertexAnthropicProjection, vertexAnthropicUnavailable } from "./vertex-anthropic-binding.ts";
 import { prepareVertexAnthropicRequest } from "./provider-vertex.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
@@ -22,7 +22,7 @@ function identity(grant: UpstreamGrant): string {
 export async function prepareVertexAnthropicDispatch(request: Request, env: Env, auth: AuthorizedIdentity,
   selection: ProxySelection, upstream: UpstreamAuth, hasQuery: boolean, transport: "http" | "websocket") {
   const { endpoint, model } = selection, grant = upstream.grant, key = upstream.grantKey;
-  const binding = grant && vertexOwnerBinding({ ...grant, providerId: grant.provider });
+  const binding = vertexAnthropicProjection(grant);
   if (!vertexAnthropicRoute(selection.provider, endpoint) || !grant || !key || !binding || !model || transport !== "http"
     || hasQuery || new URL(request.url).search || selection.capability !== "llm.chat" || selection.method !== "POST"
     || endpoint.method !== "POST" || endpoint.response_format !== "anthropic.messages" || endpoint.path !== "/v1/messages"

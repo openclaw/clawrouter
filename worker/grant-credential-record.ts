@@ -16,6 +16,7 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
   // Private owner state; deliberately absent from every materialized projection.
   minimaxDeviceAttempt?: MiniMaxDeviceAttempt;
   vertexAnthropicBinding?: VertexAnthropicBinding | null;
+  vertexPrivateKey?: string;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: NativeMediaBinding | null;
   version: 1;
@@ -78,6 +79,7 @@ export interface PutRequest {
   // metadata, legacy imports, OAuth completion and pool submissions do not.
   nativeMediaIntent?: NativeMediaBinding | null;
   vertexAnthropicIntent?: VertexAnthropicBinding | null;
+  vertexPrivateKey?: string;
   minimaxAnthropicIntent?: MiniMaxAnthropicBinding | null;
   key: string;
   grant: UpstreamGrant;
@@ -118,8 +120,8 @@ export function credentialProjection(record: CredentialRecord): CredentialProjec
 }
 
 export function hasFreshPrimaryCredentials(previous: CredentialRecord, replacement: CredentialRecord): boolean {
-  const oldValues = new Set([previous.credential, previous.accessToken, ...Object.values(previous.credentials ?? {})]);
-  return [replacement.credential, replacement.accessToken, ...Object.values(replacement.credentials ?? {})]
+  const oldValues = new Set([previous.vertexPrivateKey, previous.credential, previous.accessToken, ...Object.values(previous.credentials ?? {})]);
+  return [replacement.vertexPrivateKey, replacement.credential, replacement.accessToken, ...Object.values(replacement.credentials ?? {})]
     .some(value => typeof value === "string" && !oldValues.has(value));
 }
 
