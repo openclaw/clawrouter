@@ -96,9 +96,12 @@ export class InlineMusicInput {
   private uploadStarted = false;
   private finished?: Promise<void>;
   private discardRetention?: () => void;
+  private readonly selection: ProxySelection;
+  readonly evidence: Readonly<InlineMusicEvidence>;
 
-  constructor(private readonly selection: ProxySelection, lease: BodyLease, operation: HttpOperation,
-    readonly evidence: Readonly<InlineMusicEvidence>, context: OpenRouterMusicContext) {
+  constructor(selection: ProxySelection, lease: BodyLease, operation: HttpOperation,
+    evidence: Readonly<InlineMusicEvidence>, context: OpenRouterMusicContext) {
+    this.selection = selection; this.evidence = evidence;
     this.inputLease = lease; this.operation = operation;
     this.nativeResponse = nativeOpenRouterMusicResponse(context);
     if (inputs.has(selection)) throw new TypeError("music input already has an owner");
