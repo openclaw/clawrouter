@@ -1,6 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { registerHooks } from "node:module";
 import test from "node:test";
 const { prepareNativeOpenRouterMusic: prepare } = await import("../native-openrouter-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
@@ -52,6 +53,92 @@ function chunks(values, onCancel = () => {}) {
     else controller.enqueue(Uint8Array.from(values[index++]));
   }, cancel: onCancel }, { highWaterMark: 0 });
 }
+
+let scalarProbe;
+async function scalarPreparationProbe() {
+  if (scalarProbe) return scalarProbe;
+  const nativeUrl = new URL("../native-openrouter-music.ts?scalar-retention", import.meta.url).href;
+  // Observe the real codec boundary; do not substitute validation or assert GC.
+  const codecUrl = "data:text/javascript," + encodeURIComponent(`
+    import * as codec from ${JSON.stringify(new URL("../openrouter-music.ts", import.meta.url).href)};
+    export const openRouterMusicModels = codec.openRouterMusicModels;
+    let prepared, revoke; const contexts = [];
+    export function prepareOpenRouterMusic(...args) {
+      prepared = codec.prepareOpenRouterMusic(...args);
+      const guarded = Proxy.revocable(prepared, {}); revoke = guarded.revoke; return guarded.proxy;
+    }
+    export function retirePrepared() {
+      prepared.model = "changed-model"; prepared.format = prepared.format === "mp3" ? "wav" : "mp3";
+      prepared.body = null; revoke(); prepared = undefined; revoke = undefined;
+    }
+    export function createOpenRouterMusicInspector(context) {
+      contexts.push(context); return codec.createOpenRouterMusicInspector(context);
+    }
+    export function takeContexts() { return contexts.splice(0); }
+  `);
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (context.parentURL === nativeUrl && specifier === "./openrouter-music.ts") return { shortCircuit: true, url: codecUrl };
+    return nextResolve(specifier, context);
+  } });
+  try {
+    const native = await import(nativeUrl), codec = await import(codecUrl);
+    scalarProbe = { prepare: native.prepareNativeOpenRouterMusic, ...codec };
+    return scalarProbe;
+  } finally { hooks.deregister(); }
+}
+
+test("response callbacks pass only frozen selected metadata after prepared request revocation", async () => {
+  const probe = await scalarPreparationProbe(), baseline = bodyBudgetCharged();
+  for (const model of models) for (const [format, audio] of [["mp3", mp3], ["wav", wav]]) {
+    const native = probe.prepare(selection(model, format)); probe.retirePrepared();
+    const lease = native.acquire(); let result;
+    try {
+      const original = wire(audio, model);
+      result = await native.read(response(original), new AbortController().signal);
+      const contexts = probe.takeContexts(); assert.equal(contexts.length, 1);
+      assert.deepEqual(contexts[0], { model, format }); assert.equal(Object.isFrozen(contexts[0]), true);
+      assert.deepEqual(Object.keys(contexts[0]).sort(), ["format", "model"]);
+      assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      assert.equal(await result.response.text(), original);
+    } finally { await result?.response.body?.cancel().catch(() => undefined); lease.release(); }
+  }
+  assert.equal(bodyBudgetCharged(), baseline);
+});
+
+test("pending quarantine keeps selected scalars and terminal, identity, EOF and cancellation rules", async () => {
+  const probe = await scalarPreparationProbe(), baseline = bodyBudgetCharged();
+  for (const outcome of ["done", "wrong-model", "eof", "abort"]) {
+    const model = models[1], native = probe.prepare(selection(model, "wav")), abort = new AbortController();
+    let source, ready, canceled = 0, result, pending;
+    const entered = new Promise(resolve => { ready = resolve; });
+    const first = data(frame({ data: wav.toString("base64") }, model));
+    const upstream = new ReadableStream({ type: "bytes", start(controller) {
+      source = controller; controller.enqueue(new TextEncoder().encode(first));
+    }, pull() { ready(); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+    const lease = native.acquire();
+    try {
+      pending = native.read(response(upstream), abort.signal); await entered;
+      probe.retirePrepared();
+      const contexts = probe.takeContexts(); assert.equal(contexts.length, 1);
+      assert.deepEqual(contexts[0], { model, format: "wav" }); assert.equal(Object.isFrozen(contexts[0]), true);
+      assert.throws(() => { contexts[0].model = models[0]; }, TypeError);
+      assert.throws(() => { contexts[0].format = "mp3"; }, TypeError);
+      if (outcome === "abort") abort.abort(new Error("synthetic scalar-case cancellation"));
+      else if (outcome === "eof") { source.close(); source.byobRequest?.respond(0); }
+      else source.enqueue(new TextEncoder().encode(outcome === "done" ? data("[DONE]")
+        : data(frame({ data: "AAAA" }, models[0])) + data("[DONE]")));
+      if (outcome === "done") {
+        result = await pending; assert.equal(await result.response.text(), first + data("[DONE]"));
+        assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      } else await assert.rejects(pending, invalid);
+      if (outcome !== "eof") assert.equal(canceled, 1);
+    } finally {
+      abort.abort(); await pending?.catch(() => undefined);
+      await result?.response.body?.cancel().catch(() => undefined); lease.release();
+    }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
 
 test("both frozen models preserve complete MP3/WAV native SSE bytes and diagnostic usage", async () => {
   assert.equal(mp3.length, fixture.bytes); assert.equal(createHash("sha256").update(mp3).digest("hex"), fixture.sha256);
