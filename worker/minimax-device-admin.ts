@@ -34,7 +34,7 @@ function invalid(): never { throw new HttpError(400, "invalid_minimax_device_req
 // each owner phase. An admin token, proxy key or caller-supplied actor is not it.
 export async function miniMaxDeviceAdmin(request: Request, env: Env, expected?: string): Promise<string> {
   request.signal.throwIfAborted();
-  if (!request.headers.has("origin") || !sameOrigin(request, env))
+  if (!request.headers.get("origin") || !sameOrigin(request, env))
     throw new HttpError(403, "access_csrf_required", "Same-origin browser request required");
   const { authorizeAdmin } = await import("./access.ts");
   const session = await authorizeAdmin(request, env);
@@ -47,15 +47,22 @@ export async function miniMaxDeviceAdmin(request: Request, env: Env, expected?: 
 }
 
 export async function miniMaxDeviceAuthorize(request: Request, env: Env, key: string, value: Record<string, unknown>): Promise<Response> {
-  const input = readMiniMaxDeviceInput(value);
-  await miniMaxDeviceAdmin(request, env);
-  const headers = new Headers();
-  for (const name of ["cf-access-jwt-assertion", "origin", "sec-fetch-site", "x-forwarded-host", "x-forwarded-proto"])
-    if (request.headers.has(name)) headers.set(name, request.headers.get(name)!);
-  const owner = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
-  const response = await owner.fetch("https://clawrouter.internal/minimax-device", { method: "POST", headers,
-    body: JSON.stringify({ key, sourceUrl: request.url, input }), signal: request.signal });
-  // The owner returns only a closed, secret-free projection, including errors.
-  await miniMaxDeviceAdmin(request, env);
-  return new Response(response.body, { status: response.status, headers: privateJson({}).headers });
+  let response: Response | undefined;
+  try {
+    const input = readMiniMaxDeviceInput(value);
+    await miniMaxDeviceAdmin(request, env);
+    const headers = new Headers();
+    for (const name of ["cf-access-jwt-assertion", "origin", "sec-fetch-site", "x-forwarded-host", "x-forwarded-proto"])
+      if (request.headers.has(name)) headers.set(name, request.headers.get(name)!);
+    const owner = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
+    response = await owner.fetch("https://clawrouter.internal/minimax-device", { method: "POST", headers,
+      body: JSON.stringify({ key, sourceUrl: request.url, input }), signal: request.signal });
+    // The owner returns only a closed, secret-free projection, including errors.
+    await miniMaxDeviceAdmin(request, env);
+    return new Response(response.body, { status: response.status, headers: privateJson({}).headers });
+  } catch (error) {
+    await response?.body?.cancel().catch(() => undefined);
+    return privateJson({ error: { code: error instanceof HttpError ? error.code : "minimax_device_unavailable",
+      message: "MiniMax device operation unavailable" } }, error instanceof HttpError ? error.status : 503);
+  }
 }

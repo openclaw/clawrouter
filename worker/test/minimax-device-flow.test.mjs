@@ -68,7 +68,7 @@ async function fixture(t) {
 }
 async function body(response, status = 200) {
   const value = await response.json(); assert.equal(response.status, status, JSON.stringify(value));
-  if (status === 200) assert.match(response.headers.get("cache-control"), /no-store/);
+  assert.match(response.headers.get("cache-control"), /no-store/);
   assert.doesNotMatch(JSON.stringify(value), /synthetic-device-(?:access|refresh)|verifier|ownerBinding|code_challenge|credentialGeneration/);
   return value;
 }
@@ -99,7 +99,7 @@ for (const region of ["global", "cn"]) test(`MiniMax device ${region} real admin
 for (const options of [
   { headers: { "cf-access-jwt-assertion": null, authorization: "Bearer synthetic-admin-token" } },
   { headers: { "cf-access-jwt-assertion": null, authorization: "Bearer synthetic-proxy-key" } },
-  { headers: { origin: "https://foreign.example.invalid" } }, { headers: { origin: null } }, { actor: "member@example.invalid" },
+  { headers: { origin: "https://foreign.example.invalid" } }, { headers: { origin: null } }, { headers: { origin: "" } }, { actor: "member@example.invalid" },
 ]) test("MiniMax device requires verified current Access admin and same-origin " + JSON.stringify(options), async t => {
   const f = await fixture(t), response = await f.begin({}, options);
   assert.ok([401, 403].includes(response.status)); await response.text(); assert.equal(f.sent.length, 0);
@@ -277,4 +277,17 @@ test("MiniMax committed status cannot cross a later owner generation or lineage"
   await body(await f.action("status", begin.attemptId), 409);
   await body(await f.action("poll", begin.attemptId), 409);
   assert.equal(f.sent.length, 2);
+});
+
+test("MiniMax caller abort cancels the actual exchange and retains UNKNOWN without late installation", async t => {
+  const f = await fixture(t), begin = await body(await f.begin()); f.advance();
+  const entered = deferred(), release = deferred(), caller = new AbortController(), reply = f.reply;
+  f.reply = async (...args) => { entered.resolve(); await release.promise; return reply(...args); };
+  const pending = f.action("poll", begin.attemptId, { signal: caller.signal }); await entered.promise;
+  caller.abort(new DOMException("synthetic caller abort", "AbortError"));
+  await body(await pending, 503); assert.equal(f.sent.at(-1).init.signal.aborted, true);
+  release.resolve();
+  assert.equal((await body(await f.action("status", begin.attemptId))).status, "unknown");
+  assert.equal((await body(await f.action("poll", begin.attemptId))).status, "unknown");
+  assert.equal(f.sent.length, 2); assert.equal(f.record().accessToken, undefined);
 });
