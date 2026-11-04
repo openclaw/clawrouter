@@ -70,6 +70,8 @@
 - Recognize and mask the canonical Runway server secret only for its declared Bearer scheme, preserving original grant credentials and rejecting malformed values before headers or egress.
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
+- Declare experimental PixVerse text-video routes with scoped retrieval, original regional credentials and unpriced frozen models; image/upload and cancellation stay unavailable.
+- Exercise both frozen PixVerse text models through compiled native/manifest Worker lifecycle tests and the actual configured native video client, preserving fresh trace headers, original keys and conservative settlement.
 
 - Qualify OpenRouter video download-only endpoint links with original-job content controls, preserving metadata-first file declarations and conservative unknown costs.
 - Add three frozen Gemini Flash/Lite identities with published multimodal input-cost bounds, served-tier cache rates and unchanged hosted-tool cost guards.
@@ -134,6 +136,8 @@
 - Validate the frozen Kie Wan 2.6 native text/image wire contracts, enforcing explicit text resolution and native string duration while keeping unbound image dispatch and unknown upstream costs closed.
 - Validate frozen Kie Kling 2.6 text inputs in the registered job adapter, preserve native sound/duration semantics and keep image execution closed pending original-credential asset binding.
 - Add a bounded Wan video lifecycle adapter and synthetic native fixtures, preserving model-specific inputs, regional credential boundaries and expired observations. Shared durable route activation remains separately qualified.
+- Declare and register canonical Alibaba Wan text-video creation with original Standard regional credential checks before every dispatch, scoped retrieval and conservative expired-task settlement; keep all image/reference creates closed until input assets are bound.
+- Exercise the compiled Wan lifecycle through Worker/SQLite and the actual OpenClaw native video host, preserving proxy credentials, unknown-price denial and one conservative settlement through observation loss.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
 - Support authenticated one-job PixVerse image intake with bounded multipart bytes, original-owner upload/create ordering, dual operation reservations and acknowledged native-response delivery; generic JSON and unowned image IDs remain closed.
 - Qualify PixVerse fresh trace UUIDs and Runway stable version headers against the shared managed dispatch contract, preserving route identity and scoped asset prerequisites. Require both scoped Replicate read/cancel paths when rewriting controls.

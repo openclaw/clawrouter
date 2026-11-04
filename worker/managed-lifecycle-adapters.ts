@@ -3,13 +3,15 @@ import { falManagedAdapter } from "./managed-fal.ts";
 import { googleOmniManagedAdapter } from "./managed-google-omni-wrapper.ts";
 import { kieManagedAdapter } from "./managed-kie.ts";
 import { openRouterVideoManagedAdapter } from "./managed-openrouter-video.ts";
+import { createPixVerseManagedAdapter } from "./managed-pixverse.ts";
 import { replicateManagedAdapter } from "./managed-replicate.ts";
 import { togetherManagedAdapter } from "./managed-together-wrapper.ts";
+import { wanManagedAdapter } from "./managed-wan.ts";
 import { vydraManagedAdapter } from "./managed-vydra.ts";
 
 const adapters: readonly ManagedLifecycleAdapter[] = [
   replicateManagedAdapter, falManagedAdapter, kieManagedAdapter, vydraManagedAdapter, togetherManagedAdapter, googleOmniManagedAdapter,
-  openRouterVideoManagedAdapter,
+  openRouterVideoManagedAdapter, wanManagedAdapter, createPixVerseManagedAdapter("text"),
 ];
 
 // A lifecycle declaration alone never activates an unknown protocol or format.
