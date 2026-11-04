@@ -531,6 +531,13 @@ function secretBindingCandidates(provider, scheme) {
   ) {
     candidates.push("FAL_KEY");
   }
+  if (
+    provider.id === "runway" && scheme.type === "bearer" && secretKind === "api_key"
+    && scheme.header?.toLowerCase() === "authorization" && scheme.format === "Bearer ${secret}"
+    && provider.config_keys.includes("RUNWAYML_API_SECRET")
+  ) {
+    candidates.push("RUNWAYML_API_SECRET");
+  }
   for (const key of provider.config_keys) {
     if (configKeyMatchesSecretKind(key, secretKind)) {
       candidates.push(key);
