@@ -229,6 +229,7 @@
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
+- Add an inactive MiniMax plan Search response leaf with trusted regional destinations, complete native JSON and validation of every result URL; preserve unknown usage and response capacity through downstream completion while operation authority remains separate.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
 - Qualify the frozen Google grounded-search manifest contract with explicit endpoint selection and unknown grounding costs while overlapping native discovery remains closed.
 - Add a complete Google grounded-search response wrapper with scoped native selection, stable attribution indices, thought exclusion and bounded delivery without inferring tool costs.
