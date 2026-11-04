@@ -9,6 +9,7 @@
 - Add an internal one-job PixVerse byte-input receipt with original-credential upload ordering, single-attempt create claims and separate conservative upload/generation accounting; public image/upload routes remain closed.
 - Add a bounded PixVerse image multipart parser with zero-copy PNG/JPEG/WebP container validation and strict native-plan fields; public intake, credential authority and accounting remain separate.
 - Define the optional PixVerse composed-image input profile in schema, compiler metadata and catalog types while keeping image lifecycle activation and discovery projection closed.
+- Add a bounded PixVerse image multipart parser with zero-copy PNG/JPEG/WebP container validation and strict native-plan fields; public intake, credential authority and accounting remain separate.
 - Add a bounded Microsoft Edge speech request/frame codec with request-ID binding, complete-audio delivery and explicit interruption handling, without activating a route or assuming upstream cost.
 
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
@@ -39,6 +40,7 @@
 - Qualify the model-less xAI unary speech compiler contract with exact binary output, original credential binding and no OpenAI speech alias or inferred character tariff.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
 - Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
+- Add bounded complete-MP3 response validation for three frozen OpenRouter speech models, with exact destination and length checks, cancellation and conservative unknown usage; common dispatch and PCM remain separately qualified.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
 - Qualify documented frozen fal Grok image routes with ordered edit references and native geometry; keep unqualified quality generation closed without borrowing direct-xAI aliases or tariffs.
 - Add finite OpenRouter native image codecs and fixtures with ordered inline references, bounded binary images and separate per-request accounting for partially failed batches.
@@ -184,6 +186,7 @@
 - Qualify model-less native DeepSeek Search declarations against the original Bearer origin and bounded codec, keeping Search request fees separate from Chat token prices and fixed policy charges.
 - Define the published DeepSeek Search request tariff and conservative single-dispatch reserve without enabling hard-dollar admission or deriving charges from incomplete results.
 - Calculate version-bound DeepSeek Search request receipts from validated native empty/nonempty observations while retaining reserves for unknown outcomes and keeping runtime admission closed.
+- Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.

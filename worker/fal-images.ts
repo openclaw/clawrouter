@@ -1,3 +1,4 @@
+import { assertFalRunDispatch } from "./fal-dispatch.ts";
 import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
 import { readNativeJson } from "./native-json.ts";
 
@@ -53,12 +54,7 @@ export function prepareFalImage(model: string, value: unknown): FalImageRequest 
     headers: new Headers({ "content-type": "application/json", accept: "application/json" }) };
 }
 export function assertFalImageDispatch(request: Request, prepared: FalImageRequest): void {
-  const url = new URL(request.url);
-  if (request.method !== "POST" || url.origin !== "https://fal.run" || url.pathname !== prepared.path
-    || !(falImageModels as readonly string[]).includes(prepared.model) || prepared.path !== "/" + prepared.model
-    || url.username || url.password || url.search || url.hash
-    || !/^Key [\x21-\x7e]{1,4096}$/.test(request.headers.get("authorization") ?? "")
-    || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") fail("dispatch");
+  assertFalRunDispatch(request, prepared, falImageModels, fail);
 }
 export interface FalImageAsset { url: string; mimeType: string | null; width: number | null; height: number | null; flagged: boolean | null }
 export function observeFalImage(value: unknown, prepared: FalImageRequest): {

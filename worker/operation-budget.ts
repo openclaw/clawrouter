@@ -52,7 +52,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (auth.policy.budgetScope === "principal" && !auth.principalId && !auth.credentialId)
     return { status: "exact-blocked", reasonCode: "principal_required" };
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
-  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || isModelDiscovery(endpoint) ? cost.reserveMicros : !endpoint.requestPricing && bounds?.zero ? 0 : null;
+  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || cost.requestTariff?.kind === "deepseek_search" || isModelDiscovery(endpoint) ? cost.reserveMicros : !endpoint.requestPricing && bounds?.zero ? 0 : null;
   const minimum = exact ?? (endpoint.requestPricing ? 0 : bounds?.minimumMicros ?? 0);
   if (exact === 0 && (!soft || isModelDiscovery(endpoint))) return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };
