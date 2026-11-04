@@ -69,6 +69,8 @@
 
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.
 - Recognize and mask the canonical Runway server secret only for its declared Bearer scheme, preserving original grant credentials and rejecting malformed values before headers or egress.
+- Declare experimental Runway text-video routes and three unpriced frozen models with original-job controls, canonical native-Bearer credentials and cancellation uncertainty; keep image/video/upload modes closed pending input-asset binding and serialized integration proof.
+- Qualify Runway text-video native and manifest lifecycle dispatch, original versioned credentials and conservative settlement; recognize its canonical server secret in safe unresolved smoke plans and exercise the actual native video client with explicit supported durations.
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
 - Declare experimental PixVerse text-video routes with scoped retrieval, original regional credentials and unpriced frozen models; image/upload and cancellation stay unavailable.
