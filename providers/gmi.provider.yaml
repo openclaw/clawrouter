@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-regional-providers.md.
+# Frozen native Chat/discovery qualification: docs/gmi-native-catalog.md.
 # Endpoint/model source checked 2026-11-03: https://www.gmicloud.ai/en/developers
 schema: clawrouter.service-provider.v1
 id: gmi
@@ -27,10 +27,17 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -42,6 +49,49 @@ models:
   entries:
     - id: gmi/deepseek-ai/DeepSeek-V4-Pro
       upstream: deepseek-ai/DeepSeek-V4-Pro
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.gmicloud.ai/model-quickstarts/text/deepseek-ai-deepseek-v4-pro]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+    - id: gmi/zai-org/GLM-5.2-FP8
+      upstream: zai-org/GLM-5.2-FP8
+      capabilities: [llm.chat]
+    - id: gmi/zai-org/GLM-5.1-FP8
+      upstream: zai-org/GLM-5.1-FP8
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.gmicloud.ai/model-quickstarts/text/zai-org-glm-5-1-fp8]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+    - id: gmi/deepseek-ai/DeepSeek-V3.2
+      upstream: deepseek-ai/DeepSeek-V3.2
+      capabilities: [llm.chat]
+    - id: gmi/google/gemini-3.5-flash-lite
+      upstream: google/gemini-3.5-flash-lite
+      capabilities: [llm.chat]
+    - id: gmi/anthropic/claude-sonnet-5
+      upstream: anthropic/claude-sonnet-5
+      capabilities: [llm.chat]
+    - id: gmi/anthropic/claude-sonnet-4.6
+      upstream: anthropic/claude-sonnet-4.6
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.gmicloud.ai/model-quickstarts/text/anthropic-claude-sonnet-4-6]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.gmicloud.ai/model-quickstarts/text/anthropic-claude-sonnet-4-6]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: gmi/openai/gpt-5.6-sol
+      upstream: openai/gpt-5.6-sol
       capabilities: [llm.chat]
 billing:
   meter: clawrouter.tokens
