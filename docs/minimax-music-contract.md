@@ -81,6 +81,60 @@ No manifest activation or claim of complete E10 parity is made by this codec.
 Fixture: `providers/_fixtures/minimax/music.json`. Synthetic bytes prove encoding,
 not playable MP3 or measured duration. No live call or deployment.
 
+## Inactive bounded streaming response leaf
+
+`readMiniMaxMusicStream(response, model, signal)` is an additive inspection mode.
+The existing `readMiniMaxMusic` reader and unary response behavior remain intact.
+`prepareNativeMiniMaxMusic(selection)` now accepts an explicitly declared SSE
+endpoint for global `music-2.6` and `music-2.6-free`, `minimax.music` request and
+response formats, and `music.generate`. Input must explicitly select
+`stream:true`, hex MP3, 44100Hz and 256000bps within the existing 64KiB request
+bound. CN, cover and reference input remain unavailable in this leaf.
+
+The reader requires HTTP 200 SSE, absent or identity encoding, fatal UTF-8,
+matching Content-Length when present, a valid status-2 frame and complete EOF.
+A terminal frame on an open connection is not complete. It verifies deltas
+against any terminal full-file aggregate in one owned accumulator, including
+when the aggregate is longer. It then replays exactly one native terminal SSE
+aggregate in bounded hex chunks, followed by `[DONE]`. This preserves the full
+track for the frozen client's decoder without delivering speculative audio.
+The decoder-compatible unit fixture is the existing locally generated,
+decoder-verified 44100Hz stereo 256000bps MP3; it is not vendor synthesis or
+registered-client proof.
+
+Explicit retained allocations and operational bounds:
+
+| Phase | Ownership and bound |
+| --- | --- |
+| Input validation | At most 64KiB JSON; prepared input is transient. The returned reader captures only model/stream scalars. |
+| Upstream read | At most 40MiB + 64KiB cumulative wire, 2048 frames and 262144 reads including empty reads. One separate 64KiB read window; returned BYOB backing owns the next window. |
+| Parsing | One decoded read window, tokenizer feeds of at most 1024 UTF-16 units, depth 8, 512 metadata nodes and 64KiB metadata text per frame. No full-wire string or frame array. |
+| Audio inspection | One fixed 8MiB owned accumulator; terminal-prefix validation and suffix compaction happen in place. The result view can retain the full backing buffer. |
+| Delivery | The same audio backing, bounded terminal metadata and its serialized/encoded prefix (at most 1MiB encoded), plus at most one 64KiB replay chunk. No full-file hex string. EOF/cancel retires retained audio and the signal listener. |
+
+The existing 32MiB lease charges 64MiB; the separate 16MiB ingress charge fits
+within the unchanged 96MiB pool. These are reservation and explicit-allocation
+bounds, not a measured runtime heap or complete transport-lifetime proof.
+The common delivery owner must hold the lease through downstream EOF/cancel,
+and retain the upstream operation until cancellation completes. Unit coverage
+checks that ownership without claiming common runtime activation.
+
+Actual-fetch/runtime chunk qualification is **unsupported until independently
+proven**. The reader uses BYOB when available; otherwise it rejects any returned
+chunk or backing buffer larger than 64KiB. It neither assumes BYOB survives
+common transforms nor copies an unbounded chunk into smaller windows. Source 11.1
+and source 11.6 must qualify the actual fetch, reader and cancellation path before
+dispatch can use this leaf. The existing default codec is not a fallback.
+
+There is no production caller or private original music-operation grant binding
+in this change. Source 11.1 owns that global authorization and common selection;
+speech, image, Messages and TokenPlan permissions confer no music authority.
+Source 11.2 still owns registered-client delivery, signal and no-replay proof.
+Success has null token usage; native duration/size are not USD or invoice
+receipts. Unknown upstream-dollar budgets remain closed; `policy_fixed` is
+separate, and interrupted/dispatched work does not imply a refund. Cover and CN
+remain required internal work, not qualified by this streaming leaf.
+
 Primary evidence checked 2026-11-03:
 - [Native music schema and availability notice](https://platform.minimax.io/docs/api-reference/music-generation)
 - [One-step and owned-feature cover workflows](https://platform.minimax.io/docs/guides/music-generation)
