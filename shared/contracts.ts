@@ -22,6 +22,8 @@ export interface ImageTokenPricing {
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
 export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
+  // Configured server origin, not publication permission or automatic selection.
+  publishedInputOrigin?: { version: "clawrouter.published-input.v1"; origin: string };
   // Encoding declaration only; runtime eligibility and authority remain separate.
   inputProfile?: "clawrouter.pixverse-image-input.v1";
   endpoint: string;

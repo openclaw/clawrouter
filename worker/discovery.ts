@@ -1,4 +1,6 @@
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
+import { isPublishedMusicInputSupport } from "../shared/native-capabilities.ts";
+import { readPublishedInputOrigin } from "./published-input-receipt.ts";
 import { manifestOnlyPublicCatalog } from "./public-model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
@@ -132,11 +134,31 @@ function supportsHostedSearch(provider: CompiledProvider, model: CompiledModel, 
     && typeof facts.checkedAt === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(facts.checkedAt);
 }
 
+function supportsPublishedMusicInput(provider: CompiledProvider, model: CompiledModel, endpointId: string): boolean {
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === endpointId);
+  const facts = model.nativeCapabilities?.endpoints[endpointId];
+  const capabilities = provider.capabilities.filter(capability => capability.endpoint === endpointId);
+  return isPublishedMusicInputSupport(facts?.publishedInput)
+    && provider.id === "openrouter" && endpointId === "music_generate"
+    && Object.values(provider.base_urls).length > 0 && Object.values(provider.base_urls).every(base => base === "https://openrouter.ai/api")
+    && ["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"].includes(model.upstream)
+    && model.id === `openrouter/${model.upstream}` && model.availability?.status !== "upstream_alias"
+    && model.capabilities.length === 1 && model.capabilities[0] === "music.generate"
+    && capabilities.length === 1 && capabilities[0].id === "music.generate" && Array.isArray(capabilities[0].methods) && capabilities[0].methods.length === 1 && capabilities[0].methods[0] === "POST"
+    && endpoint?.method === "POST" && Array.isArray(endpoint.methods) && endpoint.methods.length === 1 && endpoint.methods[0] === "POST" && endpoint.path === "/v1/chat/completions"
+    && endpoint.request_format === "openai.chat_completions" && endpoint.response_format === "openai.chat_completions"
+    && endpoint.streaming === "sse" && !endpoint.path_params.length && !Object.keys(endpoint.query).length
+    && !endpoint.upstreamPath && !endpoint.websocket && !endpoint.lifecycle && !endpoint.responsesLifecycle
+    && !endpoint.modelPassthrough && !endpoint.requestPricing && !endpoint.inputProfile
+    && model.nativeCapabilities?.version === "clawrouter.native-capabilities.v1"
+    && facts?.input?.length === 2 && facts.input.includes("text") && facts.input.includes("image");
+}
+
 function projectCatalogModel(provider: CompiledProvider, model: CompiledModel, capabilities: string[], visibleEndpoints: ReadonlySet<string>): CompiledModel {
   const { nativeCapabilities, requestParameters, ...base } = model;
   const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)).map(([id, facts]) => {
-    const { hostedTools, ...baseFacts } = facts;
-    return [id, { ...baseFacts, ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
+    const { hostedTools, publishedInput, ...baseFacts } = facts;
+    return [id, { ...baseFacts, ...(supportsPublishedMusicInput(provider, model, id) ? { publishedInput } : {}), ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
   }));
   const parameters = Object.fromEntries(Object.entries(requestParameters ?? {}).filter(([id]) => visibleEndpoints.has(id)));
   return { ...base, capabilities,
@@ -145,7 +167,7 @@ function projectCatalogModel(provider: CompiledProvider, model: CompiledModel, c
   };
 }
 
-function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
+function catalogProjection(entitlements: ClientEntitlements, publicOrigin: string | null = null): ClientCatalog {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
   // Route formats describe both native and manifest payloads. Only scoped
@@ -162,7 +184,12 @@ function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: row.readiness, connectionTypes: compiledProjection(provider).connectionTypes,
       routes: provider.endpoints.filter((endpoint) => endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id)).map((endpoint) => ({ ...compiledProjection(provider).routes.get(endpoint.id)!, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
-      models: view.models, offers: view.offers,
+      models: view.models, offers: view.offers.map(offer => {
+        const model = view.models.find(model => model.id === offer.modelId);
+        return publicOrigin && offer.eligible && offer.transport === "http" && (offer.routeKind === "native" || offer.routeKind === "manifest")
+          && model && supportsPublishedMusicInput(provider, model, offer.endpoint)
+          ? { ...offer, publishedInputOrigin: { version: "clawrouter.published-input.v1" as const, origin: publicOrigin } } : offer;
+      }),
     }];
   });
   const fusion = rows.find((row) => row.provider === "clawrouter" && row.allowed);
@@ -287,12 +314,15 @@ const loads = new WeakMap<ClientEntitlements, { started: number; published: Set<
 // A cold isolate first adopts a sibling's rendered body from the same location:
 // it is exactly what this caller receives, so it is secretless, unlike the
 // inventory (selectors, grants). It keeps the load's start time and fence.
-async function discoveryResponse(request: Request, env: Env, variant: string, render: (entitlements: ClientEntitlements) => unknown): Promise<Response> {
+async function discoveryResponse(request: Request, env: Env, variant: string, render: (entitlements: ClientEntitlements, publicOrigin: string | null) => unknown): Promise<Response> {
+  // Freeze the configured value once for both cache identity and projection.
+  // Request/forwarded origins and publication response URLs cannot supply it.
+  const publicOrigin = readPublishedInputOrigin(env.CLAWROUTER_PUBLIC_ORIGIN);
   const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
   if (!hasKey) {
     const session = await verifiedAccessSession(request, env);
     if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
-    return privateJson(render(await sessionEntitlements(session, env)));
+    return privateJson(render(await sessionEntitlements(session, env), publicOrigin));
   }
   const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
   if (auth instanceof Response) return auth;
@@ -303,7 +333,7 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
   // A rotated server key cannot reuse an eligible discovery body from either
   // isolate or colo caches. No credential bytes enter the cache identity.
   const mediaRevision = mediaProvider ? [mediaEnvironment ? await sha256Hex(mediaEnvironment.binding) : null] : [];
-  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision(), ...mediaRevision]);
+  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision(), ["clawrouter.published-input.v1", publicOrigin], ...mediaRevision]);
   const config = hotCacheConfig(env), shared = `${variant}\n${key}`;
   if (!entitlementCache.peek(key, config)) {
     const adopted = await coloGet<unknown>("discovery", shared, config);
@@ -315,7 +345,7 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
     loads.set(value, { started, published: new Set() });
     return { value, cacheable: true };
   });
-  const body = render(value);
+  const body = render(value, publicOrigin);
   // Each variant of a loaded inventory is published once, stamped with the
   // load's start, whichever request first renders it in this isolate.
   const load = loads.get(value);

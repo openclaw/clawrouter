@@ -54,6 +54,14 @@ const text = (value: unknown, limit = 256): value is string => typeof value === 
 const digest = (value: unknown): value is string => typeof value === "string" && value.length === 64 && /^[a-f0-9]+$/.test(value);
 const date = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) > 0;
 
+export function readPublishedInputOrigin(value: unknown): string | null {
+  try {
+    const origin = new URL(value as string);
+    if (origin.protocol !== "https:" || origin.origin !== value || origin.username || origin.password) return null;
+    return origin.origin;
+  } catch { return null; }
+}
+
 export function validatePublishedInput(value: unknown): asserts value is PublishedInputBinding {
   if (!keys(value, ["version", "id", "scope", "issuer", "owner", "generation", "publicOrigin", "origin", "path", "modelId",
     "upstreamModel", "slot", "requestDigest", "permissionDigest", "digest", "mime", "size", "idempotencyDigest", "verifierDigest", "allocatedAt", "expiresAt"])
@@ -69,10 +77,7 @@ export function validatePublishedInput(value: unknown): asserts value is Publish
     || !Number.isSafeInteger(value.generation) || (value.generation as number) < 1
     || !date(value.allocatedAt) || !date(value.expiresAt) || value.expiresAt <= value.allocatedAt
     || value.expiresAt - value.allocatedAt > publishedInputLifetimeMs) publishedInputUnavailable();
-  try {
-    const origin = new URL(value.publicOrigin as string);
-    if (origin.protocol !== "https:" || origin.origin !== value.publicOrigin || origin.username || origin.password) publishedInputUnavailable();
-  } catch { publishedInputUnavailable(); }
+  if (readPublishedInputOrigin(value.publicOrigin) === null) publishedInputUnavailable();
   const owner = value.owner;
   if (!keys(owner, ["providerId", "endpointId", "grantKey", "lineage", "routeSha256", "policyGeneration"])
     || owner.providerId !== "openrouter" || owner.endpointId !== "music_generate" || !text(owner.grantKey, 1024)
