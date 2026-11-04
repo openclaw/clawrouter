@@ -18,7 +18,7 @@ const unavailable = () => new HttpError(502, "grant_refresh_at_risk", "Vertex to
 const changed = () => new HttpError(409, "upstream_grant_changed", "original Vertex credential authority changed");
 const same = (a: CredentialRecord | undefined, b: CredentialRecord) => !!a && a.enabled === true && !a.revokedAt
   && a.status === "active" && !["ambiguous", "provider_ok_persist_failed"].includes(a.refreshDiagnosis?.failure?.failureClass ?? "") && a.grantKey === b.grantKey && a.providerId === b.providerId && a.generation === b.generation
-  && a.lineage === b.lineage && a.refreshAttempt?.id === b.refreshAttempt?.id
+  && a.lineage === b.lineage && a.kind === b.kind && a.accountId === b.accountId && a.vertexPrivateKey === b.vertexPrivateKey && a.refreshAttempt?.id === b.refreshAttempt?.id
   && a.refreshAttempt?.generation === b.generation && JSON.stringify(a.vertexAnthropicBinding) === JSON.stringify(b.vertexAnthropicBinding);
 
 // This is the existing credential owner's refreshAttempt fence. Only reserve,
@@ -33,13 +33,13 @@ export class VertexOwnerRefresh {
   async materialize(input: MaterializeRequest, signal?: AbortSignal): Promise<OwnerResponse> {
     const prepared = await this.owner.order(async () => {
       const record = await this.owner.load(input.key), binding = record && vertexOwnerBinding(record);
-      if (binding?.source !== "service_account") return { result: await this.owner.materialize(input) };
+      if (binding?.source !== "service_account") return { kind: "ready" as const, result: await this.owner.materialize(input) };
       if (!record || record.enabled !== true || record.revokedAt || record.status !== "active" || record.grantKey !== input.key
         || input.providerId !== "anthropic-vertex" || input.grant.provider !== record.providerId || input.grant.kind !== record.kind
         || input.expectedGeneration !== record.generation || input.grant.credentialLineage !== record.lineage) throw changed();
       if (record.refreshAttempt) throw unavailable();
       if (!input.force && record.accessToken && Date.parse(record.expiresAt ?? "") > Date.now() + 300_000)
-        return { result: await this.owner.materialize(input) };
+        return { kind: "ready" as const, result: await this.owner.materialize(input) };
       if (!Number.isSafeInteger(record.generation) || record.generation >= Number.MAX_SAFE_INTEGER - 1) throw changed();
       signal?.throwIfAborted();
       const key = await importVertexServiceAccountKey(record.vertexPrivateKey!);
@@ -56,9 +56,9 @@ export class VertexOwnerRefresh {
           late => { void late.body?.cancel().catch(() => undefined); }); }
         catch { return Promise.reject(unavailable()); }
       })();
-      return { fenced, operation, requestedAt, response };
+      return { kind: "exchange" as const, fenced, operation, requestedAt, response };
     });
-    if (prepared.result) return prepared.result;
+    if (prepared.kind === "ready") return prepared.result;
     const { fenced, operation, requestedAt, response } = prepared;
     let committed = false;
     try {
@@ -77,8 +77,7 @@ export class VertexOwnerRefresh {
           // A storage ACK can be lost after commit. Recover that exact row;
           // otherwise retain the original fence. Never repeat the exchange.
           const stored = await this.owner.read();
-          if (stored?.generation === updated.generation && stored.lineage === updated.lineage
-            && stored.accessToken === updated.accessToken && stored.expiresAt === updated.expiresAt && !stored.refreshAttempt) committed = true;
+          if (stored && JSON.stringify(stored) === JSON.stringify(updated)) committed = true;
           if (!committed) {
             if (same(stored, fenced)) await this.owner.failure(fenced, true);
             throw unavailable();
