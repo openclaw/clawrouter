@@ -336,6 +336,11 @@ function validateModels(manifest) {
       const supported = manifest.capabilities.filter(capability => capability.endpoint === id && model.capabilities?.includes(capability.id));
       const fail = message => { throw new Error("model " + model.id + " nativeCapabilities " + message); };
       if (!endpoint || !supported.length) fail("must reference a supported endpoint");
+      if (facts.speech && (endpoint.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary"
+        || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
+        || !supported.some(capability => capability.id === "audio.speech")
+        || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))))
+        fail("speech profile requires a unary POST audio.speech endpoint with openai.audio_speech input and audio.binary output");
       if (facts.contextTokens !== undefined && (facts.contextWindow === undefined || facts.contextTokens > facts.contextWindow)) fail("contextTokens requires and cannot exceed contextWindow");
       if (facts.maxOutputTokens !== undefined && facts.contextWindow !== undefined && facts.maxOutputTokens > facts.contextWindow) fail("maxOutputTokens cannot exceed contextWindow");
       if (facts.inference?.chat === true && !supported.some(capability => ["llm.chat", "llm.responses", "llm.messages", "llm.generate"].includes(capability.id))) fail("chat requires a conversational capability");
