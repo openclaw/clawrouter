@@ -3,6 +3,7 @@
 ## Unreleased
 
 
+
 - Accept explicitly selected local provider packages with `compile-providers --plugin`, while preserving the default bundled manifests and snapshot output.
 
 - Define an opt-in provider plugin package contract with local assets, documentation, fixtures, and a starter example; existing provider loading and runtime behavior remain unchanged.
@@ -298,6 +299,7 @@
 - Add Google service-account and Anthropic Vertex request codecs with explicit project/region/model binding, token expiration checks and deterministic signature tests for credential-owner integration.
 - Bind preprovisioned Anthropic Vertex access tokens to original owner project/location and expiry, with fixed native dispatch, fresh post-budget authority checks and conservative settlement; service-account refresh remains separate.
 
+- Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
 
 - Add GitHub Copilot account and native request codecs with explicit public/enterprise identity, advertised model transports and credential-owner binding for runtime integration.
