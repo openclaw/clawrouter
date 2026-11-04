@@ -38,7 +38,7 @@ export function arceeCatalogRequest(inferenceBaseUrl: string, selectedApiKey: st
   }
   return new Request("https://api.arcee.ai/api/v1/models", {
     method: "GET", headers: { accept: "application/json", authorization: `Bearer ${selectedApiKey}` },
-    credentials: "omit", redirect: "error", signal,
+    credentials: "omit", redirect: "manual", signal,
   });
 }
 

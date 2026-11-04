@@ -98,7 +98,7 @@ test("published factories select one Cerebras URL and both NVIDIA URLs without i
   for (const request of [single, pair.inventory, pair.featured]) {
     assert.equal(request.method, "GET"); assert.equal(request.body, null);
     assert.deepEqual([...request.headers], [["accept", "application/json"]]);
-    assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "error");
+    assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "manual");
   }
 });
 

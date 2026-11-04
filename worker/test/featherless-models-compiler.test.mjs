@@ -36,7 +36,7 @@ test("Featherless catalog compiles a bodyless route with the original selected k
     assert.equal(request.body, null); assert.equal(request.method, "GET");
     assert.equal(request.headers.get("authorization"), upstream.headers.get("authorization"));
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-selected-key"]]);
-    assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+    assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
   }
   assert.equal(endpoint.auth, null);
   assert.equal(provider.auth.schemes[0].secretKind, "api_key");

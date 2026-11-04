@@ -18,7 +18,7 @@ test("Venice documented public text discovery cannot receive inference or wallet
   for (const base of ["https://api.venice.ai/api/v1", "https://api.venice.ai/api/v1/"]) {
     const controller = new AbortController(), r = veniceCatalogRequest(base, controller.signal);
     assert.equal(r.url, "https://api.venice.ai/api/v1/models?type=text"); assert.equal(r.method, "GET"); assert.equal(r.body, null);
-    assert.deepEqual([...r.headers], [["accept", "application/json"]]); assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error");
+    assert.deepEqual([...r.headers], [["accept", "application/json"]]); assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual");
     controller.abort(); assert.equal(r.signal.aborted, true);
   }
 });

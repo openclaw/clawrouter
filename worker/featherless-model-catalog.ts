@@ -40,7 +40,7 @@ export function featherlessCatalogRequest(inferenceBaseUrl: string, selectedApiK
   }
   return new Request(`https://api.featherless.ai/v1/models?capabilities=chat&page=${page}&per_page=${PAGE_SIZE}`, {
     method: "GET", headers: { accept: "application/json", authorization: `Bearer ${selectedApiKey}` },
-    credentials: "omit", redirect: "error", signal,
+    credentials: "omit", redirect: "manual", signal,
   });
 }
 
