@@ -83,6 +83,15 @@ export function providerModel(provider: CompiledProvider, value: string, endpoin
   const upstream = prefix && !native ? value.slice(prefix.length) : value;
   const known = provider.models.find((model) => model.id === value) ?? provider.models.find((model) => model.upstream === value || model.upstream === upstream);
   if (known) return modelForEndpoint(known, endpoint?.id);
+  if (native && value) {
+    // A registered native identity may differ from its physical upstream alias.
+    // Match only literal cards with an exact declared router prefix plus identity,
+    // never configured deployment templates, suffixes or stripped unknown IDs.
+    const declared = provider.models.filter((model) => !model.id.includes("${") && !model.upstream.includes("${")
+      && provider.routing.modelPrefixes.some((prefix) => model.id === prefix + value));
+    if (declared.length > 1) return null;
+    if (declared.length === 1) return modelForEndpoint(declared[0], endpoint?.id);
+  }
   if (!value || !endpoint?.modelPassthrough) return null;
   if (!upstream) return null;
   // Native opaque ids belong to the upstream namespace, even when they match
