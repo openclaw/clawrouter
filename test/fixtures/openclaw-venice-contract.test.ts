@@ -3,9 +3,11 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { describe, expect, it } from "vitest";
 import { makeInMemorySessionManager, makeModelSnapshotEntry } from "../../src/agents/embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { sanitizeSessionHistory } from "../../src/agents/embedded-agent-runner/replay-history.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../../src/agents/embedded-agent-runner/tool-call-argument-decoding.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
+import { resolveToolCallArgumentsEncoding } from "../../src/plugins/provider-model-compat.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { buildStaticVeniceProvider } from "./provider-catalog.js";
 import plugin from "./index.js";
@@ -45,7 +47,9 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
     tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: { value: { type: "string", minLength: 1 } } } }] };
   const wrapped = provider.wrapStreamFn?.({ provider: "venice", modelId, model, streamFn: streamSimple });
   expect(wrapped).toBeDefined();
-  return wrapped!(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, signal: options.signal });
+  const hostStream = resolveToolCallArgumentsEncoding(model) === "html-entities"
+    ? createHtmlEntityToolCallArgumentDecodingWrapper(wrapped!) : wrapped!;
+  return hostStream(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, signal: options.signal });
 }
 
 describe("actual Venice configured catalog and registered stream through Worker and SQLite", () => {
@@ -63,10 +67,23 @@ describe("actual Venice configured catalog and registered stream through Worker 
       expect(result.stopReason).toBe("error"); expect(result.errorMessage).not.toMatch(/fixture-secret|must-not-fallback|fixture-upstream/);
     }
   });
-  it("retains embedded errors without replay", async () => {
-    const result = await (await start("error")).result(); expect(result.stopReason).toBe("error");
-    expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
-    expect(JSON.stringify(result)).not.toContain("synthetic-upstream-error");
+  it("fails closed after an observed prefix without replay", async () => {
+    const controller = new AbortController(), stream = await start("error", models[0], { signal: controller.signal });
+    let delivered = "", released = false;
+    try {
+      for await (const event of stream) {
+        if (event.type !== "text_delta") continue;
+        delivered += event.delta;
+        if (!released && delivered === "synthetic-answer") {
+          expect((await fetch(origin + "/fixture/release-error", { method: "POST" })).status).toBe(204);
+          released = true;
+        }
+      }
+      const result = await stream.result();
+      expect(released).toBe(true); expect(delivered).toBe("synthetic-answer");
+      expect(result.stopReason).toBe("error");
+      expect(JSON.stringify(result)).not.toContain("synthetic-upstream-error");
+    } finally { controller.abort(); }
   });
   it.each(["foreign_model", "missing_model"])("withholds %s before native output", async id => {
     const result = await (await start(id)).result(); expect(result.stopReason).toBe("error");

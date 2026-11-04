@@ -66,6 +66,10 @@ test("actual OpenClaw Venice configured native client through workerd and SQLite
       assert.equal(call.body.fallbacks, undefined, "the frozen actual client sends no vendor fallback control");
       assert.equal(call.body.stream_options, undefined, "native usage-request compatibility is preserved");
       if (id === "venice_card0") assert.ok(call.body.messages.some(message => message.reasoning_content === "synthetic-prior-thinking"));
+      if (id === "venice_error") {
+        assert.equal(call.errorReleased, true, "the actual client must observe the valid prefix before the fixture emits its late error");
+        assert.notEqual(call.fixtureExpired, true);
+      }
       if (id === "venice_groktool") assert.equal(call.body.tools[0].function.parameters.properties.value.minLength, undefined, "actual Grok compatibility removes its unsupported schema keyword");
       assert.equal(call.body.tools[0].function.name, "lookup");
       assert.ok(call.body.messages.some(message => ["system", "developer"].includes(message.role) && message.content === "Synthetic instructions"), "the actual native serializer retains system instructions");
@@ -106,6 +110,8 @@ function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials } from "./worker/grant-credentials.ts";
 export default { ...handler, async fetch(request, env, context) {
+  if (new URL(request.url).pathname === "/fixture/release-error" && request.method === "POST")
+    return fetch("https://fixture.example/release-error", { method: "POST" });
   if (new URL(request.url).pathname === "/fixture/grants") {
     for (const id of ${JSON.stringify(ids)}) await putGrantCredentials(env, "oauth/" + id + "/venice", { provider: "venice", kind: "api_key", enabled: true, credential: "fixture-upstream-venice" });
     return new Response(null, { status: 204 });
@@ -117,6 +123,11 @@ export default { ...handler, async fetch(request, env, context) {
 function upstreamFixture() {
   return `const calls = []; export default { async fetch(request) {
     if (request.url === "https://fixture.example/state") return Response.json(calls);
+    if (request.url === "https://fixture.example/release-error" && request.method === "POST") {
+      const call = calls.find(call => call.body.messages.some(message => message.content === "fixture venice_error"));
+      if (!call || call.errorReleased) return new Response(null, { status: 409 });
+      call.errorReleased = true; return new Response(null, { status: 204 });
+    }
     const body = await request.json(); const call = { url: request.url, headers: Object.fromEntries(request.headers), body }; calls.push(call);
     const input = JSON.stringify(body.messages), frame = value => "data: " + JSON.stringify(value) + "\\n\\n";
     const failed = input.includes("venice_error"), cancel = input.includes("venice_cancel");
@@ -127,9 +138,18 @@ function upstreamFixture() {
     const wire = first + (failed ? frame({ model: body.model, error: { message: "synthetic-upstream-error", code: "server_error" } })
       : cancel ? "" : frame({ id: "chat_fixture", object: "chat.completion.chunk", model: responseModel,
         choices: [{ index: 0, delta: {}, finish_reason: tool ? "tool_calls" : "stop" }], ...(observed ? { usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } } : {}) }) + "data: [DONE]\\n\\n");
-    const bytes = new TextEncoder().encode(wire); let offset = 0, beats = 0, timer, wake;
+    const bytes = new TextEncoder().encode(wire), firstBytes = new TextEncoder().encode(first).byteLength;
+    let offset = 0, beats = 0, timer, wake;
     request.signal.addEventListener("abort", () => { call.aborted = true; clearTimeout(timer); wake?.(); }, { once: true });
     return new Response(new ReadableStream({ pull(controller) {
+      if (failed && offset === firstBytes && !call.errorReleased) {
+        // Gate on actual client receipt, not packet coalescing or a fixed delay.
+        return new Promise(resolve => { wake = resolve; timer = setTimeout(() => {
+          if (++beats > 200) { call.fixtureExpired = true; controller.error(new Error("fixture prefix was not observed")); }
+          else controller.enqueue(new TextEncoder().encode(": fixture heartbeat\\n\\n"));
+          resolve();
+        }, 50); });
+      }
       if (offset === bytes.length) {
         if (!cancel) { controller.close(); return; }
         // Heartbeats keep the synthetic request live and make downstream
@@ -140,7 +160,8 @@ function upstreamFixture() {
           resolve();
         }, 50); });
       }
-      const end = Math.min(offset + 7, bytes.length); controller.enqueue(bytes.slice(offset, end)); offset = end;
+      const end = Math.min(offset + 7, bytes.length, failed && offset < firstBytes ? firstBytes : bytes.length);
+      controller.enqueue(bytes.slice(offset, end)); offset = end;
     }, cancel() { call.cancelled = true; clearTimeout(timer); wake?.(); } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
   } };`;
 }
