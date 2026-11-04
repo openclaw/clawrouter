@@ -51,7 +51,7 @@ export const miniMaxVideoFileAdapter: ManagedFileAdapter = {
       // reader cancellation. This codec signal does not invent caller authority.
       const state = await readMiniMaxVideoFileState(boundedMiniMaxVideoResponse(response, ["application/json"], 64 * 1024),
         file.id, new AbortController().signal);
-      requireFile(state.body.error === undefined);
+      requireFile(!Object.hasOwn(state.body, "error"));
       // Project identity/state only: never return a native CDN URL or arbitrary
       // metadata that could become an input or credential destination.
       return { id: state.id, status: state.status, body: { file: { file_id: state.id, purpose: "video_generation",
