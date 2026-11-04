@@ -88,3 +88,35 @@ fixture correction [PR692](https://github.com/openclaw/clawrouter/pull/692) is
 consumed from landed `ed1b1318d8d0e9a2f31c235d1473c8b77dc861ba`, without copying
 or modifying its assertions. No snapshot is regenerated
 in this source slice, and model availability does not establish account entitlement.
+
+## Local declaration integration
+
+Source PR698 `21c17f5928c34cdc8f0865f76e86fb7d5b42b01c` is composed on
+qualified `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. Its declaration commit
+`d17a72f66e76fdade623c3b7297c50b44b193957` adds only the two original image
+cards, image endpoint and capability. Every prior Google row/endpoint and the
+current Vercel fixture are preserved; the already-landed Vercel correction is
+not reapplied over newer accepted proof.
+
+All 85 manifests compile. Snapshot SHA256 is
+`6a12bbe7ed4316c6b640e8672eb5302113566ccc3a6a0f7567e08449c6e8d1dc`.
+Local proof covers 88 focused image/compiler/real-Worker/admission/pricing
+cases in aggregate, Worker types and 1,035 Chat matrix/consumer-selection cases.
+One music negative fixture originally failed because its inherited image
+endpoint rejected the mutated origin before music validation. The integration
+fixture removes only the unrelated image endpoint/capability/rows; all music
+assertions remain intact, and the changed music fixture file passes.
+
+Fourteen actual image-host cases are AUTHORED/UNRUN against published OpenClaw
+`9ce99ae1521b2d23e85c27688d9db45a31dbe472`: registered ClawRouter selection,
+both exact models, text/edit, native and a separate manifest-only Worker
+isolate, original key binding, byte-exact PNG delivery, unknown-dollar/invalid
+key denial, already-aborted requests and incomplete paid output without replay.
+The tests import the real `generateImage` host and registered provider; no client
+parser is copied and no request is patched. The proposed receipt remains one
+explicit seven-micro policy charge with null token counters.
+
+No SDK execution, hosted CI, publication or live inference occurred. The actual
+client pin is not newly qualified here, and the fixtures are not yet enrolled
+in the hosted matrix. Native runtime tests do not substitute for this pending
+actual-client composition or imply account entitlement.
