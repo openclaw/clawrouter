@@ -224,6 +224,7 @@
 - Add executable Perplexity Agent/Search wire fixtures covering native results, typed streaming failures, credential isolation and conservative billing for the provider/client integration.
 
 - Define typed Replicate prediction lifecycle links and validate the native create, retrieve and cancel endpoint contracts before compiling manifests.
+- Add the frozen Fireworks GLM 5.3 Fast router identity with its distinct sourced tariff, full-context reservation ceiling and conservative service-tier guards.
 - Qualify the Deepgram prerecorded manifest format as native raw-audio transcription with Token authentication, exact endpoint/model constraints and no fabricated token tariff. Bundled discovery activation remains gated on binary dispatch integration.
 
 - Add a bounded DuckDuckGo HTML search codec and synthetic challenge/result fixtures. Anonymous-auth schema, actual HTML runtime integration and service-use qualification remain separate activation gates.
