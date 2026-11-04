@@ -72,7 +72,11 @@ test("actual registered Deepgram native raw audio through workerd and SQLite", {
       assert.equal(usage.usage.events.length, 1, "one original caller receives exactly one durable receipt");
       assert.equal(event.provider, "deepgram"); assert.equal(event.model, "deepgram/nova-3"); assert.equal(event.capability, "audio.transcription");
       assert.equal(event.credential_id, id); assert.equal(event.policy_id, id);
-      assert.equal(event.status, id === "deepgram_cancel" ? "client_error" : success.includes(id.slice(9)) ? "success" : "provider_error");
+      // A received 307 owns the existing rejection classification even though
+      // the router delivers sanitized 502 and never follows the redirect.
+      const rejected = id === "deepgram_cancel" || id === "deepgram_redirect";
+      assert.equal(event.status, rejected ? "client_error" : success.includes(id.slice(9)) ? "success" : "provider_error", id);
+      assert.equal(event.status_code, id === "deepgram_cancel" ? 499 : success.includes(id.slice(9)) ? 200 : 502, id);
       assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(usage.budget.spentMicros, 7);
       assert.equal(event.content_retained, false);
       for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(event[field], null, "duration and channels are not tokens");
