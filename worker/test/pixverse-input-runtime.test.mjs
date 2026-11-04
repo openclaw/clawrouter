@@ -15,8 +15,12 @@ const plan = { model: "v6", prompt: "A lighthouse", duration: 5, quality: "720p"
 const bytes = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64"));
 const permission = { version: "clawrouter.upstream-retention.v1", allow: [{ providerId: "pixverse", protocol: "pixverse.video" }] };
 async function setup(t, options = {}) {
+  const originalProviders = [...snapshot.providers];
   const index = snapshot.providers.findIndex(provider => provider.id === "replicate"), original = snapshot.providers[index];
-  snapshot.providers[index] = structuredClone(original); t.after(() => { snapshot.providers[index] = original; });
+  const replacement = structuredClone(original); snapshot.providers[index] = replacement;
+  // The shared fixture temporarily removes the shipped PixVerse row. Restore by
+  // object identity because its earlier splice changes the Replicate index.
+  t.after(() => { snapshot.providers[snapshot.providers.indexOf(replacement)] = original; });
   const f = await fixture(t, { providerId: "pixverse", pooled: options.pooled !== false, configure(provider) {
     provider.base_urls.default = "https://app-api.pixverse.ai";
     provider.auth.schemes = [{ type: "api_key", header: "API-KEY", secretKind: "api_key" }];
@@ -28,6 +32,7 @@ async function setup(t, options = {}) {
     provider.endpoints = [endpoint]; provider.capabilities = [{ id: "video.generate", endpoint: "image_video", methods: ["POST"] }];
     provider.models = [{ id: "pixverse/v6", upstream: "v6", capabilities: ["video.generate"], pricing: null }];
   } });
+  t.after(() => assert.deepEqual(snapshot.providers, originalProviders, "fixture restores every shipped provider row"));
   f.env.PIXVERSE_API_KEY = "synthetic-environment-key";
   f.policy.requestCostsMicros = { "pixverse.image_upload": 13, "video.generate": 700 };
   f.policy.upstreamRetention = permission;

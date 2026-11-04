@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test as nodeTest } from "node:test";
+import { crc32, deflateSync, inflateSync } from "node:zlib";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 const test = (name, run) => nodeTest(name, { timeout: 15000 }, run);
 const { default: worker } = await import("../index.ts");
@@ -21,8 +22,12 @@ function multipart(value = plan, image = png, extras = []) {
   return { raw: new Uint8Array(Buffer.concat(parts)), type: `multipart/form-data; boundary=${boundary}` };
 }
 async function setup(t, options = {}) {
+  const originalProviders = [...snapshot.providers];
   const index = snapshot.providers.findIndex(provider => provider.id === "replicate"), original = snapshot.providers[index];
-  snapshot.providers[index] = structuredClone(original); t.after(() => { snapshot.providers[index] = original; });
+  const replacement = structuredClone(original); snapshot.providers[index] = replacement;
+  // The shared fixture temporarily removes the shipped PixVerse row. Restore by
+  // object identity because its earlier splice changes the Replicate index.
+  t.after(() => { snapshot.providers[snapshot.providers.indexOf(replacement)] = original; });
   const f = await fixture(t, { providerId: "pixverse", pooled: options.pooled !== false, configure(provider) {
     provider.base_urls.default = "https://app-api.pixverse.ai";
     provider.auth.schemes = [{ type: "api_key", header: "API-KEY", secretKind: "api_key" }]; provider.auth.grantTransports = {};
@@ -38,6 +43,7 @@ async function setup(t, options = {}) {
     provider.capabilities = [{ id: "media.predict", endpoint: "text_video", methods: ["POST"] }, { id: "video.generate", endpoint: "image_video", methods: ["POST"] }];
     provider.models = ["v6", "c1"].map(model => ({ id: `pixverse/${model}`, upstream: model, capabilities: ["media.predict", "video.generate"], pricing: null }));
   } });
+  t.after(() => assert.deepEqual(snapshot.providers, originalProviders, "fixture restores every shipped provider row"));
   f.env.PIXVERSE_API_KEY = "synthetic-nonselected-key";
   f.policy.requestCostsMicros = { "pixverse.image_upload": 13, "video.generate": 700 };
   f.policy.upstreamRetention = { version: "clawrouter.upstream-retention.v1", allow: [{ providerId: "pixverse", protocol: "pixverse.video" }] };
@@ -98,7 +104,8 @@ test("public composed bytes reserve both operations, return exact native body on
   f.restart(); const retry = await f.send(); assert.equal(retry.status, 409); assert.equal(retry.headers.get("location"), get);
   assert.equal((await retry.json()).error.code, "managed_create_response_unavailable"); assert.equal(f.sent.length, 2);
   // Text is first and shares the native GET. Only the bound IMAGE route wins.
-  const control = await f.call(get, null); assert.equal(control.status, 200, await control.clone().text()); await control.text();
+  const control = await f.call(get, null); assert.equal(control.status, 410, await control.clone().text());
+  assert.equal((await control.json()).error.code, "prediction_observation_unavailable");
   assert.equal(f.sent.length, 3); assert.equal(f.jobs()[0].job.managed.observationUnavailable, "deleted");
   await f.env.ACCESS_CONTROL.objects.get(stored.scope).object.alarm(); await f.drain();
   const events = await f.events(); assert.equal(events.length, 2);
@@ -185,7 +192,8 @@ for (const phase of ["before-upload", "after-upload", "after-upload-claim", "aft
 test("profile or lifecycle mutation never falls back to the legacy internal route digest", async t => {
   const f = await setup(t), response = await f.send(); assert.equal(response.status, 200); await response.text();
   delete f.image.inputProfile;
-  const control = await f.call(get, null); assert.equal(control.status, 409); await control.text(); assert.equal(f.sent.length, 2);
+  const control = await f.call(get, null); assert.equal(control.status, 503);
+  assert.equal((await control.json()).error.code, "response_owner_unavailable"); assert.equal(f.sent.length, 2);
 });
 
 test("capacity exhaustion refuses before reservations and releases on public cancellation", async t => {
@@ -222,6 +230,9 @@ test("malformed or incomplete upstream upload/create results retain their dispat
   };
   await rejected(f, await f.send(), 2); f.restart(); await rejected(f, await f.send(), 2);
   const state = f.jobs()[0]; f.advance(61000); await f.env.ACCESS_CONTROL.objects.get(state.scope).object.alarm(); await f.drain();
+  assert.equal((await f.events()).length, 0, "input expiry does not invent a terminal generation");
+  f.advance(state.job.observeUntil - Date.now() + 1);
+  await f.env.ACCESS_CONTROL.objects.get(state.scope).object.alarm(); await f.drain();
   const events = await f.events(); assert.equal(events.length, 2); assert.equal(events.reduce((total, event) => total + event.actual_cost_micros, 0), 713);
 });
 
@@ -263,8 +274,23 @@ test("owner rotation between allocation and private composition never borrows th
 
 test("early upstream upload response cannot acknowledge partially consumed bytes", async t => {
   const f = await setup(t);
+  // A valid larger PNG cannot fit in the fixed stream's bounded transport
+  // window. The tiny 1x1 image can be fully consumed before a response arrives.
+  const pixels = Buffer.alloc((256 * 4 + 1) * 256); let random = 1;
+  for (let row = 0; row < 256; row++) for (let column = 1; column <= 256 * 4; column++) {
+    random ^= random << 13; random ^= random >>> 17; random ^= random << 5;
+    pixels[row * (256 * 4 + 1) + column] = random & 255;
+  }
+  const compressed = deflateSync(pixels); assert.deepEqual(inflateSync(compressed), pixels);
+  const chunk = (name, value) => {
+    const data = Buffer.concat([Buffer.from(name), value]), size = Buffer.alloc(4), checksum = Buffer.alloc(4);
+    size.writeUInt32BE(value.length); checksum.writeUInt32BE(crc32(data)); return Buffer.concat([size, data, checksum]);
+  };
+  const header = Buffer.alloc(13); header.writeUInt32BE(256, 0); header.writeUInt32BE(256, 4); header[8] = 8; header[9] = 6;
+  const image = new Uint8Array(Buffer.concat([png.subarray(0, 8), chunk("IHDR", header), chunk("IDAT", compressed), chunk("IEND", Buffer.alloc(0))]));
+  assert.ok(image.length > 128 * 1024);
   f.upstream = () => Response.json({ ErrCode: 0, Resp: { img_id: 123 } });
-  await rejected(f, await f.send(), 1);
+  await rejected(f, await f.send(plan, { image }), 1);
   assert.equal(f.jobs()[0].job.inputReceipt.state, "dispatch_unknown");
   assert.equal(f.jobs()[0].job.inputReceipt.imageId, null);
 });

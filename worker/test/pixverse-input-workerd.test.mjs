@@ -31,9 +31,12 @@ export default { async fetch(request) {
     let total = 0;
     for (let i = 0; i < 4; i++) {
       const chunk = await reader.read(); check(!chunk.done && chunk.value.length <= 16384, 'bounded default chunk'); total += chunk.value.length;
-      await Promise.resolve(); check(pulls === i + 1, 'no queued speculative pull');
+      await Promise.resolve(); check(pulls === i + 1, 'no queued speculative data pull');
+      if (i < 3) check(!source.complete, 'no completion while bytes remain');
     }
-    check(total === 50000 && !source.complete, 'lease remains until EOF, not last enqueue');
+    check(total === 50000, 'all original bytes delivered');
+    // workerd may request the empty terminal pull when its final data read is
+    // fulfilled. That is EOF, not speculative production of another data chunk.
     check(bodyBudgetCharged() === 96 * 1024 * 1024, 'full lease at delivery boundary');
     check((await reader.read()).done && source.complete, 'explicit EOF'); await source.done; reader.releaseLock();
     const canceled = pixVerseByteStream([new Uint8Array(50000)]), cancelReader = canceled.body.getReader();
@@ -134,6 +137,7 @@ export default { async fetch(request, env) {
     const pending = object('cancel-input'), abort = new AbortController(); let inputController, emitted = false;
     const input = new ReadableStream({type:'bytes',start(controller) { inputController = controller; },pull(controller) {
       if (!emitted) { emitted = true; controller.enqueue(new Uint8Array(16384).fill(71)); }
+      else return new Promise(() => {});
     }}, {highWaterMark:0});
     const waiting = pending.fetch('https://owner/echo', {method:'POST',body:input,signal:abort.signal}).then(response => response.body?.cancel(), () => undefined);
     await state(pending, value => value.phase === 'reading' && value.held);
