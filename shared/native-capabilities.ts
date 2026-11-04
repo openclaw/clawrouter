@@ -28,11 +28,22 @@ export interface OpaquePcmSpeechProfile {
   responseFormat: "pcm";
   output: { kind: "opaque"; mimeType: "audio/pcm"; sampleRate: null; voiceCompatible: false };
 }
+export interface InlineMusicReferenceImage {
+  required: false;
+  count: 1;
+  encoding: "base64_data_url";
+  mimeTypes: ["image/png", "image/jpeg", "image/webp"];
+  maxDecodedBytes: 8388608;
+  maxJsonBytes: 12582912;
+  https: false;
+  assetHandles: false;
+}
 export interface NativeEndpointCapabilities {
   sources: string[];
   checkedAt: string;
   input?: Array<"text" | "image" | "audio" | "video" | "json">;
   speech?: OpaquePcmSpeechProfile;
+  referenceImage?: InlineMusicReferenceImage;
   // Full context, preferred input threshold, and endpoint output bound are
   // distinct from the router's authoritative reservation/pricing limits.
   contextWindow?: number;

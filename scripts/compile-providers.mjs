@@ -355,6 +355,7 @@ function validateModels(manifest) {
       const supported = manifest.capabilities.filter(capability => capability.endpoint === id && model.capabilities?.includes(capability.id));
       const fail = message => { throw new Error("model " + model.id + " nativeCapabilities " + message); };
       if (!endpoint || !supported.length) fail("must reference a supported endpoint");
+      if (facts.referenceImage) validateReferenceImage(manifest, model, id, endpoint, facts);
       if (facts.speech && (endpoint.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary"
         || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
         || !supported.some(capability => capability.id === "audio.speech")
@@ -387,6 +388,25 @@ function validateModels(manifest) {
       }
     }
   }
+}
+
+function validateReferenceImage(manifest, model, id, endpoint, facts) {
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  // Support facts describe the registered leaf's input, never asset authority
+  // or a capability inherited by another model on the shared Chat wire path.
+  if (manifest.id !== "openrouter" || id !== "music_generate"
+    || Object.values(manifest.baseUrls).some(base => base !== "https://openrouter.ai/api")
+    || !["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"].includes(model.upstream)
+    || model.id !== `openrouter/${model.upstream}` || model.availability?.status === "upstream_alias"
+    || model.capabilities.length !== 1 || model.capabilities[0] !== "music.generate"
+    || capabilities.length !== 1 || capabilities[0].id !== "music.generate"
+    || capabilities[0].methods?.some(method => method !== "POST")
+    || (endpoint.method ?? "POST") !== "POST" || endpoint.path !== "/v1/chat/completions"
+    || endpoint.requestFormat !== "openai.chat_completions" || endpoint.responseFormat !== "openai.chat_completions"
+    || endpoint.streaming !== "sse" || endpoint.pathParams?.length || Object.keys(endpoint.query ?? {}).length
+    || ["upstreamPath", "websocket", "lifecycle", "responsesLifecycle", "modelPassthrough", "requestPricing", "inputProfile"].some(key => endpoint[key] !== undefined)
+    || facts.input?.length !== 2 || !facts.input.includes("text") || !facts.input.includes("image"))
+    throw new Error(`model ${model.id} referenceImage requires the registered OpenRouter Lyria music_generate route with optional inline image input`);
 }
 
 function validateModelAvailability(model) {

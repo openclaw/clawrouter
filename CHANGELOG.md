@@ -99,6 +99,7 @@
 - Dispatch frozen native Google Lyria music through bounded complete audio validation, preserving original credentials, unknown-dollar denial, explicit policy charging and no-replay settlement.
 - Add frozen OpenRouter Lyria streaming music codecs and fixtures, preserving split base64 audio, native completion and unknown-cost outcomes on interrupted delivery.
 - Add immutable borrowed OpenRouter music input preparation with bounded original-range base64 and JSON-size validation, preserving the existing owned-copy API and keeping image authority and capacity admission separate.
+- Define closed model-scoped inline reference-image facts for the two OpenRouter Lyria models, preserving optional text input, explicit URL/asset denial and public catalog constraints without activating image routes.
 - Add a bounded OpenRouter Lyria response leaf that quarantines complete music SSE before unchanged replay, preserving native diagnostics without token pricing; shared dispatch and asset authority remain separate.
 - Add scalar-only OpenRouter music inspection with incremental canonical base64 validation, retaining the original reader's decoded-output behavior and keeping larger response delivery behind actual Worker-path qualification.
 - Keep OpenRouter music response inspection and decoding bound to immutable model/format scalars without retaining prepared request bodies in state or reader callbacks.
