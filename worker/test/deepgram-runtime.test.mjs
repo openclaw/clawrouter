@@ -10,6 +10,7 @@ const { providerById } = await import("../providers.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 const { transcriptionLimits } = await import("../transcription-body.ts");
 const { deepgramAudioLimit } = await import("../deepgram-prerecorded.ts");
+const { overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/deepgram/prerecorded.json", import.meta.url), "utf8"));
 const audio = new Uint8Array(Buffer.from(wire.request.base64, "base64"));
 const native = "/v1/native/openai/v1/listen", manifest = "/v1/proxy/openai/listen";
@@ -158,6 +159,36 @@ for (const scenario of ["model-missing", "model-denied", "policy-revoked", "cred
   });
   const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("revoked upload escaped"); });
   const response = await f.call(); assert.ok([400, 401, 403, 503].includes(response.status), await response.text()); assert.equal(upstream.mock.callCount(), 0);
+});
+
+for (const path of [native, manifest]) for (const revoked of ["policy", "credential"]) test(`raw post-upload ${revoked} check bypasses warm admission: ${path}`, async t => {
+  overrideHotCacheConfig({ maxAgeMs: 60_000, freshMs: 60_000 });
+  t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED));
+  const f = fixture(t), upstream = t.mock.method(globalThis, "fetch", async () => Response.json(wire.response));
+  const first = await f.call(audio, { path });
+  assert.equal(first.status, 200, await first.clone().text()); await first.arrayBuffer(); await Promise.all(f.pending);
+  assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
+  assert.ok(f.admissions.some(value => value.selection?.model === "nova-3"));
+  const before = f.admissions.length; let reads = 0;
+  // The first complete Worker request established the warm admission. HWM0
+  // prevents producer prefetch; revoke only when the authenticated reader pulls.
+  const body = new ReadableStream({ pull(controller) {
+    reads++;
+    f.editAuthority(value => {
+      if (value.policy && revoked === "policy") value.policy.policy.enabled = false;
+      if (value.credential && revoked === "credential") value.credential.credential.enabled = false;
+      return value;
+    });
+    controller.enqueue(audio); controller.close();
+  } }, { highWaterMark: 0 });
+  const denied = await f.call(body, { path });
+  assert.ok([401, 403].includes(denied.status), await denied.text());
+  await Promise.all(f.pending);
+  assert.equal(reads, 1); assert.equal(f.admissions.length, before + 1);
+  assert.equal(f.admissions.at(-1).selection.model, "nova-3");
+  assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].actual_cost_micros, 200);
+  for (const name of owners) assert.equal(f.ledger.get(name).reservations().length, 1);
 });
 
 for (const bound of ["policy", "provider", "daily", "weekly"]) test("unknown whole-upload cost denies " + bound + " hard budget and discovery", async t => {
