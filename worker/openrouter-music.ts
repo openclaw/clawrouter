@@ -1,5 +1,7 @@
 import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
 import { createSseFrames } from "./token-usage.ts";
+import { createJsonTokenizer } from "./json-tokens.ts";
+import { utf8Length } from "./json-body.ts";
 
 export const openRouterMusicModels = ["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"] as const;
 const maxAudio = 16 * 1024 * 1024, maxEnvelope = 32 * 1024 * 1024, maxTranscript = 1024 * 1024;
@@ -36,11 +38,33 @@ export function prepareOpenRouterMusic(model: string, value: unknown): OpenRoute
 }
 export interface OpenRouterMusicObservation { audio: Uint8Array; transcript: string; format: "mp3" | "wav";
   usage: Json | null; responseId: string | null; upstreamCostMicros: null }
+export interface OpenRouterMusicInspection { audioBytes: number; transcriptBytes: number; format: "mp3" | "wav";
+  usage: Json | null; responseId: string | null; upstreamCostMicros: null }
 
 export class OpenRouterMusicStream {
+  private readonly state: MusicState;
+  constructor(request: OpenRouterMusicRequest) { this.state = new MusicState(request, true); }
+  accept(data: string): void { this.state.accept(data); }
+  isDone(): boolean { return this.state.isDone(); }
+  result(): OpenRouterMusicObservation { return this.state.result(); }
+}
+
+// Inspection keeps scalar evidence only. It does not retain/return audio,
+// base64 or transcript and does not grant capacity or input-image authority.
+export function createOpenRouterMusicInspector(request: OpenRouterMusicRequest): {
+  accept(data: string): void; isDone(): boolean; result(): OpenRouterMusicInspection;
+} {
+  const state = new MusicState(request, false);
+  return { accept: data => state.accept(data), isDone: () => state.isDone(), result: () => state.inspection() };
+}
+
+class MusicState {
   private audioBase64 = "";
+  private audioCharacters = 0;
+  private readonly audioCounter = new Base64Counter();
   private transcript = "";
   private transcriptBytes = 0;
+  private transcriptHigh = false;
   private frames = 0;
   private usage: Json | null = null;
   private responseId: string | null = null;
@@ -48,14 +72,16 @@ export class OpenRouterMusicStream {
   private done = false;
   private failed = false;
   private readonly request: OpenRouterMusicRequest;
-  constructor(request: OpenRouterMusicRequest) { this.request = request; }
+  private readonly retain: boolean;
+  constructor(request: OpenRouterMusicRequest, retain: boolean) { this.request = request; this.retain = retain; }
 
   // Called only with a decoded SSE data payload; never execute embedded text.
   accept(data: string): void {
     try {
       if (this.failed || this.done || ++this.frames > 8192 || data.length > 2 * 1024 * 1024
-        || encoder.encode(data).length > 2 * 1024 * 1024) fail("state");
+        || (this.retain ? encoder.encode(data).length : utf8Length(data)) > 2 * 1024 * 1024) fail("state");
       if (data === "[DONE]") { this.done = true; return; }
+      if (!this.retain) inspectStructure(data);
       const frame = object(JSON.parse(data));
       if (frame.error != null || frame.model != null && frame.model !== this.request.model) fail("frame");
       if (frame.id !== undefined) {
@@ -80,14 +106,24 @@ export class OpenRouterMusicStream {
         const audio = object(delta.audio);
         if (audio.data !== undefined) {
           if (typeof audio.data !== "string" || !/^[A-Za-z0-9+/=]*$/.test(audio.data)
-            || this.audioBase64.length + audio.data.length > Math.ceil(maxAudio / 3) * 4) fail("audio");
-          this.audioBase64 += audio.data;
+            || this.audioCharacters + audio.data.length > Math.ceil(maxAudio / 3) * 4) fail("audio");
+          this.audioCharacters += audio.data.length;
+          if (this.retain) this.audioBase64 += audio.data;
+          else this.audioCounter.accept(audio.data);
         }
         if (audio.transcript !== undefined) {
           if (typeof audio.transcript !== "string") fail("transcript");
-          this.transcriptBytes += encoder.encode(audio.transcript).length;
+          this.transcriptBytes += this.retain ? encoder.encode(audio.transcript).length : utf8Length(audio.transcript);
           if (this.transcriptBytes > maxTranscript) fail("transcript_limit");
-          this.transcript += audio.transcript;
+          if (this.retain) this.transcript += audio.transcript;
+          else for (let index = 0; index < audio.transcript.length; index++) {
+            const code = audio.transcript.charCodeAt(index);
+            if (this.transcriptHigh) {
+              if (code < 0xdc00 || code > 0xdfff) fail("transcript_unicode");
+              this.transcriptHigh = false;
+            } else if (code >= 0xd800 && code <= 0xdbff) this.transcriptHigh = true;
+            else if (code >= 0xdc00 && code <= 0xdfff) fail("transcript_unicode");
+          }
         }
       }
       if (choice.finish_reason === "stop") this.stopped = true;
@@ -102,6 +138,80 @@ export class OpenRouterMusicStream {
     return { audio, transcript: this.transcript, format: this.request.format,
       usage: this.usage, responseId: this.responseId, upstreamCostMicros: null };
   }
+  inspection(): OpenRouterMusicInspection {
+    if (this.retain || this.failed || !this.done || !this.audioCharacters) fail("incomplete_audio");
+    if (this.transcriptHigh) fail("transcript_unicode");
+    return { audioBytes: this.audioCounter.result(), transcriptBytes: this.transcriptBytes, format: this.request.format,
+      usage: this.usage, responseId: this.responseId, upstreamCostMicros: null };
+  }
+}
+
+// At most one unfinished quartet, represented by its position and final sextet.
+// No atob, aggregate string, decoded array or caller-owned audio is retained.
+class Base64Counter {
+  private position = 0;
+  private last = 0;
+  private secondPadding = false;
+  private closed = false;
+  private bytes = 0;
+  accept(data: string): void {
+    for (let index = 0; index < data.length; index++) {
+      if (this.closed) fail("base64");
+      const code = data.charCodeAt(index), padding = code === 61;
+      const value = code >= 65 && code <= 90 ? code - 65 : code >= 97 && code <= 122 ? code - 71
+        : code >= 48 && code <= 57 ? code + 4 : code === 43 ? 62 : code === 47 ? 63 : -1;
+      if (!padding && value < 0 || padding && this.position < 2) fail("base64");
+      if (this.position === 2 && padding) {
+        if (this.last & 15) fail("base64");
+        this.secondPadding = true;
+      } else if (this.position === 3) {
+        if (this.secondPadding && !padding || padding && !this.secondPadding && (this.last & 3)) fail("base64");
+        this.bytes += this.secondPadding ? 1 : padding ? 2 : 3;
+        this.closed = padding;
+        this.secondPadding = false;
+        if (this.bytes > maxAudio) fail("audio");
+      }
+      this.last = value; this.position = (this.position + 1) % 4;
+    }
+  }
+  result(): number {
+    if (this.position === 1 || this.secondPadding || this.position === 2 && (this.last & 15)
+      || this.position === 3 && (this.last & 3)) fail("base64");
+    const bytes = this.bytes + (this.position ? this.position - 1 : 0);
+    if (!bytes || bytes > maxAudio) fail("audio");
+    return bytes;
+  }
+}
+
+// Bound object amplification before JSON.parse in inspection mode. The default
+// reader retains its existing behavior; this is not a new JSON parsing framework.
+function inspectStructure(data: string): void {
+  const stack: Array<{ object: boolean; count: number }> = [];
+  let nodes = 0, properties = 0, units = 0, scalar = 0, key = false, number = false;
+  const node = () => {
+    if (++nodes > 4096) fail("structure");
+    const parent = stack.at(-1);
+    if (parent && !parent.object && ++parent.count > 4096) fail("structure");
+  };
+  const tokens = createJsonTokenizer(token => {
+    switch (token.name) {
+      case "startObject": case "startArray":
+        node(); if (stack.length >= 32) fail("structure"); stack.push({ object: token.name === "startObject", count: 0 }); break;
+      case "endObject": case "endArray": stack.pop(); break;
+      case "startKey": key = true; number = false; scalar = 0; break;
+      case "startString": key = false; number = false; scalar = 0; node(); break;
+      case "startNumber": key = false; number = true; scalar = 0; node(); break;
+      case "stringChunk": case "numberChunk":
+        scalar += token.value.length; units += token.value.length;
+        if (units > 2 * 1024 * 1024 || key && scalar > 256 || number && scalar > 128) fail("structure"); break;
+      case "endKey":
+        if (!stack.at(-1)?.object || ++stack.at(-1)!.count > 128 || ++properties > 4096) fail("structure");
+        key = false; break;
+      case "nullValue": case "trueValue": case "falseValue": node(); break;
+    }
+  });
+  for (let offset = 0; offset < data.length; offset += 1024) tokens.push(data.slice(offset, offset + 1024));
+  tokens.end();
 }
 export async function readOpenRouterMusic(response: Response, request: OpenRouterMusicRequest, signal: AbortSignal): Promise<OpenRouterMusicObservation> {
   const length = response.headers.get("content-length");

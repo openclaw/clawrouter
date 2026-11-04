@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { openRouterMusicModels, prepareOpenRouterMusic, OpenRouterMusicStream, readOpenRouterMusic } from "../openrouter-music.ts";
+import { openRouterMusicModels, prepareOpenRouterMusic, OpenRouterMusicStream, readOpenRouterMusic, createOpenRouterMusicInspector } from "../openrouter-music.ts";
 
 const fixture = JSON.parse(readFileSync(new URL("../../providers/_fixtures/openrouter/music.json", import.meta.url)));
 const prepare = body => prepareOpenRouterMusic(body.model, body);
@@ -83,4 +83,122 @@ test("size, HTTP, invalid UTF-8 and abort bounds preserve an unknown outcome", a
   let cancelled = false; const controller = new AbortController();
   const pending = readOpenRouterMusic(new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "content-type": "text/event-stream" } }), request, controller.signal);
   controller.abort(); await assert.rejects(pending); assert.equal(cancelled, true);
+});
+
+function audioFrame(data, transcript) {
+  return { id: "gen-synthetic-music", model: request.model, choices: [{ index: 0, delta: {
+    audio: { data, ...(transcript === undefined ? {} : { transcript }) },
+  }, finish_reason: null }] };
+}
+const feed = (state, value) => state.accept(typeof value === "string" ? value : JSON.stringify(value));
+function inspect(frames) {
+  const state = createOpenRouterMusicInspector(request);
+  for (const frame of frames) feed(state, frame);
+  return state;
+}
+
+test("scalar inspection preserves native identity and diagnostics without returning audio or transcript", () => {
+  const retained = accepted([...fixture.frames, "[DONE]"]).result();
+  const state = inspect(fixture.frames);
+  assert.equal(state.isDone(), false); assert.throws(() => state.result(), /incomplete_audio/);
+  state.accept("[DONE]"); assert.equal(state.isDone(), true);
+  const result = state.result();
+  assert.deepEqual(result, { audioBytes: retained.audio.length, transcriptBytes: encode(retained.transcript).length,
+    format: retained.format, usage: retained.usage, responseId: retained.responseId, upstreamCostMicros: null });
+  assert.equal(Object.hasOwn(result, "audio"), false); assert.equal(Object.hasOwn(result, "transcript"), false);
+  assert.deepEqual(state.result(), result); // Reading scalar evidence does not recount a tail.
+  assert.throws(() => state.accept("[DONE]")); assert.equal(state.isDone(), false); assert.throws(() => state.result());
+});
+
+test("inspection agrees with the default reader for canonical padded and unpadded tails at every split", () => {
+  for (let size = 1; size <= 8; size++) {
+    const bytes = Buffer.from(Array.from({ length: size }, (_, index) => (index * 73 + size) % 256));
+    const canonical = bytes.toString("base64");
+    for (const encoded of [canonical, canonical.replace(/=+$/, "")]) for (let split = 0; split <= encoded.length; split++) {
+      const frames = [audioFrame(encoded.slice(0, split)), audioFrame(encoded.slice(split)), "[DONE]"];
+      const result = inspect(frames).result(), retained = accepted(frames).result();
+      assert.equal(result.audioBytes, bytes.length); assert.deepEqual(retained.audio, new Uint8Array(bytes));
+    }
+  }
+  for (const encoded of ["A", "AB", "ABC", "AB==", "ABC=", "A===", "AA=", "AA=A", "AA==AAAA", "AAA=AAAA", "=AAA", "AAAA=", "AAAA====", "AA-_"]) {
+    for (let split = 0; split <= encoded.length; split++) {
+      const frames = [audioFrame(encoded.slice(0, split)), audioFrame(encoded.slice(split)), "[DONE]"];
+      assert.throws(() => inspect(frames).result(), /invalid_openrouter_music/);
+      assert.throws(() => accepted(frames).result(), /invalid_openrouter_music/);
+    }
+  }
+});
+
+test("exact original 16 MiB inspection allocates no decoded audio and rejects one extra byte", () => {
+  const maximum = 16 * 1024 * 1024, block = "AAAA".repeat(16384), blockBytes = block.length / 4 * 3;
+  const originalAtob = globalThis.atob; let decodeCalls = 0;
+  globalThis.atob = value => { decodeCalls++; return originalAtob(value); };
+  try {
+    for (const extra of [0, 1]) {
+      const state = createOpenRouterMusicInspector(request);
+      for (let bytes = 0; bytes + blockBytes <= maximum; bytes += blockBytes) feed(state, audioFrame(block));
+      const tail = Buffer.alloc(maximum % blockBytes + extra).toString("base64");
+      if (extra) assert.throws(() => { feed(state, audioFrame(tail)); feed(state, "[DONE]"); state.result(); });
+      else {
+        feed(state, audioFrame(tail)); feed(state, "[DONE]");
+        assert.equal(state.result().audioBytes, maximum);
+        assert.equal(state.result().transcriptBytes, 0); assert.equal(state.result().usage, null);
+      }
+    }
+    assert.equal(decodeCalls, 0);
+  } finally { globalThis.atob = originalAtob; }
+});
+
+test("inspection validates split transcript surrogates and the original per-fragment UTF-8 byte bound", () => {
+  const split = [audioFrame("AA==", "\ud83e"), audioFrame("", "\udd8a"), "[DONE]"];
+  assert.equal(accepted(split).result().transcript, "🦊");
+  assert.equal(inspect(split).result().transcriptBytes, 6); // Original encoder counts each fragment independently.
+  for (const fragments of [["\ud800"], ["\udc00"], ["\ud800", "x"], ["\ud800", "\ud800"]]) {
+    const frames = fragments.map((text, index) => audioFrame(index ? "" : "AA==", text)).concat("[DONE]");
+    assert.throws(() => inspect(frames).result()); assert.throws(() => accepted(frames).result());
+  }
+  const state = createOpenRouterMusicInspector(request);
+  for (let index = 0; index < 16; index++) feed(state, audioFrame(index ? "" : "AA==", "a".repeat(65536)));
+  feed(state, "[DONE]"); assert.equal(state.result().transcriptBytes, 1024 * 1024);
+  const oversized = createOpenRouterMusicInspector(request);
+  for (let index = 0; index < 16; index++) feed(oversized, audioFrame(index ? "" : "AA==", "a".repeat(65536)));
+  assert.throws(() => feed(oversized, audioFrame("", "a")));
+});
+
+test("inspection retains original identity, native error and terminal invariants with unknown cost", () => {
+  for (const patch of [{ error: { message: "synthetic failure" } }, { model: "other-model" }, { id: "bad/id" },
+    { usage: { cost: -1 } }, { choices: [{ index: 1, delta: {} }] },
+    { choices: [{ delta: { audio: { data: "AA==" } }, finish_reason: "length" }] },
+    { choices: [{ delta: { function_call: {} } }] }, { choices: [{ delta: { refusal: "filtered" } }] }])
+    assert.throws(() => inspect([{ ...audioFrame("AA=="), ...patch }, "[DONE]"]).result());
+  assert.throws(() => inspect([audioFrame("AA=="), { ...audioFrame(""), id: "other-job" }, "[DONE]"]));
+  assert.throws(() => inspect([audioFrame("AA=="), { choices: [{ delta: {}, finish_reason: "stop" }] }, audioFrame(""), "[DONE]"]));
+  assert.throws(() => inspect(["[DONE]"]).result());
+  const unknown = inspect([audioFrame("AA=="), { choices: [], usage: { cost: 123, completion_tokens: 999 } }, "[DONE]"]).result();
+  assert.equal(unknown.upstreamCostMicros, null); assert.equal(unknown.usage.cost, 123);
+  assert.equal(inspect([{ ...audioFrame("AA=="), error: null }, "[DONE]"]).result().audioBytes, 1);
+  // Null-error compatibility remains in the codec; the production leaf separately denies it.
+});
+
+test("inspection bounds object amplification before parsing without changing default extension behavior", () => {
+  let deep = {}; for (let index = 0; index < 33; index++) deep = { next: deep };
+  const properties = Object.fromEntries(Array.from({ length: 129 }, (_, index) => ["field" + index, 0]));
+  for (const extra of [deep, properties, Array(4096).fill(null), { ["k".repeat(257)]: 1 }]) {
+    const frames = [{ ...audioFrame("AA=="), diagnostic: extra }, "[DONE]"];
+    assert.throws(() => inspect(frames).result());
+    assert.equal(accepted(frames).result().audio.length, 1);
+  }
+  assert.throws(() => inspect([JSON.stringify(audioFrame("AA==")).replace('"finish_reason":null', '"finish_reason":null,"extra":' + "1".repeat(129)), "[DONE]"]));
+  assert.throws(() => inspect([JSON.stringify({ ...audioFrame("AA=="), text: "音".repeat(700000) }), "[DONE]"]));
+  const events = createOpenRouterMusicInspector(request); feed(events, audioFrame("AA=="));
+  for (let index = 1; index < 8192; index++) feed(events, { choices: [], usage: {} });
+  assert.throws(() => feed(events, "[DONE]"));
+  const complete = createOpenRouterMusicInspector(request); feed(complete, audioFrame("AA=="));
+  for (let index = 1; index < 8191; index++) feed(complete, { choices: [], usage: {} });
+  feed(complete, "[DONE]"); assert.equal(complete.result().audioBytes, 1);
+  const empty = { ...audioFrame("AA=="), diagnostic: "" };
+  const exact = JSON.stringify({ ...empty, diagnostic: "x".repeat(2 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(empty))) });
+  assert.equal(Buffer.byteLength(exact), 2 * 1024 * 1024);
+  assert.equal(inspect([exact, "[DONE]"]).result().audioBytes, 1);
+  assert.throws(() => inspect([exact + " ", "[DONE]"]));
 });
