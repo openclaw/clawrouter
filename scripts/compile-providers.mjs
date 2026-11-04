@@ -13,6 +13,23 @@ const decisionContracts = new Map([
   ["typesafe-systemone", { provider: "typesafe", format: "typesafe.systemone" }],
   ["subq-decisions", { provider: "subq", format: "subq.decisions" }],
 ]);
+// Exact existing discovery/codec pairs, not a naming convention for future
+// formats. Provider-specific validators retain their stricter route/auth rules.
+const catalogContracts = [
+  ["openai.models", "openai.models", true],
+  ["anthropic.models", "anthropic.models", true],
+  ["ollama.models", "ollama.models", false],
+  ["synthetic.models", "synthetic.models", false],
+  ["baseten.models", "baseten.models", false],
+  ["arcee.models", "arcee.models", false],
+  ["novita.models", "novita.models", false],
+  ["chutes.models", "chutes.models", false],
+  ["venice.models", "venice.models", false],
+  ["featherless.models", "featherless.models", false],
+  ["featherless.catalog", "featherless.catalog", false],
+  ["cerebras.public_catalog", "cerebras.public_catalog", false],
+  ["nvidia.public_catalog", "nvidia.public_catalog", false],
+];
 const manifestSchema = JSON.parse(readFileSync(new URL("../providers/_schema/service-provider.schema.json", import.meta.url), "utf8"));
 const manifestValidator = new Validator(manifestSchema, "2020-12");
 
@@ -388,6 +405,7 @@ function validateModelAvailability(model) {
 function validateEndpoints(manifest) {
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    validateCatalogEndpoint(manifest, id, endpoint);
     validateUpstreamPath(manifest, id, endpoint);
     if (endpoint.requestPricing?.unit === "image") {
       if (manifest.id !== "xai" || !["xai.images_generations", "xai.images_edits"].includes(endpoint.requestFormat) || endpoint.responseFormat !== "xai.images")
@@ -475,6 +493,25 @@ function validateEndpoints(manifest) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }
   }
+}
+
+function validateCatalogEndpoint(manifest, id, endpoint) {
+  if (!catalogContracts.some(([request, response]) => endpoint.requestFormat === request || endpoint.responseFormat === response)) return;
+  const contract = catalogContracts.find(([request, response]) => endpoint.requestFormat === request && endpoint.responseFormat === response);
+  const fail = message => { throw new Error(`provider ${manifest.id} endpoint ${id} catalog protocol ${message}`); };
+  if (!contract) fail("requires a registered request/response pair");
+  if (endpoint.method !== "GET") fail("requires explicit GET");
+  if (Object.hasOwn(endpoint, "streaming") || Object.hasOwn(endpoint, "websocket"))
+    fail("requires an omitted streaming property and no WebSocket transport");
+  const params = endpoint.pathParams ?? [];
+  const retrieve = params.length === 1 && params[0] === "model_id" && contract[2];
+  if (params.length && !retrieve || retrieve && endpoint.path.split("${model_id}").length !== 2)
+    fail("allows only its qualified model_id retrieval variant");
+  const expected = retrieve ? "models.retrieve" : "models.list";
+  const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
+  if (!capabilities.length || capabilities.some(capability => capability.id !== expected)) fail(`requires canonical ${expected}`);
+  if (capabilities.some(capability => (capability.methods?.length ? capability.methods : [endpoint.method]).some(method => method !== "GET")))
+    fail("requires GET-only capability methods");
 }
 
 function validateUpstreamPath(manifest, id, endpoint) {

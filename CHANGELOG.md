@@ -341,6 +341,7 @@
 - Fix native Node loading of the Cerebras catalog codec by resolving its TypeScript imports explicitly.
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
 - Qualify manifest-only Cerebras and NVIDIA public catalog declarations with fixed metadata factories and normalized fact arrays, preserving private caller binding and withholding native-route activation.
+- Reject registered catalog protocol declarations with mismatched wire pairs, noncanonical list/retrieve capabilities, missing GET or streaming transports before Worker execution, while preserving generic endpoint defaults and existing catalog exposure restrictions.
 - Add isolated public catalog orchestration for Cerebras, NVIDIA, Chutes and Venice with original-owner checks before every fetch and publication, one caller deadline and final current-policy filtering; shared dispatch activation remains separate.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Qualify DeepInfra’s eight frozen model dispositions and original-account model discovery, preserving the existing Chat seed and withholding the known GLM-5.1 alias until runtime availability integration.
