@@ -105,10 +105,10 @@ observations do not authorize silently changing a policy-selected tariff.
 Source3 retains the compiler. No shared source, client, media file, snapshot,
 production deployment, login or live account provisioning is changed here.
 
-## Local integration checkpoint
+## Serialized integration checkpoint
 
 Exact source `1df3552c342f611d83ed23301777b8eb5d34984c` is retained on
-qualified `f11178a847189325d86ec3fa32f104c346648e66`. The provider YAML retains
+qualified `7e04f3a4798039dfaa8e3a73e209c735a0a3ecd6`. The provider YAML retains
 the exact owner-corrected blob described below. The changelog insertion is
 composed with existing unrelated entries.
 
@@ -125,22 +125,28 @@ require the unsupported `/v1/native/clawrouter-tencent-tokenhub/...` URL to
 return 404 `provider_not_found` with zero upstream calls. Canonical native and
 manifest routes, selected/served preview identity, grant isolation, tools and
 usage retain their positive assertions. No production runtime or YAML was
-changed by these corrections. The Worker and actual-client fixtures remain
-byte-identical to local checkpoint `334326adddeb6632b6fcfc9d96ce4a7e14f9414c`.
-This local checkpoint has not been published or qualified by final-head CI.
+changed by these corrections. The Worker fixture remains byte-identical to
+local checkpoint `334326adddeb6632b6fcfc9d96ce4a7e14f9414c`. Final-head CI
+remains required.
 
-Six actual registered-client cases are AUTHORED/UNRUN in
+Six actual registered-client cases are enrolled in ordinary hosted CI from
 `test/fixtures/openclaw-tencent-contract.test.ts`, paired with the real
 Worker/SQLite harness `test/openclaw-tencent.test.mjs`. They pin actual public
 OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb` and import its Tencent
 plugin, static catalog, registered Hy3 wrapper, host replay and serializer.
 They cover the three selected IDs, Hy3 off/low mapping, positive tool/thinking
 history, cumulative native usage/cache, original TokenHub keys and zero-egress
-invalid caller/TokenPlan-only/unknown-dollar denial. The synthetic preview
+invalid caller/TokenPlan-only/unknown-dollar denial. The existing denial case
+also exercises an already-aborted caller: the actual SDK must return `aborted`
+with no content, and the outer Worker harness requires zero upstream calls.
+The original positive reasoning, tools, usage and seven-micro capped-budget
+assertions remain unchanged. The synthetic preview
 response reports `hy3` while the selected request and receipt remain
 `hy3-preview`; no static `replacedBy` metadata is used to rewrite requests.
 
-This local preparation does not execute or qualify the SDK, enroll CI, publish,
-or call a live provider. Actual discovery/profile selection, manifest-client
-transport and account billing remain separate from the configured native-route
+The pinned static-catalog helper and host replay policy are inspected directly;
+the actual six-case execution and outer SQLite assertions remain pending until
+the composed head passes CI. No additional SDK report, local install or live
+provider call is performed. Dynamic discovery/profile selection, manifest-client
+transport and account billing remain separate from these configured native-route
 fixtures. Published client prices are never imported as router price facts.

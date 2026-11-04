@@ -10,7 +10,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const cards = { preview: "hy3-preview", hy3: "hy3", hy4: "hy4-preview", off: "hy3", low: "hy3" };
-const charged = Object.keys(cards), ids = [...charged, "foreign", "unpriced"];
+const charged = Object.keys(cards), ids = [...charged, "foreign", "unpriced", "aborted"];
 test("registered Tencent TokenHub selected/served identity and accounting through Worker/SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const provider = snapshot.providers.find(p => p.id === "tencent-tokenhub");
   assert.ok(Object.values(cards).every(id => provider.models.some(m => m.upstream === id)), "declaration snapshot must qualify first");
@@ -33,7 +33,7 @@ test("registered Tencent TokenHub selected/served identity and accounting throug
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-tencent-contract.test.ts", import.meta.url), testPath: "extensions/tencent/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, TOKENHUB_API_KEY: "must-not-fallback", TOKENPLAN_API_KEY: "must-not-fallback" } });
     const upstream = await mf.getWorker("upstream"), calls = await (await upstream.fetch("https://fixture.example/state")).json();
-    assert.equal(calls.length, charged.length, "invalid/foreign-product/unknown-price calls have zero egress");
+    assert.equal(calls.length, charged.length, "invalid/foreign-product/unknown-price/pre-aborted calls have zero egress");
     for (const id of charged) {
       const matching = calls.filter(c => JSON.stringify(c.body.messages).includes(`tencent_${id}`)); assert.equal(matching.length, 1);
       const [call] = matching;

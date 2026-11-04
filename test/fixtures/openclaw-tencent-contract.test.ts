@@ -12,7 +12,7 @@ import plugin from "./index.js";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const cards = { preview: "hy3-preview", hy3: "hy3", hy4: "hy4-preview", off: "hy3", low: "hy3" };
-async function run(id: string, invalid = false) {
+async function run(id: string, invalid = false, signal?: AbortSignal) {
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.id).toBe("tencent-tokenhub");
   const catalog = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
@@ -35,7 +35,7 @@ async function run(id: string, invalid = false) {
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages), tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   const wrapped = provider.wrapStreamFn?.({ provider: model.provider, modelId, model, streamFn: streamSimple });
   expect(wrapped).toBeDefined();
-  return wrapped!(model, context, { apiKey: invalid ? "clawrouter-live-tencent_hy3-invalid" : `clawrouter-live-tencent_${id}-fixture-secret`, maxTokens: 128, reasoning: id === "off" ? "off" : id === "low" ? "low" : "high" }).result();
+  return wrapped!(model, context, { apiKey: invalid ? "clawrouter-live-tencent_hy3-invalid" : `clawrouter-live-tencent_${id}-fixture-secret`, maxTokens: 128, reasoning: id === "off" ? "off" : id === "low" ? "low" : "high", signal }).result();
 }
 describe("actual registered Tencent TokenHub standard client through Worker", () => {
   it.each(Object.keys(cards))("preserves selected card and native wrapper for %s", async id => {
@@ -43,10 +43,15 @@ describe("actual registered Tencent TokenHub standard client through Worker", ()
     expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
     expect(result.usage).toMatchObject({ input: 44, cacheRead: 256, output: 20, totalTokens: 320 });
   });
-  it("denies invalid caller, TokenPlan-only scope and unknown-dollar pricing without fallback", async () => {
+  it("denies invalid caller, TokenPlan-only scope, unknown-dollar pricing and pre-aborted calls without fallback", async () => {
     for (const [id, invalid] of [["hy3", true], ["foreign", false], ["unpriced", false]] as const) {
       const result = await run(id, invalid); expect(result.stopReason).toBe("error");
       expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream|must-not-fallback/);
     }
+    const controller = new AbortController();
+    controller.abort(new DOMException("Synthetic caller cancellation", "AbortError"));
+    const canceled = await run("aborted", false, controller.signal);
+    expect(canceled.stopReason).toBe("aborted");
+    expect(canceled.content).toEqual([]);
   });
 });
