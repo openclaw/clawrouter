@@ -63,12 +63,13 @@ function metadataResponse(value: unknown, response: Response): Response {
 }
 
 const malformed = () => new HttpError(502, "invalid_model_discovery_response", "upstream model metadata is invalid or exceeds the discovery scan bound");
-async function readMetadata(response: Response, operation: HttpOperation): Promise<Record<string, unknown>> {
+async function readMetadata(response: Response, operation: HttpOperation, boundReads = false): Promise<Record<string, unknown>> {
   const reader = response.body?.getReader();
   if (!reader) throw malformed();
-  const chunks: Uint8Array[] = []; let size = 0;
+  const chunks: Uint8Array[] = []; let size = 0, reads = 0;
   try {
     while (true) {
+      if (boundReads && ++reads > 8192) throw malformed();
       const { done, value } = await operation.wait(reader.read());
       if (done) break;
       size += value.byteLength;
@@ -94,8 +95,16 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
   const seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
     if (refreshPolicy && response.status !== 200) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new HttpError(502, "model_discovery_rejected", "upstream rejected model discovery");
+      if (response.status < 400) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new HttpError(502, "model_discovery_rejected", "upstream rejected model discovery");
+      }
+      // Preserve the native error contract only after bounded complete parsing
+      // and current authority. Restricted callers keep content-free errors.
+      const metadata = await readMetadata(response, operation, true);
+      policy = await refreshPolicy(); restricted = policy.models != null;
+      if (!restricted) return metadataResponse(metadata, response);
+      throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
     if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
       void response.body?.cancel().catch(() => undefined);
@@ -119,7 +128,7 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
         value => filterSyntheticModels(value, id => discoveryAllows(policy, provider, id)), () => { throw malformed(); });
       return metadataResponse(metadata, response);
     }
-    const metadata = await readMetadata(response, operation);
+    const metadata = await readMetadata(response, operation, !!refreshPolicy);
     // Optional original-owner binding refreshes permissions AFTER the complete
     // read. A stale admission policy must not publish newly hidden model IDs.
     if (refreshPolicy) { policy = await refreshPolicy(); restricted = policy.models != null; }

@@ -1,3 +1,5 @@
+import { nativeResponseLease } from "./native-response.ts";
+import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
 import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
@@ -145,6 +147,7 @@ interface PreparedUpstream {
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
+  acquireDiscovery?: () => BodyLease;
   revalidateDiscovery?: (signal: AbortSignal) => Promise<import("./types").AccessPolicy>;
   publicCatalog?: Awaited<ReturnType<typeof preparePublicDiscoveryOwner>>;
   revalidateDelivery?: (signal: AbortSignal) => Promise<void>;
@@ -632,7 +635,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    nativeLease = prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire();
+    nativeLease = prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
@@ -830,7 +833,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -906,6 +909,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     const gmiCheck = selection.provider.id === "gmi"
       ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
+    const discoveryCheck = gmiCheck ?? (selection.endpoint.request_format === "openai.models" && selection.capability === "models.list"
+      ? await prepareModelDiscoveryOwner(request, env, auth, selection, upstream, url, headers) : undefined);
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
       for (const name of openCodeSessionHeaders) headers.delete(name);
       const session = transport === "http" ? await openCodeSessionHeader(request, auth, selection, upstream, url) : null;
@@ -946,7 +951,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : gmiCheck ? { revalidateAccount: async (signal: AbortSignal) => { await gmiCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: gmiCheck } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
