@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
@@ -33,10 +34,10 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage>; retired: Promise<void> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
-  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
+  if (!response.body) { operation.stop("complete"); return { response, retired: Promise.resolve(), result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mime = contentType.split(";")[0].trim();
   const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
@@ -53,13 +54,23 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
-  const reader = response.body.getReader();
+  const reader = response.body.getReader(), input = inputRetirement(reader);
   let text = "", bytes = 0, nonempty = false, finished = false;
   let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
-  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
-    if (finished) return Promise.resolve();
+  let resolveRetired!: () => void, rejectRetired!: (reason: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolveRetired = yes; rejectRetired = no; });
+  void retired.catch(() => undefined);
+  let pulling: Promise<void> | undefined;
+  // Abort notifies delivery/accounting immediately. The actual callback must
+  // still settle before its retained chunk/inspection owner can retire.
+  async function publication<T>(pending: Promise<T>): Promise<T> {
+    try { return await pending; }
+    catch (error) { operation.stop("publication", error); throw error; }
+  }
+  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
+    if (finished) return;
     finished = true;
     signal.removeEventListener("abort", aborted);
     if (delivery === "canceled") operation.cancel(reason);
@@ -88,9 +99,12 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
-    if (delivery !== "complete") void reader.cancel(reason).catch(() => undefined);
-    reader.releaseLock();
-    return Promise.resolve();
+    const cleanup = input.retire(delivery === "complete" ? "eof" : "cancel", reason);
+    // finish() never awaits this from inside pull: joining our own active pull
+    // here is safe only because the pull returns without awaiting retirement.
+    void Promise.all([cleanup, pulling]).then(resolveRetired, rejectRetired);
+    // Downstream cancellation remains prompt. Only retired certifies cleanup
+    // and permits the proxy's separately retained capacity owner to release.
   }
   let downstream: ReadableStreamDefaultController<Uint8Array>;
   function aborted() {
@@ -100,9 +114,10 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   }
   const body = new ReadableStream<Uint8Array>({
     start(controller) { downstream = controller; },
-    async pull(controller) {
+    pull(controller) {
+      const work = (async () => {
       try {
-        const next = await reader.read();
+        const next = await input.read(() => reader.read());
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
           sse?.end();
@@ -115,15 +130,15 @@ export function observeUsage(response: Response, operation = new HttpOperation()
             } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
             text = ""; inspect = false;
           }
-          if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
-          if (responses) await (bodyInspection?.observe ? operation.wait(responses.end(), "publication") : responses.end()); if (finished) return;
-          if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication"); if (finished) return;
+          if (bodyInspection) await publication(bodyInspection.end()); if (finished) return;
+          if (responses) await (bodyInspection?.observe ? publication(responses.end()) : responses.end()); if (finished) return;
+          if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify()); if (finished) return;
           finish("complete"); controller.close(); return;
         }
         nonempty ||= next.value.byteLength > 0;
-        if (bodyInspection?.observe) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (bodyInspection?.observe) await publication(bodyInspection.push(next.value));
         if (finished) return;
-        if (responses) { await (bodyInspection?.observe ? operation.wait(responses.push(next.value), "publication") : responses.push(next.value)); if (finished) return; }
+        if (responses) { await (bodyInspection?.observe ? publication(responses.push(next.value)) : responses.push(next.value)); if (finished) return; }
         sse?.push(next.value);
         bedrock?.push(next.value);
         ollama?.push(next.value);
@@ -135,11 +150,14 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         }
         // Identity registration owns publication; the same reader still owns
         // demand, cancellation, and usage when the durable write fails.
-        if (bodyInspection && !bodyInspection.observe) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (bodyInspection && !bodyInspection.observe) await publication(bodyInspection.push(next.value));
         if (finished) return;
-        if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication");
+        if (responses && bodyInspection?.qualify) await publication(bodyInspection.qualify());
         if (!finished) controller.enqueue(next.value);
       } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }
+      })();
+      pulling = work;
+      return work.finally(() => { if (pulling === work) pulling = undefined; });
     },
     cancel(reason) { return finish("canceled", reason); },
   }, { highWaterMark: 0 });
@@ -147,7 +165,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   // Ingress abort is the authoritative caller-lifecycle signal in that case.
   if (signal.aborted) aborted();
   else signal.addEventListener("abort", aborted, { once: true });
-  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
+  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired };
 }
 
 export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
