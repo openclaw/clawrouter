@@ -84,7 +84,7 @@ import {configureMusic} from './worker/test/openrouter-music-runtime-fixture.mjs
 const provider=snapshot.providers.find(value=>value.id==='openrouter');configureMusic(provider);
 provider.endpoints.find(value=>value.id==='music_generate').timeout_ms=30000;
 const original=globalThis.fetch.bind(globalThis),pending=[],networkBodies=new WeakSet();
-let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false,controlled,activeReads=0,readerLocks=0,cancels=0,cancelCharge=0;
+let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false,controlled,activeReads=0,readerLocks=0,cancels=0,settledCancels=0,cancelCharge=0,cancelSettledCharge=0,cancelFailure,upstreamAborted=false;
 let outputBytes=0,outputEof=false;
 const getReader=ReadableStream.prototype.getReader;
 ReadableStream.prototype.getReader=function(options){
@@ -93,20 +93,27 @@ ReadableStream.prototype.getReader=function(options){
   const read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),release=reader.releaseLock.bind(reader);let held=true;readerLocks++;
   reader.releaseLock=()=>{release();if(held){held=false;readerLocks--;}};
   reader.read=async(...args)=>{activeReads++;try{return await read(...args);}finally{activeReads--;}};
-  reader.cancel=async(...args)=>{cancelCharge=bodyBudgetCharged();await cancel(...args);cancels++;};
+  reader.cancel=async(...args)=>{
+   cancels++;cancelCharge=bodyBudgetCharged();
+   try{return await cancel(...args);}catch(error){cancelFailure=error?.name??'unknown';throw error;}
+   finally{cancelSettledCharge=bodyBudgetCharged();settledCancels++;}
+  };
  }
  return reader;
 };
 globalThis.fetch=async(input,init)=>{
  const url=input instanceof Request?input.url:String(input);
  if(url!=='https://openrouter.ai/api/v1/chat/completions')throw new Error('unexpected destination');
- fetches++;capacity=bodyBudgetCharged();const response=await original(input,init);
+ fetches++;capacity=bodyBudgetCharged();
+ const signal=init?.signal??(input instanceof Request?input.signal:undefined);
+ upstreamAborted=signal?.aborted??false;signal?.addEventListener('abort',()=>{upstreamAborted=true;},{once:true});
+ const response=await original(input,init);
  uploadBytes=Number(response.headers.get('x-fixture-image-bytes'));uploadDigest=response.headers.get('x-fixture-image-digest');
  const reader=response.body.getReader({mode:'byob'});reader.releaseLock();networkByob=true;networkBodies.add(response.body);return response;
 };
 export default {async fetch(request,bindings,context){
  const env={...bindings,OPENROUTER_SITE_URL:'https://example.com'},path=new URL(request.url).pathname;
- if(path==='/fixture/phase')return Response.json({activeReads,readerLocks,cancels,outputBytes,outputEof,remaining:bodyBudgetCharged()});
+ if(path==='/fixture/phase')return Response.json({activeReads,readerLocks,cancels,settledCancels,upstreamAborted,outputBytes,outputEof,remaining:bodyBudgetCharged()});
  if(path==='/fixture/abort'){controlled.abort();return new Response('aborted');}
  if(path==='/fixture/setup'){
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
@@ -118,7 +125,7 @@ export default {async fetch(request,bindings,context){
  if(path==='/fixture/state'){
   while(pending.length)await Promise.all(pending.splice(0));
   const usage=await(await usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin')).json();
-  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,readerLocks,cancels,cancelCharge,outputBytes,outputEof,events:usage.events});
+  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,readerLocks,cancels,settledCancels,cancelFailure,cancelCharge,cancelSettledCharge,upstreamAborted,outputBytes,outputEof,events:usage.events});
  }
  if(request.headers.has('x-fixture-controlled')){
   controlled=new AbortController();const headers=new Headers(request.headers);headers.delete('x-fixture-controlled');
@@ -210,11 +217,17 @@ test("workerd controlled caller signal cancels the actual pending quarantine rea
     assert.ok(Date.now() < deadline, JSON.stringify(phase));
     await new Promise(resolve => setTimeout(resolve, 20));
   } while (true);
-  assert.equal(phase.remaining, 96 * MiB); assert.equal(phase.cancels, 0); assert.equal(phase.readerLocks, 1);
+  assert.equal(phase.remaining, 96 * MiB); assert.equal(phase.cancels, 0); assert.equal(phase.readerLocks, 1); assert.equal(phase.upstreamAborted, false);
   await runtime.dispatchFetch("https://router.example/fixture/abort");
   const response = await pending; assert.equal(response.status, 502); assert.ok(!(await response.text()).includes('"audio"'));
   const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
+  // cancel() on an already-errored body may reject. Invocation and settlement
+  // are separate from physical read, lock and socket retirement; none is inferred.
+  t.diagnostic(JSON.stringify({ activeReads: state.activeReads, readerLocks: state.readerLocks, cancels: state.cancels,
+    settledCancels: state.settledCancels, cancelFailure: state.cancelFailure, cancelCharge: state.cancelCharge, cancelSettledCharge: state.cancelSettledCharge,
+    remaining: state.remaining, upstreamAborted: state.upstreamAborted }));
   assert.equal(state.fetches, 1); assert.equal(state.activeReads, 0); assert.equal(state.readerLocks, 0); assert.equal(state.cancels, 1);
+  assert.equal(state.settledCancels, 1); assert.equal(state.cancelSettledCharge, 96 * MiB); assert.equal(state.upstreamAborted, true);
   assert.equal(state.cancelCharge, 96 * MiB); assert.equal(state.remaining, 0);
   await network.closed; assert.equal(network.metrics.pending, 1); assert.equal(network.metrics.closed, 1);
   assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
