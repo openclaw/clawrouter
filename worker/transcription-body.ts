@@ -18,7 +18,7 @@ export interface TranscriptionUpload { file: File; fields: Record<string, string
 // No clone/tee and no unbounded request.formData(). Bound the raw reader first;
 // parse strict common multipart framing directly so path-bearing filenames are
 // rejected before a runtime form parser could normalize them to a basename.
-export async function readTranscriptionUpload(request: Request): Promise<TranscriptionUpload> {
+export async function readTranscriptionUpload(request: Request, options?: Readonly<{ maximumReads: number; exactLength: boolean; timeoutMs?: number }>): Promise<TranscriptionUpload> {
   if (request.headers.has("content-encoding")) invalid("content encoding is unsupported");
   const type = request.headers.get("content-type") ?? "";
   const match = /^multipart\/form-data;\s*boundary=(?:"([0-9A-Za-z'()+_,.\/:=? -]{1,70})"|([0-9A-Za-z'()+_,.\/:=?-]{1,70}))$/i.exec(type);
@@ -27,9 +27,10 @@ export async function readTranscriptionUpload(request: Request): Promise<Transcr
   const length = request.headers.get("content-length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)))) invalid("invalid content length");
   if (length !== null && Number(length) > transcriptionLimits.raw) tooLarge();
-  const operation = new HttpOperation(request.signal, transcriptionLimits.readMs);
+  const operation = new HttpOperation(request.signal, options?.timeoutMs ?? transcriptionLimits.readMs);
   try {
-    const raw = await readBounded(request.body, transcriptionLimits.raw, operation, 413);
+    const raw = await readBounded(request.body, transcriptionLimits.raw, operation, 413, options?.maximumReads);
+    if (options?.exactLength && length !== null && Number(length) !== raw.byteLength) invalid("multipart content length does not match body");
     return parseMultipart(raw, boundary);
   } catch (error) {
     if (operation.status === "timeout") throw new HttpError(408, "transcription_read_timeout", "multipart upload deadline exceeded");
@@ -38,14 +39,15 @@ export async function readTranscriptionUpload(request: Request): Promise<Transcr
   } finally { operation.stop("complete"); }
 }
 
-export async function readBounded(body: ReadableStream<Uint8Array> | null, maximum: number, operation: HttpOperation, status = 502): Promise<Uint8Array<ArrayBuffer>> {
+export async function readBounded(body: ReadableStream<Uint8Array> | null, maximum: number, operation: HttpOperation, status = 502, maximumReads = Infinity): Promise<Uint8Array<ArrayBuffer>> {
   operation.signal.throwIfAborted();
   if (!body) return new Uint8Array();
   const reader = body.getReader();
   // A bounded number of chunks even for an adversarial one-byte stream.
-  let buffer = new Uint8Array(Math.min(maximum, 8192)), used = 0, complete = false;
+  let buffer = new Uint8Array(Math.min(maximum, 8192)), used = 0, complete = false, reads = 0;
   try {
     while (true) {
+      if (++reads > maximumReads) throw new HttpError(status, "transcription_chunk_limit", "multipart upload exceeds its chunk limit");
       const next = await operation.wait(reader.read());
       if (next.done) { complete = true; return buffer.slice(0, used); }
       if (next.value.byteLength > maximum - used) throw new HttpError(status, "transcription_body_too_large", "transcription body exceeds router byte limit");
