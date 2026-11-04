@@ -31,6 +31,11 @@
   box-shadow: inset 0 2px var(--accent);
 }
 
+.fusionPresets button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
 .fusionPresets button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

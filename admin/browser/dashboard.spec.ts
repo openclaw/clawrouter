@@ -98,6 +98,8 @@ test("Fusion presets preserve the panel and single readiness accounts for one ca
   await models.fill(original);
   await expect(page.locator(".fusionAdvisers strong")).not.toHaveText(["No advisers"]);
   await expectA11yClean(page);
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await expectA11yClean(page);
 });
 
 test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) => {
