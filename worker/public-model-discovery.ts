@@ -70,7 +70,14 @@ export async function fetchPublicModelDiscovery(input: Readonly<{
         throw new HttpError(400, "public_catalog_not_supported", "the selected provider has no public catalog contract");
     }
     await revalidate();
-    return result;
+    // Fresh authorization can tighten the policy behind allows. Reader-time
+    // filtering is provisional until this final intersection succeeds.
+    switch (result.providerId) {
+      case "cerebras": return { ...result, catalog: result.catalog.filter(row => allows(row.id)) };
+      case "nvidia": return { ...result, catalog: result.catalog.filter(row => allows(row.id)) };
+      case "chutes": return { ...result, catalog: { ...result.catalog, data: result.catalog.data.filter(row => allows(row.id)) } };
+      case "venice": return { ...result, catalog: { ...result.catalog, data: result.catalog.data.filter(row => allows(row.id)) } };
+    }
   } finally {
     for (const response of responses) discard(response);
   }

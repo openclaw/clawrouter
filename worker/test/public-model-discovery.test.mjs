@@ -86,6 +86,25 @@ for (const [providerId, contract] of Object.entries(contracts)) {
     assert.equal(checks, contract.urls.length + 1);
     assert.ok(responses.every(response => !response.body.locked));
   });
+
+  test(`${providerId} final authorization tightens current policy before catalog publication`, async t => {
+    let checks = 0, currentPolicy = new Set(contract.ids);
+    const responses = [];
+    const selected = input(t, providerId, { allows: id => currentPolicy.has(id), revalidateAccount: async () => {
+      if (++checks === contract.urls.length + 1) {
+        assert.ok(responses.every(response => response.bodyUsed));
+        currentPolicy = new Set([contract.ids[1], contract.ids[2]]);
+      }
+    } });
+    t.mock.method(globalThis, "fetch", async request => {
+      const response = Response.json(request.url === contracts.nvidia.urls[1] ? featured : contract.payload(contract.ids));
+      responses.push(response); return response;
+    });
+    const result = await fetchPublicModelDiscovery(selected);
+    assert.deepEqual(rows(result).map(row => row.id), [contract.ids[1]], "removed policy ID and out-of-scope permitted ID stay excluded");
+    assert.equal(checks, contract.urls.length + 1);
+    if (providerId === "venice") assert.equal(result.catalog.type, "text");
+  });
 }
 
 test("NVIDIA revocation between inventory and featured prevents second egress and cancels unread inventory", async t => {
