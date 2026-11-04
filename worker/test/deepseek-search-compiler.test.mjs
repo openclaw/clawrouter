@@ -20,6 +20,8 @@ function fixture() {
   if (!manifest.capabilities.some(item => item.id === capability && item.endpoint === "search"))
     manifest.capabilities.push({ id: capability, endpoint: "search", methods: ["POST"] });
   manifest.endpoints.search ??= { method: "POST", path: "/v1/tools/search", requestFormat: format, responseFormat: format };
+  // Keep the legacy no-tariff contract independently fail-closed.
+  delete manifest.endpoints.search.requestPricing;
   return manifest;
 }
 function selected() {
@@ -105,7 +107,7 @@ test("unqualified Search request fees deny caller and provider hard budgets whil
 });
 
 test("DeepSeek Search declaration order preserves existing Chat models, pricing and adapters", () => {
-  const before = compile(existing).providers[0], manifest = fixture();
+  const before = compile(fixture()).providers[0], manifest = fixture();
   for (const endpoints of [manifest.endpoints, Object.fromEntries(Object.entries(manifest.endpoints).reverse())]) {
     const after = compile({ ...manifest, endpoints }).providers[0];
     for (const endpoint of before.endpoints) assert.deepEqual(after.endpoints.find(value => value.id === endpoint.id), endpoint);
@@ -147,4 +149,24 @@ test("DeepSeek Search compilation pins original auth and origin without body or 
     m => { m.adapter.passthroughHeaders = ["authorization"]; },
     m => { m.adapter.requestTransforms = { renameFields: [{ from: "query", to: "messages" }] }; },
   ]) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /deepseek.search|invalid manifest/, String(change)); }
+});
+
+
+test("DeepSeek native-result tariffs compile only on the qualified model-less Search endpoint", () => {
+  const manifest = fixture(), tariff = structuredClone(existing.endpoints.search.requestPricing);
+  manifest.endpoints.search.requestPricing = tariff;
+  const endpoint = compile(manifest).providers[0].endpoints.find(value => value.id === "search");
+  assert.deepEqual(endpoint.requestPricing, tariff);
+  const cost = estimateCost(null, wire.request.body, null, capability, endpoint);
+  assert.equal(cost.reserveMicros, 750); assert.equal(cost.requestTariff.kind, "deepseek_search");
+  for (const change of [
+    m => { m.endpoints.chat_completions.requestPricing = structuredClone(tariff); },
+    m => { m.endpoints.search.requestPricing.protocol = "perplexity.search"; },
+    m => { m.endpoints.search.requestPricing.source = "https://example.com/rates"; },
+    m => { m.endpoints.search.requestPricing.effectiveAt = "2026-11-01"; },
+    m => { m.endpoints.search.requestPricing.successfulNonemptyRequestMicros = 0; },
+    m => { m.endpoints.search.requestPricing.emptyRequestMicros = 750; },
+    m => { m.endpoints.search.requestPricing.successfulResponseMicros = 750; },
+    m => { m.endpoints.search.requestPricing.parameterRates = { parameter: "count", rates: { 1: 750 } }; },
+  ]) { const changed = structuredClone(manifest); change(changed); assert.throws(() => compile(changed), /deepseek.search|requestPricing|invalid manifest/, String(change)); }
 });

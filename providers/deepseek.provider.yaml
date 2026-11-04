@@ -38,6 +38,14 @@ endpoints:
     pathParams: []
     requestFormat: deepseek.search
     responseFormat: deepseek.search
+    requestPricing:
+      unit: request
+      protocol: deepseek.search
+      version: deepseek-search-2026-11-01
+      effectiveAt: "2026-11-01T00:00:00+08:00"
+      source: https://api-docs.deepseek.com/guides/search/
+      successfulNonemptyRequestMicros: 750
+      emptyRequestMicros: 0
     timeoutMs: 120000
   chat_completions:
     modelPassthrough: {}

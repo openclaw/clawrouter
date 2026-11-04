@@ -8,7 +8,9 @@ Existing Chat identities, capabilities and prices are unchanged.
 This declaration consumes the native runtime qualified in
 [PR728](https://github.com/openclaw/clawrouter/pull/728), landed as
 `2f4aafaf485ef83c1260694e8e7d85cba3ece07b`, and the existing compiler and
-codec contracts. Native requests use `/v1/native/deepseek/v1/tools/search`;
+codec contracts. Its request tariff additionally requires the qualified common
+admission and settlement from [PR767](https://github.com/openclaw/clawrouter/pull/767).
+Native requests use `/v1/native/deepseek/v1/tools/search`;
 manifest requests use `/v1/proxy/deepseek/search` with `{ body }`.
 Both require explicit `query`, `count` from 1–10 and `need_content: false`.
 No model, implicit count, Fetch, localization, URL fetching or query override
@@ -17,11 +19,12 @@ is added. The wrapper bounds request JSON to 4 KiB and response JSON to 1 MiB.
 The declaration tests compile this YAML unchanged and use the real Worker,
 selected environment or owner-grant credentials and SQLite reservation/event
 fixtures. They cover catalog eligibility, both routes, native empty/nonempty
-results, fixed-policy settlement and zero-egress hard-dollar denial. Source6
+results, the 750-microUSD reservation and conditional settlement, fixed-policy
+isolation, incomplete-delivery reservations and zero-egress budget denial. Source6
 owns generated snapshot integration; source2 actual-client proof is separate.
 Test source alone is not hosted or client execution proof.
 
-## Native request tariff remains separate
+## Frozen native request tariff
 
 The [primary Search guide](https://api-docs.deepseek.com/guides/search/), checked
 2026-11-04, publishes USD 0.75 per 1,000 successful nonempty requests, effective
@@ -29,16 +32,23 @@ The [primary Search guide](https://api-docs.deepseek.com/guides/search/), checke
 versus complete-empty observations. Consumer filtering cannot erase a charge;
 interruption is not a verified empty response or free error.
 
-The current `SuccessfulRequestPricing` contract prices successful responses
-without a typed native-result condition. The native wrapper also explicitly
-rejects `endpoint.requestPricing` and returns null token usage without a tariff
-receipt. A qualified tariff needs an extension to the existing request-pricing
-admission/settlement contract, retaining the native complete-result condition
-and conservative uncertain outcome. This declaration does not invent that
-shared interface or silently use unconditional success pricing.
+The endpoint declares `DeepSeekSearchRequestPricing`, version
+`deepseek-search-2026-11-01`, with `successfulNonemptyRequestMicros: 750` and
+`emptyRequestMicros: 0`. Admission freezes that sourced tariff and reserves
+750 microUSD before dispatch, independently of requested result count. Only
+codec-complete native evidence can produce a version-bound `manifest_request`
+receipt: nonempty costs 750, empty costs zero. Missing or interrupted evidence
+retains the entire reserve; a generic failed response does not establish zero.
+Native usage remains non-token usage, separate from Chat model pricing.
 
-Until that bounded integration is qualified, upstream-dollar hard budgets
-reject Search before egress. Explicit `policy_fixed` is separately labeled,
-including an explicit zero; it does not certify a zero upstream price.
+The compiler accepts this tariff only on the canonical model-less DeepSeek
+Search contract. A missing tariff still denies upstream-dollar hard budgets
+before egress. Explicit `policy_fixed` is separately labeled, including an
+explicit zero; it does not certify a zero upstream price.
+
+The tariff runtime is qualified by PR767, landed as
+`ac46e07bcc0a1318b1eda0db7002e32f9a2029ce`. Generated snapshot activation
+stays in the existing source6 integration queue;
+local source and prepared fixtures do not establish runtime or client proof.
 
 Primary wire reference: [Search API](https://api-docs.deepseek.com/api/search/).

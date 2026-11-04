@@ -408,6 +408,11 @@ function validateEndpoints(manifest) {
         || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "llm.responses")
         || manifest.capabilities.some(capability => capability.endpoint === id && (capability.id !== "llm.responses" || capability.methods?.some(method => method !== "POST"))))
         throw new Error(`endpoint ${id} requestPricing requires the qualified xAI Responses outcome contract`);
+    } else if (endpoint.requestPricing?.protocol) {
+      if (endpoint.requestPricing.protocol !== "deepseek.search" || manifest.id !== "deepseek"
+        || endpoint.path !== "/v1/tools/search" || (endpoint.method ?? "POST") !== "POST"
+        || endpoint.requestFormat !== "deepseek.search" || endpoint.responseFormat !== "deepseek.search")
+        throw new Error(`endpoint ${id} requestPricing requires the qualified deepseek.search native-result contract`);
     } else if (endpoint.requestPricing) {
       // The runtime can select a flat request tariff without provider branches.
       // Qualification remains explicit until another protocol has sourced billing semantics.
@@ -1075,7 +1080,7 @@ function validateDeepSeekSearch(manifest) {
     || manifest.id === "deepseek" && (endpoint.path === "/v1/tools/search"
       || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "search.web")));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error("deepseek.search requires model-less native search, canonical origin, original Bearer auth and an unpriced request contract"); };
+  const fail = () => { throw new Error("deepseek.search requires model-less native search, canonical origin, original Bearer auth and a qualified optional native-result tariff"); };
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (manifest.id !== "deepseek" || endpoints.length !== 1
     || Object.values(manifest.baseUrls).some(base => base !== "https://api.deepseek.com")
