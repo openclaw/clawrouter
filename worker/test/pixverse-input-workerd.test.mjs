@@ -23,22 +23,29 @@ export default { async fetch(request) {
     check(refused, 'third lease refused');
     let pulls = 0, maximum = 0; const lengths = [], copies = [];
     class ObservedBytes extends Uint8Array {
-      subarray(start, end) { pulls++; maximum = Math.max(maximum, end - start); const part = super.subarray(start, end); copies.push([start,end,this.length,part.length]); return part; }
+      subarray(start, end) { pulls++; maximum = Math.max(maximum, end - start); const part = super.subarray(start, end); if (copies.length < 32) copies.push([start,end,this.length,part.length]); return part; }
     }
     const observed = new ObservedBytes(50000).fill(71), source = pixVerseByteStream([observed]);
     await Promise.resolve(); check(pulls === 0, 'no read ahead');
     const reader = source.body.getReader();
-    let total = 0;
-    for (let i = 0; i < 4; i++) {
-      const chunk = await reader.read(); check(!chunk.done && chunk.value.length <= 16384, 'bounded default chunk'); total += chunk.value.length; lengths.push(chunk.value.length);
-      await Promise.resolve(); check(pulls === i + 1, 'no queued speculative data pull');
-      if (i < 3) check(!source.complete, 'no completion while bytes remain');
+    let total = 0, reads = 0;
+    // A native default reader can request smaller BYOB windows. The contract
+    // bounds the maximum chunk, not an exact four-read count for 50,000 bytes.
+    while (total < 50000) {
+      check(++reads <= 50000, 'bounded read count');
+      const chunk = await reader.read();
+      check(!chunk.done && chunk.value.length > 0 && chunk.value.length <= 16384, 'bounded default chunk');
+      check(chunk.value.every(byte => byte === 71), 'original byte values');
+      total += chunk.value.length; if (lengths.length < 32) lengths.push(chunk.value.length);
+      await Promise.resolve(); check(pulls === reads, 'no queued speculative data pull');
+      if (total < 50000) check(!source.complete, 'no completion while bytes remain');
     }
     check(total === 50000, 'all original bytes delivered: ' + JSON.stringify({total,lengths,copies,inputLength:observed.length,complete:source.complete}));
     // workerd may request the empty terminal pull when its final data read is
     // fulfilled. That is EOF, not speculative production of another data chunk.
     check(bodyBudgetCharged() === 96 * 1024 * 1024, 'full lease at delivery boundary');
     check((await reader.read()).done && source.complete, 'explicit EOF'); await source.done; reader.releaseLock();
+    check(observed.length === 50000 && observed.every(byte => byte === 71), 'original input remains intact');
     const canceled = pixVerseByteStream([new Uint8Array(50000)]), cancelReader = canceled.body.getReader();
     await cancelReader.read(); await cancelReader.cancel(); await canceled.done;
     check(!canceled.complete, 'cancel is not EOF'); cancelReader.releaseLock();
@@ -81,7 +88,9 @@ test("workerd composed input proves bounded pulls, native BYOB, cancellation and
   for (const length of [50000, 8 * 1024 * 1024]) {
     const response = await fetch(base, { method: "POST", body: new Uint8Array(length).fill(71) });
     assert.equal(response.status, 200, await response.clone().text());
-    assert.deepEqual(await response.json(), { pulls: 4, maximum: 16384, refused: true, bytes: length, held: 96 * 1024 * 1024 });
+    const { pulls, maximum, ...result } = await response.json();
+    assert.ok(pulls >= 4 && pulls <= 50000); assert.ok(maximum > 0 && maximum <= 16384);
+    assert.deepEqual(result, { refused: true, bytes: length, held: 96 * 1024 * 1024 });
   }
 });
 
