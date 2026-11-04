@@ -1,4 +1,3 @@
-import { authorizeAdmin } from "./access.ts";
 import { sameOrigin } from "./request-origin.ts";
 import type { Env } from "./types.ts";
 import { HttpError, privateJson, sha256Hex } from "./utils.ts";
@@ -37,6 +36,7 @@ export async function miniMaxDeviceAdmin(request: Request, env: Env, expected?: 
   request.signal.throwIfAborted();
   if (!request.headers.has("origin") || !sameOrigin(request, env))
     throw new HttpError(403, "access_csrf_required", "Same-origin browser request required");
+  const { authorizeAdmin } = await import("./access.ts");
   const session = await authorizeAdmin(request, env);
   if (session instanceof Response || session.auth !== "cloudflare_access" || session.role !== "admin")
     throw new HttpError(403, "access_admin_required", "Verified Access administrator required");
