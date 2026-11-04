@@ -137,8 +137,9 @@ plugin, static catalog, registered Hy3 wrapper, host replay and serializer.
 They cover the three selected IDs, Hy3 off/low mapping, positive tool/thinking
 history, cumulative native usage/cache, original TokenHub keys and zero-egress
 invalid caller/TokenPlan-only/unknown-dollar denial. The existing denial case
-also exercises an already-aborted caller: the actual SDK must return `aborted`
-with no content, and the outer Worker harness requires zero upstream calls.
+also exercises an already-aborted caller: the pinned host rejects before
+provider dispatch and returns `error` with the exact original cancellation
+message and no content; the outer Worker harness requires zero upstream calls.
 The original positive reasoning, tools, usage and seven-micro capped-budget
 assertions remain unchanged. The synthetic preview
 response reports `hy3` while the selected request and receipt remain
@@ -150,3 +151,12 @@ the composed head passes CI. No additional SDK report, local install or live
 provider call is performed. Dynamic discovery/profile selection, manifest-client
 transport and account billing remain separate from these configured native-route
 fixtures. Published client prices are never imported as router price facts.
+
+At candidate `a44e14acaa7c931c6f3b7f7de7a6d49ba385f31a`, all 9,116 Worker
+tests and smoke checks passed. The actual five positive client cases passed;
+the added pre-abort assertion incorrectly expected the provider-level `aborted`
+classification. Exact pinned `src/llm/stream.ts` throws the signal reason before
+provider dispatch and projects it as a host `error`. The corrected fixture
+requires that classification plus the original reason, empty content and zero
+egress. It does not accept an arbitrary transport failure. Final-head client
+and outer SQLite proof remain required.

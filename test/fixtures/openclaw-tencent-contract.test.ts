@@ -51,7 +51,9 @@ describe("actual registered Tencent TokenHub standard client through Worker", ()
     const controller = new AbortController();
     controller.abort(new DOMException("Synthetic caller cancellation", "AbortError"));
     const canceled = await run("aborted", false, controller.signal);
-    expect(canceled.stopReason).toBe("aborted");
+    // The actual host rejects before provider dispatch and retains this exact cause.
+    expect(canceled.stopReason).toBe("error");
+    expect(canceled.errorMessage).toBe(controller.signal.reason.message);
     expect(canceled.content).toEqual([]);
   });
 });
