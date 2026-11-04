@@ -58,13 +58,13 @@ Source 11.1 owns shared original-route/runtime controls, and source 11.6 owns
 combined Worker proof and serialized snapshot regeneration. This PR must not
 land with a stale generated snapshot or claim deployed/live parity.
 
-There is a concrete server-credential runtime gap at the qualification base:
-`providerSecretConfigKey` and the environment credential selector do not accept
-canonical `RUNWAYML_API_SECRET`. Source 1 must qualify that exact provider/key/
-native Bearer binding; source 6 owns corresponding script masking and smoke
-qualification. Do not rename it to an alias, use client secrets, or claim this is
-only a stale-snapshot failure. PR493's header contract is already landed and the
-existing `2024-11-06` version header remains unchanged on every control.
+The source readiness base `69608e4` includes canonical `RUNWAYML_API_SECRET`
+selection in `provider-auth.ts`, restricted to the declared Runway Bearer scheme,
+with focused runtime credential tests. The earlier server-key selection gap is
+closed. Source 6 retains the corresponding script masking/safe-smoke repair,
+serialized snapshot and composed acceptance; these remain integration work.
+No alias or client-secret fallback is authorized. PR493's header contract is
+already landed, and `2024-11-06` remains unchanged on every control.
 
 Verification: two new registry tests plus seven native lifecycle tests; two new
 manifest compiler tests run in qualified CI together with all bundled manifests.
