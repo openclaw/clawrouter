@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-- Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
 - Define an opt-in provider plugin package contract with local assets, documentation, fixtures, and a starter example; existing provider loading and runtime behavior remain unchanged.
 
 - Add scoped OpenRouter video/content wrappers with download-only original-job files and bounded MP4 delivery, admitting creates only through explicit policy and original-credential retention qualification.
@@ -454,6 +453,8 @@
 - Preserve validated payload formats for caller-scoped manifest-only catalog routes so native embedding clients can qualify offers without enabling disabled native endpoints.
 - Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
 - Qualify legacy speech offers against the OpenAI request and binary response pair, preserving provider-native speech routes and mixed Chat models without advertising an unsupported controller.
+
+- Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
 
 ## 0.5.0 - 2026-10-22
 
