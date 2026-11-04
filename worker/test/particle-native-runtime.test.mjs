@@ -129,6 +129,19 @@ for (const model of models) for (const manifest of [false, true]) for (const str
   });
 }
 
+test("Particle native public client identity resolves to its declared wire alias", async t => {
+  const f = await fixture(t);
+  const r = await f.call({ model: publicId, messages: [] });
+  assert.equal(r.status, 200, await r.clone().text());
+  await r.text(); await f.drain();
+  assert.equal(f.sent.length, 1);
+  assert.equal((await f.sent[0].json()).model, wireId);
+  const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1");
+  assert.equal(event.model, routerId);
+  assert.equal(event.actual_cost_micros, 7);
+  assert.equal(event.cost_basis, "policy_fixed");
+});
+
 test("Particle original grant does not rewrite model case, substitute products or allow ungranted models", async t => {
   const f = await fixture(t);
   for (const model of ["Particle-1", "particle-ai/Particle-1", "deepseek-ai/deepseek-v41-flash-1017", "glm-5.3-flash", "synthetic-tenant-model"]) {
