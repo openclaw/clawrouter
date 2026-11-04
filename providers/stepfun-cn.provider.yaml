@@ -1,0 +1,86 @@
+# Frozen standard API region/auth facts: docs/stepfun-native-catalog.md.
+# Primary endpoint/model contracts checked 2026-11-03.
+schema: clawrouter.service-provider.v1
+id: stepfun-cn
+displayName: StepFun China standard API
+status: experimental
+class: openai_compatible
+service:
+  platform: stepfun
+  kind: model_provider
+  upstreamService: stepfun-cn
+  configKeys: [STEPFUN_CN_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.stepfun.com/v1
+routing:
+  nativePrefixes: [clawrouter-stepfun-cn, stepfun-cn]
+  modelPrefixes: [stepfun-cn/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: stepfun-cn/step-3.7-flash
+      upstream: step-3.7-flash
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: medium
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.stepfun.com/docs/zh/guides/models/step-3.7-flash]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+    - id: stepfun-cn/step-3.5-flash
+      upstream: step-3.5-flash
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://platform.stepfun.com/docs/zh/guides/models/step-3.5-flash]
+            checkedAt: "2026-11-03"
+            input: [text]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
