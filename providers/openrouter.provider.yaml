@@ -35,6 +35,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
 endpoints:
   responses:
     modelPassthrough: {}
@@ -50,12 +53,29 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  speech:
+    path: /v1/audio/speech
+    method: POST
+    requestFormat: openai.audio_speech
+    responseFormat: audio.binary
+    nativeProxy: true
+    timeoutMs: 120000
 models:
   entries:
     - id: openrouter/auto
       upstream: openrouter/auto
       capabilities: [llm.chat]
       pricingRef: openrouter-auto
+    # MP3 speech tariffs remain unknown; do not attach Chat token pricing.
+    - id: openrouter/hexgrad/kokoro-82m
+      upstream: hexgrad/kokoro-82m
+      capabilities: [audio.speech]
+    - id: openrouter/elevenlabs/eleven-turbo-v2
+      upstream: elevenlabs/eleven-turbo-v2
+      capabilities: [audio.speech]
+    - id: openrouter/mistralai/voxtral-mini-tts-2603
+      upstream: mistralai/voxtral-mini-tts-2603
+      capabilities: [audio.speech]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
