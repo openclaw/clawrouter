@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "gmi-unified-selectors",
+      "split": "development",
+      "base": "aef09502cf9726adab59827fdf4dc22da7ba62ba",
+      "oracle": "06530c262b8957aa0dc5763e94c83e68fa991e51",
+      "editPaths": [
+        "worker/gmi-organization-binding.ts"
+      ],
+      "visibleTests": [
+        "worker/test/gmi-organization-binding.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/gmi-organization-binding.test.mjs"
+      ],
+      "instruction": "Unified Chat requests to GMI are rejected because internal model and deployment selectors are treated as caller path parameters. Accept the exact internally generated selector pair only for POST /v1/chat/completions when both selectors and body.model agree with the selected upstream model. Preserve literal GMI paths, original organization/credential binding, catalog handling, and rejection of forged or extra parameters."
+    },
+    {
+      "id": "bedrock-error-message",
+      "split": "development",
+      "base": "8029f0e7dbba6590d7e9ffb4827b06644887dce8",
+      "oracle": "cf6bf95665a1678cdc417f4578d99393f2822c76",
+      "editPaths": [
+        "worker/provider-bedrock-embeddings.ts"
+      ],
+      "visibleTests": [
+        "worker/test/provider-bedrock-embeddings.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/provider-bedrock-embeddings.test.mjs"
+      ],
+      "instruction": "A Titan Multimodal embedding response can contain a message error field alongside an embedding. Reject every non-null, non-undefined message value for the canonical Titan image embedding model, even falsy values. Continue accepting absent/null message fields. Preserve existing handling and token accounting for the other embedding families and invalid responses."
+    },
+    {
+      "id": "responses-literal-path",
+      "split": "development",
+      "base": "c5c1cd19834b6e7f1df65f2d6604210ae7e372e8",
+      "oracle": "d35d4bd683aa5dc36367141a05303bd3d64ba86c",
+      "editPaths": [
+        "worker/endpoint-path.ts"
+      ],
+      "visibleTests": [
+        "worker/test/endpoint-upstream-path.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/responses-upstream-path.test.mjs"
+      ],
+      "instruction": "A qualified unary OpenAI Responses endpoint cannot use an explicitly compiled literal upstreamPath. Permit the canonical POST /v1/responses caller route with a literal same-origin upstream path and no query or path parameters. Preserve all existing method, path, response-format, lifecycle, WebSocket, pricing and transport override restrictions."
+    },
+    {
+      "id": "unpriced-native-speech",
+      "split": "development",
+      "base": "752a16c82fd242b71d2ddeea03c39fc46d90f8a6",
+      "oracle": "60b1962d45a45fd1f1aa26e7a6ca918a721bf715",
+      "editPaths": [
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/xai-speech-pricing.test.mjs"
+      ],
+      "instruction": "Native xAI unary speech is being assigned ordinary model token/character costs even though no qualified native speech tariff or billable output measurement is available. Keep xai.tts admission explicitly unpriced, reserve no invented token estimate, and settle actual cost as unknown. Preserve existing unknown handling for other native audio formats and qualified OpenAI-compatible and character-priced routes."
+    }
+  ]
+}

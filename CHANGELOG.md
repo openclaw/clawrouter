@@ -5,6 +5,8 @@
 - Allow administrators to share existing subscription owners across policy pools while preserving one credential/refresh owner, shared quota, consumer billing and scoped pool visibility.
 
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
+- Add a separate pinned Fusion transfer-validation corpus and qualify every bundled workload set.
+
 - Add a development-only, shared-budget multi-turn Fusion agent comparison with isolated source edits, test-feedback repair, and measured cascade acceptance.
 
 - Add a development Fusion workload corpus with pinned repository regressions, isolated Docker verification, and broken/known-repair qualification.
