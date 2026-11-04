@@ -12,8 +12,8 @@ import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { sha256Hex } from './worker/utils.ts';
 import { snapshot } from './worker/providers.ts';
 import { bodyBudgetCharged, BodyLease } from './worker/body-budget.ts';
-const originalFetch=globalThis.fetch.bind(globalThis);let fetches=0;
-globalThis.fetch=(input,init)=>{const req=new Request(input,init);if(!req.url.startsWith('https://api.featherless.ai/v1/models?')||bodyBudgetCharged()!==96*1024*1024)throw new Error('unqualified dispatch or capacity');fetches++;return originalFetch(req);};
+const originalFetch=globalThis.fetch.bind(globalThis);let fetches=0;const attempts=[];
+globalThis.fetch=(input,init)=>{const req=new Request(input,init);const url=new URL(req.url);attempts.push({origin:url.origin,path:url.pathname,query:[...url.searchParams.keys()],capacity:bodyBudgetCharged()});if(!req.url.startsWith('https://api.featherless.ai/v1/models?')||bodyBudgetCharged()!==96*1024*1024)throw new Error('unqualified dispatch or capacity');fetches++;return originalFetch(req);};
 const id=n=>'model-'+String(n).padStart(4,'0')+'x'.repeat(470);
 const provider=structuredClone(snapshot.providers.find(p=>p.id==='openai'));
 const endpoint={...provider.endpoints.find(e=>e.id==='models_list'),id:'catalog',path:'/models',method:'GET',methods:['GET'],request_format:'featherless.catalog',response_format:'featherless.catalog',native_proxy:false,timeout_ms:20000,path_params:[],path_param_styles:{},headers:{},query:{}};
@@ -27,7 +27,7 @@ export default {async fetch(request,env){
  await putGrantCredentials(env,'oauth/fixture/featherless',{provider:'featherless',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
  const call=()=>worker.fetch(new Request('https://router.example/v1/proxy/featherless/catalog',{headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret'}}),env,ctx);
  const held=new BodyLease();held.grow(1024*1024);const refused=await call();const denied=refused.status;await refused.text();const before=fetches;held.release();await drain();
- const response=await call();const charged=bodyBudgetCharged();if(response.status!==200)throw new Error('catalog refused status='+response.status+' fetches='+fetches+' capacity='+charged+' body='+await response.text());const reader=response.body.getReader();let wire='',maximum=0;
+ const response=await call();const charged=bodyBudgetCharged();if(response.status!==200)throw new Error('catalog refused status='+response.status+' fetches='+fetches+' capacity='+charged+' attempts='+JSON.stringify(attempts)+' body='+await response.text());const reader=response.body.getReader();let wire='',maximum=0;
  const example={id:id(0),context_length:8192,max_completion_tokens:1024,concurrency_cost:1,is_gated:false,available_on_current_plan:true,features:{tool_use:true,image_input:false},pricing:{prompt:'0.2',completion:'0.4',image:'0.1',request:'0.3'}};
  const expected=JSON.stringify({providerId:'featherless',catalog:[]}).length+5000*JSON.stringify(example).length+4999;
  for(;;){const next=await reader.read();if(next.done)break;maximum=Math.max(maximum,next.value.byteLength);wire+=new TextDecoder().decode(next.value);if(wire.length<expected&&bodyBudgetCharged()!==96*1024*1024)throw new Error('lease released while bytes remain: received='+wire.length+' expected='+expected+' fetches='+fetches+' capacity='+bodyBudgetCharged());}
