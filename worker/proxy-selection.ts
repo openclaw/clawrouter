@@ -5,6 +5,8 @@ import { miniMaxSpeechModels } from "./minimax-speech.ts";
 import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { prepareNativeBasetenSystemOne } from "./native-baseten-systemone.ts";
+import { prepareNativeSage } from "./native-sage.ts";
+import { prepareNativeSystemOne } from "./native-systemone.ts";
 import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { validateCompactRequest } from "./responses-compact.ts";
@@ -59,7 +61,8 @@ export function validateSelectedInput(selection: ProxySelection): void {
     && selection.capability !== "llm.embeddings")
     throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
   selection.nativeResponse = inlineMusicInput(selection)?.nativeResponse ?? publishedMusicInput(selection)?.nativeResponse ?? prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
-    ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
+    ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeSage(selection) ?? prepareNativeSystemOne(selection)
+    ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
     ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection) ?? prepareNativeOpenRouterPcmSpeech(selection) ?? prepareNativeOpenRouterSpeech(selection)
     ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
