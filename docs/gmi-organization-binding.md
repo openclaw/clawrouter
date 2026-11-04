@@ -8,9 +8,16 @@ header. No new credential type, attestation, migration or live account change
 is introduced.
 
 The first qualified destination is `https://api.gmi-serving.com/v1`, with POST
-`/chat/completions` and bodyless GET `/models`. Native and manifest callers use
-the same binding. Other origins, transports, endpoint authentication overrides,
+`/chat/completions` and bodyless GET `/models`. Unified, native and manifest
+callers use the same binding. Other origins, transports, endpoint authentication overrides,
 mapped paths and query overrides remain outside this qualification.
+
+Unified `/v1/chat/completions` selection carries internal `model` and
+`deployment` parameters. Both must exactly match the selected upstream model
+and serialized body model; neither changes GMI's literal upstream path. This
+exception does not accept extra parameters or caller-supplied native/manifest
+path parameters. Canonical router IDs and registered routing prefixes resolve
+to the same original model and credential binding.
 
 The Worker removes caller, provider-static and endpoint-static organization
 headers after header construction. It then inserts only the original

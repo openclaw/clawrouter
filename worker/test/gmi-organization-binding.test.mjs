@@ -4,6 +4,10 @@ import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 const { snapshot } = await import("../providers.ts");
 const { putGrantCredentials, inspectGrantCredentials } = await import("../grant-credentials.ts");
 const { overrideHotCacheConfig } = await import("../hot-cache.ts");
+const { concreteOpenAiSelection, isSelectionFailure } = await import("../proxy-selection.ts");
+const { configuredUpstream } = await import("../providers.ts");
+const { authenticateProxyKey } = await import("../proxy-auth.ts");
+const { prepareGmiOrganizationBinding } = await import("../gmi-organization-binding.ts");
 const selected = "deepseek-ai/DeepSeek-V4-Pro", hidden = "synthetic-hidden";
 const chat = { model: selected, messages: [{ role: "user", content: "Synthetic prompt." }] };
 const completion = { model: selected, choices: [{ message: { role: "assistant", content: "Synthetic answer." }, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } };
@@ -30,6 +34,81 @@ async function setup(t, { pooled = true, accountId, fixed = 700 } = {}) {
   f.replace = delta => putGrantCredentials(f.env, grantKey, { provider: "gmi", kind: "api_key", enabled: true, credential: "synthetic-original-key", ...delta });
   return f;
 }
+
+for (const prefix of ["gmi/", "gmi-cloud/", "gmicloud/"]) {
+  for (const accountId of [undefined, "synthetic-organization"]) {
+    for (const stream of [false, true]) test(`GMI unified ${prefix} ${stream ? "SSE" : "JSON"} keeps original ${accountId ? "organization" : "Bearer-only"} binding`, async t => {
+      const f = await setup(t, { accountId });
+      f.provider.adapter.passthroughHeaders.push("X-Organization-ID");
+      f.provider.adapter.injectHeaders["x-organization-id"] = "synthetic-static-organization";
+      const wire = `data: ${JSON.stringify({ ...completion, object: "chat.completion.chunk", choices: [] })}\n\ndata: [DONE]\n\n`;
+      f.upstream = async request => {
+        assert.equal(request.url, "https://api.gmi-serving.com/v1/chat/completions");
+        assert.equal(request.redirect, "manual");
+        assert.equal(request.headers.get("authorization"), "Bearer synthetic-original-key");
+        assert.equal(request.headers.get("x-organization-id"), accountId ?? null);
+        assert.deepEqual(await request.json(), { ...chat, stream });
+        return stream ? new Response(wire, { headers: { "content-type": "text/event-stream" } }) : Response.json(completion);
+      };
+      const response = await f.call("/v1/chat/completions", { ...chat, model: prefix + selected, stream },
+        { headers: { "x-organization-id": "synthetic-caller-organization" } });
+      assert.equal(response.status, 200, await response.clone().text());
+      if (stream) assert.equal(await response.text(), wire); else assert.deepEqual(await response.json(), completion);
+      assert.equal(f.sent.length, 1); await f.drain();
+      const rows = await f.events(); assert.equal(rows.length, 1);
+      assert.deepEqual([rows[0].input_tokens, rows[0].output_tokens, rows[0].total_tokens, rows[0].actual_cost_micros], [7, 3, 10, 700]);
+      assert.doesNotMatch(JSON.stringify(rows), /synthetic-(original-key|organization|caller-organization|static-organization)/);
+    });
+  }
+}
+
+const badSelectors = [
+  ["foreign model", selection => { selection.pathParams.model = hidden; }],
+  ["foreign deployment", selection => { selection.pathParams.deployment = hidden; }],
+  ["router ID instead of upstream", selection => { selection.pathParams.model = `gmi/${selected}`; }],
+  ["missing deployment", selection => { delete selection.pathParams.deployment; }],
+  ["missing model", selection => { delete selection.pathParams.model; }],
+  ["extra parameter", selection => { selection.pathParams.extra = selected; }],
+  ["numeric parameter", selection => { selection.pathParams.model = 7; }],
+  ["null parameter", selection => { selection.pathParams.deployment = null; }],
+  ["array parameter", selection => { selection.pathParams.model = [selected]; }],
+  ["trailing newline", selection => { selection.pathParams.model += "\n"; }],
+  ["foreign serialized model", selection => { selection.body.model = hidden; }],
+  ["missing serialized model", selection => { delete selection.body.model; }],
+  ["missing selected model", selection => { selection.model = null; }],
+  ["declared path parameter", selection => { selection.endpoint = { ...selection.endpoint, path_params: ["model"] }; }],
+];
+for (const [name, mutate] of badSelectors) test(`GMI rejects malformed internal selector: ${name}`, async t => {
+  const f = await setup(t, { pooled: false });
+  const request = new Request("https://router.example/v1/chat/completions", { method: "POST",
+    headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } });
+  const auth = await authenticateProxyKey(request.headers, f.env); assert.ok(!(auth instanceof Response));
+  const selection = concreteOpenAiSelection("/v1/chat/completions", { ...chat, model: `gmi/${selected}` }, f.env);
+  assert.equal(isSelectionFailure(selection), false);
+  assert.deepEqual(selection.pathParams, { model: selected, deployment: selected });
+  const upstream = configuredUpstream(f.provider, null, f.env), url = new URL(upstream.baseUrl + "/chat/completions");
+  // Prove the unchanged setup reaches the binding before changing one field.
+  const check = await prepareGmiOrganizationBinding(request, f.env, auth, selection, upstream, url, new Headers(upstream.headers));
+  await check(new AbortController().signal);
+  mutate(selection);
+  await assert.rejects(prepareGmiOrganizationBinding(request, f.env, auth, selection, upstream, url, new Headers(upstream.headers)),
+    error => error.status === 503 && error.code === "gmi_organization_owner_unavailable");
+  assert.equal(f.sent.length, 0);
+});
+
+for (const pathParams of [{ model: selected, deployment: selected }, { model: selected }, { extra: selected },
+  { model: hidden, deployment: selected }, { model: 7, deployment: selected }]) test(`GMI manifest cannot supply internal selector metadata ${JSON.stringify(pathParams)}`, async t => {
+  const f = await setup(t, { accountId: "synthetic-organization" });
+  const response = await f.call("/v1/proxy/gmi/chat_completions", { body: { ...chat, model: `gmi/${selected}` }, pathParams });
+  assert.ok(response.status >= 400); assert.equal(f.sent.length, 0); await response.text();
+});
+
+for (const route of ["/v1/chat/completions", "/v1/native/gmi/chat/completions"]) test(`GMI ${route} cannot turn caller query into model metadata`, async t => {
+  const f = await setup(t, { accountId: "synthetic-organization" });
+  const response = await f.call(`${route}?model=${encodeURIComponent(selected)}&deployment=${encodeURIComponent(selected)}`,
+    { ...chat, model: route.startsWith("/v1/native/") ? selected : `gmi/${selected}` });
+  assert.ok(response.status >= 400); assert.equal(f.sent.length, 0); await response.text();
+});
 
 for (const route of ["native-chat", "manifest-chat", "native-catalog", "manifest-catalog"]) {
   for (const accountId of [undefined, "synthetic-organization"]) test(`GMI ${route} optional organization ${accountId ?? "absent"} uses the original key`, async t => {

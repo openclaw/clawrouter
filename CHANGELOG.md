@@ -375,6 +375,7 @@
 - Include the three direct Arcee Chat cards in the generated catalog and verify catalog-selected native/manifest transport, fragmented streams and conservative accounting across the bundled Chat matrix.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Bind GMI's optional organization header to the original credential owner for Chat and keyed discovery, reject caller/static overrides, and recheck account identity and current policy after admission waits.
+- Preserve GMI unified Chat and model-prefix aliases by validating internal model selectors against the selected upstream model, while keeping caller path parameters and organization overrides closed.
 - Retain conservative generation charges for qualified Novita upstream HTTP 499 responses without treating local aborts, unsent requests, catalog reads or unrelated HTTP errors as that billing outcome.
 - Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
 - Qualify Novita native model-catalog declarations against the canonical keyed data-only contract, preserving exact caller filtering and unknown price units before runtime activation.
