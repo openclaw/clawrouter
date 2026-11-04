@@ -21,7 +21,7 @@ function providerFixture() {
     baseUrls: { default: "https://provider.example" }, routing: { nativePrefixes: [id], modelPrefixes: [`${id}/`] },
     capabilities: [
       { id: "llm.chat", endpoint: "chat", methods: ["POST"] }, { id: "llm.messages", endpoint: "messages", methods: ["POST"] },
-      { id: "models.list", endpoint: "models_list", methods: ["GET"] }, { id: "models.get", endpoint: "models_get", methods: ["GET"] },
+      { id: "models.list", endpoint: "models_list", methods: ["GET"] }, { id: "models.retrieve", endpoint: "models_get", methods: ["GET"] },
     ],
     endpoints: {
       chat: { path: "/v1/chat/completions", requestFormat: "openai.chat_completions", responseFormat: "openai.chat_completions", modelPassthrough: {} },
