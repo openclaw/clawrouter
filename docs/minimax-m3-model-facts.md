@@ -66,9 +66,10 @@ after partial delivery. Paid outcomes retain one explicit seven-micro
 `policy_fixed` receipt and null tokens when usage is absent. Client tariff and
 output-limit hints never become router reservation facts.
 
-These 11 actual-client cases are **authored, unrun** in this local-only
-preparation. No SDK build, hosted run, publication or live call was performed.
-They are not yet enrolled in the hosted consumer matrix.
+These 11 actual-client cases are enrolled in the existing hosted consumer
+matrix at the exact public source above. They remain **authored, unrun** until
+the composed candidate passes that job; local preparation does not establish
+actual-client or live proof. No new SDK report or live call is required.
 The client defaults to Anthropic; this fixture explicitly selects its existing
 Chat option. It does not prove default Anthropic, OAuth/portal, CN, dynamic
 discovery, ClawRouter manifest-client selection, video, account entitlement or
