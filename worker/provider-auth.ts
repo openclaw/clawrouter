@@ -1,3 +1,4 @@
+import { miniMaxImageProjection, miniMaxImageRequirement } from "./minimax-image-credential.ts";
 import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { isQualifiedVertexModelLocation } from "./vertex-model-eligibility.ts";
 import { miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
@@ -26,6 +27,8 @@ export function openRouterPcmRequirement(requirement: Pick<GrantRequirement, "pr
 }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.endpoint.request_format === "minimax.images" && (!miniMaxImageRequirement(requirement)
+    || !miniMaxImageProjection(grant) || transportForGrant(requirement.provider, grant) !== null)) return false;
   if (requirement.provider.id === "anthropic-vertex") {
     const binding = vertexAnthropicProjection(grant);
     const models = requirement.provider.models.filter(model => model.id === requirement.model || model.upstream === requirement.model);

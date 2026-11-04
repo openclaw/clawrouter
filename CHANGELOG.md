@@ -45,6 +45,7 @@
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
 - Add bounded MiniMax native speech response validation with complete hex delivery and locally generated playable test audio; common native-media grant authority and fee qualification remain closed pending integration.
 - Require explicit owner-bound global MiniMax speech authorization, exact API-key source selection, fingerprint-qualified discovery and a fresh final credential-owner check; keep legacy grants and unknown dollar tariffs closed.
+- Authorize prompt-only MiniMax images through a separate original-owner API-key binding, fresh generation and policy checks, bounded native delivery and conservative accounting; keep unknown dollar prices, environment keys and reference inputs closed.
 - Bind preprovisioned MiniMax Messages credentials to an explicit regional issuer and resource, reusing durable refresh fencing and fresh original-owner checks without environment or cross-region fallback.
 - Add Access-admin-only MiniMax device onboarding with same-origin controls, durable single-attempt exchange fences, cancellable owner-bound polling and atomic credential installation; uncertain exchanges are never replayed.
 - Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.

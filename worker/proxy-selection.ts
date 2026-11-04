@@ -1,5 +1,6 @@
 import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
 import { prepareVeniceChatResponse } from "./venice-chat-runtime.ts";
+import { prepareNativeMiniMaxImage } from "./native-minimax-images.ts";
 import { prepareNativeMiniMaxSpeech } from "./native-minimax-speech.ts";
 import { miniMaxSpeechModels } from "./minimax-speech.ts";
 import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
@@ -53,6 +54,10 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.provider.id === "minimax" && (selection.model?.upstream === "image-01"
+    || !Array.isArray(selection.body) && selection.body.model === "image-01")
+    && (selection.endpoint.request_format !== "minimax.images" || selection.capability !== "image.generate"))
+    throw new HttpError(400, "native_image_route_required", "MiniMax images require their qualified native image route");
   if (selection.provider.id === "minimax" && miniMaxSpeechModels.some(model => model === (selection.model?.upstream ?? (!Array.isArray(selection.body) ? selection.body.model : undefined)))
     && selection.endpoint.request_format !== "minimax.speech")
     throw new HttpError(400, "native_audio_route_required", "MiniMax speech models require their qualified native media route");
@@ -65,7 +70,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
     ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection) ?? prepareNativeOpenRouterPcmSpeech(selection) ?? prepareNativeOpenRouterSpeech(selection)
-    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
+    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection) ?? prepareNativeMiniMaxImage(selection)
     ?? prepareNativeElevenLabsSpeech(selection) ?? prepareVeniceChatResponse(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))

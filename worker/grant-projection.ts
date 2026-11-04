@@ -1,3 +1,5 @@
+import { miniMaxImageProjection } from "./minimax-image-credential.ts";
+import { readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
 import { HttpError } from "./utils.ts";
@@ -9,6 +11,7 @@ import { readNativeMediaBinding } from "../shared/native-media-binding.ts";
 export function routingProjection(grant: UpstreamGrant): UpstreamGrant {
   const fields = ["version", "enabled", "priority", "weight", "kind", "provider", "label", "credentialStore", "credentialGeneration", "credentialLineage", "credentialStatus", "credentialRefreshBlockedUntil", "hasCredential", "credentialFields", "hasAccessToken", "hasRefreshToken", "tokenType", "expiresAt", "scopes", "accountId", "subscription", "createdAt", "updatedAt", "revokedAt"] as const;
   return { ...Object.fromEntries(fields.filter(field => grant[field] !== undefined).map(field => [field, grant[field]])),
+    minimaxImageBinding: miniMaxImageProjection(grant) ? readMiniMaxImageBinding(grant.minimaxImageBinding) : null,
     vertexAnthropicBinding: vertexAnthropicProjection(grant),
     minimaxAnthropicBinding: miniMaxAnthropicProjection(grant),
     nativeMediaBinding: grant.provider === "minimax" && grant.kind === "api_key" && grant.credentialStore === "durable_object"

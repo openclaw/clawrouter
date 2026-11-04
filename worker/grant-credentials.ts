@@ -5,6 +5,7 @@ import { prepareMiniMaxRefreshRequest, decodeMiniMaxTokenResponse, type MiniMaxO
 import { readMiniMaxTokenBody } from "./minimax-token-body.ts";
 import { authorizationTimestamp, refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
 import { credentialProjection, materializedGrant, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
+import { mutateMiniMaxImageBinding, miniMaxImageOwnerBinding, miniMaxImageDenied } from "./minimax-image-credential.ts";
 import { mutateNativeMediaBinding } from "./native-media-credential.ts";
 export type { CredentialProjection } from "./grant-credential-record.ts";
 import { claimRefreshOwnership, reserveRefreshOwnership, OWNERSHIP_CLAIM, OWNERSHIP_CURRENT } from "./refresh-ownership.ts";
@@ -270,6 +271,8 @@ export class GrantCredentialObject implements DurableObject {
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         await mutateVertexAnthropicBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.vertexAnthropicIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt, input.vertexPrivateKey);
+        mutateMiniMaxImageBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxImageIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
         const freshAuthority = !current || record.refreshToken !== current.refreshToken;
         record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
@@ -389,7 +392,7 @@ export class GrantCredentialObject implements DurableObject {
       updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
       metadata: { provider: "minimax", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight,
         createdAt: current?.createdAt ?? now, updatedAt: now },
-      nativeMediaBinding: null, minimaxAnthropicBinding: null,
+      nativeMediaBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null,
     };
     const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
       key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "minimax", status: "reauth_required",
@@ -429,6 +432,11 @@ export class GrantCredentialObject implements DurableObject {
 
   private async materialize(input: MaterializeRequest): Promise<OwnerResponse> {
     let record = await this.loadRecord(input.key);
+    // Unlike generic refresh, this operation may only materialize the exact
+    // already-admitted owner revision and its actual scalar API-key slot.
+    if (input.operation === "minimax.images" && (!record || input.providerId !== "minimax"
+      || !miniMaxImageOwnerBinding(record) || record.grantKey !== input.key
+      || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage)) miniMaxImageDenied();
     let migrated = false;
     if (!record && input.legacy && hasPrimaryCredential(input.legacy)) {
       const metadata = await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
@@ -1019,8 +1027,8 @@ export async function inspectGrantCredentials(env: Env, key: string, signal?: Ab
   return (await ownerCall<OwnerResponse>(env, key, "/inspect", {}, signal)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -1035,6 +1043,7 @@ export async function materializeGrantCredentials(
   refresh: RefreshConfig | null,
   force: boolean,
   signal?: AbortSignal,
+  operation?: MaterializeRequest["operation"],
 ): Promise<UpstreamGrant> {
   const legacy = hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
@@ -1045,6 +1054,7 @@ export async function materializeGrantCredentials(
     refresh,
     force,
     expectedGeneration: grant.credentialGeneration ?? null,
+    operation,
   }, signal)).grant;
 }
 
@@ -1055,7 +1065,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
   for (const name of ["minimaxDeviceAttempt", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
-  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
+  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {

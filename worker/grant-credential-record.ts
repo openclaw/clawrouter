@@ -1,3 +1,5 @@
+import { miniMaxImageOwnerBinding } from "./minimax-image-credential.ts";
+import type { MiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { vertexOwnerBinding, type VertexAnthropicBinding } from "./vertex-anthropic-binding.ts";
 import { miniMaxOwnerBinding, type MiniMaxAnthropicBinding } from "./minimax-anthropic-binding.ts";
 import type { MiniMaxDeviceAttempt } from "./minimax-device-flow.ts";
@@ -19,6 +21,7 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
   vertexPrivateKey?: string;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: NativeMediaBinding | null;
+  minimaxImageBinding?: MiniMaxImageBinding | null;
   version: 1;
   generation: number;
   lineage?: string;
@@ -47,6 +50,7 @@ export interface CredentialProjection extends CredentialMetadata {
   vertexAnthropicBinding: VertexAnthropicBinding | null;
   minimaxAnthropicBinding: MiniMaxAnthropicBinding | null;
   nativeMediaBinding: NativeMediaBinding | null;
+  minimaxImageBinding: MiniMaxImageBinding | null;
   credentialStore: "durable_object";
   credentialGeneration: number;
   credentialLineage?: string;
@@ -65,6 +69,7 @@ export interface OwnerResponse {
 }
 
 export interface MaterializeRequest {
+  operation?: "minimax.images";
   key: string;
   grant: UpstreamGrant;
   legacy?: UpstreamGrant | null;
@@ -78,6 +83,7 @@ export interface PutRequest {
   // Only the privileged admin mutation supplies this owner intent. Grant
   // metadata, legacy imports, OAuth completion and pool submissions do not.
   nativeMediaIntent?: NativeMediaBinding | null;
+  minimaxImageIntent?: MiniMaxImageBinding | null;
   vertexAnthropicIntent?: VertexAnthropicBinding | null;
   vertexPrivateKey?: string;
   minimaxAnthropicIntent?: MiniMaxAnthropicBinding | null;
@@ -92,6 +98,7 @@ export interface PutRequest {
 
 export function credentialProjection(record: CredentialRecord): CredentialProjection {
   return {
+    minimaxImageBinding: miniMaxImageOwnerBinding(record),
     vertexAnthropicBinding: vertexOwnerBinding(record),
     minimaxAnthropicBinding: miniMaxOwnerBinding(record),
     nativeMediaBinding: record.providerId === "minimax" && miniMaxApiKeySecret(record) ? readNativeMediaBinding(record.nativeMediaBinding) : null,
@@ -128,6 +135,7 @@ export function hasFreshPrimaryCredentials(previous: CredentialRecord, replaceme
 export function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
   return {
     ...metadata,
+    minimaxImageBinding: miniMaxImageOwnerBinding(record),
     vertexAnthropicBinding: vertexOwnerBinding(record),
     minimaxAnthropicBinding: miniMaxOwnerBinding(record),
     nativeMediaBinding: record.providerId === "minimax" && miniMaxApiKeySecret(record) ? readNativeMediaBinding(record.nativeMediaBinding) : null,

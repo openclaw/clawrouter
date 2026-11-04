@@ -383,7 +383,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
       // PCM key authority and Vertex model/location support depend on the
       // selected model even when multiple models share one endpoint.
-      const modelRequirement = model && (provider.id === "anthropic-vertex" || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
+      const modelRequirement = model && (provider.id === "anthropic-vertex" || provider.id === "minimax" && model.upstream === "image-01" || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
       const key = JSON.stringify([matching.map(pool => pool.entry.policyId), modelRequirement ?? null]);
       const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false, modelRequirement };
       if (model === undefined) group.passthrough = true;

@@ -10,6 +10,7 @@ import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./prox
 
 import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
+import { revalidateMiniMaxImageOwner } from "./minimax-image-dispatch.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
@@ -363,7 +364,10 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
-  try { materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
+  try { materialized = requirement?.endpoint.request_format === "minimax.images"
+    ? await materializeGrantCredentials(env, key, await revalidateMiniMaxImageOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal),
+      provider.id, null, false, signal, "minimax.images")
+    : provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
     ? await refreshGrant(key, grant, provider, env, false, signal)
     : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
