@@ -8,6 +8,8 @@ import { authorizeIssuedControl, assertIssuedControlLive, publicControlAuthoriza
 import { assertPublishedInputLive, publishedInputUnavailable, validatePublishedIssuer, type PublishedInputBinding } from "./published-input-receipt.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { sha256Hex } from "./utils.ts";
+import { allowsInputPublicationAndForwarding, readInputPublicationPolicy } from "../shared/input-publication.ts";
+import type { AccessPolicy } from "./types.ts";
 
 export function issuedPublishedInputCaller(auth: AuthorizedIdentity): PublicControlBinding {
   const authorization = publicControlAuthorization(auth);
@@ -44,6 +46,14 @@ export async function publishedMusicRouteDigest(binding: Pick<PublishedInputBind
     "openai.chat_completions", "openai.chat_completions", "sse", binding.publicOrigin]));
 }
 
+export async function publishedInputPermission(policy: AccessPolicy, endpointId: string, modelId: string, now = Date.now()): Promise<{ digest: string; expiresAt: number }> {
+  const canonical = readInputPublicationPolicy(policy.inputPublication, now);
+  if (!policy.enabled || !canonical || !allowsInputPublicationAndForwarding(canonical, "openrouter", endpointId, modelId, now)) publishedInputUnavailable();
+  // Source3 owns normalization, entry uniqueness and UTC spelling. This binds
+  // the normalized object, not serialized JSON member-name uniqueness.
+  return { digest: await sha256Hex(JSON.stringify(canonical)), expiresAt: Math.min(...canonical.allow.map(entry => Date.parse(entry.expiresAt))) };
+}
+
 // Owner freshness is necessary, not publication/forwarding consent. Each
 // operation must also qualify the distinct current permission before egress.
 // This function never materializes a key, refreshes, or selects another grant.
@@ -54,6 +64,8 @@ export async function authorizePublishedInputOwner(env: Env, binding: PublishedI
   const route = publishedMusicRoute(binding);
   const policy = await authorizeIssuedControl(env, binding.issuer, binding.owner, signal);
   assertPolicyModel(policy, { ...route, capability: "music.generate" });
+  const permission = await publishedInputPermission(policy, route.endpoint.id, route.model.id);
+  if (permission.digest !== binding.permissionDigest || binding.expiresAt > permission.expiresAt) publishedInputUnavailable();
   const grant = await inspectGrantCredentials(env, binding.owner.grantKey, signal);
   signal.throwIfAborted(); assertPublishedInputLive(binding); assertIssuedControlLive(binding.issuer);
   assertPublishedInputGrant(binding, grant);
