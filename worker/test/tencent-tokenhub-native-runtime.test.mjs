@@ -85,7 +85,7 @@ test(`${id} declaration preserves the frozen postpaid alias without inheriting t
       assert.deepEqual(native.input, ["text"]); assert.equal(native.contextWindow, undefined); assert.equal(native.maxOutputTokens, undefined);
     }
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["models_list", "chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["models_list", "chat_completions"].sort());
   const opaque = providerModel(provider, `${id}/synthetic-tenant-model`, provider.endpoints.find(e => e.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   const foreign = { TOKENPLAN_API_KEY: "synthetic-plan", OPENAI_API_KEY: "synthetic-unrelated" };
@@ -297,10 +297,10 @@ for (const manifest of [false, true]) test(`${id} ${manifest ? "manifest" : "nat
   assert.equal(f.sent.length, 1);
 });
 
-test(`${id} routing alias retains the canonical original provider grant`, async t => {
+test(`${id} unadvertised native URL clawrouter-tencent-tokenhub is rejected before upstream egress`, async t => {
   const f = await fixture(t), body = { model: "hy3", messages: [{ role: "user", content: "synthetic-input" }] };
   const r = await f.call(body, { nativePrefix: "clawrouter-tencent-tokenhub" });
-  assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
-  assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
-  assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-tokenhub"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+  assert.equal(r.status, 404, await r.clone().text());
+  assert.equal((await r.json()).error.code, "provider_not_found"); await f.drain();
+  assert.equal(f.sent.length, 0);
 });
