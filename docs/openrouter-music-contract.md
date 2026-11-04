@@ -68,16 +68,24 @@ This leaf accepts text-only messages; every image/reference remains closed
 pending original asset authority. The standalone codec's larger input surface
 does not grant that authority.
 
-The leaf bounds request JSON to 256 KiB before the existing codec clones it,
-retaining the 32,768 UTF-16 prompt limit. It quarantines at most 4 MiB of native
-SSE wire with 8,192 reads and 8,192 events (including empty reads and heartbeat
-events), 256 KiB accepted frames with at most 32 lines, 2 MiB decoded audio and 128 KiB UTF-8
-transcript. Encoded audio is bounded before decoding. A 32 MiB response lease
-charges 64 MiB in the existing 96 MiB pool, covering quarantine, parser and JSON
-scratch, base64 copies, decoded validation audio and replay; ingress keeps its
-separate charge. Replay uses bounded views into the same quarantine, and common
-dispatch retains the lease through delivery or cancellation. These are deliberate
-smaller local limits, not duration or upstream-fee guarantees.
+The output-only continuation keeps request JSON at 256 KiB before the existing
+codec clones it, retaining the 32,768 UTF-16 prompt limit. It restores the
+original 32 MiB wire, 16 MiB audio and 1 MiB transcript bounds through
+`createOpenRouterMusicInspector`, without accumulating base64, decoded audio or
+transcript. All 262,144 reads and 8,192 events, including heartbeat events, are
+bounded; frames remain at most 2 MiB with at most 32 lines. The original codec's
+default audio-returning reader is unchanged.
+
+A 32 MiB response lease still charges 64 MiB in the existing 96 MiB pool.
+Quarantine uses one fixed 32 MiB allocation and a **separate** 64 KiB BYOB
+window. Every next read follows the returned view's buffer ownership; quarantine
+is never passed to a reader as detachable backing. Reads have no minimum-fill
+requirement, so a small native terminal on an open socket can complete. A
+non-BYOB body fails conservatively; there is no default-reader allocation
+fallback. Replay copies at most 64 KiB into a consumer BYOB view or a fresh
+bounded output window. It never enqueues a borrowed quarantine view into a byte
+controller. Common dispatch retains the lease until delivery or cancellation.
+These are payload bounds, not duration or upstream-fee guarantees.
 
 Only complete HTTP 200 native SSE with real `[DONE]` is replayed. Socket EOF
 alone, errors, malformed UTF-8/base64, inconsistent native identity, overflow or
@@ -100,49 +108,39 @@ generic Chat bypass guard, original grant/model routing, admission and settlemen
 source2/source6 own actual-client and Worker acceptance. This leaf does not
 activate a route.
 
-Payload lifetime within the 64 MiB charged response lease:
+Payload lifetime within the existing 64 MiB charged response lease:
 
-| Phase | Retained payload and bounded scratch | Release point |
+| Reservation | Retained payload and explicit transient copies | Release point |
 | --- | --- | --- |
-| Preparation | Original JSON remains with common ingress; at most 256 KiB JSON and 32,768 UTF-16 prompt units. Codec cloning/serialization adds less than 1 MiB for this text-only shape. | Prepared request stays with the leaf through validation; ingress has its separate reservation. |
-| Quarantine | One 4 MiB buffer; one accepted upstream chunk at most 4 MiB; shared framing buffer at most 2 MiB and decoded framing string at most 4 MiB. Accepted frames are only 256 KiB, at most 32 lines before split/JSON allocation. No decoded audio is retained in this pass. | Reader canceled/released at native terminal or failure; framing/JSON scratch is not returned. |
-| Codec validation | Same 4 MiB quarantine replayed in 64 KiB views; bounded frame/JSON scratch; at most 2,796,204 encoded audio characters. Budget includes UTF-16 concatenation/canonical-base64 copies, the temporary decoded string and at most 2 MiB validated audio, plus 128 KiB transcript. | Codec observation is discarded after validation. No observation audio/transcript is captured by the output stream. |
-| Delivery | Only the same quarantine buffer and 64 KiB views are retained by replay; common SSE inspection is bounded. | Common observer releases the response lease on completion, cancellation or failure. |
+| 32 MiB | One fixed original-wire quarantine; no chunk list, geometric resize or final whole-wire copy. | Delivery EOF, cancellation or failure. |
+| 16 MiB | Shared SSE framing buffer and its bounded growth copy, decoded frame/data strings and at most 32 line views. Frames are at most 2 MiB. Root-key scanning uses the existing tokenizer in 1,024-unit feeds without a second parsed object graph. | Each frame; no frame/data strings escape quarantine. |
+| 8 MiB | One structurally bounded JSON event parsed by the inspector; transient bounded usage serialization and the last diagnostic usage record. No aggregate base64/audio/transcript is retained. | Each event; inspector is discarded at validated terminal. |
+| 8 MiB | Separate 64 KiB BYOB transport window, returned view, bounded delivery copy, text-only request preparation and parser/window headroom. Delivery also covers the existing bounded common SSE observer/sniffer scratch. | Transport reader is canceled/released at terminal/failure; replay and common observer end at delivery EOF/cancel. |
 
-The 64 MiB charge reserves headroom for transient JSON objects, string copies
-and parser scratch; it is not a measured JavaScript heap or GC guarantee. Byte,
-frame, line and read bounds remain enforced independently of Content-Length.
-An oversized incoming transport chunk is rejected before copying into quarantine;
-transport allocation itself remains common runtime responsibility.
+Ingress remains separately charged: a 16 MiB ingress charge plus this 64 MiB
+response charge is 80 MiB within the existing 96 MiB pool. The ledger accounts
+for reachable payloads and explicit copies; it is not a measured heap or GC
+guarantee. Wire/frame/structure/read bounds apply independently of Content-Length.
+Actual network BYOB support must survive every common wrapper; a synthetic byte
+stream alone cannot qualify this larger response path.
 
-Offline fixtures include MP3 at 2,096,640 bytes (6,289,920 decoded PCM bytes) and
-PCM WAV at the exact 2,097,152-byte audio cap (2,097,108 decoded PCM bytes), plus
-the small containers above. They are generated/repeated test audio, not vendor
-inference. The HTTP response remains SSE for both requested formats; no binary
-MIME is guessed from base64. The codec checks native protocol completeness,
-not acoustic validity of arbitrary returned audio.
+Offline decoder-verified fixtures include a 16,777,216-byte PCM WAV with
+16,777,172 decoded PCM bytes and a 16,776,576-byte repeated MP3 with 50,329,728
+decoded PCM bytes, both 24 kHz mono test audio. Small and former partial-leaf
+fixtures remain. The HTTP response stays SSE for both requested formats; no
+binary MIME is guessed from base64. Protocol completeness does not establish
+acoustic validity of arbitrary upstream audio, a live synthesis, or a duration
+promise.
 
-This is not full frozen music parity. The frozen client defaults to WAV and
-permits a 180-second request; neither that duration nor image-conditioned music
-is qualified by the smaller prompt-only leaf. Restoring original codec limits
-(16 MiB decoded audio / 32 MiB wire, one reference image) is an internal original
-E12 dependency, not an external-entitlement blocker or a new product:
-
-- Source5/source1 must agree a codec validation mode that checks fragmented
-  base64 and terminal state without retaining the whole base64 stream and
-  materializing `OpenRouterMusicObservation.audio`. The current mandatory
-  audio-returning reader cannot safely fit those original limits plus 32 MiB
-  quarantine and ingress in this lease by merely raising constants.
-- Source1 must qualify the corresponding original-ingress/quarantine/replay
-  capacity lifetime (or an explicit larger-capacity mechanism), including
-  bounded transport reads and the image body's extra copies. The existing
-  parameterless `acquire()` alone does not establish that larger combined
-  allocation. The existing request codec also clones/serializes image JSON.
-- Original image bytes/references need source1's asset/destination authority
-  contract and source5's byte validation before the text-only exclusion can
-  open. Caller URLs, uploaded IDs or an unqualified boolean supply no authority.
-  Source2's actual frozen consumer and source6's composed proof must exercise
-  the restored surface.
+This remains partial original E12 until common dispatch and actual-client proof
+qualify. The frozen client defaults to WAV and permits a 180-second request;
+restored output bounds alone do not prove every such result fits. Reference-image
+ingress and ownership remain a separate **internal original dependency**:
+`prepareOpenRouterMusic` accepts one image and clones/serializes its JSON, while
+this leaf continues rejecting every image/reference. Source1 must qualify those
+copies and original asset/destination authority; source5 must qualify input
+bytes. Caller URLs, uploaded IDs or an unqualified boolean grant no authority.
+Source2's frozen consumer and source6's composed proof must exercise that surface.
 
 Focused leaf checks: `node --test worker/test/native-openrouter-music.test.mjs`.
 
@@ -166,16 +164,15 @@ data events; its caller still owns fatal UTF-8 framing, wire limits, original
 terminal/cancellation lifetime and the response lease. Native usage is diagnostic,
 not an invoice or pricing authority.
 
-This codec continuation does not raise the landed response leaf's limits.
-At reviewed main `ecefad76f02039e57e11967b2e02a9a71483cd12`,
-`validateSelectedInput` has no music factory registration. Source1 must publish
-the qualified common-path composition so a real Worker fetch can prove BYOB
-support through every intervening wrapper before larger quarantine activation.
-An isolated byte-stream fixture cannot substitute for that proof. The planned
-32 MiB fixed quarantine must never be passed as detachable BYOB backing;
-only a separate bounded window may follow the reader's returned-view ownership.
-Source5 can qualify scalar inspection independently while original image
-ingress/ownership and common delivery qualification remain required internal work.
+The scalar inspector landed independently in PR783. The full-output wrapper
+must compose with source1's PR784 common selector/factory route and pass actual
+workerd fetch, full-size delivery, cancellation and lease-release proof before
+publication or activation. `worker/test/native-openrouter-music-workerd.test.mjs`
+uses that published composition's fixture declaration and the real Worker
+entrypoint. It streams original wire to the host for hashing rather than
+materializing a second full response inside the router isolate. Common runtime,
+auth, pricing, declarations, snapshots and actual-client acceptance remain with
+their existing owners.
 
 Primary evidence checked 2026-11-03:
 

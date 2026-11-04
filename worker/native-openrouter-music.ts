@@ -1,13 +1,14 @@
 import { jsonBodyBytes, utf8Length } from "./json-body.ts";
+import { createJsonTokenizer } from "./json-tokens.ts";
 import { mediaObject } from "./managed-media-json.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
-import { openRouterMusicModels, prepareOpenRouterMusic, readOpenRouterMusic } from "./openrouter-music.ts";
+import { createOpenRouterMusicInspector, openRouterMusicModels, prepareOpenRouterMusic, type OpenRouterMusicRequest } from "./openrouter-music.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { createSseFrames } from "./token-usage.ts";
 import { HttpError } from "./utils.ts";
 
-const wireLimit = 4 * 1024 * 1024, audioLimit = 2 * 1024 * 1024, transcriptLimit = 128 * 1024;
-const readLimit = 8192, eventLimit = 8192, frameLimit = 256 * 1024;
+const wireLimit = 32 * 1024 * 1024, windowLimit = 64 * 1024;
+const readLimit = 262144, eventLimit = 8192, frameLimit = 2 * 1024 * 1024;
 const isMusic = (model: unknown) => openRouterMusicModels.some(value => value === model);
 
 // Common selection owns original OpenRouter credentials, admission and pricing.
@@ -46,14 +47,11 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
         void response.body?.cancel().catch(() => undefined); invalid();
       }
       try {
-        const wire = await quarantine(response.body, signal);
+        const wire = await quarantine(response.body, prepared, signal);
         if (length !== null && Number(length) !== wire.byteLength) invalid();
-        // Decode only after the smaller wire/audio bounds are established. The
-        // native codec still owns model/ID, base64, usage and terminal validation.
-        // This is local validation, never a second upstream request.
+        // The codec's scalar inspector already validated the original 16 MiB
+        // audio bound. No aggregate base64, decoded audio or transcript is kept.
         const headers = new Headers({ "content-type": "text/event-stream", "content-length": String(wire.byteLength) });
-        const observed = await readOpenRouterMusic(new Response(replay(wire), { headers }), prepared, signal);
-        if (observed.audio.byteLength > audioLimit) invalid();
         signal.throwIfAborted();
         headers.set("cache-control", "no-store"); headers.set("x-content-type-options", "nosniff");
         return { response: new Response(replay(wire), { status: 200, headers }),
@@ -63,54 +61,52 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
   };
 }
 
-async function quarantine(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
-  const wire = new Uint8Array(wireLimit);
-  let size = 0, reads = 0, events = 0, encodedAudio = 0, audioTail = "", transcriptBytes = 0, done = false, carriage = false;
+async function quarantine(body: ReadableStream<Uint8Array>, request: OpenRouterMusicRequest, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
+  let reader: ReadableStreamBYOBReader;
+  try { reader = body.getReader({ mode: "byob" }); }
+  catch { void body.cancel().catch(() => undefined); invalid(); }
+  const inspection = createOpenRouterMusicInspector(request);
+  let size = 0, reads = 0, events = 0, carriage = false;
   const frames = createSseFrames(frame => {
     if (frame === null || ++events > eventLimit || frame.length > frameLimit || utf8Length(frame) > frameLimit
-      || done && frame.trim()) invalid();
+      || inspection.isDone() && frame.trim()) invalid();
     // Bound split/JSON allocations as well as bytes. The shared framer's 2 MiB
     // scratch bound alone does not bound the number of tiny SSE header strings.
     let lines = 0;
     for (let index = 0; index < frame.length; index++) if (frame[index] === "\n" && ++lines > 32) invalid();
-    const data: string[] = [];
+    let data: string | undefined;
     for (const line of frame.split("\n")) {
-      if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+      if (!line || line.startsWith(":")) continue;
+      const colon = line.indexOf(":"), field = colon < 0 ? line : line.slice(0, colon);
+      const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+      if (field === "data") { if (data !== undefined) invalid(); data = value; }
+      else if (field !== "event" && field !== "id" && field !== "retry") invalid();
       // The common pre-stream error sniffer must never turn paid music into a
       // free rejection, including an error event with an otherwise valid body.
-      if (line.startsWith("event:") && line.slice(6).trim() === "error") invalid();
+      if (field === "event" && value.trim() === "error") invalid();
     }
     // The frozen client parses each data line independently, unlike multiline SSE.
-    if (data.length > 1) invalid();
-    if (!data.length) return;
-    if (data[0] === "[DONE]") {
-      const padding = audioTail.endsWith("==") ? 2 : audioTail.endsWith("=") ? 1 : 0;
-      if (Math.floor((encodedAudio - padding) * 3 / 4) > audioLimit) invalid();
-      done = true; return;
-    }
-    const value: unknown = JSON.parse(data[0]);
-    if (!mediaObject(value) || Object.hasOwn(value, "error")) invalid();
-    const choice = Array.isArray(value.choices) ? value.choices[0] : null;
-    const delta = mediaObject(choice) && mediaObject(choice.delta) ? choice.delta : null;
-    const audio = delta && mediaObject(delta.audio) ? delta.audio : null;
-    if (audio?.data !== undefined) {
-      if (typeof audio.data !== "string" || (encodedAudio += audio.data.length) > Math.ceil(audioLimit / 3) * 4) invalid();
-      audioTail = (audioTail + audio.data.slice(-2)).slice(-2);
-    }
-    if (audio?.transcript !== undefined) {
-      if (typeof audio.transcript !== "string" || (transcriptBytes += utf8Length(audio.transcript)) > transcriptLimit) invalid();
-    }
+    if (data === undefined) return;
+    if (data !== "[DONE]") rejectErrorField(data);
+    inspection.accept(data);
   }, true);
-  const reader = body.getReader();
-  const abort = () => { void reader.cancel().catch(() => undefined); };
+  let cancellation: Promise<void> | undefined;
+  const cancel = () => { cancellation ??= reader.cancel().catch(() => undefined); };
+  const abort = () => { cancel(); };
   signal.addEventListener("abort", abort, { once: true });
   try {
     signal.throwIfAborted();
+    const wire = new Uint8Array(wireLimit);
+    let window = new Uint8Array(windowLimit);
     for (;;) {
       if (++reads > readLimit) invalid();
-      const part = await reader.read(); signal.throwIfAborted();
+      // Never lend quarantine to BYOB: read() transfers the supplied buffer.
+      // No minimum fill: a small native DONE must complete on an open socket.
+      const part = await reader.read(window); signal.throwIfAborted();
       if (part.done) invalid(); // Only native [DONE], never socket EOF, completes music.
-      if (!(part.value instanceof Uint8Array) || part.value.byteLength > wireLimit - size) invalid();
+      if (!(part.value instanceof Uint8Array) || !part.value.byteLength || part.value.byteLength > windowLimit
+        || !(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > windowLimit
+        || part.value.byteLength > wireLimit - size) invalid();
       // Require LF or CRLF so the original client can parse the unchanged bytes.
       for (const byte of part.value) {
         if (carriage && byte !== 10) invalid();
@@ -121,29 +117,53 @@ async function quarantine(body: ReadableStream<Uint8Array>, signal: AbortSignal)
       if (frames.overflowed()) invalid();
       // CR completes an SSE line in the shared parser, but the frozen client
       // needs its paired LF. Keep reading when that pair crosses a chunk.
-      if (done && !carriage) {
+      if (inspection.isDone() && !carriage) {
         const tail = frames.pending();
         if (tail === null || tail.trim()) invalid();
+        inspection.result(); // Final quartet/padding, transcript and nonempty-audio checks.
         return wire.subarray(0, size);
       }
+      // Only the returned view owns the transferred window now.
+      window = new Uint8Array(part.value.buffer);
     }
   } finally {
-    void reader.cancel().catch(() => undefined);
+    cancel();
     signal.removeEventListener("abort", abort); reader.releaseLock();
   }
 }
 
+// Scan root keys without a second JSON.parse/object graph. The codec permits
+// error:null; common pre-stream rejection does not. Escaped keys also count.
+function rejectErrorField(data: string): void {
+  let depth = 0, key = false, name = "";
+  const tokens = createJsonTokenizer(token => {
+    if (token.name === "startObject" || token.name === "startArray") depth++;
+    else if (token.name === "endObject" || token.name === "endArray") depth--;
+    else if (token.name === "startKey") { key = depth === 1; name = ""; }
+    else if (token.name === "stringChunk" && key) name = (name + token.value.slice(0, 6)).slice(0, 6);
+    else if (token.name === "endKey") { if (key && name === "error") invalid(); key = false; }
+  });
+  for (let offset = 0; offset < data.length; offset += 1024) tokens.push(data.slice(offset, offset + 1024));
+  tokens.end();
+}
+
 function replay(wire: Uint8Array): ReadableStream<Uint8Array> {
-  let offset = 0;
-  return new ReadableStream<Uint8Array>({
+  let retained: Uint8Array | null = wire, offset = 0;
+  return new ReadableStream<Uint8Array>({ type: "bytes",
     pull(controller) {
-      if (offset === wire.byteLength) { controller.close(); return; }
-      let end = Math.min(offset + 64 * 1024, wire.byteLength);
-      // Keep terminal CRLF together for the native codec's DONE/length check.
-      if (end < wire.byteLength && wire[end - 1] === 13 && wire[end] === 10) end--;
-      controller.enqueue(wire.subarray(offset, end)); offset = end;
+      if (!("byobRequest" in controller)) invalid();
+      if (!retained || offset === retained.byteLength) {
+        retained = null; controller.close(); controller.byobRequest?.respond(0); return;
+      }
+      const requested = controller.byobRequest?.view;
+      const size = Math.min(windowLimit, retained.byteLength - offset, requested?.byteLength ?? windowLimit);
+      const chunk = requested ? new Uint8Array(requested.buffer, requested.byteOffset, size) : new Uint8Array(size);
+      chunk.set(retained.subarray(offset, offset + size)); offset += size;
+      // Byte controllers detach enqueued buffers. Only a delivery copy, never a
+      // borrowed quarantine view, may cross this boundary.
+      if (requested) controller.byobRequest!.respond(size); else controller.enqueue(chunk);
     },
-    cancel() { offset = wire.byteLength; },
+    cancel() { retained = null; },
   }, { highWaterMark: 0 });
 }
 
