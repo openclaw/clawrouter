@@ -15,6 +15,7 @@ export function issuedPublishedInputCaller(auth: AuthorizedIdentity): PublicCont
   const authorization = publicControlAuthorization(auth);
   if (authorization.kind !== "public") publishedInputUnavailable();
   const binding = structuredClone(authorization.binding);
+  if (binding.proof.kind === "proxy_key") binding.proof = { ...binding.proof, expiresAt: binding.proof.expiresAt ?? null };
   validatePublishedIssuer(binding);
   return binding;
 }
@@ -58,6 +59,19 @@ export async function publishedInputPermission(policy: AccessPolicy, endpointId:
 // operation must also qualify the distinct current permission before egress.
 // This function never materializes a key, refreshes, or selects another grant.
 export async function authorizePublishedInputOwner(env: Env, binding: PublishedInputBinding, signal: AbortSignal) {
+  const { policy, ...route } = await authorizePublishedInputCaller(env, binding, signal);
+  const grant = await inspectGrantCredentials(env, binding.owner.grantKey, signal);
+  signal.throwIfAborted(); assertPublishedInputLive(binding); assertIssuedControlLive(binding.issuer);
+  assertPublishedInputGrant(binding, grant);
+  if (transportForGrant(route.provider, grant) !== null || !filterGrantCandidates("openrouter",
+    [{ key: binding.owner.grantKey, grant, runtimeState: null }], new Set(), grantRoutingPolicy(policy.grantRouting),
+    binding.owner.grantKey, undefined, Date.now()).available.length) publishedInputUnavailable();
+  return { ...route, policy, grant };
+}
+
+// The credential owner's ordered dispatch uses this half and its ALREADY held
+// original record. It must never inspect/call itself while holding its tail.
+export async function authorizePublishedInputCaller(env: Env, binding: PublishedInputBinding, signal: AbortSignal) {
   assertPublishedInputLive(binding);
   if (env.CLAWROUTER_PUBLIC_ORIGIN !== binding.publicOrigin || await publishedInputScope(binding.issuer) !== binding.scope
     || await publishedMusicRouteDigest(binding) !== binding.owner.routeSha256) publishedInputUnavailable();
@@ -66,13 +80,8 @@ export async function authorizePublishedInputOwner(env: Env, binding: PublishedI
   assertPolicyModel(policy, { ...route, capability: "music.generate" });
   const permission = await publishedInputPermission(policy, route.endpoint.id, route.model.id);
   if (permission.digest !== binding.permissionDigest || binding.expiresAt > permission.expiresAt) publishedInputUnavailable();
-  const grant = await inspectGrantCredentials(env, binding.owner.grantKey, signal);
   signal.throwIfAborted(); assertPublishedInputLive(binding); assertIssuedControlLive(binding.issuer);
-  assertPublishedInputGrant(binding, grant);
-  if (transportForGrant(route.provider, grant) !== null || !filterGrantCandidates("openrouter",
-    [{ key: binding.owner.grantKey, grant, runtimeState: null }], new Set(), grantRoutingPolicy(policy.grantRouting),
-    binding.owner.grantKey, undefined, Date.now()).available.length) publishedInputUnavailable();
-  return { ...route, policy, grant };
+  return { ...route, policy };
 }
 
 export function assertPublishedInputGrant(binding: PublishedInputBinding, grant: UpstreamGrant | undefined): asserts grant is UpstreamGrant {

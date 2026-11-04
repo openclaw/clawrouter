@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
 import { sqliteFixture } from "./sqlite-storage.mjs";
-import { ResponsesScopeStore } from "../responses-scope.ts";
-import { BodyLease, bodyBudgetCharged } from "../body-budget.ts";
-import { HttpOperation } from "../http-operation.ts";
-import { publishedInputKey } from "../published-input-receipt.ts";
-import { parsePublishedInputUrl, publishedInputUrl, resolvePublishedInputUrl, publishInputBytes, publishedInputResponse } from "../published-input-archive.ts";
+const { ResponsesScopeStore } = await import("../responses-scope.ts");
+const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
+const { HttpOperation } = await import("../http-operation.ts");
+const { publishedInputKey } = await import("../published-input-receipt.ts");
+const { parsePublishedInputUrl, publishedInputUrl, resolvePublishedInputUrl, publishInputBytes, publishedInputResponse } = await import("../published-input-archive.ts");
 
 const MiB = 1024 * 1024, hash = x => x.repeat(64), verifier = "f".repeat(64);
 const png = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACXBIWXMAAAAAAAAAAQCEeRdzAAAAGUlEQVR4nGP8z8Dwn/E/QyMLI8N/IGSsBwA6swYEbMHgjAAAAABJRU5ErkJggg==", "base64"));
@@ -55,7 +55,7 @@ async function fixture(t) {
 
 test("archive publication preserves exact bytes, claims before write and acknowledges only verified object", async t => {
   const f = await fixture(t), receipt = await publishInputBytes(f.env, f.access, png);
-  assert.deepEqual(f.trace, ["asset_allocate", "authorize", "asset_claim_publish", "put", "authorize", "asset_bind_publish"]);
+  assert.deepEqual(f.trace, ["asset_allocate", "authorize", "asset_claim_publish", "authorize", "put", "authorize", "asset_bind_publish"]);
   assert.equal(receipt.state, "published"); assert.deepEqual(f.objects.get(publishedInputKey(f.binding)).bytes, Buffer.from(png));
   assert.equal(JSON.stringify(receipt).includes(verifier), false);
   const url = publishedInputUrl(f.binding, verifier);
@@ -110,7 +110,7 @@ test("delegated GET holds independent capacity through producer EOF and validate
   assert.equal(response.headers.get("content-type"), "image/png"); assert.equal(response.headers.get("cache-control"), "private, no-store");
   assert.equal(bodyBudgetCharged(), 16 * MiB);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.from(png)); assert.equal(bodyBudgetCharged(), 0);
-  assert.equal(f.checks, 4);
+  assert.equal(f.checks, 5);
 });
 
 for (const field of ["version", "etag", "size", "checksum", "mime", "expiry"])

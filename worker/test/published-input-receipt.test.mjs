@@ -2,9 +2,9 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { sqliteFixture } from "./sqlite-storage.mjs";
-import { BackgroundStore, backgroundCapacity } from "../background-store.ts";
-import { ResponsesScopeStore } from "../responses-scope.ts";
-import { assertPublishedVerifier, publishedInputKey, samePublishedInput, validatePublishedInput } from "../published-input-receipt.ts";
+const { BackgroundStore, backgroundCapacity } = await import("../background-store.ts");
+const { ResponsesScopeStore } = await import("../responses-scope.ts");
+const { assertPublishedVerifier, publishedInputKey, samePublishedInput, validatePublishedInput } = await import("../published-input-receipt.ts");
 
 const hash = n => n.repeat(64), now = Date.parse("2026-11-04T10:00:00Z");
 function binding(overrides = {}) {
@@ -23,7 +23,7 @@ function fixture(t) {
   return { storage, get store() { return store; }, restart() { store = new BackgroundStore(storage.sql); }, advance(ms) { clock += ms; } };
 }
 const object = b => ({ key: publishedInputKey(b), version: "immutable-upload-1", etag: "etag-1", digest: b.digest, mime: b.mime, size: b.size });
-const attempt = () => ({ requestId: "request-1", eventId: "event-1", reservedMicros: 700,
+const attempt = () => ({ admissionDigest: "a".repeat(64), requestId: "request-1", eventId: "event-1", reservedMicros: 700,
   reservations: [{ objectName: "policy-budget", reservationId: "reservation-1" }] });
 const unavailable = error => error.code === "published_input_unavailable";
 

@@ -36,6 +36,48 @@ cannot retract an already authorized attempt or bytes already delivered. The
 URL deliberately delegates bearer read authority and cannot identify its
 retriever. Raw verifier URLs must not enter logging or retained request content.
 
-The source3-owned permission module, public intake, immutable archive transport,
-delegated GET and common forwarding integration are separate remaining pieces
-of this same execution route. Private state tests alone do not qualify them.
+`POST /v1/input-assets/openrouter/music` authenticates a proxy key before reading
+the body. It accepts the same native music plan with one inline image and a
+bounded `Idempotency-Key`. It returns `{url, expiresAt, receiptId}` only after the
+immutable archive and scoped receipt acknowledge publication. A repeated key
+cannot mint a replacement URL, even after a lost response. No archive recovery
+or automatic re-upload runs in the background.
+
+The caller replaces only the image slot with that exact URL and submits the
+same plan through the registered native or manifest music route. The receipt
+pins the original managed key; environment and alternate-grant fallback are
+forbidden. The forwarding slice requires reserve-mode admission. Unknown native
+USD pricing remains denied under hard budgets; explicit policy-fixed cost is
+recorded separately. Logging, when required by the current policy, replaces the
+bearer URL with a non-secret receipt ID.
+
+The credential owner validates bounded forwarding bytes before entering its
+existing mutation ordering. Under that ordering it checks the original record,
+current issuer/policy and fixed destination. The receipt's forwarding claim is
+the last await. Synchronous expiry checks immediately precede the single fetch;
+the credential ordering releases after fetch starts, not after the response.
+The receipt owner never calls back into the held credential owner. A definitive
+losing claim is unsent; an unavailable claim acknowledgment retains uncertainty.
+
+Publication borrows the existing 64 MiB ingress charge through decoded-image
+validation, hash snapshots, the bounded archive stream and actual cancellation.
+Forwarding accepts at most 256 KiB of URL-bearing native JSON. Its phase transfer
+holds 12 MiB for parsed/serialized input owners and 64 MiB for the existing
+32 MiB wire/16 MiB audio quarantine. The credential-owner hop reserves 4 MiB
+before preparation and holds it through actual upstream EOF/cancel. One
+delegated GET reserves 16 MiB. These explicit charges total the existing 96 MiB
+pool; contention refuses work before the paid attempt. GET uses bounded output
+copies and never detaches the retained archive input backing.
+
+The input and response leases retire after their respective real owners finish.
+Upstream DONE does not release the response charge while the Worker still owns
+downstream bytes. Test-controlled incoming cancellation is separate from a
+physical host disconnect. Maximum-size actual workerd execution and all native
+gates remain required; authored tests are not qualification or activation.
+
+Permission normalization comes from `shared/input-publication.ts`. The runtime
+binds its canonical sorted object and UTC precision. It does not claim to detect
+duplicate serialized JSON member names; the existing admin parser remains
+last-key-wins. Unknown fields and duplicate model entries remain denied by the
+policy normalizer. Manifest metadata remains `https: false` until the separate
+qualified declaration/consumer follow-through.

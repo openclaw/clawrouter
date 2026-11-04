@@ -23,7 +23,11 @@ export async function publishedInputCall<T>(env: Env, scope: string, input: unkn
   const response = await env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(scope)).fetch(
     "https://clawrouter.internal/responses-background", { method: "POST", body: JSON.stringify(input),
       signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) });
-  if (!response.ok) { await response.body?.cancel().catch(() => undefined); publishedInputUnavailable(); }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    if (response.status === 409) publishedInputUnavailable();
+    throw new HttpError(503, "published_input_owner_unavailable", "published input acknowledgment is unavailable");
+  }
   const value = await response.json<T>();
   signal.throwIfAborted(); return value;
 }
@@ -73,6 +77,9 @@ export async function publishInputBytes(env: Env, access: PublishedInputAccess, 
   const ack = await publishedInputCall<{ acknowledged: true; receipt: PublishedInputReceipt }>(env, binding.scope,
     { action: "asset_claim_publish", binding }, signal);
   if (ack.acknowledged !== true || ack.receipt.state !== "publication_unknown" || !samePublishedInput(ack.receipt.binding, binding)) publishedInputUnavailable();
+  // The claim can wait behind another receipt action. Recheck the original
+  // owner and caller after that wait; a spent claim never permits re-upload.
+  await access.authorize();
   signal.throwIfAborted(); access.assertLive(); assertPublishedInputLive(binding);
   let source: Uint8Array<ArrayBuffer> | undefined = bytes, offset = 0;
   const stream = new ReadableStream<Uint8Array>({ type: "bytes", pull(controller) {

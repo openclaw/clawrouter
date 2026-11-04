@@ -31,6 +31,7 @@ export interface PublishedInputBinding {
 }
 export interface PublishedInputObject { key: string; version: string; etag: string; digest: string; mime: PublishedInputBinding["mime"]; size: number }
 export interface PublishedInputAttempt {
+  admissionDigest: string;
   requestId: string;
   eventId: string;
   reservedMicros: number;
@@ -119,7 +120,7 @@ export function validatePublishedObject(value: unknown, binding: PublishedInputB
     || !text(value.version) || !text(value.etag) || value.digest !== binding.digest || value.mime !== binding.mime || value.size !== binding.size) publishedInputUnavailable();
 }
 export function validatePublishedAttempt(value: unknown): asserts value is PublishedInputAttempt {
-  if (!keys(value, ["requestId", "eventId", "reservedMicros", "reservations"]) || !text(value.requestId) || !text(value.eventId)
+  if (!keys(value, ["admissionDigest", "requestId", "eventId", "reservedMicros", "reservations"]) || !digest(value.admissionDigest) || !text(value.requestId) || !text(value.eventId)
     || !Number.isSafeInteger(value.reservedMicros) || (value.reservedMicros as number) < 0
     || !Array.isArray(value.reservations) || value.reservations.length > 8
     || value.reservations.some(leg => !keys(leg, ["objectName", "reservationId"]) || !text(leg.objectName, 1024) || !text(leg.reservationId))) publishedInputUnavailable();

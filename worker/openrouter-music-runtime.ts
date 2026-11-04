@@ -48,7 +48,8 @@ export async function prepareInlineMusicInput(selection: ProxySelection, lease: 
   return new InlineMusicInput(selection, lease, operation, evidence, context);
 }
 
-async function imageEvidence(content: unknown, signal: AbortSignal): Promise<Readonly<InlineMusicEvidence>> {
+export async function imageEvidence(content: unknown, signal: AbortSignal,
+  consume?: (evidence: Readonly<InlineMusicEvidence>, bytes: Uint8Array<ArrayBuffer>) => Promise<void>): Promise<Readonly<InlineMusicEvidence>> {
   // The borrowed codec already validated the complete shape and base64 range.
   // Decode bounded slices of that original string, never a whole substring,
   // atob string, normalized copy or second JSON graph. HTTPS remains closed.
@@ -62,6 +63,7 @@ async function imageEvidence(content: unknown, signal: AbortSignal): Promise<Rea
   const size = Math.floor((url.length - start) * 3 / 4) - padding;
   if (size < 1 || size > 8 * MiB) invalid();
   let decoded: Uint8Array<ArrayBuffer> | undefined = new Uint8Array(size);
+  let validated = false;
   try {
     let written = 0;
     for (let offset = start; offset < url.length; offset += 16384) {
@@ -76,10 +78,13 @@ async function imageEvidence(content: unknown, signal: AbortSignal): Promise<Rea
     // live. Both stay under the 64 MiB ingress phase until digest completion.
     const digest = await crypto.subtle.digest("SHA-256", decoded);
     signal.throwIfAborted();
-    return Object.freeze({ slot: "messages[0].content[1].image_url.url", mime, bytes: size,
+    const evidence = Object.freeze({ slot: "messages[0].content[1].image_url.url" as const, mime, bytes: size,
       sha256: Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("") });
+    validated = true;
+    if (consume) await consume(evidence, decoded);
+    return evidence;
   } catch (error) {
-    if (signal.aborted) throw error;
+    if (signal.aborted || validated) throw error;
     invalid();
   } finally { decoded = undefined; }
 }
