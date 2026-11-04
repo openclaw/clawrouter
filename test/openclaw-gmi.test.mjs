@@ -65,6 +65,13 @@ test("actual OpenClaw GMI configured native client through workerd and SQLite", 
     }
     calls = calls.filter(call => call.method === "POST");
     assert.equal(calls.length, charged.length, "invalid keys, foreign grants and unknown-price hard budgets must not dispatch; errors must not replay");
+    const replayFacts = calls.map(call => ({
+      model: call.body.model,
+      fixture: charged.find(id => JSON.stringify(call.body.messages).includes(id)),
+      reasoningContent: call.body.messages.some(message => message.reasoning_content === "synthetic-prior-thinking"),
+      thinkingAsText: call.body.messages.some(message => message.role === "assistant" && JSON.stringify(message.content ?? "").includes("synthetic-prior-thinking")),
+      assistantKeys: call.body.messages.filter(message => message.role === "assistant").map(message => Object.keys(message).sort()),
+    }));
     for (const call of calls) {
       assert.equal(call.url, provider.base_urls.default.replace(/\/$/, "") + endpoint.path);
       const id = charged.find(id => JSON.stringify(call.body.messages).includes(id)); assert.ok(id);
@@ -74,7 +81,7 @@ test("actual OpenClaw GMI configured native client through workerd and SQLite", 
       assert.equal(call.body.model, expected);
       assert.equal(call.body.stream, true);
       assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, 128);
-      assert.ok(call.body.messages.some(message => message.reasoning_content === "synthetic-prior-thinking"), "actual same-provider replay must retain reasoning");
+      assert.ok(call.body.messages.some(message => message.reasoning_content === "synthetic-prior-thinking"), `actual same-provider replay must retain reasoning for ${id} / ${expected}: ${JSON.stringify(replayFacts)}`);
       if (id === "gmi_notools") assert.ok(!call.body.tools?.length);
       else assert.equal(call.body.tools[0].function.name, "lookup");
       if (expected === models[7]) assert.equal(call.body.reasoning_effort, id === "gmi_notools" ? "high" : "none");
