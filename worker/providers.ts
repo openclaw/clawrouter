@@ -10,7 +10,6 @@ import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./prox
 
 import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
-import { revalidateMiniMaxImageOwner } from "./minimax-image-dispatch.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
@@ -364,12 +363,16 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
-  try { materialized = requirement?.endpoint.request_format === "minimax.images"
-    ? await materializeGrantCredentials(env, key, await revalidateMiniMaxImageOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal),
-      provider.id, null, false, signal, "minimax.images")
-    : provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
-    ? await refreshGrant(key, grant, provider, env, false, signal)
-    : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
+  try {
+    if (requirement?.endpoint.request_format === "minimax.images") {
+      // Keep the authenticated dispatch graph off metadata-only provider loads.
+      const { revalidateMiniMaxImageOwner } = await import("./minimax-image-dispatch.ts");
+      const current = await revalidateMiniMaxImageOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, signal, "minimax.images");
+    } else materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
+      ? await refreshGrant(key, grant, provider, env, false, signal)
+      : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));
+  }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's

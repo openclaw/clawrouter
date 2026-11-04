@@ -139,8 +139,8 @@ test("MiniMax image strict owner materialization rejects rotation between inspec
 });
 for (const warm of [false, true]) test(`MiniMax image unknown USD denies before materialization (${warm ? "warm" : "cold"})`, async t => {
   const f = await setup(t, { fixed: null });
-  if (warm) { overrideHotCacheConfig({ maxAgeMs: 60000, freshMs: 60000 }); t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED)); const r = await f.request(); assert.equal(r.status, 402); await r.text(); await f.drain(); }
-  const r = await f.request(); assert.equal(r.status, 402, await r.clone().text()); await r.text(); await f.drain();
+  if (warm) { overrideHotCacheConfig({ maxAgeMs: 60000, freshMs: 60000 }); t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED)); const r = await f.request(); assert.equal(r.status, 400); assert.equal((await r.json()).error.code, "pricing_required"); await f.drain(); }
+  const r = await f.request(); assert.equal(r.status, 400, await r.clone().text()); assert.equal((await r.json()).error.code, "pricing_required"); await f.drain();
   assert.equal(f.sent.length, 0); assert.equal(f.materializations, 0);
 });
 test("MiniMax image discovery requires exact model and independent image authorization", async t => {

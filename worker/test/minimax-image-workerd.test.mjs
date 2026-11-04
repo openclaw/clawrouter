@@ -88,6 +88,6 @@ test('MiniMax image actual workerd capacity refusal, controlled pending-read can
   await f.mode('cancel');r=await f.run(true);assert.notEqual(r.status,200);await r.text();
   let state=await f.settled(2);proof=state.proof;assert.equal(proof.fetches,1);assert.equal(proof.readStarted,1);assert.equal(proof.activeReads,0);assert.equal(proof.canceled,1);assert.equal(proof.capacity,0);assert.equal(proof.aborted,true);
   assert.deepEqual(state.events.map(e=>e.actual_cost_micros).sort((a,b)=>a-b),[0,700]);
-  await f.runtime.dispatchFetch(f.origin+'/fixture/unprice');r=await f.run(false);assert.equal(r.status,402,await r.clone().text());await r.text();
+  await f.runtime.dispatchFetch(f.origin+'/fixture/unprice');r=await f.run(false);assert.equal(r.status,400,await r.clone().text());assert.equal((await r.json()).error.code,'pricing_required');
   state=await f.settled(3);assert.equal(state.proof.fetches,1);assert.equal(state.proof.capacity,0);assert.equal(state.events.filter(e=>e.actual_cost_micros===700).length,1);
 });
