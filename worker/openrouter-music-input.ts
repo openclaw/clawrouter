@@ -49,10 +49,11 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
     void request.body?.cancel().catch(() => undefined);
     throw new HttpError(413, "request_too_large", "JSON input exceeds its route envelope");
   }
-  if (!request.body) reject();
+  const body = request.body;
+  if (!body) return reject();
   const lease = new BodyLease();
   if (!lease.grow(sharedChat ? Number(length ?? 0) : 32 * MiB)) {
-    void request.body.cancel().catch(() => undefined);
+    void body.cancel().catch(() => undefined);
     throw new HttpError(503, "server_overloaded", "inline music input capacity is busy", { "retry-after": "1" });
   }
   let reader: ReadableStreamBYOBReader | undefined, parser: ReturnType<typeof createJsonBodyParser> | undefined;
@@ -63,7 +64,7 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
     operation.signal.throwIfAborted();
     // No default-reader fallback: an arbitrary backing allocation would defeat
     // the fixed-window lifetime bound before its view could be inspected.
-    reader = request.body.getReader({ mode: "byob" });
+    reader = body.getReader({ mode: "byob" });
     parser = createJsonBodyParser(!sharedChat);
     const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
     window = new Uint8Array(windowBytes);
@@ -71,7 +72,7 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
     for (;;) {
       operation.signal.throwIfAborted();
       if (++reads > maximumReads) invalid();
-      const part = await reader.read(window);
+      const part: ReadableStreamReadResult<Uint8Array<ArrayBuffer>> = await reader.read(window);
       operation.signal.throwIfAborted();
       if (part.value) {
         if (!(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > windowBytes
@@ -102,11 +103,11 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
     cancel();
     if (error instanceof HttpError || operation.signal.aborted) throw error;
     if (error instanceof JsonBodyStructureLimit) throw new HttpError(413, "request_too_large", "inline music JSON exceeds structural bounds");
-    invalid();
+    return invalid();
   } finally {
     operation.signal.removeEventListener("abort", cancel);
     if (reader) { cancel(); await cancellation; reader.releaseLock(); }
-    else if (!transferred) await request.body.cancel().catch(() => undefined);
+    else if (!transferred) await body.cancel().catch(() => undefined);
     parser?.discard(); parser = undefined; window = undefined;
     if (!transferred) lease.release();
   }
