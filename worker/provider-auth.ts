@@ -1,3 +1,4 @@
+import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
 import { miniMaxEnvironmentBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
@@ -24,6 +25,13 @@ export function openRouterPcmRequirement(requirement: Pick<GrantRequirement, "pr
 }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.provider.id === "anthropic-vertex" && (requirement.mode !== "http" || requirement.endpoint.request_format !== "anthropic.messages"
+    || requirement.endpoint.response_format !== "anthropic.messages" || requirement.endpoint.method !== "POST"
+    || requirement.endpoint.path !== "/v1/messages" || requirement.endpoint.upstreamPath !== undefined || requirement.endpoint.auth
+    || requirement.endpoint.websocket || requirement.endpoint.lifecycle || requirement.endpoint.responsesLifecycle
+    || requirement.endpoint.modelPassthrough || requirement.endpoint.path_params.length || Object.keys(requirement.endpoint.query).length
+    || transportForGrant(requirement.provider, grant) !== null || !vertexAnthropicProjection(grant)
+    || Date.parse(grant?.expiresAt ?? "") <= Date.now() + 60_000)) return false;
   if (requirement.provider.id === "minimax") {
     const native = requirement.endpoint.request_format === "anthropic.messages";
     if (native && (requirement.mode !== "http" || requirement.endpoint.response_format !== "anthropic.messages"

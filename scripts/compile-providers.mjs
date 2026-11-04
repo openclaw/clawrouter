@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Validator } from "@cfworker/json-schema";
-import { parse } from "yaml";
+import { loadProviderManifestInputs, parseProviderCompilerArgs } from "./provider-manifest-inputs.mjs";
 
 const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
 const decisionContracts = new Map([
@@ -1453,13 +1453,8 @@ function unique(values) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
-  const outputIndex = rawArgs.indexOf("--output");
-  const output = outputIndex >= 0 ? rawArgs[outputIndex + 1] : null;
-  const paths = rawArgs.filter((_, index) => outputIndex < 0 || (index !== outputIndex && index !== outputIndex + 1));
-  if (!paths.length) throw new Error("usage: compile-providers <manifest...> [--output path]");
-
-  const manifests = paths.sort().map((path) => parse(readFileSync(path, "utf8")));
+  const { manifestPaths, pluginPaths, output } = parseProviderCompilerArgs(process.argv.slice(2));
+  const manifests = loadProviderManifestInputs(manifestPaths, pluginPaths);
   const snapshot = compileProviderSnapshot(manifests);
   const encoded = output ? `${JSON.stringify(snapshot)}\n` : `${JSON.stringify(snapshot, null, 2)}\n`;
   if (output) {
