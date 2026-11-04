@@ -42,6 +42,7 @@
 - Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
 - Add bounded complete-MP3 response validation for three frozen OpenRouter speech models, with exact destination and length checks, cancellation and conservative unknown usage; common dispatch and PCM remain separately qualified.
 - Dispatch the three qualified OpenRouter MP3 speech models through the existing native response factory, preserving explicit voice/input, original credentials, complete audio and fixed-policy accounting while unknown speech-dollar charges remain closed.
+- Declare the three frozen OpenRouter MP3 speech models on their qualified binary route, preserving existing inference cards and leaving speech tariffs explicitly unknown.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
 - Qualify documented frozen fal Grok image routes with ordered edit references and native geometry; keep unqualified quality generation closed without borrowing direct-xAI aliases or tariffs.
 - Add finite OpenRouter native image codecs and fixtures with ordered inline references, bounded binary images and separate per-request accounting for partially failed batches.
