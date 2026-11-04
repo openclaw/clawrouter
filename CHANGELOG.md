@@ -108,6 +108,7 @@
 - Add bounded complete-response quarantine for native Bedrock ConverseStream, validating every frame and terminal event before releasing original bytes; common dispatch, signing and route activation remain separately qualified.
 - Qualify unary Bedrock Converse declarations with explicit model binding and regional SigV4 constraints; keep streaming, tariffs and provider activation closed.
 - Qualify the distinct buffered Bedrock ConverseStream compiler contract alongside unary Converse, preserving explicit Chat selection, regional SigV4 binding and unknown-price denial.
+- Dispatch explicit native Bedrock Converse and buffered ConverseStream through original regional credentials, preparing payloads before SigV4 and withholding incomplete responses while preserving observed usage and conservative settlement.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
@@ -341,6 +342,8 @@
 - Qualify Venice public text-catalog declarations with credential-free upstream requests, private original-grant filtering and separate unknown USD/DIEM observations before activation.
 - Add bounded Featherless native catalog pages with original-key requests, exact grant filtering and explicit pagination, preserving unknown plan eligibility and prices.
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
+- Qualify the frozen Featherless Qwen3-32B Chat card and native reasoning/tool replay, preserving the existing seed, original API-key grant and unknown plan-dependent prices/output limits.
+- Regenerate the Featherless catalog and exercise the actual native SDK through the Worker and SQLite, including frozen compatibility flags, reasoning/tool replay, missing usage, cancellation and proxy-only credentials.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
 - Qualify Chutes public native catalog declarations while retaining private caller/grant authorization, credential-free upstream requests and unknown native pricing units.
 - Add the five frozen Chutes Chat cards with qualified native metadata and original-grant JSON/streaming fixtures that preserve missing usage and unknown pricing.

@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-catalog-providers.md.
+# Hosted Chat API; frozen native card and boundaries: docs/featherless-native-chat.md.
 # Endpoint/model source checked 2026-11-03: https://featherless.ai/docs/completions
 schema: clawrouter.service-provider.v1
 id: featherless
@@ -43,6 +43,22 @@ models:
     - id: featherless/GalrionSoftworks/Margnum-12B-v1
       upstream: GalrionSoftworks/Margnum-12B-v1
       capabilities: [llm.chat]
+    - id: featherless/Qwen/Qwen3-32B
+      upstream: Qwen/Qwen3-32B
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://featherless.ai/docs/tool-calling, https://api.featherless.ai/v1/models/Qwen/Qwen3-32B]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.featherless.ai/v1/models/Qwen/Qwen3-32B, https://featherless.ai/docs/models-model-compatibility]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 32768
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

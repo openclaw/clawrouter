@@ -2,6 +2,8 @@ import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
+import { prepareNativeBedrockConverse } from "./native-bedrock-converse.ts";
+import { prepareNativeBedrockConverseStream } from "./native-bedrock-converse-stream.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
 import { nativeModelEligible } from "../shared/native-model-eligibility.ts";
 import { nativeRawFormat, readNativeRawInput } from "./native-raw-input.ts";
@@ -846,6 +848,15 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       assertOperationConfiguration(lifecycle, upstream.grant, env);
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
+    const converse = ["aws_bedrock.converse", "aws_bedrock.converse_stream"].includes(selection.endpoint.request_format);
+    if (converse) {
+      if (transport !== "http" || upstream.transport || upstream.query.size || hasProxyQuery(queryInput) || new URL(request.url).search)
+        throw new HttpError(400, "invalid_native_bedrock_converse_destination", "Bedrock Converse requires the original regional HTTP route without transport or query overrides");
+      // The native codec removes routing-only fields. Prepare that payload
+      // before its one serialization and SigV4 hash, using the selected origin.
+      selection.nativeResponse = prepareNativeBedrockConverse(selection, { origin: upstream.baseUrl })
+        ?? prepareNativeBedrockConverseStream(selection, { origin: upstream.baseUrl });
+    }
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
       for (const name of openCodeSessionHeaders) headers.delete(name);
@@ -853,13 +864,15 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       if (session) headers.set(session.name, session.value);
     }
     const signingRegion = !streamBody ? await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant) : undefined;
-    if (selection.provider.id === "aws-bedrock" && selection.capability === "llm.embeddings") {
+    if (selection.provider.id === "aws-bedrock" && (selection.capability === "llm.embeddings" || converse)) {
       const signingScheme = selection.provider.auth.schemes.find(scheme => scheme.type === "sig_v4");
       if (transport !== "http" || signingScheme?.type !== "sig_v4" || signingScheme.service !== "bedrock"
         || !signingRegion || url.origin !== `https://bedrock-runtime.${signingRegion}.amazonaws.com`
         || hasProxyQuery(queryInput) || new URL(request.url).search)
-        throw new HttpError(400, "invalid_native_bedrock_embedding_destination", "Bedrock embeddings require the original signed regional destination without query options");
-      selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
+        throw new HttpError(400, converse ? "invalid_native_bedrock_converse_destination" : "invalid_native_bedrock_embedding_destination", converse
+          ? "Bedrock Converse requires the original signed regional destination without query options"
+          : "Bedrock embeddings require the original signed regional destination without query options");
+      if (!converse) selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
     const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
