@@ -143,7 +143,7 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
   if (!asr && ['asr-model', 'budget'].includes(kind)) continue;
   test('bounded media authority ' + kind + ', ASR=' + asr, { timeout: 15_000 }, async t => {
     const f = await fixture(t);
-    const diagnostic = asr && ['revocation', 'generation'].includes(kind);
+    const diagnostic = asr && ['revocation', 'generation', 'budget'].includes(kind);
     if (diagnostic) await f.control('/fixture-observe', 'on');
     if (kind === 'route') await f.control('/fixture-grant', 'put');
     const c = await f.open(asr, false);
