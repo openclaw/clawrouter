@@ -387,12 +387,22 @@ export class PolicyBindingIndexObject implements DurableObject {
     const providerId = grantSegment(input.providerId, "providerId");
     const policyId = grantPoolScopeId(input.policyId);
     const tenantId = grantPoolScopeId(input.tenantId);
+    // Only the stored consumer policy can share another scope's owner. Never
+    // accept membership from a request or follow another policy's references.
+    const shared = policyId ? this.getPolicy(policyId)?.policy.grantRouting?.sharedGrants?.[providerId] ?? [] : [];
+    const sharedKeys = shared.filter(key => {
+      if (this.attachmentMember(grantPoolIdentity(key), providerId)?.status !== "active") return false;
+      const row = rows<{ projection_json: string | null }>(this.sql.exec("SELECT projection_json FROM upstream_grant_projections WHERE grant_key = ? AND legacy = 0", key))[0];
+      const grant: UpstreamGrant | null = row?.projection_json ? JSON.parse(row.projection_json) : null;
+      return grant?.kind === "subscription" && grant.provider === providerId;
+    });
     const keys = [...new Set([
       ...(input.defaultKeys ?? []).map((key) => grantKey(key)),
       ...(policyId ? this.poolTokenRefs("policies", policyId, providerId).map((tokenRef) => `oauth/${policyId}/${tokenRef}`) : []),
       ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
+      ...sharedKeys,
     ])];
-    const hasAttachment = [policyId && ["policies", policyId], tenantId && ["tenants", tenantId]].some((scope) => scope && rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? LIMIT 1", ...scope, providerId)).length > 0);
+    const hasAttachment = shared.length > 0 || [policyId && ["policies", policyId], tenantId && ["tenants", tenantId]].some((scope) => scope && rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? LIMIT 1", ...scope, providerId)).length > 0);
     return { keys, states: this.grantRuntimeStates(keys), hasAttachment };
   }
 
@@ -521,7 +531,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private grantRuntimeStates(rawKeys: unknown): Record<string, GrantRuntimeState> {
-    if (!Array.isArray(rawKeys) || rawKeys.length > 66) invalidAuthorityRequest("grant runtime keys must be a bounded array");
+    if (!Array.isArray(rawKeys) || rawKeys.length > 98) invalidAuthorityRequest("grant runtime keys must be a bounded array");
     const states: Record<string, GrantRuntimeState> = {};
     for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
       const row = rows<{ state_json: string }>(this.sql.exec("SELECT state_json FROM upstream_grant_runtime WHERE grant_key = ?", key))[0];
@@ -532,7 +542,7 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   private selectGrant(input: GrantPoolSelectRequest): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
     const poolKey = grantSelectionPoolKey(input.poolKey);
-    if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 66) invalidAuthorityRequest("grant selection candidates must be a bounded array");
+    if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 98) invalidAuthorityRequest("grant selection candidates must be a bounded array");
     const candidates = normalizedChoiceCandidates(input.candidates, grantKey);
     const cursorKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
     const counts = input.strategy === "least_used" ? this.selectionCounts(poolKey) : new Map<string, { count: number; lastMs: number }>();
@@ -573,7 +583,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private grantSelectionStats(rawKeys: unknown): Record<string, { selectedCount: number; lastSelectedAt: string | null }> {
-    if (!Array.isArray(rawKeys) || rawKeys.length > 66) invalidAuthorityRequest("grant selection keys must be a bounded array");
+    if (!Array.isArray(rawKeys) || rawKeys.length > 98) invalidAuthorityRequest("grant selection keys must be a bounded array");
     const stats: Record<string, { selectedCount: number; lastSelectedAt: string | null }> = {};
     for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
       const row = rows<{ selected_count: number; last_selected_ms: number | null }>(this.sql.exec("SELECT COALESCE(SUM(selected_count), 0) AS selected_count, MAX(last_selected_ms) AS last_selected_ms FROM upstream_grant_selection WHERE grant_key = ?", key))[0];

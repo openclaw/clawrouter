@@ -5,7 +5,7 @@ import { admissionFixture, admissionHeaders } from './admission-fixture.mjs';
 import { attachGrantCredentialNamespace } from './grant-credential-mock.mjs';
 import { sqlBudgetNamespace } from './sql-budget-namespace.mjs';
 import { usageEnv, proxyKey } from './usage-budget-fixture.mjs';
-import { putGrantCredentials } from '../grant-credentials.ts';
+import { putGrantCredentials, revokeGrantCredentials } from '../grant-credentials.ts';
 import { resolveGrantSelection } from '../grant-selection.ts';
 import { HotCache, hotCacheConfig, hotCacheNow, pendingBackgroundWork, setHotCacheClock } from '../hot-cache.ts';
 import { applyLocalGrantRuntime, resolveAdmission } from '../admission-cache.ts';
@@ -118,6 +118,28 @@ test('disabling the hot cache restores the authoritative foreground path', async
     assert.deepEqual(f.calls, ['/admission/resolve']); assert.equal(f.ownerCalls, 1);
     assert.match(response.headers.get('server-timing'), /cr-cache;desc=off/);
   }
+});
+
+test('shared subscription snapshots reuse the original owner and observe source revocation by max age', async t => {
+  const time = clock(), f = await fixture(), sharedKey = 'oauth/source/contributor';
+  await f.put(sharedKey, grant({ accessToken: 'synthetic-shared-token' }));
+  f.policy.grantRouting = normalizePolicy({ providers: ['anthropic'], grantRouting: { sharedGrants: { anthropic: [sharedKey] } } }, undefined, false).grantRouting;
+  await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    calls++; assert.equal(new Headers(init.headers).get('authorization'), 'Bearer synthetic-shared-token'); return ok();
+  });
+  assert.equal((await f.send()).response.status, 200);
+  f.reset();
+  assert.equal((await f.send()).response.status, 200);
+  assert.equal(f.ownerCalls, 0, 'shared membership does not add a foreground owner lookup');
+  assert.deepEqual(f.calls, ['/grant-pools/record']);
+  assert.deepEqual([...f.env.GRANT_CREDENTIALS.objects.keys()], [sharedKey]);
+  await revokeGrantCredentials(f.env, sharedKey);
+  time.advance(60_001);
+  const denied = await f.send();
+  assert.equal(denied.response.status, 503, denied.body);
+  assert.equal(calls, 2, 'a revoked shared owner cannot turn into environment fallback');
 });
 
 test('a cached key never admits a different secret', async t => {

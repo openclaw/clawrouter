@@ -17,6 +17,15 @@ export const DEFAULT_GRANT_ROUTING: GrantRoutingPolicy = {
 export function grantRoutingPolicy(input: unknown): GrantRoutingPolicy {
   const value = input && typeof input === "object" && !Array.isArray(input) ? input as Partial<GrantRoutingPolicy> : {};
   const eligibleGrants: Record<string, string[]> = {};
+  const sharedGrants: Record<string, string[]> = {};
+  let sharedCount = 0;
+  if (value.sharedGrants && typeof value.sharedGrants === "object" && !Array.isArray(value.sharedGrants)) {
+    for (const [providerId, keys] of Object.entries(value.sharedGrants)) {
+      if (!validGrantSegment(providerId) || !Array.isArray(keys)) continue;
+      sharedGrants[providerId] = [...new Set(keys.filter((key): key is string => typeof key === "string" && validGrantKey(key)))].slice(0, 32 - sharedCount).sort();
+      sharedCount += sharedGrants[providerId].length;
+    }
+  }
   if (value.eligibleGrants && typeof value.eligibleGrants === "object" && !Array.isArray(value.eligibleGrants)) {
     for (const [providerId, refs] of Object.entries(value.eligibleGrants)) {
       if (!validGrantSegment(providerId) || !Array.isArray(refs)) continue;
@@ -35,9 +44,16 @@ export function grantRoutingPolicy(input: unknown): GrantRoutingPolicy {
     switchAtUsedPercent: boundedPercent(value.switchAtUsedPercent, DEFAULT_GRANT_ROUTING.switchAtUsedPercent),
     hysteresisPercent: boundedPercent(value.hysteresisPercent, DEFAULT_GRANT_ROUTING.hysteresisPercent),
     eligibleGrants,
+    ...(Object.keys(sharedGrants).length ? { sharedGrants } : {}),
   };
 }
 
 export function validGrantSegment(value: string): boolean {
   return value.length > 0 && value.length <= 256 && !value.includes("/") && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+export function validGrantKey(value: string): boolean {
+  const parts = value.split("/");
+  return parts[0] === "oauth" && (parts[1] === "tenants" ? parts.length === 4 : parts.length === 3)
+    && parts.slice(1).every(validGrantSegment);
 }

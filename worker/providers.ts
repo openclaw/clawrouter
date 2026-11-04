@@ -374,6 +374,10 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
       : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));
   }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  // A shared owner can be replaced after selection. Sharing subscriptions must
+  // never authorize a replacement API-key/media transport under that same key.
+  if (!grantsVisibleToPolicies([{ key, grant: materialized }], [{ policyId: auth.policyId, policy: auth.policy }]).length)
+    throw new HttpError(503, "upstream_grant_changed", "shared subscription owner changed");
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's
   // routing projection so later requests take the local hot path.

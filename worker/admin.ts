@@ -10,6 +10,7 @@ import { budgetCapsCall } from "./authority-budgets.ts";
 import { effectiveBudgetPolicy, normalizeBudgetOverride } from "./budget-overrides.ts";
 import { normalizePolicyTiers } from "./service-tiers.ts";
 import { normalizeLimitHint } from "./policy-limits.ts";
+import { validGrantKey } from "./grant-routing.ts";
 import { authorizeAdmin } from "./access";
 import { minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { backgroundRecovery } from "./background-recovery.ts";
@@ -371,10 +372,24 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
     const body = mutationObject(await readJson<unknown>(request), "invalid_policy", "policy");
     const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
     policy = normalizePolicy(body, existing, contentRetentionDefault(env));
+    // Membership grants access to the existing owner; it never copies secrets.
+    // Recheck only new references so an unrelated edit can retain a revoked member.
+    for (const [providerId, keys] of Object.entries(policy.grantRouting.sharedGrants ?? {})) {
+      for (const key of keys) {
+        if (existing?.grantRouting?.sharedGrants?.[providerId]?.includes(key)) continue;
+        const grant = await inspectGrantCredentials(env, key);
+        if (grant.provider !== providerId || grant.kind !== "subscription" || grant.enabled === false || grant.revokedAt || !grantCredentialPresent(grant))
+          throw new HttpError(400, "invalid_policy", "sharedGrants must reference an enabled subscription owner for that provider");
+      }
+    }
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const ultrafastPolicy = id === "team_server" || id === "openclaw_stable";
   if (policy.serviceTiers?.allowed.includes("ultrafast") || Object.entries(policy.serviceTiers?.models ?? {}).some(([model, tiers]) => tiers.includes("ultrafast") && (!ultrafastPolicy || model !== "openai/gpt-6.1-sol"))) throw new HttpError(400, "invalid_policy", "ultrafast may only be granted by team_server or openclaw_stable for openai/gpt-6.1-sol");
+  if (Object.keys(policy.grantRouting?.sharedGrants ?? {}).length) {
+    const authorization = await authorizeAdmin(request, env);
+    if (authorization instanceof Response) return authorization;
+  }
   const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry);
   return privateJson(policyResponse(entry));
 }
@@ -632,7 +647,17 @@ function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRou
     if (!snapshot.providers.some((provider) => provider.id === providerId) || !Array.isArray(rawRefs) || rawRefs.length > 32 || rawRefs.some((ref) => typeof ref !== "string" || !validGrantSegment(ref))) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants contains an invalid provider or token reference");
     eligibleGrants[providerId] = [...new Set(rawRefs as string[])].sort();
   }
-  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, environmentFallback, includedQuotaReservePercent: includedQuotaReservePercent as number, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants };
+  const shared = body.sharedGrants === undefined ? existing?.sharedGrants ?? {} : body.sharedGrants;
+  if (!shared || typeof shared !== "object" || Array.isArray(shared)) throw new HttpError(400, "invalid_policy", "grantRouting sharedGrants must map providers to grant keys");
+  const sharedGrants: Record<string, string[]> = {};
+  for (const [providerId, keys] of Object.entries(shared)) {
+    if (!snapshot.providers.some(provider => provider.id === providerId) || !Array.isArray(keys) || keys.length > 32 || keys.some(key => typeof key !== "string" || !validGrantKey(key)))
+      throw new HttpError(400, "invalid_policy", "grantRouting sharedGrants contains an invalid provider or grant key");
+    sharedGrants[providerId] = [...new Set(keys as string[])].sort();
+  }
+  if (Object.values(sharedGrants).reduce((count, keys) => count + keys.length, 0) > 32)
+    throw new HttpError(400, "invalid_policy", "grantRouting sharedGrants permits at most 32 shared owners per policy");
+  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, environmentFallback, includedQuotaReservePercent: includedQuotaReservePercent as number, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants, ...(Object.keys(sharedGrants).length ? { sharedGrants } : {}) };
 }
 
 function policyBoolean(value: unknown, field: string, fallback: boolean): boolean {

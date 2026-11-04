@@ -121,6 +121,8 @@ export interface GrantRoutingPolicy {
   switchAtUsedPercent: number;
   hysteresisPercent: number;
   eligibleGrants: Record<string, string[]>;
+  // Administrator-authorized subscription owners; keys retain their original scope.
+  sharedGrants?: Record<string, string[]>;
 }
 
 export interface ProxyCredential {

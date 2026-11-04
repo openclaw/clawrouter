@@ -894,6 +894,30 @@ quota evidence. Set `failover` to `false` when a policy must never retry a
 request with another credential. The console exposes these controls and each
 grant's selection count and last-selected time.
 
+Administrators can share existing subscription owners across policies with
+`grantRouting.sharedGrants` on `PUT /v1/admin/policies/<policy-id>`:
+
+```json
+{ "sharedGrants": { "anthropic": ["oauth/contributor_policy/account"] } }
+```
+
+Merge this field into the policy's existing `grantRouting` object. It names
+existing enabled subscription grants, with at most 32 shared owners per policy.
+Routing keeps their full original keys; credentials, refresh ownership and quota
+stay with each original owner. Source-policy access remains available. The
+consumer's providers, models, token-reference allowlist, reserve and budgets
+still apply, and usage is charged to the consumer policy with the original grant
+key. This does not share another policy's bindings or follow its shared references.
+Revoking or pausing the source grant disables it for every consumer within the
+normal hot-cache maximum age. Replacing it with an API-key grant does not inherit
+subscription sharing. Disabling the source policy alone does not revoke its grants.
+
+Omitting `sharedGrants` preserves existing membership, including during console
+edits. Send `{}` to remove all shared members. There is no credential migration,
+copy or new refresh owner. A provider pool remains bounded to 98 candidates:
+32 policy grants, 32 tenant grants, two default references and up to 32 shared
+owners. Missing shared owners do not implicitly enable environment fallback.
+
 Provider manifests declare the response headers used to collect request, token,
 input-token, output-token, subscription-window, or credit quota. ClawRouter
 stores only bounded numeric windows, reset times, and sanitized status metadata

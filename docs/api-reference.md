@@ -695,11 +695,15 @@ Account emails are intentionally visible to holders when the administrator opts
 in. No access/refresh tokens, credential fields, raw provider payloads, or full
 storage keys are returned.
 
-Inventory includes the selected policy's grants and shared tenant grants,
+Inventory includes the selected policy's grants, shared tenant grants and explicit
+`grantRouting.sharedGrants` subscription owners authorized by an administrator,
 filtered by its provider and eligible-grant restrictions. It is bounded to
-1,024 scanned grant records (HTTP 422 `pool_too_large` beyond that limit).
+1,024 scanned grant records (HTTP 422 `pool_too_large` beyond that limit), plus at
+most 32 explicitly shared owners. Foreign-scope owners use stable opaque
+`shared-<digest>` keys in both inventory and usage, so equal token references do
+not collide and source policy names remain private.
 `usage` contains `days: 7` and the policy's aggregate `lanes` and `grants` from
-the existing grant usage ledger, with token references replacing storage keys;
+the existing grant usage ledger, with token references or opaque shared IDs replacing storage keys;
 it contains no individual request events. These are policy-wide totals, including
 other credentials on the same policy, and retain historical attribution.
 
