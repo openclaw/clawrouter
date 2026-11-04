@@ -29,6 +29,9 @@ function hold(t) {
 test("Vertex key-only owner bootstrap signs fixed JWT and projects no private material", async t => {
   const f = setup(), projection = await f.put(); let calls = 0;
   assert.equal(projection.hasAccessToken, false); assert.equal(projection.hasRefreshToken, false);
+  // Signing authority reserves its active pool slot at the explicit admin
+  // commit; refresh must not try to activate an unadmitted attachment later.
+  assert.deepEqual(f.env.grantAuthority.sql.exec("SELECT status FROM upstream_grant_pool_members WHERE provider_id = ? AND token_ref = ?", "anthropic-vertex", "vertex").map(row => row.status), ["active"]);
   assert.deepEqual(routingProjection(projection).vertexAnthropicBinding, signingBinding());
   assert.doesNotMatch(JSON.stringify(projection), /PRIVATE KEY|vertexPrivateKey|vertexServiceAccountPrivateKey/);
   assert.equal(secretlessGrant({ ...projection, vertexPrivateKey: signing.pem }).vertexPrivateKey, undefined);

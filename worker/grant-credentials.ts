@@ -863,7 +863,8 @@ function metadataGrant(record: CredentialRecord): UpstreamGrant {
 function attachmentStatus(record: CredentialRecord): GrantAttachmentStatus | null {
   if (record.revokedAt) return null;
   if (!record.enabled) return "paused";
-  return record.status === "reauth_required" || !hasPrimaryCredential(record) ? "reauth_required" : "active";
+  return record.status === "reauth_required" || !hasPrimaryCredential(record) && vertexOwnerBinding(record)?.source !== "service_account"
+    ? "reauth_required" : "active";
 }
 
 function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
