@@ -90,12 +90,22 @@ export async function mutateVertexAnthropicBinding(record: CredentialRecord, pre
   }
 }
 
-export function vertexAnthropicProjection(grant: UpstreamGrant | null): VertexAnthropicBinding | null {
+function projectedVertexBinding(grant: UpstreamGrant | null): VertexAnthropicBinding | null {
   const binding = readVertexAnthropicBinding(grant?.vertexAnthropicBinding);
   if (!binding || !grant || grant.provider !== "anthropic-vertex" || grant.kind !== "oauth" || grant.tokenType !== "Bearer"
-    || grant.credentialStore !== "durable_object" || grant.enabled !== true || grant.revokedAt || grant.credentialStatus !== "active"
+    || grant.credentialStore !== "durable_object"
     || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration) || grant.credentialGeneration! < 1
-    || grant.credentialRefreshBlockedUntil === null || grant.hasCredential || grant.credentialFields?.length || binding.source === "access_token" && !grant.hasAccessToken
+    || grant.hasCredential || grant.credentialFields?.length || binding.source === "access_token" && !grant.hasAccessToken
     || grant.hasRefreshToken || grant.refresh || grant.subscription || (binding.source === "access_token" || grant.hasAccessToken) && !Number.isSafeInteger(Math.floor(Date.parse(grant.expiresAt ?? "") / 1000))) return null;
   return binding;
+}
+
+// Credential presence is distinct from current routing eligibility. A fenced
+// key-only owner still occupies its original pool and permits admin mutation.
+export function vertexSigningCredentialPresent(grant: UpstreamGrant): boolean {
+  return projectedVertexBinding(grant)?.source === "service_account";
+}
+export function vertexAnthropicProjection(grant: UpstreamGrant | null): VertexAnthropicBinding | null {
+  return grant?.enabled === true && !grant.revokedAt && grant.credentialStatus === "active"
+    && grant.credentialRefreshBlockedUntil !== null ? projectedVertexBinding(grant) : null;
 }

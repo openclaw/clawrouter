@@ -139,3 +139,21 @@ test("Vertex private key is never inherited by legacy import or OAuth completion
   const imported = await putGrantCredentials(f.env, key, { ...projection, accessToken: "synthetic-import", expiresAt: new Date(Date.now() + 3600000).toISOString() }, true, undefined, "clawrouter_oauth");
   assert.equal(imported.vertexAnthropicBinding, null); assert.equal(f.record().vertexPrivateKey, undefined);
 });
+test("Vertex alarm uses the same fenced exchange and preserves signing lineage", async t => {
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  const f = setup(), projection = await f.put(); let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => Response.json(tokenBody({ access_token: `synthetic-alarm-${++calls}` })));
+  await f.materialize(projection); const before = await f.inspect();
+  now += 3300001; await f.owner().object.alarm();
+  const after = await f.inspect(); assert.equal(calls, 2); assert.equal(after.credentialGeneration, before.credentialGeneration + 1);
+  assert.equal(after.credentialLineage, before.credentialLineage); assert.equal(after.hasRefreshToken, false);
+  assert.equal((await f.materialize(after)).accessToken, "synthetic-alarm-2"); assert.equal(calls, 2);
+});
+test("Vertex new signing resource or key retires the old access token before reuse", async t => {
+  const f = setup(), projection = await f.put();
+  t.mock.method(globalThis, "fetch", async () => Response.json(tokenBody())); await f.materialize(projection);
+  const old = await f.inspect();
+  const updated = await f.put(old, signingBinding({ location: "eu" }), signing.pem, true);
+  assert.equal(updated.hasAccessToken, false); assert.equal(updated.expiresAt, null); assert.notEqual(updated.credentialLineage, old.credentialLineage);
+  assert.equal(f.record().accessToken, undefined);
+});

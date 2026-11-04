@@ -1,4 +1,4 @@
-import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
+import { vertexSigningCredentialPresent } from "./vertex-anthropic-binding.ts";
 import { validGrantSegment } from "./grant-routing.ts";
 export { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, validGrantSegment } from "./grant-routing.ts";
 import { HttpError } from "./utils.ts";
@@ -37,7 +37,7 @@ function grantRefreshBlocked(grant: UpstreamGrant, nowMs: number): boolean {
 
 export function grantCredentialPresent(grant: UpstreamGrant): boolean {
   if (grant.credentialStore === "durable_object") {
-    return grant.credentialStatus !== "reauth_required" && !!(grant.hasCredential || grant.hasAccessToken || vertexAnthropicProjection(grant)?.source === "service_account");
+    return grant.credentialStatus !== "reauth_required" && !!(grant.hasCredential || grant.hasAccessToken || vertexSigningCredentialPresent(grant));
   }
   const scalarCredentials = [grant.credential, grant.accessToken, grant.refreshToken];
   if (scalarCredentials.some((value) => value != null && (typeof value !== "string" || value.trim().length === 0)) || !validCredentialBundle(grant.credentials)) return false;
