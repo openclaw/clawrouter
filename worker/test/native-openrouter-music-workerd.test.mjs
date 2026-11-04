@@ -51,6 +51,14 @@ import { configureMusic, musicBody } from './worker/test/openrouter-music-runtim
 configureMusic(snapshot.providers.find(value => value.id === 'openrouter'));
 const originalFetch = globalThis.fetch.bind(globalThis), originalReader = ReadableStream.prototype.getReader;
 const bodies = new WeakSet(), operations = new WeakMap(); let initialized, metrics = {}, pending = new Set();
+// Capture only fixed categories, never upstream messages, bodies or credentials.
+function readFailure(error) {
+  const message=typeof error?.message==='string'?error.message:'';
+  return {name:['Error','TypeError','AbortError','TimeoutError'].includes(error?.name)?error.name:'other',
+    category:message.includes('code had hung and would never generate a response')?'workerd_hung_request'
+      :message==='unbounded transport window'?'fixture_input_window'
+      :message==='unbounded returned window'?'fixture_returned_window':'unclassified'};
+}
 // Observe the original operation; never manufacture a caller signal or change
 // its first cause. A transport read failure is not automatically client_error.
 const originalStop = HttpOperation.prototype.stop;
@@ -66,12 +74,14 @@ HttpOperation.prototype.stop = function(cause, reason) {
 globalThis.fetch = async (input, init) => {
   const url = input instanceof Request ? input.url : String(input);
   if (url !== 'https://openrouter.ai/api/v1/chat/completions') throw new Error('unexpected physical destination');
-  const current=metrics; current.fetches++; current.dispatchCapacity=bodyBudgetCharged();
+  const current=metrics; current.fetches++; current.fetchStartOrder=++current.sequence; current.dispatchCapacity=bodyBudgetCharged();
   const signal=init?.signal ?? (input instanceof Request ? input.signal : undefined);
   if(signal&&current.mode==='quarantine-cancel')operations.set(signal,current);
   current.upstreamAborted=signal?.aborted ?? false;
   signal?.addEventListener('abort',()=>{current.upstreamAborted=true;current.upstreamAbortOrder=++current.sequence;},{once:true});
-  const response = await originalFetch(input, init); current.upstreamStatus=response.status;
+  const response = await originalFetch(input, init); current.upstreamStatus=response.status;current.upstreamHeadersOrder=++current.sequence;
+  const attempt=response.headers.get('x-fixture-music-attempt');
+  current.physicalAttempt=attempt&&/^[1-9][0-9]{0,7}$/.test(attempt)?Number(attempt):null;
   if (response.body) bodies.add(response.body); return response;
 };
 ReadableStream.prototype.getReader = function(options) {
@@ -80,17 +90,17 @@ ReadableStream.prototype.getReader = function(options) {
     bodies.delete(this); const current=metrics; current.nativeReaders++; current.byob=options?.mode === 'byob';
     const read = reader.read.bind(reader), cancel = reader.cancel.bind(reader);
     reader.read = async (view, options) => {
-      current.reads++; current.activeReads++;
+      current.reads++; current.activeReads++;current.readStartOrder=++current.sequence;
       try {
         if (!view || view.buffer.byteLength > 65536) throw new Error('unbounded transport window');
         current.maxWindow=Math.max(current.maxWindow,view.buffer.byteLength);
-        const result=await read(view,options); current.lastReadDone=result.done;
+        const result=await read(view,options); current.lastReadDone=result.done;current.readReturnOrder=++current.sequence;
         if(result.value){
           if(result.value.buffer.byteLength>65536)throw new Error('unbounded returned window');
           current.bytes+=result.value.byteLength;
         }
         return result;
-      } catch(error){current.readErrorName=error?.name;throw error;}
+      } catch(error){current.readErrorName=error?.name;current.readFailure=readFailure(error);current.readErrorOrder=++current.sequence;throw error;}
       finally {current.activeReads--;}
     };
     reader.cancel = reason => { current.cancels++;current.cancelOrder=++current.sequence;return cancel(reason); };
@@ -100,6 +110,9 @@ ReadableStream.prototype.getReader = function(options) {
 export default { async fetch(request, bindings, context) {
   const url = new URL(request.url), env = {...bindings, OPENROUTER_SITE_URL:'https://example.com'};
   if (url.pathname === '/proof') return Response.json({...metrics, pending:pending.size, capacity:bodyBudgetCharged()});
+  // Read only after the operation settles, so observation cannot keep a stalled
+  // upstream request alive or provide the cancellation barrier itself.
+  if (url.pathname === '/physical-proof') return originalFetch('https://openrouter.ai/__fixture_music_phase');
   if (url.pathname === '/usage') return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
   initialized ??= (async () => {
     await authorityCall(env, '/policies/initialize-all', [{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
@@ -113,7 +126,7 @@ export default { async fetch(request, bindings, context) {
     metrics.guardRejection = {requestedMode:mode,previousMode:metrics.mode,pending:pending.size,capacity:bodyBudgetCharged()};
     return Response.json({error:'fixture_previous_delivery_pending',...metrics.guardRejection},{status:500});
   }
-  metrics = {mode,fetches:0,nativeReaders:0,reads:0,activeReads:0,bytes:0,maxWindow:0,cancels:0,byob:false,sequence:0,fixtureRequestAborted:request.signal.aborted,routedRequestAborted:false};
+  metrics = {mode,fetches:0,nativeReaders:0,reads:0,activeReads:0,bytes:0,maxWindow:0,cancels:0,byob:false,sequence:1,requestStartOrder:1,fixtureRequestAborted:request.signal.aborted,routedRequestAborted:false};
   const current=metrics;
   const fixtureSignal=request.signal;
   fixtureSignal.addEventListener('abort',()=>{current.fixtureRequestAborted=true;current.fixtureRequestAbortOrder=++current.sequence;},{once:true});
@@ -132,17 +145,25 @@ export default { async fetch(request, bindings, context) {
 }, queue:worker.queue };
 `;
 const upstream = `const musicWire = ${musicWire.toString()};
+let attempts=0;const phases=[];
 export default {async fetch(request){
+  if(request.url==='https://openrouter.ai/__fixture_music_phase'&&request.method==='GET')return Response.json({attempts,phases});
+  const phase={attempt:++attempts,post:request.method==='POST',pathMatches:request.url==='https://openrouter.ai/api/v1/chat/completions',
+    pulls:0,bytes:0,exhausted:false,canceled:false,requestAborted:request.signal.aborted};
+  phases.push(phase);if(phases.length>8)phases.shift();
+  request.signal.addEventListener('abort',()=>{phase.requestAborted=true;},{once:true});
   if(request.url !== 'https://openrouter.ai/api/v1/chat/completions' || request.method !== 'POST'
-    || request.headers.get('authorization') !== 'Bearer synthetic-original-key') return new Response('invalid original dispatch',{status:400});
-  const body = await request.json(); if(body.model !== 'google/lyria-3-pro-preview' || body.audio.format !== 'wav') return new Response('invalid native body',{status:400});
+    || request.headers.get('authorization') !== 'Bearer synthetic-original-key') {phase.status=400;return new Response('invalid original dispatch',{status:400});}
+  const body = await request.json(); if(body.model !== 'google/lyria-3-pro-preview' || body.audio.format !== 'wav') {phase.status=400;return new Response('invalid native body',{status:400});}
   const mode = body.messages[0].content, small = mode === 'small' || mode === 'quarantine-cancel';
+  phase.mode=['full','delivery-cancel','quarantine-cancel','small','truncated'].includes(mode)?mode:'other';phase.status=200;
   const parts = musicWire(!small,!small,mode !== 'truncated' && mode !== 'quarantine-cancel'); let finished = false;
   return new Response(new ReadableStream({pull(controller){
+    phase.pulls++;
     if(finished) return; const part=parts.next();
-    if(part.done){finished=true;if(mode==='truncated')controller.close();return;}
-    controller.enqueue(new TextEncoder().encode(part.value));
-  },cancel(){finished=true;parts.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream'}});
+    if(part.done){finished=true;phase.exhausted=true;if(mode==='truncated')controller.close();return;}
+    const bytes=new TextEncoder().encode(part.value);phase.bytes+=bytes.byteLength;controller.enqueue(bytes);
+  },cancel(){phase.canceled=true;finished=true;parts.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream','x-fixture-music-attempt':String(phase.attempt)}});
 }};`;
 
 async function readFixtureJson(url) {
@@ -273,7 +294,8 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
         await delay(20);
       }
       const hostBeforeAbort={...host};abort.abort(reason);await outcome;
-      const afterAbort=await settled(origin),trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort});
+      const afterAbort=await settled(origin),physical=await readFixtureJson(new URL('/physical-proof',origin));
+      const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical});
       let receipt;
       try {
         // Record the real ledger outcome before any signal-observation assertion.
@@ -306,7 +328,7 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
         }
         assertPhysical(afterAbort);
       } finally {
-        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,
+        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,
           receipt:receipt&&{status:receipt.status,cost:receipt.actual_cost_micros,basis:receipt.cost_basis,
             grant:receipt.grant_key,capability:receipt.capability,input:receipt.input_tokens,output:receipt.output_tokens,total:receipt.total_tokens}}));
       }
