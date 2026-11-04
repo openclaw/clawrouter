@@ -1,28 +1,24 @@
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { discoveryAllows } from "./model-discovery.ts";
+import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { authorizeResponseControl, assertControlCallerLive, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
-type PublicCatalogProvider = "cerebras" | "nvidia" | "chutes" | "venice";
-function publicProvider(value: string): value is PublicCatalogProvider {
-  return value === "cerebras" || value === "nvidia" || value === "chutes" || value === "venice";
-}
-
-// The caller qualifies the registered discovery format/path before this owner
-// preparation. No inference headers or credential bytes cross the leaf ABI.
+// No inference headers or credential bytes cross the public leaf ABI.
 export async function preparePublicDiscoveryOwner(request: Request, env: Env, auth: AuthorizedIdentity,
   selection: ProxySelection, upstream: UpstreamAuth) {
   const { provider, endpoint } = selection, grant = upstream.grant, key = upstream.grantKey;
-  if (!publicProvider(provider.id) || !key || !qualified(grant, provider.id)
+  const providerId = publicCatalogProvider(endpoint.request_format);
+  if (!providerId || provider.id !== providerId || endpoint.response_format !== endpoint.request_format || !key || !qualified(grant, provider.id)
     || selection.method !== "GET" || endpoint.method !== "GET" || endpoint.path_params.length || Object.keys(selection.pathParams).length
     || endpoint.auth != null || endpoint.upstreamPath !== undefined || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
     || Object.keys(selection.body).length || Object.keys(endpoint.query).length || new URL(request.url).search
     || upstream.query.size || upstream.transport !== null) unavailable();
-  const providerId = provider.id, identity = ownerIdentity(grant);
+  const identity = ownerIdentity(grant);
   const caller = publicControlAuthorization(auth);
   const owner = { providerId, endpointId: endpoint.id, grantKey: key, lineage: grant.credentialLineage!,
     routeSha256: await sha256Hex(JSON.stringify([providerId, endpoint.id, endpoint.request_format, upstream.baseUrl])),

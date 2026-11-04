@@ -1,5 +1,6 @@
 import { miniMaxEnvironmentBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
+import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
@@ -13,6 +14,11 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
 export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  const publicProvider = publicCatalogProvider(requirement.endpoint.request_format);
+  if (publicProvider && (requirement.provider.id !== publicProvider || requirement.mode !== "http"
+    || requirement.endpoint.response_format !== requirement.endpoint.request_format || !grant || grant.kind !== "api_key"
+    || grant.credentialStore !== "durable_object" || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration)
+    || transportForGrant(requirement.provider, grant) !== null)) return false;
   if (requirement.endpoint.inputProfile !== undefined && (requirement.endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1"
     || requirement.provider.id !== "pixverse" || requirement.mode !== "http" || !grant || grant.kind !== "api_key"
     || grant.credentialStore !== "durable_object" || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration))) return false;
