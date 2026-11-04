@@ -37,7 +37,7 @@ test("Featherless complete scan follows short and empty advertised pages with on
     order.push(`fetch-${n}`);
     assert.equal(request.url, `${base}/models?capabilities=chat&page=${n}&per_page=100`);
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", `Bearer ${key}`]]);
-    assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+    assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
     return body(page(n, 300, n === 2 ? [] : [{ id: n === 1 ? "one" : "two" }]));
   });
   assert.deepEqual(await scan(selected), { providerId: "featherless", catalog: [{ id: "one" }, { id: "two" }] });

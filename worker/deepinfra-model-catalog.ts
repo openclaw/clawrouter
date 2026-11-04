@@ -77,7 +77,7 @@ export function deepinfraCatalogRequests(
     || typeof selectedApiKey !== "string" || !/^[\x21-\x7e]{1,8192}$/.test(selectedApiKey)) {
     throw new HttpError(503, "provider_catalog_not_supported", "DeepInfra catalog requires its canonical service and selected credential");
   }
-  const options = { method: "GET", credentials: "omit", redirect: "error", signal } as const;
+  const options = { method: "GET", credentials: "omit", redirect: "manual", signal } as const;
   return {
     metadata: new Request("https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta", {
       ...options, headers: { accept: "application/json", authorization: `Bearer ${selectedApiKey}` },
@@ -144,6 +144,12 @@ export function parseDeepInfraCatalog(metadata: unknown, pricing: unknown, permi
 export async function readDeepInfraCatalog(
   responses: { metadata: Response; pricing: Response }, signal: AbortSignal, permittedModelIds: ReadonlySet<string>,
 ): Promise<DeepInfraCatalog> {
+  // A manual redirect must never become the empty-inventory metadata exception.
+  const pair = [responses.metadata, responses.pricing];
+  if (pair.some(response => response.redirected || response.status >= 300 && response.status < 400)) {
+    for (const response of pair) void response.body?.cancel().catch(() => undefined);
+    invalid();
+  }
   // Finish both independent readers before publishing. A failed metadata request
   // never falls back to a seed; failed pricing only permits an authoritative empty inventory.
   const [metadata, pricing] = await Promise.allSettled([

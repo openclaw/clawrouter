@@ -350,6 +350,7 @@
 - Add bounded public Venice text catalog decoding with exact original-grant filtering, independent native metadata and conservative deprecation/currency observations.
 - Qualify Venice public text-catalog declarations with credential-free upstream requests, private original-grant filtering and separate unknown USD/DIEM observations before activation.
 - Add bounded Featherless native catalog pages with original-key requests, exact grant filtering and explicit pagination, preserving unknown plan eligibility and prices.
+- Use Worker-supported manual redirects for native catalog requests while rejecting every redirect response, preserving original credentials and public-request isolation.
 - Add an isolated complete Featherless catalog scan with original-key authorization per page, atomic bounds and final current-policy filtering; shared route and capacity ownership remain separate.
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
 - Qualify a separate manifest-only Featherless complete-catalog projection while retaining the native page codec, original-key boundary and unknown facts; shared scan runtime and provider activation remain separately gated.

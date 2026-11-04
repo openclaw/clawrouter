@@ -20,7 +20,7 @@ test("Featherless discovery pins canonical Chat query, original credential and b
       assert.equal(r.url, `https://api.featherless.ai/v1/models?capabilities=chat&page=${number}&per_page=100`);
       assert.equal(r.method, "GET"); assert.equal(r.body, null);
       assert.deepEqual([...r.headers], [["accept", "application/json"], ["authorization", `Bearer ${key}`]]);
-      assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error");
+      assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual");
       controller.abort(); assert.equal(r.signal.aborted, true);
     }
   }

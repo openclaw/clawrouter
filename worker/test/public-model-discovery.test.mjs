@@ -43,7 +43,7 @@ for (const [providerId, contract] of Object.entries(contracts)) {
     t.mock.method(globalThis, "fetch", async request => {
       events.push("fetch"); requests.push(request);
       assert.equal(request.method, "GET"); assert.equal(request.body, null);
-      assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "error");
+      assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "manual");
       assert.deepEqual([...request.headers], [["accept", "application/json"]]);
       const response = Response.json(request.url === contracts.nvidia.urls[1] ? featured : contract.payload(contract.ids));
       responses.push(response); return response;
