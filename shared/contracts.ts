@@ -208,6 +208,7 @@ export interface GrantRefreshDiagnosis {
 }
 
 export interface UpstreamGrant {
+  minimaxImageBinding?: import("./minimax-image-binding").MiniMaxImageBinding | null;
   nativeMediaBinding?: import("./native-media-binding").NativeMediaBinding | null;
   key: string;
   scope: "policies" | "tenants";

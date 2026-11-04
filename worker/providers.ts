@@ -363,9 +363,16 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
-  try { materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
-    ? await refreshGrant(key, grant, provider, env, false, signal)
-    : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
+  try {
+    if (requirement?.endpoint.request_format === "minimax.images") {
+      // Keep the authenticated dispatch graph off metadata-only provider loads.
+      const { revalidateMiniMaxImageOwner } = await import("./minimax-image-dispatch.ts");
+      const current = await revalidateMiniMaxImageOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, signal, "minimax.images");
+    } else materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
+      ? await refreshGrant(key, grant, provider, env, false, signal)
+      : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));
+  }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's

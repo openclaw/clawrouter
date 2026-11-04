@@ -88,7 +88,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", reporting_known_cost_micros: null, duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
-  if ((facts.googleImage || facts.googleAudio || facts.nativeMusic || facts.nativeSpeech || requestFormat === "minimax.speech") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+  if ((facts.googleImage || facts.googleAudio || facts.nativeMusic || facts.nativeSpeech || requestFormat === "minimax.speech" || requestFormat === "minimax.images") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: billable ? reservation.reservedMicros : 0,
     cost_basis: billable ? "unpriced_usage" : "none", input_tokens: null, output_tokens: null, total_tokens: null,
     pricing_ref: null, pricing_effective_at: null,
@@ -255,7 +255,7 @@ export function createProxyAccounting(options: AccountingContext) {
 
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff, providerId?: string): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
-  if (endpoint.request_format === "minimax.speech" && fixed == null)
+  if (["minimax.speech", "minimax.images"].includes(endpoint.request_format) && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   // Raw audio bytes and response duration cannot bound the whole upload price.

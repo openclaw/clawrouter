@@ -214,6 +214,7 @@ export interface OAuthState {
 }
 
 export interface UpstreamGrant {
+  minimaxImageBinding?: import("../shared/minimax-image-binding").MiniMaxImageBinding | null;
   vertexAnthropicBinding?: import("./vertex-anthropic-binding.ts").VertexAnthropicBinding | null;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: import("../shared/native-media-binding.ts").NativeMediaBinding | null;

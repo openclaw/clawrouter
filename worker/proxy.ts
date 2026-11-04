@@ -17,6 +17,8 @@ import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { ownMiniMaxImageInput } from "./minimax-image-input.ts";
+import { prepareMiniMaxImageDispatch } from "./minimax-image-dispatch.ts";
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
@@ -709,6 +711,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let nativeLease: BodyLease | undefined;
   let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
   let musicRead: Promise<unknown> | undefined;
+  let imageRead: Promise<unknown> | undefined;
+  let imageInput: ReturnType<typeof ownMiniMaxImageInput> | undefined;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
@@ -777,11 +781,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       }, prepared.revalidateDiscovery ? () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined);
     }
     if (selection.nativeResponse) {
-      const reading = selection.nativeResponse.read(response, signal);
+      if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
+      const reading = selection.nativeResponse.read(imageInput?.response ?? response, signal);
+      if (imageInput) imageRead = reading;
       if (music) musicRead = reading;
       const validated = await operation.wait(reading, "upstream", discardNative);
       try { if (prepared.revalidateDelivery) await operation.wait(prepared.revalidateDelivery(signal), "publication"); }
       catch (error) { discardNative(validated); throw error; }
+      await imageInput?.retire();
       response = validated.response;
       nativeUsage = "usage" in validated ? validated.usage : undefined;
     }
@@ -810,6 +817,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       // The operation's rejection may win before a physical quarantined read
       // has acknowledged cancellation. Keep its response charge until then.
       await musicRead?.catch(() => undefined);
+    }
+    if (imageInput) {
+      operation.stop("upstream", error);
+      await imageInput.retire(error);
+      await imageRead?.catch(() => undefined);
     }
     nativeLease?.release();
     soft?.close();
@@ -926,7 +938,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -956,9 +968,9 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
-  // Native MiniMax materialization may refresh inside its fenced owner. Known
-  // monetary denials must precede that external exchange, not only inference.
-  if ((miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
+  // Native owner materialization follows known monetary denials. Messages
+  // may refresh inside the owner; images may only read the exact admitted key.
+  if ((selection.endpoint.request_format === "minimax.images" || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
     const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
       selection.capability, selection.endpoint, undefined, undefined, selection.provider.id);
     validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, connection,
@@ -1046,6 +1058,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const published = publishedMusicInput(selection);
     const musicCheck = published ? await published.bind(upstream, url, headers)
       : music ? await prepareInlineMusicOwner(env, auth, selection, upstream, url, headers, music.evidence) : undefined;
+    const imageCheck = selection.endpoint.request_format === "minimax.images"
+      ? prepareMiniMaxImageDispatch(env, auth, selection, upstream, url, headers) : undefined;
     const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
       ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;
@@ -1064,7 +1078,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
