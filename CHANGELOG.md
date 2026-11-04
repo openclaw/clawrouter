@@ -165,6 +165,7 @@
 - Validate the model-less Gradium native unary speech declaration, preserving original API-key routing and native settings while rejecting format aliases and invented tariffs before activation.
 - Qualify Baseten SystemOne decision metadata and exact native endpoint links for the three frozen models, preserving option/question usage bounds and separation from Chat and unqualified tariffs.
 - Dispatch native Baseten, Arcee and Novita model catalogs with their original API-key grants, canonical destinations, fresh owner checks and bounded policy-filtered metadata.
+- Revalidate generic model-list callers and original managed credentials before fetch and after parsing; intersect current permissions before publishing metadata and retain bounded response capacity through delivery.
 - Dispatch public Cerebras, NVIDIA, Chutes and Venice catalogs under the original caller and grant, without inference credentials; keep aggregate catalogs manifest-only and reapply current model policy before publication.
 - Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
