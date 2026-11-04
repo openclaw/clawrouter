@@ -356,6 +356,7 @@
 - Add an isolated complete Featherless catalog scan with original-key authorization per page, atomic bounds and final current-policy filtering; shared route and capacity ownership remain separate.
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
 - Qualify a separate manifest-only Featherless complete-catalog projection while retaining the native page codec, original-key boundary and unknown facts; shared scan runtime and provider activation remain separately gated.
+- Dispatch complete Featherless catalogs through the original keyed grant, revalidate every page and final policy, and hold bounded capacity through atomic catalog serialization and delivery.
 - Qualify the frozen Featherless Qwen3-32B Chat card and native reasoning/tool replay, preserving the existing seed, original API-key grant and unknown plan-dependent prices/output limits.
 - Regenerate the Featherless catalog and exercise the actual native SDK through the Worker and SQLite, including frozen compatibility flags, reasoning/tool replay, missing usage, cancellation and proxy-only credentials.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.

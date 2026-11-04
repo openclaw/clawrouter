@@ -19,6 +19,11 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
     || requirement.endpoint.response_format !== requirement.endpoint.request_format || !grant || grant.kind !== "api_key"
     || grant.credentialStore !== "durable_object" || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration)
     || transportForGrant(requirement.provider, grant) !== null)) return false;
+  if (requirement.endpoint.request_format === "featherless.catalog" && (requirement.provider.id !== "featherless"
+    || requirement.endpoint.response_format !== "featherless.catalog" || requirement.mode !== "http"
+    || !grant || grant.kind !== "api_key" || grant.credentialStore !== "durable_object"
+    || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration)
+    || transportForGrant(requirement.provider, grant) !== null)) return false;
   if (requirement.endpoint.inputProfile !== undefined && (requirement.endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1"
     || requirement.provider.id !== "pixverse" || requirement.mode !== "http" || !grant || grant.kind !== "api_key"
     || grant.credentialStore !== "durable_object" || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration))) return false;

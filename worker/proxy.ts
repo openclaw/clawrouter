@@ -1,5 +1,6 @@
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
+import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
@@ -147,6 +148,7 @@ interface PreparedUpstream {
   revalidateDiscovery?: (signal: AbortSignal) => Promise<import("./types").AccessPolicy>;
   publicCatalog?: Awaited<ReturnType<typeof preparePublicDiscoveryOwner>>;
   revalidateDelivery?: (signal: AbortSignal) => Promise<void>;
+  featherlessCatalog?: Awaited<ReturnType<typeof prepareFeatherlessCatalogOwner>>;
 }
 
 interface ReservedProxyBudget {
@@ -332,6 +334,10 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
+  if (endpoint.request_format === "featherless.catalog" && (request.method !== "GET" || request.body !== null || new URL(request.url).search)) {
+    const auth = await preauthenticate(request, env, mode, provider.id);
+    return auth instanceof Response ? auth : errorResponse("invalid_model_discovery", "the catalog requires a bodyless, query-free GET", 400);
+  }
   const admission = new JsonAdmission(request, env, mode, provider.id);
   try {
     let envelope, prepared;
@@ -366,7 +372,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
   let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
-  if (!endpoint || !endpoint.native_proxy || manifestOnlyPublicCatalog(endpoint.request_format)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
+  if (!endpoint || !endpoint.native_proxy || manifestOnlyPublicCatalog(endpoint.request_format) || endpoint.request_format === "featherless.catalog") { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
   if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, "proxy_key", provider, endpoint);
@@ -626,11 +632,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    nativeLease = selection.nativeResponse?.acquire();
+    nativeLease = prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire();
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
-    const pending = prepared.publicCatalog
+    const pending = prepared.featherlessCatalog
+      ? featherlessCatalogResponse(prepared.featherlessCatalog, operation)
+      : prepared.publicCatalog
       ? fetchPublicModelDiscovery({ ...prepared.publicCatalog, operation }).then(result => Response.json(
         manifestOnlyPublicCatalog(selection.endpoint.request_format) ? result : result.catalog,
         { headers: { "cache-control": "private, no-store" } }))
@@ -673,7 +681,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
     if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
-    if (isModelDiscovery(selection.endpoint) && !prepared.publicCatalog) {
+    if (isModelDiscovery(selection.endpoint) && !prepared.publicCatalog && !prepared.featherlessCatalog) {
       response = await modelDiscoveryResponse(response, selection.provider, selection.endpoint, auth.policy, discoveryQuery(queryInput), operation, async (cursor, before) => {
         const pageUrl = new URL(prepared.url);
         pageUrl.searchParams.set(before ? "before_id" : "after_id", cursor);
@@ -867,6 +875,13 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       // The public factories own physical URLs and headers. The selected
       // inference credential remains local authority and is never forwarded.
       return { publicCatalog, headers: new Headers(), url: new URL(upstream.baseUrl), requestBody: undefined,
+        grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision,
+        connection, websocket: false, backgroundRecovery: false };
+    }
+    if (selection.endpoint.request_format === "featherless.catalog") {
+      if (transport !== "http") throw new HttpError(400, "invalid_model_discovery", "model catalogs require HTTP");
+      const featherlessCatalog = await prepareFeatherlessCatalogOwner(request, env, auth, selection, upstream);
+      return { featherlessCatalog, headers: new Headers(), url: new URL(upstream.baseUrl), requestBody: undefined,
         grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision,
         connection, websocket: false, backgroundRecovery: false };
     }

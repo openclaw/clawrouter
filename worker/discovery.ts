@@ -467,9 +467,9 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const supportedTiers = model?.nativeCapabilities?.endpoints[endpoint.id]?.supportedServiceTiers;
         const permittedServiceTiers = supportedTiers?.filter(tier => availability.status !== "exact-blocked" && allowedServiceTiers(auth.policy, model!.id, auth.serviceTiers).includes(tier));
         const common = { ...(endpoint.inputProfile ? { inputProfile: endpoint.inputProfile } : {}), ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
-        const nativeEnabled = endpoint.native_proxy && !manifestOnlyPublicCatalog(endpoint.request_format);
+        const nativeEnabled = endpoint.native_proxy && !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog";
         const native: CatalogOffer = { ...common, routeKind: keyScope ? nativeEnabled ? "native" : "manifest" : "playground", route: keyScope && nativeEnabled ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
-        const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && model && unifiedPathForEndpoint(provider, endpoint);
+        const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog" && model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
         if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
           const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] }, provider.id);
