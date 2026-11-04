@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('every arm fits the predeclared campaign ceiling including previous uncertainty', () => {
@@ -48,4 +48,19 @@ test('native JSON schema actions remain identical across providers', () => {
   const body = { messages: [], max_tokens: 2048, response_format: { type: 'json_schema', json_schema: { name: 'action', strict: true, schema } } };
   assert.deepEqual(nativeRequest('anthropic/claude-sonnet-5.5', body, {}).body.output_config.format.schema, schema);
   assert.deepEqual(nativeRequest('openai/gpt-6.1-sol', body, {}).body.response_format.json_schema.schema, schema);
+});
+
+
+test('large-file source navigation preserves line locations and literal search', () => {
+  const files = [{ path: 'scripts/compile.mjs', content: Array.from({length: 1200}, (_, i) => `line ${i + 1}`).join('\n') }];
+  assert.match(sourceView(files, ['scripts/compile.mjs:1100-1110'])[0].content, /line 1100/);
+  assert.equal(sourceView(files, ['scripts/compile.mjs'], 'line 1100')[0].matches[0].line, 1100);
+  assert.throws(() => sourceView(files, ['scripts/compile.mjs:1-1000']), /line_range/);
+});
+
+test('failed cheap submissions escalate; accepted or already-strong submissions can finish', () => {
+  assert.equal(escalateSubmission('cascade', false, false), true);
+  assert.equal(escalateSubmission('cascade', false, true), false);
+  assert.equal(escalateSubmission('cascade', true, false), false);
+  assert.equal(escalateSubmission('strong', false, false), false);
 });

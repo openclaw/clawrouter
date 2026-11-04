@@ -5,8 +5,8 @@ import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check,
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 
-const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits'], properties: {
-  action: { type: 'string', enum: ['read', 'edit', 'test', 'finish'] }, paths: { type: 'array', items: { type: 'string' } },
+const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query'], properties: {
+  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
   edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
     properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
 } };
@@ -65,6 +65,32 @@ export function replaceEdits(task, files, edits) {
   return validateEdits(task, [...current].map(([path, content]) => ({ path, content })));
 }
 
+export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
+
+export function sourceView(files, selectors, query = '') {
+  if (typeof query !== 'string' || query.length > 200 || !Array.isArray(selectors) || selectors.length > 3) throw new Error('invalid_source_view');
+  const views = selectors.map(selector => {
+    if (typeof selector !== 'string') throw new Error('invalid_source_view');
+    const [path, range, extra] = selector.split(':');
+    if (extra !== undefined) throw new Error('invalid_source_view');
+    const file = files.find(file => file.path === path);
+    if (!file) throw new Error('missing_source');
+    const lines = file.content.split('\n');
+    if (query) {
+      const matches = lines.flatMap((line, index) => line.includes(query) ? [{ line: index + 1,
+        content: lines.slice(Math.max(0, index - 3), index + 4).join('\n') }] : []).slice(0, 12);
+      return { path, totalLines: lines.length, matches };
+    }
+    const values = range?.match(/^(\d+)-(\d+)$/);
+    if (range && !values) throw new Error('invalid_line_range');
+    const start = values ? Number(values[1]) : 1, end = values ? Number(values[2]) : 120;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start >= 200) throw new Error('invalid_line_range');
+    return { path, totalLines: lines.length, startLine: start, content: lines.slice(start - 1, end).join('\n') };
+  });
+  if (JSON.stringify(views).length > 40000) throw new Error('source_view_too_large');
+  return views;
+}
+
 function bodyFor(messages, config) {
   return { messages, max_tokens: config.outputTokens, response_format: { type: 'json_schema',
     json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
@@ -73,14 +99,14 @@ function bodyFor(messages, config) {
 async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
   const box = await sandbox(image), started = performance.now();
   const deadline = AbortSignal.timeout(config.deadlineMs);
-  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests repository paths; edit applies exact unique search/replace strings to allowed source files; test runs the fixed visible tests; finish submits. Supply empty paths/edits when unused. Tests and tools run in an isolated container. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
+  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges (default first 120 lines). search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; finish submits. Supply empty paths/edits/query when unused. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
-  let outcome = 'turn_limit', escalated = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
+  let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
   try {
     for (; turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      const model = strategy === 'strong' || (strategy === 'cascade' && turns >= 2) ? models.strong : models.cheap;
-      if (strategy === 'cascade' && turns === 2) escalated = true;
+      const model = strategy === 'strong' || (strategy === 'cascade' && (turns >= 2 || forceEscalation)) ? models.strong : models.cheap;
+      if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
       const context = [...messages.slice(0, 2), ...messages.slice(2).slice(-10)];
       let response;
@@ -109,9 +135,11 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
       const toolStarted = performance.now();
       const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
       try {
-        if (action.action === 'read') {
-          const files = await readSource(box, action.paths, remaining());
-          messages.push({ role: 'user', content: JSON.stringify(files).slice(0, 40000) });
+        if (action.action === 'read' || action.action === 'search') {
+          const paths = action.paths?.length ? action.paths : task.editPaths;
+          const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
+          if (action.action === 'search' && !action.query) throw new Error('missing_query');
+          messages.push({ role: 'user', content: JSON.stringify(sourceView(files, paths, action.action === 'search' ? action.query : '')) });
         } else if (action.action === 'edit') {
           const files = await readSource(box, task.editPaths, remaining());
           await writeFiles(box, replaceEdits(task, files, action.edits), remaining());
@@ -120,7 +148,10 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
         } else if (action.action === 'test' || action.action === 'finish') {
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
-          if (action.action === 'finish') { outcome = 'submitted'; turns++; break; }
+          if (action.action === 'finish') {
+            if (escalateSubmission(strategy, escalated, publicPassed)) forceEscalation = true;
+            else { outcome = 'submitted'; turns++; break; }
+          }
         } else throw new Error('invalid_action');
       } catch { if (deadline.aborted) { outcome = 'deadline'; break; }
         invalidActions++; messages.push({ role: 'user', content: 'Invalid action or tool failure. Check allowed paths and exact unique search text.' }); }

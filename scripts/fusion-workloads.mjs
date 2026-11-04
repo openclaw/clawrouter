@@ -92,11 +92,13 @@ const writeProgram = `const fs=require('node:fs'),p=require('node:path');let inp
 export async function writeFiles(box, files, timeout = 120000) { await box.exec(['node', '-e', writeProgram], { input: JSON.stringify(files), timeout }); }
 
 export async function readSource(box, paths, timeout = 120000) {
-  if (!paths.every(safePath) || paths.length > 12) throw new Error('invalid_read_paths');
+  const readable = path => safePath(path) || (typeof path === 'string'
+    && /^(providers|docs)\/[A-Za-z0-9_./-]+$/.test(path) && !path.split('/').some(part => !part || part === '.' || part === '..'))
+    || ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'].includes(path);
+  if (!paths.every(readable) || paths.length > 12) throw new Error('invalid_read_paths');
   const program = `const fs=require('node:fs'),p=require('node:path');const paths=JSON.parse(process.argv[1]);console.log(JSON.stringify(paths.map(path=>{const target=p.resolve('/work',path);if(fs.realpathSync(target)!==target||!fs.statSync(target).isFile()||fs.statSync(target).size>262144)throw Error('invalid_read');return {path,content:fs.readFileSync(target,'utf8')}})));`;
   return JSON.parse((await box.exec(['node', '-e', program, JSON.stringify(paths)], { timeout })).stdout.toString());
 }
-
 export function testResult(result) {
   const text = result.stdout.toString();
   const count = key => Number(text.match(new RegExp(`^# ${key} (\\d+)$`, 'm'))?.[1] ?? -1);
@@ -163,4 +165,3 @@ export async function qualify(task, options) {
   return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, visible, broken, oracle,
     qualified: visible.passed && broken.valid && !broken.passed && oracle.passed };
 }
-
