@@ -28,6 +28,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: audio.transcription
+    endpoint: transcription
+    methods: [POST]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -36,6 +39,14 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  transcription:
+    path: /v1/audio/transcriptions
+    method: POST
+    requestFormat: groq.transcription
+    responseFormat: groq.transcription
+    nativeProxy: true
+    headers:
+      Accept: application/json
 models:
   entries:
     - id: groq/gpt-oss-120b
@@ -169,6 +180,18 @@ models:
             inputMicrosPerMillion: 75000
             cachedInputMicrosPerMillion: 37500
             outputMicrosPerMillion: 300000
+    # No qualified whole-upload price bound; do not borrow Chat token rates.
+    - id: groq/whisper-large-v3-turbo
+      upstream: whisper-large-v3-turbo
+      capabilities: [audio.transcription]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          transcription:
+            sources:
+              - https://console.groq.com/docs/speech-to-text
+            checkedAt: "2026-11-03"
+            input: [audio]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
