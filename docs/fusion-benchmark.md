@@ -18,7 +18,9 @@ small public-task pilot: model training contamination is unknown, and one trial
 per task cannot establish robust frontier performance or production latency.
 
 The whole-run cost preflight uses conservative input byte bounds, full output
-allowances and the largest published input/output price tiers. A second guard
+allowances and the largest applicable published input/output price tiers. An
+input-byte upper bound rules out long-context tiers only when it is below their
+token threshold. A second guard
 reserves each call before dispatch and caps total reservations at $5. This is an
 application-side bound based on provider pricing and token-limit compliance,
 not an account-level spending limit. Missing usage cost, transport uncertainty,
@@ -28,7 +30,9 @@ remain incomplete and must not be compared as if missing pairs scored zero.
 Artifacts contain only score records, provider-reported costs, timings, call
 counts, serving model/provider IDs, configuration and dataset provenance, and
 the paired evaluator's report. Prompts, answers, reasoning and credentials are
-never written or logged. Download artifacts before the 14-day retention expires.
+never written or logged. Atomic checkpoints preserve completed records and
+unknown in-flight costs on cancellation; only a completed run is comparable.
+Download artifacts before the 14-day retention expires.
 
 This measures the composition algorithm. It does not exercise the gateway's
 credential authority, budget ledgers, transport adapters or production traffic.

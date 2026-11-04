@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { gradeAnswer, selectCases, priceBound, parsePrice, runCase, models } from '../scripts/benchmark-fusion.mjs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gradeAnswer, selectCases, priceBound, parsePrice, runCase, models, writeCheckpoint } from '../scripts/benchmark-fusion.mjs';
 
 test('grader accepts only exact final JSON string answers', () => {
   assert.equal(gradeAnswer('{"answer":"B"}', '(B)'), 1);
@@ -23,7 +26,20 @@ test('cost reservation includes input bytes, full output allowance and request f
   const price = parsePrice({ pricing: { prompt: '0.000001', completion: '0.00001', request: '0.01' } });
   assert.equal(priceBound({ text: '😀' }, price), Buffer.byteLength(JSON.stringify({ text: '😀' })) + 1024 + 40960 + 10000);
   assert.throws(() => parsePrice({ pricing: { prompt: 'unknown', completion: '0.1' } }));
-  assert.equal(parsePrice({ pricing: { prompt: '0.1', completion: '0.1', overrides: [{ prompt: '0.2' }] } }).input, 0.2);
+  const tiered = parsePrice({ pricing: { prompt: '0.1', completion: '0.1', overrides: [{ min_prompt_tokens: 2000, prompt: '0.2' }] } });
+  assert.equal(priceBound({}, tiered), priceBound({}, { input: 0.1, output: 0.1, request: 0 }));
+  assert.equal(priceBound({ text: 'x'.repeat(2000) }, tiered), priceBound({ text: 'x'.repeat(2000) }, { input: 0.2, output: 0.1, request: 0 }));
+});
+
+test('checkpoint retains parseable partial measurements until explicitly complete', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'fusion-checkpoint-'));
+  try {
+    await writeCheckpoint(root, { records: [] }, { complete: false, attempts: [{ costMicros: null }] });
+    assert.equal(JSON.parse(await readFile(join(root, 'provenance.json'))).complete, false);
+    await writeCheckpoint(root, { records: [{ score: 1 }] }, { complete: true });
+    assert.equal(JSON.parse(await readFile(join(root, 'runs.json'))).records.length, 1);
+    assert.equal(JSON.parse(await readFile(join(root, 'provenance.json'))).complete, true);
+  } finally { await rm(root, { recursive: true }); }
 });
 
 test('case measurements count all billed calls, failed advisers and final grading', async () => {

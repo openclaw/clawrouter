@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Opt-in live composition benchmark. Never retain prompts, answers, or credentials.
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
@@ -29,21 +29,36 @@ export function selectCases(examples, domain, count = 10) {
 export function priceBound(body, price) {
   // UTF-8 bytes bound text tokens conservatively; no tools, images or web search.
   const inputBytes = Buffer.byteLength(JSON.stringify(body)) + 1024;
-  return Math.ceil((inputBytes * price.input + limit * price.output + price.request) * 1e6);
+  const applicable = (price.tiers ?? []).filter(t => t.minimum <= inputBytes);
+  const input = Math.max(price.input, ...applicable.map(t => t.input));
+  const output = Math.max(price.output, ...applicable.map(t => t.output));
+  return Math.ceil((inputBytes * input + limit * output + price.request) * 1e6);
 }
 
 export function parsePrice(row) {
-  let input = Number(row?.pricing?.prompt), output = Number(row?.pricing?.completion);
+  const input = Number(row?.pricing?.prompt), output = Number(row?.pricing?.completion);
   const request = Number(row?.pricing?.request ?? 0);
   if (![input, output, request].every(n => Number.isFinite(n) && n >= 0)) throw new Error('model pricing unavailable');
+  const tiers = [];
   if (row.pricing.overrides?.length) {
     for (const p of row.pricing.overrides) {
       const pi = Number(p.prompt ?? input), po = Number(p.completion ?? output);
-      if (![pi, po].every(n => Number.isFinite(n) && n >= 0)) throw new Error('invalid tiered price');
-      input = Math.max(input, pi); output = Math.max(output, po);
+      const minimum = Number(p.min_prompt_tokens ?? 0);
+      if (![pi, po, minimum].every(n => Number.isFinite(n) && n >= 0)) throw new Error('invalid tiered price');
+      tiers.push({ minimum, input: pi, output: po });
     }
   }
-  return { input, output, request };
+  return { input, output, request, tiers };
+}
+
+export async function writeCheckpoint(out, runs, provenance) {
+  // Keep the prior valid JSON if the process exits during a write. Publish the
+  // completion marker last, after the corresponding records are durable.
+  for (const [name, value] of [['runs.json', runs], ['provenance.json', provenance]]) {
+    const path = resolve(out, name), temporary = `${path}.tmp`;
+    await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+    await rename(temporary, path);
+  }
 }
 
 export async function runCase(item, configuration, engine, invoke) {
@@ -103,12 +118,23 @@ export async function main(out) {
   const planned = cases.reduce((sum, item) => {
     const inputBytes = Buffer.byteLength(item.input) + 2048;
     return sum + [models.cheap, models.strong, models.strong, models.critic, models.cheap]
-      .reduce((n, model, index) => n + priceBound({ padding: ' '.repeat(inputBytes + (index === 4 ? 48000 : 0)) }, pins[model].price), 0);
+      .reduce((n, model, index) => n + priceBound({ padding: ' '.repeat(inputBytes + (index === 4 ? 72000 : 0)) }, pins[model].price), 0);
   }, 0);
   const budgetMicros = 5000000;
   if (planned > budgetMicros) throw new Error('whole-run conservative cost bound exceeds $5');
   let reservedMicros = 0, actualMicros = 0, blocked = false;
   const attempts = [], records = [], observations = [];
+  const checkpoint = (complete = false) => writeCheckpoint(out,
+    { version: 1, evaluationId: `fusion-${sourceSha.slice(0, 12)}`,
+      datasetRevision: digest({ datasetHashes, cases: cases.map(c => c.caseId) }),
+      graderRevision: 'json-string-exact-v1', split: 'test', records },
+    { ...metadata, complete, actualMicros, reservedMicros, attempts, observations });
+  // Adviser calls run concurrently; serialize their checkpoint writes.
+  let checkpointTail = Promise.resolve();
+  const persist = (complete = false) => {
+    checkpointTail = checkpointTail.then(() => checkpoint(complete));
+    return checkpointTail;
+  };
   const invoke = async (model, body, _timeout, callerSignal) => {
     if (blocked) throw new Error('benchmark stopped');
     const request = { ...body, model, reasoning: { effort: 'medium' },
@@ -118,6 +144,7 @@ export async function main(out) {
     reservedMicros += reservation;
     const attempt = { model, reservationMicros: reservation, costMicros: null };
     attempts.push(attempt);
+    await persist();
     try {
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST', headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'content-type': 'application/json' },
@@ -130,6 +157,7 @@ export async function main(out) {
       attempt.costMicros = Math.ceil(cost * 1e6);
       actualMicros += attempt.costMicros;
       if (attempt.costMicros > reservation) { blocked = true; throw new Error('cost exceeded bound'); }
+      await persist();
       return { response: Response.json(result, { status: response.status }), costMicros: attempt.costMicros,
         served: { model: result.model ?? null, provider: result.provider ?? null, finishReason: result.choices?.[0]?.finish_reason ?? null } };
     } catch {
@@ -144,6 +172,7 @@ export async function main(out) {
     limitations: ['public tasks may be present in model training', 'one trial per case', 'provider aliases cannot attest hidden serving revisions'],
   };
   let failure = false;
+  await persist();
   try {
     for (const [index, item] of cases.entries()) {
       // Rotate ordering so a strategy is not always measured first.
@@ -152,14 +181,12 @@ export async function main(out) {
         const result = await runCase(item, configuration, engine, invoke);
         const { served, failedAdvisers, ...record } = result;
         records.push(record); observations.push({ caseId: item.caseId, strategy: configuration.name, served, failedAdvisers });
+        await persist();
         console.log(JSON.stringify({ completed: records.length, total: cases.length * configurations.length, actualMicros }));
       }
     }
   } catch { failure = true; }
-  const write = (name, value) => writeFile(resolve(out, name), JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
-  await write('provenance.json', { ...metadata, complete: !failure, actualMicros, reservedMicros, attempts, observations });
-  await write('runs.json', { version: 1, evaluationId: `fusion-${sourceSha.slice(0, 12)}`, datasetRevision: digest({ datasetHashes, cases: cases.map(c => c.caseId) }),
-    graderRevision: metadata.graderRevision, split: 'test', records });
+  await persist(!failure);
   if (failure) throw new Error('incomplete benchmark; inspect content-free provenance');
 }
 
