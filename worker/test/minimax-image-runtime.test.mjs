@@ -16,6 +16,11 @@ const adminPath = "/v1/admin/upstream-grants/policies/fixture/replicate";
 const originalKey = "synthetic-original-image-key";
 async function setup(t, options = {}) {
   const provider = structuredClone(snapshot.providers.find(row => row.id === "minimax")); configureImage(provider);
+  // Compiled discovery projections are immutable per provider object. Give the
+  // injected declaration its own identity, preserving production cache semantics.
+  const originalProviders = snapshot.providers;
+  snapshot.providers = originalProviders.filter(row => row.id !== "minimax").map(row => row.id === "replicate" ? structuredClone(row) : row);
+  t.after(() => { snapshot.providers = originalProviders; });
   const f = await fixture(t, { providerId: "minimax", fixed: options.fixed === undefined ? 700 : options.fixed, configure(target) { Object.assign(target, provider); } });
   f.env.MINIMAX_API_KEY = "synthetic-forbidden-environment-key";
   f.env.CLAWROUTER_ADMIN_TOKEN_SHA256 = await sha256Hex("synthetic-admin");
@@ -147,11 +152,19 @@ test("MiniMax image discovery requires exact model and independent image authori
   const f = await setup(t, { qualify: false });
   const requirement = { provider: f.provider, endpoint: f.provider.endpoints[0], mode: "http", model: imageModel };
   assert.equal(grantSupports(requirement, await inspectGrantCredentials(f.env, grantKey)), false);
+  const before = await (await f.call("/v1/catalog", null)).json();
+  assert.equal(before.providers.find(row => row.id === "minimax").offers.some(row => row.eligible), false);
   await f.put({ minimaxImageAuthorization: "minimax-global-image" }); const grant = await inspectGrantCredentials(f.env, grantKey);
   assert.equal(grantSupports(requirement, grant), true); assert.equal(grantSupports({ ...requirement, model: "foreign" }, grant), false);
   assert.deepEqual(routingProjection(grant).minimaxImageBinding, minimaxImageBinding);
   const r = await f.call("/v1/catalog", null); assert.equal(r.status, 200); const catalog = await r.text();
-  assert.match(catalog, /minimax\.images/); assert.doesNotMatch(catalog, /minimaxImageBinding|credentialSource|synthetic-original-image-key/);
+  const offered = JSON.parse(catalog).providers.find(row => row.id === "minimax");
+  assert.deepEqual(offered.routes.map(row => [row.endpoint, row.requestFormat, row.responseFormat]), [["images", "minimax.images", "minimax.images"]]);
+  assert.equal(offered.offers.find(row => row.modelId === imageModel).eligible, true);
+  assert.doesNotMatch(catalog, /minimaxImageBinding|credentialSource|synthetic-original-image-key/);
+  await revokeGrantCredentials(f.env, grantKey);
+  const revoked = await (await f.call("/v1/catalog", null)).json();
+  assert.equal(revoked.providers.find(row => row.id === "minimax").offers.some(row => row.eligible), false);
 });
 test("MiniMax image capacity exhaustion is known-unsent and releases only its own lease", async t => {
   const f = await setup(t), other = new BodyLease(); assert.equal(other.grow(17 * 1024 * 1024), true); t.after(() => other.release());

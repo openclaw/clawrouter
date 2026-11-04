@@ -17,7 +17,7 @@ import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
 import {usageStub} from './worker/ledgers.ts';
 import {configureImage,imageModel} from './worker/test/minimax-image-runtime-fixture.mjs';
 configureImage(snapshot.providers.find(p=>p.id==='minimax'));
-let initialized,fetches=0,pending=new Set(),mode='',capacityAtFetch=0,readStarted=0,canceled=0,activeReads=0,aborted=false;
+let initialized,fetches=0,pending=new Set(),mode='',capacityAtFetch=0,readStarted=0,canceled=0,activeReads=0,aborted=false,capacityDuringCleanup=-1;
 let currentController,contention;
 const original=globalThis.fetch.bind(globalThis);
 globalThis.fetch=async(input,init)=>{
@@ -27,7 +27,7 @@ globalThis.fetch=async(input,init)=>{
  if(mode!=='cancel')return reply;
  // Controlled Worker request signal, not a claim about host TCP disconnect.
  const reader=reply.body.getReader();let first=true,cleanup;
- const retire=reason=>cleanup??=(async()=>{try{await reader.cancel(reason);}finally{reader.releaseLock();if(activeReads){activeReads--;canceled++;}}})();
+ const retire=reason=>cleanup??=(async()=>{try{await reader.cancel(reason);await new Promise(resolve=>setTimeout(resolve,30));capacityDuringCleanup=bodyBudgetCharged();}finally{reader.releaseLock();if(activeReads){activeReads--;canceled++;}}})();
  const body=new ReadableStream({async pull(controller){
    if(first){first=false;const chunk=await reader.read();controller.enqueue(chunk.value);readStarted++;activeReads++;
      setTimeout(()=>currentController.abort(new DOMException('fixture cancellation','AbortError')),20);
@@ -48,7 +48,7 @@ export default {async fetch(request,bindings,context){
   await authorityCall(env,'/connections/initialize-all',[{providerId:'minimax',enabled:true,monthlyBudgetMicros:10000}]);
  })();await initialized;
  const path=new URL(request.url).pathname;
- if(path==='/fixture/proof'){const grant=await inspectGrantCredentials(env,'oauth/fixture/image');return Response.json({fetches,pending:pending.size,capacity:bodyBudgetCharged(),capacityAtFetch,generation:grant.credentialGeneration,lineage:grant.credentialLineage,enabled:grant.enabled,binding:grant.minimaxImageBinding,readStarted,canceled,activeReads,aborted});}
+ if(path==='/fixture/proof'){const grant=await inspectGrantCredentials(env,'oauth/fixture/image');return Response.json({fetches,pending:pending.size,capacity:bodyBudgetCharged(),capacityAtFetch,generation:grant.credentialGeneration,lineage:grant.credentialLineage,enabled:grant.enabled,binding:grant.minimaxImageBinding,readStarted,canceled,activeReads,aborted,capacityDuringCleanup});}
  if(path==='/fixture/events')return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
  if(path.startsWith('/fixture/mode/')){mode=path.split('/').at(-1);if(mode==='contention'){contention=new BodyLease();if(!contention.grow(17*1024*1024))throw new Error('fixture capacity');}else if(contention){contention.release();contention=undefined;}return new Response(null,{status:204});}
  if(path==='/fixture/unprice'){await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['minimax'],models:[imageModel],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:null,retainRequestContent:false,grantRouting:{eligibleGrants:{minimax:['image']}}}});return new Response(null,{status:204});}
@@ -86,7 +86,7 @@ test('MiniMax image actual workerd capacity refusal, controlled pending-read can
   const f=await fixture(t);await f.mode('contention');let r=await f.run(false);assert.notEqual(r.status,200);await r.text();
   let proof=await f.get('/fixture/proof');assert.equal(proof.fetches,0);assert.equal(proof.capacity,34*1024*1024);
   await f.mode('cancel');r=await f.run(true);assert.notEqual(r.status,200);await r.text();
-  let state=await f.settled(2);proof=state.proof;assert.equal(proof.fetches,1);assert.equal(proof.readStarted,1);assert.equal(proof.activeReads,0);assert.equal(proof.canceled,1);assert.equal(proof.capacity,0);assert.equal(proof.aborted,true);
+  let state=await f.settled(2);proof=state.proof;assert.equal(proof.fetches,1);assert.equal(proof.readStarted,1);assert.equal(proof.activeReads,0);assert.equal(proof.canceled,1);assert.equal(proof.capacity,0);assert.equal(proof.aborted,true);assert.equal(proof.capacityDuringCleanup,64*1024*1024);
   assert.deepEqual(state.events.map(e=>e.actual_cost_micros).sort((a,b)=>a-b),[0,700]);
   await f.runtime.dispatchFetch(f.origin+'/fixture/unprice');r=await f.run(false);assert.equal(r.status,400,await r.clone().text());assert.equal((await r.json()).error.code,'pricing_required');
   state=await f.settled(3);assert.equal(state.proof.fetches,1);assert.equal(state.proof.capacity,0);assert.equal(state.events.filter(e=>e.actual_cost_micros===700).length,1);

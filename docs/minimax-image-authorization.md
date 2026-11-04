@@ -31,7 +31,10 @@ revocation between the owner reply and network dispatch.
 The unchanged wrapper accepts at most 16 KiB JSON, rejects every
 `subject_reference`, and returns complete validated native base64 JSON only.
 It holds a 64 MiB response charge in the existing 96 MiB pool through downstream
-EOF or cancellation. The operational response limits remain 8 MiB JSON and
+EOF or cancellation. The image-only input relay also retains that charge until
+the upstream read, cancellation acknowledgement and reader-lock retirement
+finish; initiating cancellation alone does not retire input ownership.
+The operational response limits remain 8 MiB JSON and
 4 MiB combined decoded data; they are not vendor entitlements. No PNG/JPEG
 binary response or playback claim is made.
 

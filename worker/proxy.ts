@@ -17,6 +17,7 @@ import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { ownMiniMaxImageInput } from "./minimax-image-input.ts";
 import { prepareMiniMaxImageDispatch } from "./minimax-image-dispatch.ts";
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
@@ -710,6 +711,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let nativeLease: BodyLease | undefined;
   let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
   let musicRead: Promise<unknown> | undefined;
+  let imageRead: Promise<unknown> | undefined;
+  let imageInput: ReturnType<typeof ownMiniMaxImageInput> | undefined;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
@@ -778,11 +781,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       }, prepared.revalidateDiscovery ? () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined);
     }
     if (selection.nativeResponse) {
-      const reading = selection.nativeResponse.read(response, signal);
+      if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
+      const reading = selection.nativeResponse.read(imageInput?.response ?? response, signal);
+      if (imageInput) imageRead = reading;
       if (music) musicRead = reading;
       const validated = await operation.wait(reading, "upstream", discardNative);
       try { if (prepared.revalidateDelivery) await operation.wait(prepared.revalidateDelivery(signal), "publication"); }
       catch (error) { discardNative(validated); throw error; }
+      await imageInput?.retire();
       response = validated.response;
       nativeUsage = "usage" in validated ? validated.usage : undefined;
     }
@@ -811,6 +817,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       // The operation's rejection may win before a physical quarantined read
       // has acknowledged cancellation. Keep its response charge until then.
       await musicRead?.catch(() => undefined);
+    }
+    if (imageInput) {
+      operation.stop("upstream", error);
+      await imageInput.retire(error);
+      await imageRead?.catch(() => undefined);
     }
     nativeLease?.release();
     soft?.close();
