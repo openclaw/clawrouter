@@ -129,3 +129,8 @@ use larger reasoning/output allowances, up to the owner's $100 cumulative cap.
 Every requested output token is reserved before dispatch; past unknown charges
 remain included at their full reservation. A new run requires a budget that
 includes all previous measured and reserved spend.
+
+Source reads now return complete bounded files by default, with optional 400-line
+ranges. Agents maintain private working notes across context eviction. Retained
+source history has a byte ceiling, preventing repeated reads from consuming an
+unbounded reservation. Neither working notes nor source history are saved.

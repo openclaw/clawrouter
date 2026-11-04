@@ -115,8 +115,12 @@ export async function check(box, paths, timeout = 120000) {
 
 export async function probe(box, source, timeout = 15000) {
   if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_probe');
-  const result = await box.exec(['node', '--input-type=module'], { input: source,
-    allowFailure: true, timeout: Math.min(15000, timeout) });
+  if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_probe');
+  const limit = Math.min(15000, timeout);
+  // The in-container watchdog owns the process group; killing docker exec alone
+  // would leave a hanging probe alive. Give the client time to collect its exit.
+  const result = await box.exec(['timeout', '--signal=KILL', `${limit / 1000}s`, 'node', '--input-type=module'],
+    { input: source, allowFailure: true, timeout: limit + 2000 });
   return { passed: result.code === 0,
     feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
 }

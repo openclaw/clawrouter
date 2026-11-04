@@ -5,7 +5,8 @@ import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check,
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 
-const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query'], properties: {
+const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
+  memory: { type: 'string' },
   action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
   edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
     properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
@@ -89,12 +90,26 @@ export function sourceView(files, selectors, query = '') {
     }
     const values = range?.match(/^(\d+)-(\d+)$/);
     if (range && !values) throw new Error('invalid_line_range');
-    const start = values ? Number(values[1]) : 1, end = values ? Number(values[2]) : 120;
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start >= 200) throw new Error('invalid_line_range');
-    return { path, totalLines: lines.length, startLine: start, content: lines.slice(start - 1, end).join('\n') };
+    const start = values ? Number(values[1]) : 1, requestedEnd = values ? Number(values[2]) : lines.length;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 1 || requestedEnd < start) throw new Error('invalid_line_range');
+    const end = values ? Math.min(requestedEnd, start + 399) : requestedEnd;
+    return { path, totalLines: lines.length, startLine: start, truncated: end < requestedEnd, content: lines.slice(start - 1, end).join('\n') };
   });
-  if (JSON.stringify(views).length > 40000) throw new Error('source_view_too_large');
+  if (Buffer.byteLength(JSON.stringify(views)) > 320000) throw new Error('source_view_too_large');
   return views;
+}
+
+export function agentContext(messages, memory = '') {
+  const header = [...messages.slice(0, 2), ...(memory ? [{ role: 'user', content: `Your working notes from earlier actions:\n${memory}` }] : [])];
+  let bytes = Buffer.byteLength(JSON.stringify(header));
+  if (bytes > 384000) throw new Error('context_header_too_large');
+  const recent = [];
+  for (const message of messages.slice(2).slice(-10).reverse()) {
+    const size = Buffer.byteLength(JSON.stringify(message)) + 1;
+    if (bytes + size > 384000) break;
+    recent.unshift(message); bytes += size;
+  }
+  return [...header, ...recent];
 }
 
 function bodyFor(messages, config) {
@@ -105,8 +120,9 @@ function bodyFor(messages, config) {
 async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
   const box = await sandbox(image), started = performance.now();
   const actions = [];
+  let memory = '';
   const deadline = AbortSignal.timeout(config.deadlineMs);
-  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges (default first 120 lines). search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
+  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
   try {
@@ -115,7 +131,7 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
       const model = strategy === 'strong' || (strategy === 'cascade' && (turns >= 2 || forceEscalation)) ? models.strong : models.cheap;
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
-      const context = [...messages.slice(0, 2), ...messages.slice(2).slice(-10)];
+      const context = agentContext(messages, memory);
       let response;
       try {
         let request = bodyFor(context, config);
@@ -138,6 +154,7 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
       let action;
       try { action = JSON.parse(content); } catch { actions.push({ turn: turns + 1, action: 'invalid_json', status: 'rejected' }); invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
       if (typeof content !== 'string' || content.length > 40000) { invalidActions++; continue; }
+      if (typeof action?.memory === 'string' && action.memory.length <= 6000) memory = action.memory;
       messages.push({ role: 'assistant', content });
       const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);

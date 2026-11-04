@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('every arm fits the predeclared campaign ceiling including previous uncertainty', () => {
@@ -55,7 +55,9 @@ test('large-file source navigation preserves line locations and literal search',
   const files = [{ path: 'scripts/compile.mjs', content: Array.from({length: 1200}, (_, i) => `line ${i + 1}`).join('\n') }];
   assert.match(sourceView(files, ['scripts/compile.mjs:1100-1110'])[0].content, /line 1100/);
   assert.equal(sourceView(files, ['scripts/compile.mjs'], 'line 1100')[0].matches[0].line, 1100);
-  assert.throws(() => sourceView(files, ['scripts/compile.mjs:1-1000']), /line_range/);
+  assert.equal(sourceView(files, ['scripts/compile.mjs:1-1000'])[0].truncated, true);
+  assert.equal(sourceView(files, ['scripts/compile.mjs'])[0].content, files[0].content);
+  assert.throws(() => sourceView(files, ['scripts/compile.mjs:0-1000']), /line_range/);
 });
 
 test('failed cheap submissions escalate; accepted or already-strong submissions can finish', () => {
@@ -80,4 +82,16 @@ test('larger explicitly configured runs remain bounded by the authorized campaig
   assert.equal(validateExperiment(config, 4), 16934028);
   assert.throws(() => validateExperiment({ ...config, campaignBudgetMicros: 100000001 }, 4));
   assert.throws(() => validateExperiment({ ...config, priorCostMicros: 99000000 }, 4), /campaign_budget/);
+});
+
+
+test('working notes survive bounded context eviction without unbounded repeated source', () => {
+  const fixed = [{ role: 'system', content: 'repair' }, { role: 'user', content: 'task' }];
+  const context = agentContext([...fixed, {role:'user',content:'old source'.repeat(25000)},
+    {role:'assistant',content:'old read'}, {role:'user',content:'new source'.repeat(25000)}], 'location and plan');
+  assert.deepEqual(context.slice(0, 2), fixed);
+  assert.match(context[2].content, /location and plan/);
+  assert.equal(context.at(-1).content, 'new source'.repeat(25000));
+  assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 384000);
+  assert.equal(context.some(m => m.content.startsWith('old source')), false);
 });
