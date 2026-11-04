@@ -154,9 +154,12 @@ test("one-byte fragmentation and CRLF keep split base64 and UTF-8 unchanged", as
 
 test("native DONE cancels a still-open upstream without waiting for socket EOF", async () => {
   let pulls = 0, canceled = false;
-  const upstream = new ReadableStream({ type: "bytes", pull(controller) { pulls++; if (pulls === 1) controller.enqueue(Buffer.from(wire())); },
+  // Byte controllers transfer ownership; pooled Node Buffer backing cannot detach.
+  const bytes = new TextEncoder().encode(wire());
+  const upstream = new ReadableStream({ type: "bytes", pull(controller) { pulls++; if (pulls === 1) controller.enqueue(bytes); },
     cancel() { canceled = true; } }, { highWaterMark: 0 });
   const delivered = await read(response(upstream));
+  assert.equal(bytes.buffer.byteLength, 0);
   assert.equal(await delivered.response.text(), wire()); assert.equal(pulls, 1); assert.equal(canceled, true);
 });
 
@@ -165,11 +168,12 @@ test("no partial SSE is exposed before terminal; missing DONE, truncation and st
     wire() + data(frame({ data: "AAAA" })), wire() + ": late\n\n"]) await assert.rejects(read(response(original)), invalid);
   let controller, ready;
   const entered = new Promise(resolve => { ready = resolve; });
-  const upstream = new ReadableStream({ type: "bytes", start(value) { controller = value; controller.enqueue(Buffer.from(wire().replace(data("[DONE]"), ""))); },
+  const bytes = new TextEncoder().encode(wire().replace(data("[DONE]"), ""));
+  const upstream = new ReadableStream({ type: "bytes", start(value) { controller = value; controller.enqueue(bytes); },
     pull() { ready(); } }, { highWaterMark: 0 });
   let resolved = false;
   const pending = read(response(upstream)).then(value => { resolved = true; return value; });
-  await entered; assert.equal(resolved, false); controller.error(new Error("synthetic interruption"));
+  await entered; assert.equal(bytes.buffer.byteLength, 0); assert.equal(resolved, false); controller.error(new Error("synthetic interruption"));
   await assert.rejects(pending, invalid);
 });
 
