@@ -89,9 +89,14 @@ async function readMetadata(response: Response, operation: HttpOperation): Promi
 // Filtered pages expose only permitted model IDs, including first/last cursors.
 // An all-hidden page is scanned internally on the SAME selected grant; never
 // repick/fail over to a different account to manufacture a combined inventory.
-export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>): Promise<Response> {
-  const restricted = policy.models != null, seen = new Set<string>();
+export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>, refreshPolicy?: () => Promise<AccessPolicy>): Promise<Response> {
+  let restricted = policy.models != null;
+  const seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
+    if (refreshPolicy && response.status !== 200) {
+      void response.body?.cancel().catch(() => undefined);
+      throw new HttpError(502, "model_discovery_rejected", "upstream rejected model discovery");
+    }
     if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
       void response.body?.cancel().catch(() => undefined);
       throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
@@ -115,6 +120,9 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       return metadataResponse(metadata, response);
     }
     const metadata = await readMetadata(response, operation);
+    // Optional original-owner binding refreshes permissions AFTER the complete
+    // read. A stale admission policy must not publish newly hidden model IDs.
+    if (refreshPolicy) { policy = await refreshPolicy(); restricted = policy.models != null; }
     if (endpoint.request_format === "ollama.models") {
       try { return metadataResponse(filterOllamaModels(metadata, id => discoveryAllows(policy, provider, id)), response); }
       catch { throw malformed(); }
