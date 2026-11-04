@@ -92,16 +92,19 @@ in this source slice, and model availability does not establish account entitlem
 ## Local declaration integration
 
 Source PR698 `21c17f5928c34cdc8f0865f76e86fb7d5b42b01c` is composed on
-qualified `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. Its declaration commit
+landed `81da9416c6e45f5b1ce2114288dc541ede81ce99`, retaining the previous
+local packet `d580436179cda5aa51c417f35c8a96e7182a47e9`. Its declaration commit
 `d17a72f66e76fdade623c3b7297c50b44b193957` adds only the two original image
 cards, image endpoint and capability. Every prior Google row/endpoint and the
 current Vercel fixture are preserved; the already-landed Vercel correction is
 not reapplied over newer accepted proof.
 
 All 85 manifests compile. Snapshot SHA256 is
-`6a12bbe7ed4316c6b640e8672eb5302113566ccc3a6a0f7567e08449c6e8d1dc`.
-Local proof covers 88 focused image/compiler/real-Worker/admission/pricing
-cases in aggregate, Worker types and 1,035 Chat matrix/consumer-selection cases.
+`90b6ab7352b58188df4044b98ce70da7fe3c911ff5d7203e7f2616aeee7de8ff`.
+Refreshed local proof covers 107 focused image/compiler/real-Worker/admission/
+pricing cases, including the existing music-compiler isolation regression,
+Worker types and 1,035 Chat matrix/consumer-selection cases. Frozen dependency
+inputs match; no installation or actual-client execution occurred.
 One music negative fixture originally failed because its inherited image
 endpoint rejected the mutated origin before music validation. The integration
 fixture removes only the unrelated image endpoint/capability/rows; all music
