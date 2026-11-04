@@ -361,6 +361,7 @@
 - Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
 - Qualify Novita native model-catalog declarations against the canonical keyed data-only contract, preserving exact caller filtering and unknown price units before runtime activation.
 - Providers: add the frozen LongCat 2.0 contract, canonical Meituan routing alias and keyed model discovery while retaining the existing seed and native thinking/replay behavior.
+- Verify LongCat's actual strict native catalog and registered thinking/replay wrapper through the Worker, preserving original credentials, zero-cost discovery and conservative stream settlement.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.

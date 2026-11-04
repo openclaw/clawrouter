@@ -44,9 +44,9 @@ async function fixture(t, { ownGrant = true } = {}) {
   for (const policyId of ["paid", "unpriced"]) if (ownGrant) await putGrantCredentials(env, `oauth/${policyId}/longcat`, {
     provider: "longcat", kind: "api_key", enabled: true, credential: "synthetic-selected-longcat" });
   const f = { env, events, sent, grantKey: "oauth/paid/longcat", reply: async r => Response.json(response((await r.clone().json()).model)),
-    call(body, { manifest = false, policyId = "paid", discovery = false, query = "", nativePrefix = "longcat" } = {}) {
+    call(body, { manifest = false, policyId = "paid", discovery = false, query = "", nativePrefix = "longcat", unified = false } = {}) {
       const path = discovery ? (manifest ? "/v1/proxy/longcat/models_list" : `/v1/native/${nativePrefix}/models`)
-        : (manifest ? "/v1/proxy/longcat/chat_completions" : `/v1/native/${nativePrefix}/chat/completions`);
+        : (unified ? "/v1/chat/completions" : manifest ? "/v1/proxy/longcat/chat_completions" : `/v1/native/${nativePrefix}/chat/completions`);
       return worker.fetch(new Request(`https://router.example${path}${query}`, { method: discovery ? "GET" : "POST",
         headers: { authorization: `Bearer clawrouter-live-${policyId}-fixture-${policyId}`, "content-type": "application/json", "x-api-key": "synthetic-caller-key", "x-organization-id": "synthetic-unbound-org" },
         ...(!discovery && { body: JSON.stringify(manifest ? { body } : body) }),
@@ -69,7 +69,7 @@ test("LongCat declaration retains the existing seed and exact frozen legacy cont
     const native = m.nativeCapabilities.endpoints.chat_completions;
     assert.deepEqual(native.input, ["text"]); assert.equal(native.contextWindow, undefined); assert.equal(native.maxOutputTokens, 131072);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["models_list", "chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "models_list"]);
   const opaque = providerModel(provider, "longcat/synthetic-tenant-model", provider.endpoints.find(e => e.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { ANTHROPIC_API_KEY: "synthetic-unselected-anthropic", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");
@@ -218,11 +218,20 @@ for (const manifest of [false, true]) test(`LongCat ${manifest ? "manifest" : "n
   assert.equal(f.sent.length, 1);
 });
 
-for (const nativePrefix of ["clawrouter-longcat", "meituan-longcat"]) test(`LongCat routing alias ${nativePrefix} retains the canonical provider grant and native model`, async t => {
-  const f = await fixture(t), body = { model: models[0], messages: [{ role: "user", content: "synthetic-input" }] };
-  const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
+for (const prefix of ["longcat", "meituan-longcat"]) test(`LongCat model prefix ${prefix} retains the canonical provider grant and frozen native model`, async t => {
+  const f = await fixture(t), body = { model: "LongCat-2.0", messages: [{ role: "user", content: "synthetic-input" }] };
+  const r = await f.call({ ...body, model: `${prefix}/${body.model}` }, { unified: true }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
   assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
   assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-longcat"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+});
+
+test("LongCat client aliases do not invent native provider URL aliases", async t => {
+  const f = await fixture(t);
+  for (const nativePrefix of ["clawrouter-longcat", "meituan-longcat"]) {
+    const r = await f.call({ model: "LongCat-2.0", messages: [] }, { nativePrefix });
+    assert.equal(r.status, 404); assert.equal((await r.json()).error.code, "provider_not_found");
+  }
+  assert.equal(f.sent.length, 0);
 });
 
 for (const manifest of [false, true]) for (const type of ["enabled", "disabled"]) test(`LongCat frozen 2.0 ${manifest ? "manifest" : "native"} preserves native thinking ${type}`, async t => {

@@ -38,7 +38,7 @@ const contracts = [
   ["opencode", "OPENCODE_API_KEY", "https://opencode.ai/inference/openai/v1/chat/completions", "glm-5.3"],
   ["opencode-go", "OPENCODE_GO_API_KEY", "https://opencode.ai/inference/go/openai/v1/chat/completions", "glm-5.3"],
 ];
-const aliases = { gmi: ["gmi-cloud", "gmicloud"], novita: ["novita-ai", "novitaai"] };
+const aliases = { gmi: ["gmi-cloud", "gmicloud"], novita: ["novita-ai", "novitaai"], longcat: ["meituan-longcat"] };
 const { providers } = compileProviderSnapshot(contracts.map(([id]) =>
   parse(readFileSync(`providers/${id}.provider.yaml`, "utf8"))));
 
