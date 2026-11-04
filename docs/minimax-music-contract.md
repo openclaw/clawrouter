@@ -7,21 +7,29 @@ No automatic migration to Music 3 or host-local implementation.
 
 ## Availability and original product
 
-The current primary API notice closes paid Music/Lyrics APIs to new users from
-2026-08-20; existing paying users may continue. It also announces discontinuation
-of the free variants without a date. The codec records those dispositions;
-compatibility fixtures do not establish a live entitlement or continued free
-availability. Catalog activation must respect those qualifications.
+Checked 2026-11-05: the [global guide](https://platform.minimax.io/docs/guides/music-generation)
+closes paid Music/Lyrics APIs to new users from 2026-08-20; existing paying users
+may continue. It announces free-variant discontinuation without a separate date.
+The [CN guide](https://platform.minimax.cn/docs/guides/music-generation) instead
+says free music APIs have stopped. `miniMaxMusicAvailability` retains the earlier
+aggregate disposition; it cannot express this regional difference and is not a
+regional availability or entitlement verdict. A separate regional metadata
+contract is required before catalog activation. Compatibility fixtures prove
+neither continued free service nor account eligibility.
 
-Select the original global `https://api.minimax.io` or CN
-`https://api.minimaxi.com` grant. Native API Bearer, plan keys and E09 Anthropic
-OAuth resources are not interchangeable by inference. No login, account changes,
-credential fallback or client upstream-secret forwarding occurs here.
+The frozen codec retains global `https://api.minimax.io` and legacy CN
+`https://api.minimaxi.com`. The [current CN API contract](https://platform.minimax.cn/docs/api-reference/music-generation)
+uses `https://api.minimax.cn`; this change does not replace the legacy origin or
+qualify an alias or credential interchange. CN activation still requires its own
+origin and original-grant qualification. Native API Bearer, plan keys and E09
+Anthropic OAuth resources are not interchangeable by inference. No login, account
+changes, credential fallback or client upstream-secret forwarding occurs here.
 
 ## Request and concrete client correction
 
 `worker/minimax-music.ts` exports `miniMaxMusicModels`,
 `miniMaxMusicAvailability`, `prepareMiniMaxMusic(region, body)`,
+`inspectMiniMaxCoverBase64(value): Readonly<{ decodedBytes: number }>`,
 `observeMiniMaxMusic(frames, request, complete)` and
 `readMiniMaxMusic(response, request, signal)`.
 
@@ -44,6 +52,16 @@ Inline reference encoding is bounded to 8MiB, below the primary 50MB limit.
 Encoding checks do not establish playable audio or the required 6-second to
 6-minute source duration. Actual client/runtime asset qualification must enforce
 that duration and media validity before cover activation.
+
+Cover preparation calls `inspectMiniMaxCoverBase64` directly. It scans the
+original string with scalar state and returns only an immutable decoded-byte
+count: nonempty standard alphabet, complete padding, zero unused tail bits and
+at most 8MiB decoded. It does not decode, normalize, re-encode or retain the
+input. Existing preparation still returns the caller's original body; this is
+not a new body-ownership or lifetime guarantee. A bounded test-only copy of the
+old roundtrip checks canonical tails and the exact size boundary. Encoding
+equivalence is not an audio MIME, duration, playability, heap measurement or
+whole-request capacity claim. Cover dispatch and asset authority remain closed.
 
 ## Complete stream and accounting
 
