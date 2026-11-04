@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow the opt-in Fusion benchmark to use explicit native OpenAI/Anthropic credentials, report token-based tariff estimates, and carry uncertain prior spend within its existing $5 cap.
+
 
 
 - Accept explicitly selected local provider packages with `compile-providers --plugin`, while preserving the default bundled manifests and snapshot output.

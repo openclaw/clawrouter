@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
+import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 
 export const datasetCommit = '9ee07bd481feebf959a6b59d61ea57bdcf30964d';
 export const domains = ['logical_deduction_seven_objects', 'multistep_arithmetic_two', 'tracking_shuffled_objects_seven_objects'];
@@ -61,13 +62,36 @@ export async function writeCheckpoint(out, runs, provenance) {
   }
 }
 
-export async function runCase(item, configuration, engine, invoke) {
+export function prepareCase(item, configuration, engine) {
   const config = engine.normalizeFusionConfig({ enabled: true, strategy: configuration.strategy,
     aggregatorModel: configuration.model, adviserModels: [models.strong, models.critic],
     adviserTimeoutMs: 120000, maxOutputTokens: limit, maxProposalChars: 6000 });
   const original = { model: configuration.model, stream: false, max_tokens: limit,
     messages: [{ role: 'system', content: instructions }, { role: 'user', content: item.input }],
     response_format: { type: 'json_object' } };
+  return { config, original };
+}
+
+export function plannedCost(cases, configurations, engine, pins, transport) {
+  let total = 0;
+  const reserve = (model, body) => {
+    const request = transport === 'native' ? nativeRequest(model, body, {}).body : { ...body, model, reasoning: { effort: 'medium' }, provider: { allow_fallbacks: false, require_parameters: true } };
+    total += priceBound(request, pins[model].price);
+  };
+  for (const item of cases) for (const configuration of configurations) {
+    const { config, original } = prepareCase(item, configuration, engine);
+    const proposals = [];
+    if (config.strategy === 'ensemble') config.adviserModels.forEach((model, index) => {
+      reserve(model, engine.buildAdviserBody(original, model, config, index));
+      proposals.push({ model, content: '\u0000'.repeat(config.maxProposalChars) });
+    });
+    reserve(config.aggregatorModel, engine.buildAggregatorBody(original, config, proposals));
+  }
+  return total;
+}
+
+export async function runCase(item, configuration, engine, invoke) {
+  const { config, original } = prepareCase(item, configuration, engine);
   const started = performance.now();
   const calls = [];
   const call = async (model, body, timeout, _index, signal) => {
@@ -89,7 +113,11 @@ export async function runCase(item, configuration, engine, invoke) {
 }
 
 export async function main(out) {
-  if (!out || !process.env.OPENROUTER_API_KEY) throw new Error('output and OPENROUTER_API_KEY required');
+  const transport = process.env.FUSION_BENCHMARK_TRANSPORT ?? 'openrouter';
+  if (!['openrouter', 'native'].includes(transport)) throw new Error('invalid transport');
+  if (!out || (transport === 'openrouter' && !process.env.OPENROUTER_API_KEY)) throw new Error('output and selected credentials required');
+  const priorReservationMicros = Number(process.env.FUSION_BENCHMARK_PRIOR_RESERVATION_MICROS ?? '0');
+  if (!Number.isSafeInteger(priorReservationMicros) || priorReservationMicros < 0 || priorReservationMicros > 5000000) throw new Error('invalid prior reservation');
   const sourceSha = process.env.GITHUB_SHA;
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact source SHA required');
   await mkdir(out, { recursive: false, mode: 0o700 });
@@ -99,15 +127,19 @@ export async function main(out) {
     { name: 'strong-single', strategy: 'single', model: models.strong, effort: 'medium', maxOutputTokens: limit },
     { name: 'claude-single', strategy: 'single', model: models.critic, effort: 'medium', maxOutputTokens: limit },
     { name: 'panel', strategy: 'ensemble', model: models.cheap, advisers: [models.strong, models.critic], effort: 'medium', maxOutputTokens: limit },
-  ];
-  const catalogResponse = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(30000) });
-  if (!catalogResponse.ok) throw new Error('model catalog unavailable');
-  const catalog = (await catalogResponse.json()).data;
-  const pins = Object.fromEntries(Object.values(models).map(id => {
+  ].map(configuration => ({ ...configuration, transport }));
+  let pins;
+  if (transport === 'native') pins = await nativePins(process.env);
+  else {
+    const catalogResponse = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(30000) });
+    if (!catalogResponse.ok) throw new Error('model catalog unavailable');
+    const catalog = (await catalogResponse.json()).data;
+    pins = Object.fromEntries(Object.values(models).map(id => {
     const row = catalog.find(r => r.id === id);
     if (!row || !row.reasoning?.supported_efforts?.includes('medium')) throw new Error('configured model unavailable');
     return [id, { id, canonicalSlug: row.canonical_slug, price: parsePrice(row) }];
-  }));
+    }));
+  }
   const cases = [], datasetHashes = {};
   for (const domain of domains) {
     const response = await fetch(`https://raw.githubusercontent.com/suzgunmirac/BIG-Bench-Hard/${datasetCommit}/bbh/${domain}.json`, { signal: AbortSignal.timeout(30000) });
@@ -116,14 +148,11 @@ export async function main(out) {
     datasetHashes[domain] = digest(text);
     cases.push(...selectCases(JSON.parse(text).examples, domain));
   }
-  const planned = cases.reduce((sum, item) => {
-    const inputBytes = Buffer.byteLength(item.input) + 2048;
-    return sum + [models.cheap, models.strong, models.critic, models.strong, models.critic, models.cheap]
-      .reduce((n, model, index) => n + priceBound({ padding: ' '.repeat(inputBytes + (index === 5 ? 72000 : 0)) }, pins[model].price), 0);
-  }, 0);
+  const planned = plannedCost(cases, configurations, engine, pins, transport);
   const budgetMicros = 5000000;
-  if (planned > budgetMicros) throw new Error('whole-run conservative cost bound exceeds $5');
-  let reservedMicros = 0, actualMicros = 0, blocked = false;
+  await writeFile(resolve(out, 'preflight.json'), JSON.stringify({ sourceSha, transport, plannedUpperBoundMicros: planned, priorReservationMicros, budgetMicros }) + '\n', { mode: 0o600, flag: 'wx' });
+  if (planned + priorReservationMicros > budgetMicros) throw new Error('whole-run conservative cost bound exceeds $5');
+  let reservedMicros = priorReservationMicros, actualMicros = 0, blocked = false;
   const attempts = [], records = [], observations = [];
   const checkpoint = (complete = false) => writeCheckpoint(out,
     { version: 1, evaluationId: `fusion-${sourceSha.slice(0, 12)}`,
@@ -138,8 +167,8 @@ export async function main(out) {
   };
   const invoke = async (model, body, _timeout, callerSignal) => {
     if (blocked) throw new Error('benchmark stopped');
-    const request = { ...body, model, reasoning: { effort: 'medium' },
-      provider: { allow_fallbacks: false, require_parameters: true } };
+    const native = transport === 'native' ? nativeRequest(model, body, process.env) : null;
+    const request = native?.body ?? { ...body, model, reasoning: { effort: 'medium' }, provider: { allow_fallbacks: false, require_parameters: true } };
     const reservation = priceBound(request, pins[model].price);
     if (reservedMicros + reservation > budgetMicros) { blocked = true; throw new Error('spend guard'); }
     reservedMicros += reservation;
@@ -147,26 +176,31 @@ export async function main(out) {
     attempts.push(attempt);
     await persist();
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST', headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'content-type': 'application/json' },
+      const response = await fetch(native?.url ?? 'https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST', headers: native?.headers ?? { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'content-type': 'application/json' },
         body: JSON.stringify(request), signal: callerSignal ? AbortSignal.any([callerSignal, AbortSignal.timeout(90000)]) : AbortSignal.timeout(90000),
       });
-      const result = await response.json();
-      const cost = result.usage?.cost;
+      let result = await response.json();
       attempt.httpStatus = response.status;
+      const normalized = native && response.ok ? nativeResult(model, result) : null;
+      const cost = normalized ? normalized.costMicros / 1e6 : result.usage?.cost;
       if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) throw new Error('unknown cost');
-      attempt.costMicros = Math.ceil(cost * 1e6);
+      if (normalized) result = normalized.result;
+      attempt.costMicros = normalized?.costMicros ?? Math.ceil(cost * 1e6);
       actualMicros += attempt.costMicros;
       if (attempt.costMicros > reservation) { blocked = true; throw new Error('cost exceeded bound'); }
       await persist();
       return { response: Response.json(result, { status: response.status }), costMicros: attempt.costMicros,
-        served: { model: result.model ?? null, provider: result.provider ?? null, finishReason: result.choices?.[0]?.finish_reason ?? null } };
-    } catch {
+        served: { model: result.model ?? null, provider: normalized?.provider ?? result.provider ?? null, finishReason: result.choices?.[0]?.finish_reason ?? null } };
+    } catch (error) {
       blocked = true;
+      attempt.failureCode = /^native_[a-z0-9_]+$/.test(error?.message ?? '') ? error.message : 'upstream_measurement_incomplete';
+      await persist();
       throw new Error('upstream measurement incomplete');
     }
   };
-  const metadata = { sourceSha, datasetCommit, datasetHashes, pins, configurations,
+  const metadata = { sourceSha, datasetCommit, datasetHashes, pins, configurations, transport, priorReservationMicros,
+    costSource: transport === 'native' ? 'published-tariff-estimate-from-native-usage' : 'provider-reported-cost',
     selection: 'sha256(fusion-pilot-v1:domain:index), first 8 per domain',
     graderRevision: 'json-string-exact-v1', budgetMicros, plannedUpperBoundMicros: planned,
     scope: 'fusion composition; excludes gateway auth, routing, production concurrency and tool use',
@@ -192,5 +226,8 @@ export async function main(out) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main(process.argv[2]).catch(() => { console.error('Fusion benchmark incomplete. No prompt, response or credential is printed.'); process.exitCode = 1; });
+  main(process.argv[2]).catch(error => {
+    const code = /^native_[a-z0-9_]+$/.test(error?.message ?? '') ? error.message : 'preflight_or_runtime_error';
+    console.error(`Fusion benchmark incomplete: ${code}. No prompt, response or credential is printed.`); process.exitCode = 1;
+  });
 }
