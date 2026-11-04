@@ -10,6 +10,7 @@ import { validateSpeechRequest } from "./speech-request.ts";
 import { prepareNativeElevenLabsSpeech } from "./native-elevenlabs-speech.ts";
 import { prepareNativeImage } from "./native-images.ts";
 import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transcription.ts";
+import { prepareNativeOpenRouterMusic } from "./native-openrouter-music.ts";
 import { prepareNativeDeepSeekSearch } from "./native-deepseek-search.ts";
 import { prepareNativeGoogleMusic } from "./native-google-music.ts";
 import { prepareNativeGoogleSpeech } from "./native-google-speech.ts";
@@ -54,7 +55,8 @@ export function validateSelectedInput(selection: ProxySelection): void {
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
-    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
+    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection)
+    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
     ?? prepareNativeElevenLabsSpeech(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))

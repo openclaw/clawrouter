@@ -58,6 +58,7 @@ export interface AccountingFacts {
   // image/audio generation, including generic GenerateContent and soft budgets.
   googleImage?: boolean;
   googleAudio?: boolean;
+  nativeMusic?: boolean;
 }
 
 export interface AccountingOutcome {
@@ -84,7 +85,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
-  if ((facts.googleImage || facts.googleAudio || requestFormat === "minimax.speech") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+  if ((facts.googleImage || facts.googleAudio || facts.nativeMusic || requestFormat === "minimax.speech") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: billable ? reservation.reservedMicros : 0,
     cost_basis: billable ? "unpriced_usage" : "none", input_tokens: null, output_tokens: null, total_tokens: null,
     pricing_ref: null, pricing_effective_at: null,
@@ -162,6 +163,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const facts: AccountingFacts = {
     googleImage: googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
     googleAudio: googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
+    nativeMusic: selection.capability === "music.generate" && selection.endpoint.request_format === "openai.chat_completions",
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
     hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
@@ -235,6 +237,9 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   if (endpoint.request_format === "minimax.speech" && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  // A native music envelope carried over Chat SSE has no qualified token tariff.
+  if (capability === "music.generate" && endpoint.request_format === "openai.chat_completions")
+    return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   // Unknown Search fees stay closed. Only the frozen, route-qualified native
   // tariff can cover this model-less operation; Chat prices never substitute.
   if (endpoint.request_format === "deepseek.search") {
