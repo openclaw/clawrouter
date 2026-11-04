@@ -10,6 +10,7 @@ import { validateSpeechRequest } from "./speech-request.ts";
 import { prepareNativeElevenLabsSpeech } from "./native-elevenlabs-speech.ts";
 import { prepareNativeImage } from "./native-images.ts";
 import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transcription.ts";
+import { prepareNativeOpenRouterMusic } from "./native-openrouter-music.ts";
 import { prepareNativeDeepSeekSearch } from "./native-deepseek-search.ts";
 import { prepareNativeGoogleMusic } from "./native-google-music.ts";
 import { prepareNativeGoogleSpeech } from "./native-google-speech.ts";
@@ -54,7 +55,8 @@ export function validateSelectedInput(selection: ProxySelection): void {
   selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
-    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
+    ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection)
+    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection)
     ?? prepareNativeElevenLabsSpeech(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))
@@ -241,12 +243,18 @@ export function nativeParams(endpoint: CompiledEndpoint, path: string): Record<s
 // Several native protocols can share one model-qualified path. A registered
 // model's declared capability chooses the operation, never YAML order or a
 // guessed body shape. Stateful controls retain their original-owner resolver.
-export function nativeModelEndpoint(provider: CompiledProvider, matching: CompiledEndpoint[], path: string, method: string): CompiledEndpoint | undefined {
+export function nativeModelEndpoint(provider: CompiledProvider, matching: CompiledEndpoint[], path: string, method: string, body?: unknown): CompiledEndpoint | undefined {
   const candidates = matching.filter(endpoint => endpoint.native_proxy && endpoint.methods.includes(method));
-  if (candidates.length < 2 || candidates.some(endpoint => endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket
-    || !endpoint.path_params.some(name => name === "model" || name === "deployment"))) return;
+  if (candidates.length < 2 || candidates.some(endpoint => endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.inputProfile)) return;
+  const pathModel = candidates.every(endpoint => endpoint.path_params.some(name => name === "model" || name === "deployment"));
+  // Same-wire Chat operations may declare distinct capabilities for an exact
+  // registered body model. This is an identity selector, never content inference.
+  const bodyModel = !pathModel && method === "POST" && candidates.every(endpoint => !endpoint.path_params.length
+    && endpoint.request_format === "openai.chat_completions" && endpoint.response_format === "openai.chat_completions")
+    && body !== null && typeof body === "object" && !Array.isArray(body) && "model" in body && typeof body.model === "string" ? body.model : null;
+  if (!pathModel && !bodyModel) return;
   const qualified = candidates.filter(endpoint => {
-    const params = nativeParams(endpoint, path), value = params.model ?? params.deployment;
+    const params = nativeParams(endpoint, path), value = bodyModel ?? params.model ?? params.deployment;
     const model = provider.models.find(model => model.upstream === value);
     // A router alias is not an upstream model assertion on an overlapping native
     // path. Manifest routes continue to resolve their explicit router selector.
