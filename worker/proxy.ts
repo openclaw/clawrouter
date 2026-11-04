@@ -1,3 +1,5 @@
+import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
+import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
@@ -141,6 +143,7 @@ interface PreparedUpstream {
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
   publicCatalog?: Awaited<ReturnType<typeof preparePublicDiscoveryOwner>>;
+  revalidateDelivery?: (signal: AbortSignal) => Promise<void>;
 }
 
 interface ReservedProxyBudget {
@@ -678,8 +681,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     if (selection.nativeResponse) {
       const validated = await operation.wait(selection.nativeResponse.read(response, signal), "upstream", discardNative);
+      try { if (prepared.revalidateDelivery) await operation.wait(prepared.revalidateDelivery(signal), "publication"); }
+      catch (error) { discardNative(validated); throw error; }
       response = validated.response;
-      nativeUsage = validated.usage;
+      nativeUsage = "usage" in validated ? validated.usage : undefined;
     }
     upstreamMs = performance.now() - upstreamStart;
     if (soft) {
@@ -898,6 +903,9 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       if (!converse) selection.nativeResponse = prepareNativeBedrockEmbedding(selection, { origin: url.origin });
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
+    const chatCheck = veniceChat(selection)
+      ? await prepareVeniceChatAuthority(env, auth, selection, upstream, url, headers) : undefined;
+    if (chatCheck) selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
     const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
       ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
     const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
@@ -918,7 +926,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

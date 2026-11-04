@@ -121,11 +121,15 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
         assert.equal((await unpriced.json()).error.code, "pricing_required");
       }
       assert.equal(upstream.mock.callCount(), 0, "catalog and denied requests make zero upstream calls");
-      const terminal = { id: "chat_fixture", object: "chat.completion.chunk", choices: [], usage: tokens };
-      const unary = { id: "chat_fixture", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "synthetic-output", tool_calls: messages[0].tool_calls, reasoning_content: "synthetic-reasoning" }, finish_reason: "stop" }], usage: tokens };
-      const errorWire = sse({ error: { message: "synthetic-rejection", code: "server_error" }, ...(outcome === "failed-usage" ? { usage: tokens } : {}) });
+      // Venice confirms the selected identity before releasing JSON or each
+      // SSE frame. The generic fixture must supply its actual native model.
+      const modelBinding = provider.id === "venice" ? { model: upstreamModel } : {};
+      const terminal = { id: "chat_fixture", object: "chat.completion.chunk", choices: [], usage: tokens, ...modelBinding };
+      const unary = { id: "chat_fixture", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "synthetic-output", tool_calls: messages[0].tool_calls, reasoning_content: "synthetic-reasoning" }, finish_reason: "stop" }], usage: tokens, ...modelBinding };
+      const errorWire = sse({ ...modelBinding, error: { message: "synthetic-rejection", code: "server_error" }, ...(outcome === "failed-usage" ? { usage: tokens } : {}) });
+      const contentWire = sse({ ...delta, ...modelBinding });
       const wire = outcome === "embedded-error" ? errorWire
-        : sse(delta) + (outcome === "cancel" ? "" : (outcome === "usage-absent" ? "" : sse(terminal)) + (["late-error", "failed-usage"].includes(outcome) ? errorWire : "data: [DONE]\n\n"));
+        : contentWire + (outcome === "cancel" ? "" : (outcome === "usage-absent" ? "" : sse(terminal)) + (["late-error", "failed-usage"].includes(outcome) ? errorWire : "data: [DONE]\n\n"));
       let canceled = false, upstreamError;
       upstream.mock.mockImplementation(async (target, init) => {
         try {
@@ -151,7 +155,18 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
       });
       const response = await call("paid", selectedModel, { stream: outcome !== "unary", ...(outcome === "unary" ? {} : { stream_options: { include_usage: true } }) });
       assert.ifError(upstreamError);
-      if (outcome === "cancel") {
+      const gatedFailure = provider.id === "venice" && ["embedded-error", "late-error", "failed-usage"].includes(outcome);
+      if (gatedFailure && outcome === "embedded-error") {
+        assert.equal(response.status, 502);
+        const rejected = await response.text(); assert.doesNotMatch(rejected, /synthetic-rejection|synthetic-output/);
+      } else if (gatedFailure) {
+        assert.equal(response.status, 200);
+        const reader = response.body.getReader(); let delivered = "", failed = false;
+        try { for (;;) { const next = await reader.read(); if (next.done) break; delivered += new TextDecoder().decode(next.value); } }
+        catch { failed = true; } finally { reader.releaseLock(); }
+        assert.equal(failed, true); assert.equal(delivered, contentWire + sse(terminal));
+        assert.doesNotMatch(delivered, /synthetic-rejection/);
+      } else if (outcome === "cancel") {
         assert.equal(response.status, 200);
         const reader = response.body.getReader();
         assert.equal((await reader.read()).done, false);
@@ -176,13 +191,15 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
       assert.equal(event.status, ["embedded-error", "late-error", "failed-usage"].includes(outcome) ? "provider_error" : outcome === "cancel" ? "client_error" : "success");
       // Only complete terminal evidence certifies token usage. Missing final
       // counters retain the fixed reservation and must not fabricate zero usage.
-      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], ["unary", "stream", "failed-usage"].includes(outcome) ? [100, 20, 120] : [null, null, null]);
-      assert.equal(event.cost_basis, outcome === "embedded-error" ? "none" : "policy_fixed");
-      assert.equal(event.actual_cost_micros, outcome === "embedded-error" ? 0 : 7);
+      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], !gatedFailure && ["unary", "stream", "failed-usage"].includes(outcome) ? [100, 20, 120] : [null, null, null]);
+      // Withheld Venice error frames cannot certify free dispatched work.
+      const freeRejection = outcome === "embedded-error" && !gatedFailure;
+      assert.equal(event.cost_basis, freeRejection ? "none" : "policy_fixed");
+      assert.equal(event.actual_cost_micros, freeRejection ? 0 : 7);
       const reservations = f.env.BUDGET_LEDGER.get("fixture:paid").reservations();
       assert.equal(reservations.length, 1);
       assert.equal(reservations[0].settled, 1);
-      assert.equal(reservations[0].reserved_micros, outcome === "embedded-error" ? 0 : 7);
+      assert.equal(reservations[0].reserved_micros, freeRejection ? 0 : 7);
       assert.doesNotMatch(JSON.stringify(event), /synthetic-reasoning|synthetic-tool-result|synthetic-output|synthetic-upstream-key/);
     });
   });
