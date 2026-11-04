@@ -353,6 +353,8 @@
 - Bind Venice Chat delivery to the explicitly selected model, reject caller fallback controls, and gate JSON or individual SSE frames under original credentials with conservative settlement.
 - Add bounded public Venice text catalog decoding with exact original-grant filtering, independent native metadata and conservative deprecation/currency observations.
 - Qualify Venice public text-catalog declarations with credential-free upstream requests, private original-grant filtering and separate unknown USD/DIEM observations before activation.
+- Providers: qualify nineteen frozen Venice Chat identities, independent limits and native effort menus; cover selected-grant tools, reasoning, vision and stream cancellation through real Worker fixtures.
+- Exercise the actual configured Venice SDK and registered compatibility hooks through Worker/SQLite, retaining strict selected-model delivery, rejected fallback controls, original grants and conservative cancellation/error settlement.
 - Add bounded Featherless native catalog pages with original-key requests, exact grant filtering and explicit pagination, preserving unknown plan eligibility and prices.
 - Use Worker-supported manual redirects for native catalog requests while rejecting every redirect response, preserving original credentials and public-request isolation.
 - Add an isolated complete Featherless catalog scan with original-key authorization per page, atomic bounds and final current-policy filtering; shared route and capacity ownership remain separate.
