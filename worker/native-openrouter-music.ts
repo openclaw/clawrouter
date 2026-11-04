@@ -110,7 +110,6 @@ async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterM
     if (data !== "[DONE]") rejectErrorField(data);
     inspection.accept(data);
   }, true);
-  let eof = false;
   const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
   try {
@@ -122,7 +121,7 @@ async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterM
       // Never lend quarantine to BYOB: read() transfers the supplied buffer.
       // No minimum fill: a small native DONE must complete on an open socket.
       const part = await input.read(() => reader.read(window)); signal.throwIfAborted();
-      if (part.done) { eof = true; invalid(); } // Only native [DONE], never socket EOF, completes music.
+      if (part.done) invalid(); // Only native [DONE], never socket EOF, completes music.
       if (!(part.value instanceof Uint8Array) || !part.value.byteLength || part.value.byteLength > windowLimit
         || !(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > windowLimit
         || part.value.byteLength > wireLimit - size) invalid();
@@ -147,7 +146,9 @@ async function quarantine(body: ReadableStream<Uint8Array>, context: OpenRouterM
     }
   } finally {
     signal.removeEventListener("abort", abort);
-    await input.retire(eof ? "eof" : "cancel", signal.reason);
+    // Preserve the codec's cleanup call on EOF rejection too. Native DONE
+    // requires cancellation of the open source, not an EOF retirement claim.
+    await input.retire("cancel", signal.reason);
   }
 }
 

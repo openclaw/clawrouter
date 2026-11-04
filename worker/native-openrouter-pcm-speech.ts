@@ -45,6 +45,22 @@ export function prepareNativeOpenRouterPcmSpeech(selection: ProxySelection): Nat
       const headers = new Headers(response.headers);
       // Preserve Content-Length; identity must not exempt the codec's EOF check.
       headers.delete("content-encoding");
+      // workerd's pipe completion can precede source cancellation cleanup.
+      // Retain the original reader independently; this forwarding body adds no
+      // copies or read-ahead, and cannot publish after retirement begins.
+      const inputReader = response.body.getReader(), input = inputRetirement(inputReader);
+      let inputDone = false, inputStopped = false;
+      const inputBody = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await input.read(() => inputReader.read());
+            if (inputStopped) return;
+            if (next.done) { inputDone = true; controller.close(); }
+            else controller.enqueue(next.value);
+          } catch (error) { if (!inputStopped) controller.error(error); }
+        },
+        cancel(reason) { inputStopped = true; return input.retire("cancel", reason); },
+      }, { highWaterMark: 0 });
       let reads = 0, bytes = 0;
       const transform = new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, controller) {
@@ -57,7 +73,7 @@ export function prepareNativeOpenRouterPcmSpeech(selection: ProxySelection): Nat
         // Bound every empty/data read and EOF. Samples may span HTTP chunks.
         flush() { if (++reads > readLimit || bytes % 2 !== 0) invalid(); },
       }, { highWaterMark: 1 }, { highWaterMark: 0 });
-      const pipe = response.body.pipeTo(transform.writable);
+      const pipe = inputBody.pipeTo(transform.writable);
       void pipe.catch(() => undefined);
       const bounded = transform.readable;
       try {
@@ -75,7 +91,11 @@ export function prepareNativeOpenRouterPcmSpeech(selection: ProxySelection): Nat
         return { response: new Response(audio, { status: 200, headers: outputHeaders }),
           usage: { tokens: null, outcome: "success" as const } };
       } catch { invalid(); }
-      finally { await pipe.catch(() => undefined); }
+      finally {
+        inputStopped = true;
+        const retired = input.retire(inputDone ? "eof" : "cancel", signal.reason);
+        await Promise.all([retired, pipe.catch(() => undefined)]);
+      }
     },
   };
 }

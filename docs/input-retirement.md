@@ -37,10 +37,13 @@ prices, deadlines, replay policy or the 96 MiB pool.
 Azure, ElevenLabs and Gradium speech, OpenRouter MP3/PCM, xAI speech, Bedrock
 ConverseStream and Groq/Mistral audio join the pending read and first cancellation
 before returning or rejecting. Header rejection uses the same retirement rule.
-OpenRouter and xAI counting adapters retain their original `pipeTo` promise:
-the codec cancels the transformed reader first, then the adapter joins the pipe.
-Joining before cancellation could deadlock a source that requires cancellation
-to retire.
+OpenRouter and xAI counting adapters retain both their original reader and the
+`pipeTo` promise. The actual workerd path can settle a pipe while its source's
+cancellation callback still owns cleanup. A forwarding body with zero read-ahead
+preserves the original reader's retirement promise separately, without copying
+chunks. The codec cancels the transformed reader first; the adapter starts source
+retirement before joining it and the pipe. Joining before cancellation could
+deadlock a source that requires cancellation to retire.
 
 OpenRouter music keeps its BYOB window and quarantine bounds. Native `[DONE]`
 cancels and joins the still-open source before replay becomes available. The
