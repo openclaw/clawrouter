@@ -63,33 +63,37 @@ The separate Sonnet image case uses its model-specific primary contract.
 GET discovery is bodyless, credential-bound and zero-inference-cost. Fixtures
 exercise filtered and empty lists, strict envelope/ID errors, denied upstreams,
 revocation and rejected query remapping. Empty native inventory does not revive
-static fallback cards. Metadata and inference both retain the original canonical
-provider even through existing `clawrouter-gmi`, `gmi-cloud` and `gmicloud`
-routing aliases. Model IDs preserve case and are never provider-product aliases.
+static fallback cards. Native metadata and inference use the canonical `/v1/native/gmi` route.
+Unified model prefixes `gmi/`, `gmi-cloud/` and `gmicloud/` retain the original
+provider identity; undeclared native URL aliases remain closed. Model IDs
+preserve case and are never provider-product aliases.
 
 The synthetic seven-micro fixed policy charge is separate from unknown upstream
 prices. A streamed receipt is used only when observed. No static zero-price
 fallback or limit is assigned to configured passthrough models.
 
-## Owner handoffs and proof boundaries
+## Integration proof and remaining boundaries
 
-- Source1: the primary multi-organization contract names `X-Organization-ID`.
-  A future selected-account organization binding must come from the original
-  server-controlled grant/transport, not a caller-supplied header. This manifest
-  does not forward that header. Frozen custom/dedicated bases also need the
-  existing approved destination/key-binding runtime; no inferred service URL or
-  provisioning. Keyed metadata must not fail over to anonymous data or another
-  grant to manufacture a catalog.
-- Source2: qualify the actual frozen `openai/` tool-reasoning compatibility
-  wrapper and configured catalog augmentation. The eight literal cards do not
-  replace strict live discovery or establish account access. Preserve native
-  replay; no source4 client or model-name heuristic is added.
-- Source6: serialized snapshot integration, final exact-head Worker/native-client
-  proof and any separately authorized keyed consumer. Source4 holds no snapshot
-  lease. The compiler/runtime format foundation is already landed; shared code
-  is unchanged.
+The optional organization binding is implemented by
+[`gmi-organization-binding.ts`](../worker/gmi-organization-binding.ts). Only the
+original materialized server grant can supply `X-Organization-ID`; an absent
+account ID remains ordinary Bearer authentication. Caller/static/environment
+organization values cannot substitute for that owner. Authority checks after
+admission waits and catalog reads preserve current owner and policy binding.
 
-Local execution remains code-only under native dependency qualification. Hosted
-checks must distinguish all-manifest compilation from Worker tests skipped by a
-snapshot gate. No paid inference, login, organization change, credential/host
-provisioning or manual deployment occurred.
+`test/openclaw-gmi.test.mjs` pins the actual public OpenClaw implementation at
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. Its CI fixture imports the registered
+GMI plugin, both stream wrappers, configured catalog augmentation, strict live
+catalog builder and replay sanitizer. The public checkout uses its own frozen
+installation in ephemeral CI. Requests pass through the real Worker and SQLite
+with distinct synthetic original credentials, both optional-organization and
+ordinary-Bearer grants, unknown-price denial, terminal usage, errors and caller
+cancellation. These are deterministic fixtures; passing execution is recorded
+in the PR's exact-head proof, not implied by authored test cases.
+
+This configured native client proof is separate from a ClawRouter catalog-driven
+client resolver or manifest client selection. The Worker fixtures cover native
+and manifest transport. No inference about live account access, current vendor
+inventory, custom/dedicated base qualification, Messages/Responses or unknown
+model pricing follows from either suite. No paid inference, login, organization
+change, credential/host provisioning or manual deployment is part of this PR.
