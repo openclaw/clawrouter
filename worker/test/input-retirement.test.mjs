@@ -100,3 +100,12 @@ test("failed source retirement cannot certify the chain or release its charge", 
   // Fixture-owned charge cleanup does not certify the failed production chain.
   lease.release();
 });
+
+test("synchronous cancellation inside read start still joins that actual read", async () => {
+  const read = deferred(); let unlocked = 0, retiring;
+  const input = inputRetirement({ cancel: async () => undefined, releaseLock() { unlocked++; } });
+  const pending = input.read(() => { retiring = input.retire("cancel"); return read.promise; });
+  await turn(); assert.equal(unlocked, 0);
+  read.resolve({ done: true }); await pending; await retiring;
+  assert.equal(unlocked, 1);
+});

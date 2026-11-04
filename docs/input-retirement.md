@@ -5,7 +5,8 @@ prove that a response reader has retired. `inputRetirement(reader, sourceRetired
 tracks one actual read at a time without adding buffers or wrapping the stream.
 It therefore preserves the caller's default-reader or BYOB ownership rules.
 
-- `read(start)` owns the returned read promise. Concurrent and retired reads fail
+- `read(start)` reserves ownership before invoking `start`, including synchronous
+  cancellation from a source pull. Concurrent and retired reads fail
   before `start` runs.
 - `retire("cancel", reason)` captures the first cancellation promise before calling
   cancellation code. Repeated or reentrant calls return the same promise.

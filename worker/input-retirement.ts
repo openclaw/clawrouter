@@ -24,9 +24,10 @@ export function inputRetirement(
     retired,
     read<T>(start: () => Promise<T>): Promise<T> {
       if (stopped || pending) return Promise.reject(new Error("input reader is retired or already reading"));
-      let read: Promise<T>;
-      try { read = Promise.resolve(start()); } catch (error) { return Promise.reject(error); }
-      pending = read;
+      let resolveRead!: (value: T | PromiseLike<T>) => void, rejectRead!: (reason: unknown) => void;
+      const read = new Promise<T>((yes, no) => { resolveRead = yes; rejectRead = no; });
+      pending = read; // A source pull can synchronously trigger cancellation.
+      try { resolveRead(start()); } catch (error) { rejectRead(error); }
       return read.finally(() => { if (pending === read) pending = undefined; });
     },
     retire(kind, reason) {
