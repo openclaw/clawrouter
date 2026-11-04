@@ -303,12 +303,25 @@ export function createJsonBodyParser() {
       case "nullValue": case "trueValue": case "falseValue": attach(token.value); break;
     }
   }
-  const consume = createJsonTokenizer(accept);
+  let consume: ReturnType<typeof createJsonTokenizer> | undefined = createJsonTokenizer(accept);
+  const discard = () => { consume = undefined; root = undefined; scalar = ""; stack.length = 0; };
   return {
     push(text: string): void {
+      if (!consume) throw new TypeError("JSON parser is retired");
       for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
     },
-    end(): unknown { consume.end(); return root; },
+    end(): unknown {
+      if (!consume) throw new TypeError("JSON parser is retired");
+      consume.end(); return root;
+    },
+    // Move the completed graph to one caller and drop all parser/tokenizer
+    // references. Existing end() callers retain their original behavior.
+    take(): unknown {
+      if (!consume) throw new TypeError("JSON parser is retired");
+      try { consume.end(); return root; }
+      finally { discard(); }
+    },
+    discard,
   };
 }
 

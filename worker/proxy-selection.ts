@@ -15,6 +15,7 @@ import { prepareNativeOpenRouterTranscription } from "./native-openrouter-transc
 import { prepareNativeOpenRouterPcmSpeech } from "./native-openrouter-pcm-speech.ts";
 import { prepareNativeOpenRouterSpeech } from "./native-openrouter-speech.ts";
 import { prepareNativeOpenRouterMusic } from "./native-openrouter-music.ts";
+import { inlineMusicInput } from "./openrouter-music-runtime.ts";
 import { prepareNativeDeepSeekSearch } from "./native-deepseek-search.ts";
 import { prepareNativeGoogleMusic } from "./native-google-music.ts";
 import { prepareNativeGoogleSpeech } from "./native-google-speech.ts";
@@ -56,7 +57,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     || isBedrockEmbeddingModel(selection.model?.upstream ?? selection.pathParams?.model ?? ""))
     && selection.capability !== "llm.embeddings")
     throw new HttpError(400, "native_embedding_route_required", "Bedrock embedding models require their qualified native embedding route");
-  selection.nativeResponse = prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
+  selection.nativeResponse = inlineMusicInput(selection)?.nativeResponse ?? prepareNativeEmbedding(selection) ?? prepareNativeImage(selection)
     ?? prepareNativeBasetenSystemOne(selection) ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
     ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection) ?? prepareNativeOpenRouterPcmSpeech(selection) ?? prepareNativeOpenRouterSpeech(selection)

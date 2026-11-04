@@ -107,6 +107,7 @@
 - Expose scalar-only native music response construction and the existing bounded PNG/JPEG/WebP container checks for internal integration, without granting input, credential or capacity authority.
 - Route explicitly selected OpenRouter music through complete native SSE validation, original credentials and conservative policy-fixed accounting; keep unknown dollar prices and reference images closed.
 - Restore original OpenRouter music output bounds through scalar inspection and bounded BYOB quarantine/replay, preserving original SSE and response capacity through delivery; reference-image intake remains closed.
+- Admit bounded inline OpenRouter music images with original caller/key binding, immutable streamed input and atomic input/response capacity; preserve ordinary Chat admission and keep HTTPS references closed.
 - Keep Google music and speech output out of generic GenerateContent/SSE text dispatch and settlement, preserving selected-model and native AUDIO evidence until qualified audio routes are wired.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 - Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.

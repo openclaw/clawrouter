@@ -1,12 +1,13 @@
 import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
 import { prepareNativeRawDispatch } from "./native-raw-input.ts";
+import { inlineMusicInput } from "./openrouter-music-runtime.ts";
 import { applyProxyQuery, applyStreamingQuery, type ProxyQuery } from "./proxy-query.ts";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import { copyRequestHeaders, upstreamPath, type UpstreamAuth } from "./providers.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { Env } from "./types.ts";
-import { maxJsonBodyBytes } from "./utils.ts";
+import { HttpError, maxJsonBodyBytes } from "./utils.ts";
 
 export function prepareUpstreamRequest(
   request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,
@@ -24,6 +25,14 @@ export function prepareUpstreamRequest(
   const configuredOwnerUrl = new URL(url);
   applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
   applyStreamingQuery(url.searchParams, selection.endpoint);
+  const music = inlineMusicInput(selection);
+  if (music) {
+    if (transport !== "http" || upstream.transport !== null || upstream.query.size
+      || url.href !== "https://openrouter.ai/api/v1/chat/completions")
+      throw new HttpError(400, "invalid_inline_music_destination", "inline music requires its original fixed HTTP destination");
+    headers.set("content-type", "application/json"); headers.set("accept", "text/event-stream");
+    return { headers, url, configuredOwnerUrl, requestBody: music.transport(), streamBody: true };
+  }
   const raw = prepareNativeRawDispatch(selection, url, headers, transport === "http" && upstream.transport === null);
   if (raw !== undefined) return { headers, url, configuredOwnerUrl, requestBody: raw, streamBody: false };
   const body = transformTransportBody(upstream.transport, selection.body);
