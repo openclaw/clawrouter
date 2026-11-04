@@ -105,7 +105,7 @@ export function boundedMiniMaxVideoResponse(response: Response, mimes: readonly 
         if (size > limit) throw new Error("invalid_managed_minimax_response");
         // Do not let a small view retain an arbitrarily large transport buffer.
         const value = chunk.value;
-        controller.enqueue(value.byteOffset === 0 && value.byteLength === value.buffer.byteLength ? value : value.slice());
+        controller.enqueue(value.byteOffset === 0 && value.byteLength === value.buffer.byteLength ? value : new Uint8Array(value));
       } catch {
         void cancel(); controller.error(new Error("invalid_managed_minimax_response"));
       }

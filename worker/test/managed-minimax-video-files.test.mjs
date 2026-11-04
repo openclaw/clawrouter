@@ -119,12 +119,14 @@ test("MiniMax full file envelope is 16MiB and bounded views preserve original by
   const limit = 16 * 1024 * 1024, bytes = new Uint8Array(limit); bytes.set(mp4());
   assert.deepEqual(await files.readFile(content(bytes), file, limit), bytes);
   await assert.rejects(files.readFile(content(new Uint8Array(limit + 1)), file, limit));
-  const backing = new Uint8Array(4096); backing.set(mp4(), 128);
-  assert.deepEqual(await files.readFile(content(backing.subarray(128, 144)), file, 1024), mp4());
-  const stream = new ReadableStream({ start(c) { c.enqueue(backing.subarray(128, 144)); c.close(); } });
-  const reader = boundedMiniMaxVideoResponse(content(stream), ["video/mp4"], 1024).body.getReader();
-  const chunk = await reader.read(); assert.equal(chunk.value.byteOffset, 0); assert.equal(chunk.value.buffer.byteLength, 16);
-  assert.deepEqual(chunk.value, mp4()); assert.equal((await reader.read()).done, true); reader.releaseLock();
+  for (const backing of [new Uint8Array(4096), Buffer.alloc(4096)]) {
+    backing.set(mp4(), 128);
+    assert.deepEqual(await files.readFile(content(backing.subarray(128, 144)), file, 1024), mp4());
+    const stream = new ReadableStream({ start(c) { c.enqueue(backing.subarray(128, 144)); c.close(); } });
+    const reader = boundedMiniMaxVideoResponse(content(stream), ["video/mp4"], 1024).body.getReader();
+    const chunk = await reader.read(); assert.equal(chunk.value.byteOffset, 0); assert.equal(chunk.value.buffer.byteLength, 16);
+    assert.deepEqual(chunk.value, mp4()); assert.equal((await reader.read()).done, true); reader.releaseLock();
+  }
 });
 
 test("MiniMax files withhold partial output until EOF and propagate common transport cancellation", async () => {
