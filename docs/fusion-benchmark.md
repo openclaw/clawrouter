@@ -6,6 +6,12 @@ Select `native` for the existing OpenAI and Anthropic repository test keys, or
 `openrouter` for the existing OpenRouter key. Routes never fall back automatically.
 It does not deploy or change production configuration.
 
+`package_only` builds and tests a standalone Node runner without accessing keys.
+Download `fusion-runner-<sha>` within one day, set `GITHUB_SHA` to that verified
+workflow SHA, select the transport and inject credentials into its process.
+The bundle includes the actual composition module and frozen dependencies;
+no local dependency installation or shared-secret replacement is required.
+
 The runner imports the real Fusion composition module. It compares GPT-6 Luna
 alone, GPT-6.1 Sol alone, Claude Sonnet 5.5 alone, and Luna synthesizing independent
 Sol and Sonnet proposals. Every pool member has its own baseline. All calls use

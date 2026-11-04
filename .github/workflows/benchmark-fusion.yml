@@ -12,6 +12,10 @@ on:
         type: choice
         options: [native, openrouter]
         default: native
+      package_only:
+        description: Build a portable runner without accessing provider credentials
+        type: boolean
+        default: false
       prior_reservation_micros:
         description: Prior uncertain spend to reserve within the same $5 ceiling
         type: string
@@ -43,8 +47,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check benchmark accounting and composition
         run: node --test test/fusion-benchmark.test.mjs test/fusion-native-provider.test.mjs test/fusion-evaluation.test.mjs worker/test/fusion.test.mjs
+      - name: Package standalone runner
+        run: |
+          node --input-type=module <<'JS'
+          import { createRequire } from 'node:module';
+          const { build } = createRequire(import.meta.resolve('wrangler/package.json'))('esbuild');
+          await build({ entryPoints: ['scripts/benchmark-fusion.mjs'], bundle: true,
+            platform: 'node', format: 'esm', outfile: process.env.RUNNER_TEMP + '/fusion-benchmark.mjs' });
+          JS
+      - name: Retain standalone runner
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fusion-runner-${{ github.sha }}
+          path: ${{ runner.temp }}/fusion-benchmark.mjs
+          retention-days: 1
       - name: Run bounded native comparison
-        if: inputs.transport == 'native'
+        if: ${{ !inputs.package_only && inputs.transport == 'native' }}
         env:
           OPENAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_ANTHROPIC_API_KEY }}
@@ -52,13 +70,14 @@ jobs:
           FUSION_BENCHMARK_PRIOR_RESERVATION_MICROS: ${{ inputs.prior_reservation_micros }}
         run: node scripts/benchmark-fusion.mjs "$RUNNER_TEMP/fusion-results"
       - name: Run bounded OpenRouter comparison
-        if: inputs.transport == 'openrouter'
+        if: ${{ !inputs.package_only && inputs.transport == 'openrouter' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_OPENROUTER_API_KEY }}
           FUSION_BENCHMARK_TRANSPORT: openrouter
           FUSION_BENCHMARK_PRIOR_RESERVATION_MICROS: ${{ inputs.prior_reservation_micros }}
         run: node scripts/benchmark-fusion.mjs "$RUNNER_TEMP/fusion-results"
       - name: Analyze paired runs
+        if: ${{ !inputs.package_only }}
         run: node scripts/evaluate-fusion.mjs "$RUNNER_TEMP/fusion-results/runs.json" --baseline single > "$RUNNER_TEMP/fusion-results/report.json"
       - name: Retain content-free results
         if: always()
