@@ -68,6 +68,25 @@ test("the native identity lookup uses only this provider's declared prefixes", (
   assert.equal(providerModel(provider, nativeId, { ...route, modelPassthrough: undefined }, true), null);
 });
 
+for (const id of ["azure-openai", "microsoft-foundry"]) test(`${id} deployment templates keep the original opaque native identity`, () => {
+  const provider = providerById(id), declared = provider.models.find(model => model.upstream === "${deployment}"); assert.ok(declared);
+  const route = provider.endpoints.find(value => value.id === "chat_completions"); assert.ok(route);
+  const opaque = providerModel(provider, "deployment", route, true);
+  assert.equal(opaque.id, "deployment"); assert.equal(opaque.upstream, "deployment");
+  assert.equal(opaque.pricing, route.modelPassthrough.pricing);
+  assert.equal(opaque.nativeCapabilities, undefined);
+  assert.equal(providerModel(provider, declared.id, route, true).id, declared.id);
+  const prepared = prepareNativeRequest(provider, route, { ...chat, model: "deployment" }, route.path.replace("${deployment}", "deployment"), {});
+  assert.equal(prepared.model.id, "deployment"); assert.equal(prepared.model.upstream, "deployment");
+});
+
+test("a templated public ID does not become a finite native model declaration", () => {
+  const provider = source(), route = endpoint(provider);
+  provider.models.find(model => model.id === publicId).id = "particle/${model}";
+  const opaque = providerModel(provider, "${model}", route, true);
+  assert.equal(opaque.id, "${model}"); assert.equal(opaque.upstream, "${model}"); assert.equal(opaque.pricing, null);
+});
+
 for (const value of ["foreign/particle-ai/particle-1", "particle/particle-ai/particle-unknown", "particle-ai/undeclared",
   "Particle-ai/particle-1", " particle-ai/particle-1", "particle-ai/particle-1\n", "particle-ai%2Fparticle-1",
   "particle-ai//particle-1", "particle/particle/particle-ai/particle-1", "", 7, null]) {

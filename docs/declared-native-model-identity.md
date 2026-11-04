@@ -5,6 +5,9 @@ Before opaque passthrough, it also checks the provider's finite registered cards
 the public ID must exactly equal one declared model prefix plus the supplied
 native identity. Multiple matching cards fail closed. No caller prefix stripping,
 suffix matching, case folding, whitespace normalization or URL decoding is added.
+Both the public ID and physical upstream alias must be literal: configured
+`${model}` / `${deployment}` templates retain their existing native passthrough
+identity and do not grant that placeholder's public-card metadata or policy ID.
 
 For Particle, native `particle-ai/particle-1` therefore selects public policy ID
 `particle/particle-ai/particle-1` and physical upstream `particle-1`. The selected

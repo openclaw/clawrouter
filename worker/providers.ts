@@ -85,9 +85,10 @@ export function providerModel(provider: CompiledProvider, value: string, endpoin
   if (known) return modelForEndpoint(known, endpoint?.id);
   if (native && value) {
     // A registered native identity may differ from its physical upstream alias.
-    // Match only an exact declared router prefix plus identity, never a suffix
-    // or a stripped unknown upstream ID. Ambiguity must not become passthrough.
-    const declared = provider.models.filter((model) => provider.routing.modelPrefixes.some((prefix) => model.id === prefix + value));
+    // Match only literal cards with an exact declared router prefix plus identity,
+    // never configured deployment templates, suffixes or stripped unknown IDs.
+    const declared = provider.models.filter((model) => !model.id.includes("${") && !model.upstream.includes("${")
+      && provider.routing.modelPrefixes.some((prefix) => model.id === prefix + value));
     if (declared.length > 1) return null;
     if (declared.length === 1) return modelForEndpoint(declared[0], endpoint?.id);
   }
