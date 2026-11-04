@@ -57,16 +57,29 @@ import {usageStub} from './worker/ledgers.ts';
 import {configureMusic} from './worker/test/openrouter-music-runtime-fixture.mjs';
 const provider=snapshot.providers.find(value=>value.id==='openrouter');configureMusic(provider);
 provider.endpoints.find(value=>value.id==='music_generate').timeout_ms=30000;
-const original=globalThis.fetch.bind(globalThis),pending=[];let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false;
+const original=globalThis.fetch.bind(globalThis),pending=[],networkBodies=new WeakSet();
+let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false,controlled,activeReads=0,cancels=0,cancelCharge=0;
+const getReader=ReadableStream.prototype.getReader;
+ReadableStream.prototype.getReader=function(options){
+ const reader=getReader.call(this,options);
+ if(networkBodies.has(this)&&options?.mode==='byob'){
+  const read=reader.read.bind(reader),cancel=reader.cancel.bind(reader);
+  reader.read=async(...args)=>{activeReads++;try{return await read(...args);}finally{activeReads--;}};
+  reader.cancel=async(...args)=>{cancelCharge=bodyBudgetCharged();await cancel(...args);cancels++;};
+ }
+ return reader;
+};
 globalThis.fetch=async(input,init)=>{
  const url=input instanceof Request?input.url:String(input);
  if(url!=='https://openrouter.ai/api/v1/chat/completions')throw new Error('unexpected destination');
  fetches++;capacity=bodyBudgetCharged();const response=await original(input,init);
  uploadBytes=Number(response.headers.get('x-fixture-image-bytes'));uploadDigest=response.headers.get('x-fixture-image-digest');
- const reader=response.body.getReader({mode:'byob'});reader.releaseLock();networkByob=true;return response;
+ const reader=response.body.getReader({mode:'byob'});reader.releaseLock();networkByob=true;networkBodies.add(response.body);return response;
 };
 export default {async fetch(request,bindings){
  const env={...bindings,OPENROUTER_SITE_URL:'https://example.com'},path=new URL(request.url).pathname;
+ if(path==='/fixture/phase')return Response.json({activeReads,cancels,remaining:bodyBudgetCharged()});
+ if(path==='/fixture/abort'){controlled.abort();return new Response('aborted');}
  if(path==='/fixture/setup'){
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
@@ -77,7 +90,11 @@ export default {async fetch(request,bindings){
  if(path==='/fixture/state'){
   while(pending.length)await Promise.all(pending.splice(0));
   const usage=await(await usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin')).json();
-  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),events:usage.events});
+  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,cancels,cancelCharge,events:usage.events});
+ }
+ if(request.headers.has('x-fixture-controlled')){
+  controlled=new AbortController();const headers=new Headers(request.headers);headers.delete('x-fixture-controlled');
+  request=new Request(request,{headers,signal:controlled.signal});
  }
  return worker.fetch(request,env,{waitUntil(value){pending.push(value);}});
 },queue:worker.queue};`;
@@ -88,12 +105,15 @@ export default {async fetch(request){
  const encoded=body.messages[0].content[1].image_url.url.split(',')[1],binary=atob(encoded),image=new Uint8Array(binary.length);
  for(let index=0;index<image.length;index++)image[index]=binary.charCodeAt(index);
  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',image)),value=>value.toString(16).padStart(2,'0')).join('');
- const parts=maximumWire();let piece,offset=0;
+ const parts=maximumWire();let piece,offset=0,started=false;
  const response=new ReadableStream({type:'bytes',pull(controller){
+  if(body.messages[0].content[0].text==='Stall quarantine'){
+   if(!started){started=true;controller.enqueue(new TextEncoder().encode('data: {'));}return;
+  }
   if(!piece||offset===piece.length){const next=parts.next();if(next.done){controller.close();controller.byobRequest?.respond(0);return;}piece=next.value;offset=0;}
   const count=Math.min(16384,piece.length-offset),copy=piece.slice(offset,offset+count);offset+=count;controller.enqueue(copy);
  },cancel(){parts.return();piece=undefined;}},{highWaterMark:0});
- return new Response(response,{headers:{'content-type':'text/event-stream','content-length':String(32*1024*1024),'x-fixture-image-bytes':String(image.length),'x-fixture-image-digest':digest}});
+ return new Response(response,{headers:{'content-type':'text/event-stream',...(body.messages[0].content[0].text==='Stall quarantine'?{}:{'content-length':String(32*1024*1024)}),'x-fixture-image-bytes':String(image.length),'x-fixture-image-digest':digest}});
 }};`;
 
 test("workerd full inline music carries exact 8 MiB input and 32 MiB native wire under the shared 96 MiB charge", { timeout: 90000 }, async t => {
@@ -120,4 +140,33 @@ test("workerd full inline music carries exact 8 MiB input and 32 MiB native wire
   assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
   assert.equal(state.events[0].cost_basis, "policy_fixed"); assert.equal(state.events[0].grant_key, "oauth/fixture/openrouter");
   for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(state.events[0][field], null);
+});
+
+test("workerd controlled caller signal cancels the actual pending quarantine read before releasing either phase", { timeout: 45000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "inline-music-cancel-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const runtime = await startWorkerdFixture(temporary, router, upstream); t.after(() => runtime.dispose());
+  assert.equal((await runtime.dispatchFetch("https://router.example/fixture/setup")).status, 200);
+  const image = maximumImage(), body = musicBody();
+  body.messages[0].content = [{ type: "text", text: "Stall quarantine" }, { type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } }];
+  const pending = runtime.dispatchFetch("https://router.example/v1/native/openrouter/v1/chat/completions", {
+    method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json", "x-fixture-controlled": "true" }, body: JSON.stringify(body),
+  });
+  let phase; const deadline = Date.now() + 15000;
+  do {
+    phase = await (await runtime.dispatchFetch("https://router.example/fixture/phase")).json();
+    if (phase.activeReads === 1) break;
+    assert.ok(Date.now() < deadline, JSON.stringify(phase));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  } while (true);
+  assert.equal(phase.remaining, 96 * MiB); assert.equal(phase.cancels, 0);
+  await runtime.dispatchFetch("https://router.example/fixture/abort");
+  const response = await pending; assert.equal(response.status, 502); assert.ok(!(await response.text()).includes('"audio"'));
+  const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
+  assert.equal(state.fetches, 1); assert.equal(state.activeReads, 0); assert.equal(state.cancels, 1);
+  assert.equal(state.cancelCharge, 96 * MiB); assert.equal(state.remaining, 0);
+  assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
+  assert.equal(state.events[0].cost_basis, "policy_fixed");
+  // This proves the explicitly supplied caller signal inside workerd. It does
+  // not claim the separate locked host/front-Worker disconnect boundary works.
 });

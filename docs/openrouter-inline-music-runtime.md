@@ -7,11 +7,12 @@ and reusable asset handles remain closed. Container validation does not grant
 PixVerse permissions, pixel-decoder guarantees or cross-request asset authority.
 
 The shared native Chat path resolves the registered model through the existing
-capability selector. Ordinary Chat keeps its 32 MiB envelope and incremental
+capability selector. Ordinary Chat keeps its 32,000,000-byte envelope and incremental
 body charge. It does not acquire music's 64 MiB ingress reservation or freeze its
 graph. Until the registered model resolves, byte-zero parsing reserves twice
 the declared/consumed wire bytes under existing thresholds; it retains no raw
-prefix. A selected inline music request grows that same lease to 64 MiB before
+prefix. Existing structural bounds still start only above 8 MiB on the shared
+Chat intake. A selected inline music request grows that same lease to 64 MiB before
 container decoding, digest snapshots or the borrowed codec's string inspection.
 
 ## Ownership phases

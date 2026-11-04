@@ -266,7 +266,7 @@ for (const change of ["grant", "model-policy", "caller"])
     assert.ok(!error.includes('"audio"')); assert.equal(f.sent.length, 1); await receipt(f, 700);
   });
 
-for (const change of ["revoke", "rotate", "models", "foreign-grant", "owner-unavailable"])
+for (const change of ["revoke", "rotate", "models", "foreign-grant", "owner-unavailable", "retention-policy", "monetary-policy"])
   test(`warm inline admission rechecks original ${change} after the final budget await`, async t => {
     const f = await setup(t);
     f.policy.grantRouting = { eligibleGrants: { openrouter: ["replicate"] }, environmentFallback: true, failover: true };
@@ -282,9 +282,11 @@ for (const change of ["revoke", "rotate", "models", "foreign-grant", "owner-unav
         changed = true;
         if (change === "revoke" || change === "rotate")
           await putGrantCredentials(f.env, grantKey, { provider: "openrouter", kind: "api_key", enabled: change !== "revoke", credential: "synthetic-rotated-key" });
-        if (change === "models" || change === "foreign-grant") {
+        if (["models", "foreign-grant", "retention-policy", "monetary-policy"].includes(change)) {
           if (change === "models") f.policy.models = ["openrouter/unrelated"];
-          else f.policy.grantRouting = { eligibleGrants: { openrouter: ["foreign"] }, environmentFallback: true, failover: true };
+          if (change === "foreign-grant") f.policy.grantRouting = { eligibleGrants: { openrouter: ["foreign"] }, environmentFallback: true, failover: true };
+          if (change === "retention-policy") f.policy.retainRequestContent = true;
+          if (change === "monetary-policy") f.policy.requestCostMicros = null;
           await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
         }
         if (change === "owner-unavailable") f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => new Response("unavailable", { status: 503 }) }) };

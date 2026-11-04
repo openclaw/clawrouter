@@ -271,11 +271,14 @@ export class JsonBodyStructureLimit extends Error {}
 // alone lets millions of tiny arrays/objects exhaust the 128 MB isolate. Parse
 // in bounded feeds directly into the value instead of retaining a second full
 // decoded document for JSON.parse. Limits apply only to bodies above 8 MiB.
-export function createJsonBodyParser() {
+export function createJsonBodyParser(enforceStructure = true) {
   const stack: Array<{ value: Record<string, unknown> | unknown[]; key?: string }> = [];
-  let root: unknown, scalar = "", key = false, nodes = 0;
+  let root: unknown, scalar = "", key = false, nodes = 0, maximumDepth = 0, maximumScalar = 0;
+  const checkStructure = () => {
+    if (enforceStructure && (nodes > 65_536 || maximumDepth > 128 || maximumScalar > 4096)) throw new JsonBodyStructureLimit();
+  };
   function attach(value: unknown) {
-    if (++nodes > 65_536) throw new JsonBodyStructureLimit();
+    nodes++; checkStructure();
     const frame = stack.at(-1);
     if (!frame) root = value;
     else if (Array.isArray(frame.value)) frame.value.push(value);
@@ -286,7 +289,7 @@ export function createJsonBodyParser() {
   function accept(token: Token) {
     switch (token.name) {
       case "startObject": case "startArray": {
-        if (stack.length >= 128) throw new JsonBodyStructureLimit();
+        maximumDepth = Math.max(maximumDepth, stack.length + 1); checkStructure();
         const value = token.name === "startArray" ? [] : {};
         attach(value); stack.push({ value }); break;
       }
@@ -295,7 +298,7 @@ export function createJsonBodyParser() {
       case "startString": case "startNumber": key = false; scalar = ""; break;
       case "stringChunk": case "numberChunk":
         scalar += token.value;
-        if ((key || token.name === "numberChunk") && scalar.length > 4096) throw new JsonBodyStructureLimit();
+        if (key || token.name === "numberChunk") { maximumScalar = Math.max(maximumScalar, scalar.length); checkStructure(); }
         break;
       case "endKey": stack.at(-1)!.key = scalar; scalar = ""; break;
       case "endString": attach(scalar); scalar = ""; break;
@@ -314,6 +317,9 @@ export function createJsonBodyParser() {
       if (!consume) throw new TypeError("JSON parser is retired");
       consume.end(); return root;
     },
+    // Shared-route byte-zero intake preserves small JSON.parse structural
+    // acceptance, then applies the existing bounds once it exceeds 8 MiB.
+    enforceStructureLimits(): void { enforceStructure = true; checkStructure(); },
     // Move the completed graph to one caller and drop all parser/tokenizer
     // references. Existing end() callers retain their original behavior.
     take(): unknown {

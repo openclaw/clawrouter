@@ -3,10 +3,11 @@ import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts"
 import { continuationScope } from "./http-continuation.ts";
 import { openRouterMusicModels } from "./openrouter-music.ts";
 import { assertPolicyModel } from "./policy-models.ts";
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
-import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
+import type { AccessPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
 
 export interface InlineMusicEvidence {
@@ -50,7 +51,7 @@ export async function prepareInlineMusicOwner(env: Env, auth: AuthorizedIdentity
     || evidence.slot !== "messages[0].content[1].image_url.url" || !/^[a-f0-9]{64}$/.test(evidence.sha256)
     || !["image/png", "image/jpeg", "image/webp"].includes(evidence.mime)
     || !Number.isSafeInteger(evidence.bytes) || evidence.bytes < 1 || evidence.bytes > 8 * 1024 * 1024) unavailable();
-  const original = identity(grant), caller = publicControlAuthorization(auth);
+  const original = identity(grant), admittedPolicy = policyBinding(auth.policy), caller = publicControlAuthorization(auth);
   const binding: Readonly<InlineMusicBinding> = Object.freeze({ ...evidence, scope: await continuationScope(auth),
     providerId: "openrouter", endpointId: selection.endpoint.id, modelId: model.id, upstreamModel: model.upstream,
     origin: "https://openrouter.ai", grantKey, generation: grant.credentialGeneration!, lineage: grant.credentialLineage! });
@@ -63,6 +64,9 @@ export async function prepareInlineMusicOwner(env: Env, auth: AuthorizedIdentity
       const policy = await authorizeResponseControl(env, caller, owner, signal);
       if (!policy) unavailable();
       assertPolicyModel(policy, selection);
+      // A newer logging or monetary policy cannot borrow an older archive /
+      // reservation verdict. Start a new request under that policy instead.
+      if (policyBinding(policy) !== admittedPolicy) unavailable();
       const current = await inspectGrantCredentials(env, grantKey, signal);
       signal.throwIfAborted(); assertControlCallerLive(caller);
       if (!qualified(current) || identity(current) !== original || !qualified(grant)
@@ -83,6 +87,11 @@ function qualified(grant: UpstreamGrant | null): grant is UpstreamGrant {
 }
 function identity(grant: UpstreamGrant): string {
   return JSON.stringify([grant.provider, grant.kind, grant.credentialGeneration, grant.credentialLineage, grant.accountId ?? null]);
+}
+function policyBinding(policy: AccessPolicy): string {
+  return JSON.stringify([policyRequestCost(policy, "music.generate"), policy.monthlyBudgetMicros ?? null,
+    policy.dailyBudgetMicros ?? null, policy.weeklyBudgetMicros ?? null, policy.budgetScope ?? "policy",
+    policy.budgetMode ?? "reserve", policy.budgetOverride ?? null, policy.retainRequestContent !== false]);
 }
 function unavailable(): never {
   throw new HttpError(503, "inline_music_owner_unavailable", "the original OpenRouter music caller, credential or input binding is unavailable");

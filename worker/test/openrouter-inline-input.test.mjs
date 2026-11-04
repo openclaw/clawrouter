@@ -76,7 +76,7 @@ test("concurrent ordinary Chat candidates do not reserve or freeze a music graph
   }
 });
 
-test("ordinary Chat candidates retain the existing 32 MiB limit instead of the music limit", async () => {
+test("ordinary Chat candidates retain the existing 32 MB limit instead of the music limit", async () => {
   const value = { text: "A".repeat(13 * MiB) }, fixture = input(encode(JSON.stringify(value)), { chunk: 16384 });
   const operation = new HttpOperation(undefined, 10000), result = await readInlineMusicJson(fixture.request, operation, true);
   try {
@@ -84,6 +84,28 @@ test("ordinary Chat candidates retain the existing 32 MiB limit instead of the m
     assert.equal(bodyBudgetCharged(), 2 * result.bytes);
     assert.equal(Object.isFrozen(result.value), false);
   } finally { result.value = undefined; result.lease.release(); operation.stop("complete"); }
+});
+
+test("shared Chat keeps small JSON structural acceptance and enforces the existing expanded bounds", async () => {
+  const value = { ["k".repeat(5000)]: Array(70000).fill(0) };
+  const operation = new HttpOperation(undefined, 10000);
+  const result = await readInlineMusicJson(input(encode(JSON.stringify(value))).request, operation, true);
+  try { assert.deepEqual(result.value, value); assert.equal(Object.isFrozen(result.value), false); }
+  finally { result.value = undefined; result.lease.release(); operation.stop("complete"); }
+  const expanded = new HttpOperation(undefined, 10000);
+  try {
+    const bytes = encode(JSON.stringify({ ...value, text: "A".repeat(8 * MiB) }));
+    await assert.rejects(readInlineMusicJson(input(bytes, { chunk: 16384 }).request, expanded, true), error => error.status === 413);
+  } finally { expanded.stop("complete"); }
+});
+
+test("shared Chat preserves the exact decimal media envelope", async () => {
+  const operation = new HttpOperation();
+  try {
+    const fixture = input(encode('{}'), { contentLength: 32000001 });
+    await assert.rejects(readInlineMusicJson(fixture.request, operation, true));
+    assert.equal(fixture.state().reads, 0);
+  } finally { operation.stop("complete"); }
 });
 
 for (const [name, bytes, options] of [

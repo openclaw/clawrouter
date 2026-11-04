@@ -93,6 +93,7 @@ export class InlineMusicInput {
   private responseLease?: BodyLease;
   private upload?: { serializer: JsonBodyTransport; done: Promise<void>; abort: AbortController };
   private transferred = false;
+  private uploadStarted = false;
   private finished?: Promise<void>;
   private discardRetention?: () => void;
 
@@ -110,8 +111,9 @@ export class InlineMusicInput {
   // JSON string/UTF-8 copy. The pipe promise owns queued transport bytes until
   // physical consumption or cancellation; serializer EOF alone is insufficient.
   transport(): ReadableStream<Uint8Array> {
-    if (this.upload || this.finished || this.transferred) throw new TypeError("music upload is single-use");
+    if (this.uploadStarted || this.finished || this.transferred) throw new TypeError("music upload is single-use");
     const serializer = jsonBodyTransport(this.selection.body, 12 * MiB);
+    this.uploadStarted = true;
     const abort = new AbortController(), fixed = new FixedLengthStream(serializer.bytes);
     const canceled = () => abort.abort(this.operation.signal.reason);
     this.operation.signal.addEventListener("abort", canceled, { once: true });

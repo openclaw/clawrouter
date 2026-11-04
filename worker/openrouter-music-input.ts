@@ -1,7 +1,7 @@
 import { BodyLease } from "./body-budget.ts";
 import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
 import type { HttpOperation } from "./http-operation.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError, maxJsonBodyBytes, maxMediaJsonBodyBytes } from "./utils.ts";
 
 const MiB = 1024 * 1024;
 export const inlineMusicJsonBytes = 12 * MiB;
@@ -36,15 +36,19 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
   value: unknown; lease: BodyLease; bytes: number;
 }> {
   // Native Chat and music share a physical route. Resolve their registered
-  // model after parsing; ordinary Chat keeps its existing 32 MiB envelope and
+  // model after parsing; ordinary Chat keeps its existing 32 MB envelope and
   // incremental charge. Only the selected music profile grows to 64 MiB before
   // byte/container validation. No body-shape guess selects a capability.
-  const maximumBytes = sharedChat ? 32 * MiB : inlineMusicJsonBytes;
+  const maximumBytes = sharedChat ? maxMediaJsonBodyBytes : inlineMusicJsonBytes;
   const reject = (): never => { void request.body?.cancel().catch(() => undefined); invalid(); };
   if (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(request.headers.get("content-type")?.trim() ?? "")
     || ![null, "identity"].includes(request.headers.get("content-encoding"))) reject();
   const length = request.headers.get("content-length");
-  if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maximumBytes)) reject();
+  if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)))) reject();
+  if (length !== null && Number(length) > maximumBytes) {
+    void request.body?.cancel().catch(() => undefined);
+    throw new HttpError(413, "request_too_large", "JSON input exceeds its route envelope");
+  }
   if (!request.body) reject();
   const lease = new BodyLease();
   if (!lease.grow(sharedChat ? Number(length ?? 0) : 32 * MiB)) {
@@ -60,7 +64,7 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
     // No default-reader fallback: an arbitrary backing allocation would defeat
     // the fixed-window lifetime bound before its view could be inspected.
     reader = request.body.getReader({ mode: "byob" });
-    parser = createJsonBodyParser();
+    parser = createJsonBodyParser(!sharedChat);
     const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
     window = new Uint8Array(windowBytes);
     operation.signal.addEventListener("abort", cancel, { once: true });
@@ -71,10 +75,13 @@ export async function readInlineMusicJson(request: Request, operation: HttpOpera
       operation.signal.throwIfAborted();
       if (part.value) {
         if (!(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > windowBytes
-          || part.value.byteLength > windowBytes || part.value.byteLength > maximumBytes - size) invalid();
+          || part.value.byteLength > windowBytes) invalid();
+        if (part.value.byteLength > maximumBytes - size)
+          throw new HttpError(413, "request_too_large", "JSON input exceeds its route envelope");
         size += part.value.byteLength;
         if (sharedChat && !lease.grow(size))
           throw new HttpError(503, "server_overloaded", "JSON input capacity is busy", { "retry-after": "1" });
+        if (sharedChat && size > maxJsonBodyBytes) parser.enforceStructureLimits();
         for (let offset = 0; offset < part.value.byteLength; offset += 4096) {
           const text = decoder.decode(part.value.subarray(offset, offset + 4096), { stream: true });
           if (firstText && text.length) { if (text.charCodeAt(0) === 0xfeff) invalid(); firstText = false; }
