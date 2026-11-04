@@ -1,6 +1,6 @@
 import type { CompiledEndpoint } from "./types.ts";
 
-export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video";
+export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video" | "minimax.video";
 export type ManagedObservationLoss = "expired_or_unknown" | "deleted" | "canceled_or_deleted";
 export type ManagedTerminal = "succeeded" | "failed" | "canceled" | "aborted";
 export type ManagedControlAction = "retrieve" | "result" | "cancel";
@@ -16,6 +16,8 @@ export interface ManagedCreate {
 
 export interface ManagedReadContext {
   action: ManagedAction;
+  // The actual operation signal; newly qualified readers may require it.
+  signal?: AbortSignal;
   // Undefined only for create. Other reads must verify this bound identity;
   // an ID-less acknowledgement/result inherits it from the original request.
   expectedId?: string;
@@ -106,6 +108,10 @@ export interface ManagedFilePaths { id: string; metadata?: string; download: str
 // These methods parse/prepare only; the scoped runtime owns all authority/I/O.
 interface ManagedFileAdapterBase {
   protocol: ManagedProtocol;
+  // Opt-in declarations only. Runtime qualification precedes their use.
+  publicControl?(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
+    file: ManagedFileDescriptor): Pick<ManagedControl, "path" | "query">;
+  downloadMimeTypes?: readonly string[];
   describe(observation: ManagedObservation, selectedBaseUrl: string): readonly ManagedFileDescriptor[];
   identify(action: ManagedFileAction, pathParams: Record<string, string>, query: URLSearchParams): string;
   control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,

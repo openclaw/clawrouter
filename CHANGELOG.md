@@ -106,6 +106,7 @@
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 - Validate the two frozen Kie Grok video input contracts in the scoped jobs adapter, preserving native duration types and unknown costs while keeping unbound image creation closed.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
+- Add inactive MiniMax text-to-video and original-job file adapters with strict native identities, bounded complete responses and explicit signal/query/MIME declarations; regional authority and managed runtime activation remain separate.
 - Admit the six frozen fal Seedance create IDs and their exact dotted control root in the managed wrapper, retaining original create parameters and rejecting remote assets or arbitrary path expansion.
 - Validate frozen fal MiniMax Live and HeyGen prompt-only video requests in the registered scoped queue adapter, preserving original control routes and terminal execution when output media is unusable.
 - Validate the two frozen fal Wan video input contracts in the scoped queue adapter, preserving exact version paths and credential boundaries; keep the unsupported Kling 2.1 Master endpoint closed.
