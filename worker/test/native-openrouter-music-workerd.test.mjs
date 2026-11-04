@@ -53,26 +53,33 @@ const bodies = new WeakSet(); let initialized, metrics = {}, pending = new Set()
 globalThis.fetch = async (input, init) => {
   const url = input instanceof Request ? input.url : String(input);
   if (url !== 'https://openrouter.ai/api/v1/chat/completions') throw new Error('unexpected physical destination');
-  metrics.fetches++; metrics.dispatchCapacity = bodyBudgetCharged();
-  const response = await originalFetch(input, init); if (response.body) bodies.add(response.body); return response;
+  const current=metrics; current.fetches++; current.dispatchCapacity=bodyBudgetCharged();
+  const signal=init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  current.upstreamAborted=signal?.aborted ?? false;
+  signal?.addEventListener('abort',()=>{current.upstreamAborted=true;current.upstreamAbortOrder=++current.sequence;},{once:true});
+  const response = await originalFetch(input, init); current.upstreamStatus=response.status;
+  if (response.body) bodies.add(response.body); return response;
 };
 ReadableStream.prototype.getReader = function(options) {
   const reader = originalReader.call(this, options);
   if (bodies.has(this)) {
-    bodies.delete(this); metrics.nativeReaders++; metrics.byob = options?.mode === 'byob';
+    bodies.delete(this); const current=metrics; current.nativeReaders++; current.byob=options?.mode === 'byob';
     const read = reader.read.bind(reader), cancel = reader.cancel.bind(reader);
     reader.read = async (view, options) => {
-      metrics.reads++;
-      if (!view || view.buffer.byteLength > 65536) throw new Error('unbounded transport window');
-      metrics.maxWindow = Math.max(metrics.maxWindow, view.buffer.byteLength);
-      const result = await read(view, options);
-      if (result.value) {
-        if (result.value.buffer.byteLength > 65536) throw new Error('unbounded returned window');
-        metrics.bytes += result.value.byteLength;
-      }
-      return result;
+      current.reads++; current.activeReads++;
+      try {
+        if (!view || view.buffer.byteLength > 65536) throw new Error('unbounded transport window');
+        current.maxWindow=Math.max(current.maxWindow,view.buffer.byteLength);
+        const result=await read(view,options); current.lastReadDone=result.done;
+        if(result.value){
+          if(result.value.buffer.byteLength>65536)throw new Error('unbounded returned window');
+          current.bytes+=result.value.byteLength;
+        }
+        return result;
+      } catch(error){current.readErrorName=error?.name;throw error;}
+      finally {current.activeReads--;}
     };
-    reader.cancel = reason => { metrics.cancels++; return cancel(reason); };
+    reader.cancel = reason => { current.cancels++;current.cancelOrder=++current.sequence;return cancel(reason); };
   }
   return reader;
 };
@@ -92,13 +99,15 @@ export default { async fetch(request, bindings, context) {
     metrics.guardRejection = {requestedMode:mode,previousMode:metrics.mode,pending:pending.size,capacity:bodyBudgetCharged()};
     return Response.json({error:'fixture_previous_delivery_pending',...metrics.guardRejection},{status:500});
   }
-  metrics = {mode,fetches:0,nativeReaders:0,reads:0,bytes:0,maxWindow:0,cancels:0,byob:false};
+  metrics = {mode,fetches:0,nativeReaders:0,reads:0,activeReads:0,bytes:0,maxWindow:0,cancels:0,byob:false,sequence:0,callerAborted:request.signal.aborted};
+  const current=metrics;
+  request.signal.addEventListener('abort',()=>{current.callerAborted=true;current.callerAbortOrder=++current.sequence;},{once:true});
   if (!['full','delivery-cancel','quarantine-cancel','small','truncated'].includes(mode)) return new Response('invalid fixture mode',{status:400});
   const body = musicBody(); body.messages[0].content = mode;
   const response = await worker.fetch(new Request('https://router.example/v1/native/openrouter/v1/chat/completions',{
     method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},body:JSON.stringify(body),signal:request.signal
   }),env,{waitUntil(promise){const tracked=Promise.resolve(promise).finally(()=>pending.delete(tracked));pending.add(tracked);context.waitUntil(tracked);}});
-  metrics.status = response.status; metrics.beforeDeliveryCapacity = bodyBudgetCharged();
+  current.status=response.status;current.returnOrder=++current.sequence;current.beforeDeliveryCapacity=bodyBudgetCharged();
   // Do not call response.text()/arrayBuffer() here: actual delivery must leave
   // the isolate without another whole-wire allocation or synthetic reader.
   return response;
@@ -215,18 +224,46 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
     assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
     await settlement(origin,3,'client_error');
   }));
-  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", () => musicRequest(origin,'quarantine-cancel',async (pending,abort) => {
-    const outcome=pending.then(response=>({response}),error=>({error}));
-    let started=false;
-    for(let attempt=0;attempt<100;attempt++){
-      const p=await readFixtureJson(new URL('/proof',origin));
-      if(p.mode==='quarantine-cancel'&&p.nativeReaders===1&&p.bytes>0&&p.bytes<65536){started=true;break;}
-      await delay(20);
-    }
-    assert.equal(started,true,JSON.stringify(await readFixtureJson(new URL('/proof',origin))));
-    abort.abort();const result=await outcome;assert.equal(result.error?.name,'AbortError');
-    assertPhysical(await settled(origin)); await settlement(origin,4,'client_error');
-  }));
+  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", async () => {
+    const count=(await readFixtureJson(new URL('/usage',origin))).events.length;
+    return musicRequest(origin,'quarantine-cancel',async(pending,abort)=>{
+      const host={phase:'fetch-pending',bytes:0};
+      const outcome=pending.then(async response=>{
+        host.phase='headers';host.status=response.status;host.mime=response.headers.get('content-type');
+        host.headersBeforeAbort=!abort.signal.aborted;
+        if(!response.body){host.phase='no-body';return;}
+        const reader=response.body.getReader();host.phase='read-pending';
+        try {
+          const part=await reader.read();host.bytes=part.value?.byteLength ?? 0;host.bodyDone=part.done;host.phase='read-resolved';
+          if(host.bytes && host.bytes<=4096){
+            try{const value=JSON.parse(new TextDecoder().decode(part.value));host.bodyErrorCode=typeof value?.error?.code==='string'?value.error.code:undefined;}catch{}
+          }
+        } catch(error){host.phase='read-rejected';host.readErrorName=error?.name;}
+        finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
+      },error=>{host.phase='fetch-rejected';host.fetchErrorName=error?.name;});
+      let beforeAbort,barrier=false;
+      for(let attempt=0;attempt<100;attempt++){
+        beforeAbort=await readFixtureJson(new URL('/proof',origin));
+        const current=beforeAbort.mode==='quarantine-cancel';
+        if(current&&beforeAbort.nativeReaders===1&&beforeAbort.bytes>0&&beforeAbort.bytes<65536
+          &&beforeAbort.activeReads===1&&beforeAbort.status===undefined&&!beforeAbort.callerAborted&&!beforeAbort.upstreamAborted){barrier=true;break;}
+        if((current&&beforeAbort.status!==undefined) || host.bytes || host.fetchErrorName || host.readErrorName)break;
+        await delay(20);
+      }
+      const hostBeforeAbort={...host};abort.abort();await outcome;
+      const afterAbort=await settled(origin),trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort});
+      assert.equal(barrier,true,trace);assert.equal(abort.signal.aborted,true,trace);
+      assert.equal(host.bytes,0,trace);assert.equal(afterAbort.callerAborted,true,trace);assert.equal(afterAbort.upstreamAborted,true,trace);
+      if(host.status===undefined)assert.equal(host.fetchErrorName,'AbortError',trace);
+      else {
+        // A fetch rejection and a headers-then-body rejection are distinct.
+        // Only an original HTTP-200 SSE body rejected by the real caller abort,
+        // with zero bytes and a proven pre-abort upstream read, can qualify.
+        assert.equal(host.status,200,trace);assert.equal(host.mime,'text/event-stream',trace);assert.equal(host.readErrorName,'AbortError',trace);
+      }
+      assertPhysical(afterAbort);await settlement(origin,count+1,'client_error');
+    });
+  });
   await t.test("full audio with missing native DONE is an atomic failure", () => musicRequest(origin,'truncated',async pending => {
     const response=await pending;await assertStatus(response,502,origin);
     const text=await response.text();assert.ok(text.length<4096);assert.doesNotMatch(text,/UklG|AAAA/);
