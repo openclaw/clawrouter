@@ -66,7 +66,7 @@ async function readBytes(response: Response, mime: string, limit: number, signal
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
     return bytes;
-  } catch { await input.retire("cancel", signal.reason); fail("response"); }
+  } catch { await input.retire("cancel", signal.reason); return fail("response"); }
   finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
 function optionalText(value: unknown, limit: number): string | undefined {

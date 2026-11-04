@@ -82,7 +82,7 @@ export async function readGroqMistralAudio(response: Response, provider: Provide
     if (!response.headers.has("content-encoding") && length !== null && Number(length) !== bytes) fail("truncated");
     return observeGroqMistralAudio(provider, JSON.parse(json), true);
   } catch {
-    await input.retire("cancel", signal.reason); fail("response");
+    await input.retire("cancel", signal.reason); return fail("response");
   } finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
 
