@@ -17,9 +17,11 @@ export async function startWorkerdFixture(temporary, routerScript, upstreamScrip
 // to the production isolate hot cache (load harness, hot-path smoke).
 // bindings: fixture-only overrides (e.g. synthetic provider keys); never source
 // production environment changes or real credentials for native tests.
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer, preventEviction, log, r2Buckets, hotCache = false, bindings = {} } = {}) {
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer, preventEviction, log, r2Buckets, hotCache = false, bindings = {}, directRouter = false } = {}) {
   const mf = new Miniflare(convertV4MiniflareOptions({ ...(log ? { log } : {}), resourceTmpPath: temporary, ...(persistencePath ? { resourcePersistencePath: persistencePath } : {}), workers: [{
     name: "router", modules: true, script: routerScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
+    // Opt in only when testing real client-disconnect signals at this Worker.
+    ...(directRouter === true ? { unsafeDirectSockets: [{ host: "127.0.0.1", port: 0 }] } : {}),
     bindings: { OPENAI_API_KEY: "fixture-upstream-key", ...(hotCache ? {} : { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: "0" }), ...bindings },
     kvNamespaces: ["POLICY_KV"], r2Buckets,
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([binding, className]) => [binding, { className, useSQLite: true, ...(preventEviction ? { unsafePreventEviction: true } : {}) }])),

@@ -270,7 +270,7 @@ async function assertStatus(response, expected, origin) {
 test("workerd full-output music uses actual fetch BYOB, original wire, bounded delivery and cancellation", {timeout:120000}, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-full-music-workerd-")); t.after(() => rm(temporary, {recursive:true,force:true}));
   const network=await pendingMusicSource(t);
-  const instance = await startWorkerdFixture(temporary,router,upstream(network.url)); t.after(() => instance.dispose());
+  const instance = await startWorkerdFixture(temporary,router,upstream(network.url),{directRouter:true}); t.after(() => instance.dispose());
   const origin = (await instance.ready).origin;
   await t.test("exact 16 MiB WAV / 32 MiB SSE reaches the consumer with the response lease held", () => musicRequest(origin,'full',async pending => {
     const response = await pending;
@@ -305,6 +305,8 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
     await settlement(origin,3,'client_error');
   }));
   await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", async caseTest => {
+    // Bypass Miniflare's unflagged entry Worker only for this caller-signal case.
+    const origin=(await instance.unsafeGetDirectURL('router')).origin;
     const count=(await readFixtureJson(new URL('/usage',origin))).events.length;
     return musicRequest(origin,'quarantine-cancel',async(pending,abort)=>{
       const reason=new DOMException('fixture music caller cancellation','AbortError');
