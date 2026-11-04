@@ -263,6 +263,7 @@
 - Dispatch qualified native Bedrock embeddings with original regional SigV4 credentials, unchanged model-specific input, complete bounded vectors and conservative accounting without inferred tariffs.
 - Expose the existing Bedrock embedding model recognizer for shared route guards without duplicating family or inference-profile parsing rules.
 - Qualify typed Sage, Liquid/TypeSafe SystemOne and SubQ decision metadata against closed provider/wire contracts without inventing context, prices or client compatibility.
+- Qualify finite Sage batch decision metadata with an exact paired transport and text/list model binding, preserving singular protocols and leaving runtime activation, batch bounds and prices unqualified.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 - Observe native Radius Pi event usage and errors without rewriting SSE bytes or native tool/reasoning payloads. Preserve cancellation and conservative fixed-policy settlement when terminal evidence is incomplete.
 

@@ -22,7 +22,25 @@ export interface BasetenSystemOneDecisionCapabilities {
   outputTokensPerQuestion: 1;
   limits: { maxTotalOptions: 512; maxStateAndQuestionTokens: 16384 };
 }
-export type NativeDecisionCapabilities = OpenAiDecisionCapabilities | BasetenSystemOneDecisionCapabilities;
+export interface SageDecisionCapabilities {
+  protocol: "levanto-sage";
+  questions: {
+    boolean?: { probabilities: "boolean"; abstention: true };
+    choice?: { probabilities: "categorical"; abstention: true; minOptions: number; maxOptions?: number; maxImageOptions?: number };
+    score?: { probabilities: "categorical"; abstention: false; minOptions: number; maxOptions?: number };
+    sort?: { probabilities: "none"; abstention: false; minOptions: number; maxOptions?: number };
+    tags?: { probabilities: "independent"; abstention: true; minOptions: number; maxOptions?: number };
+  };
+  reasoning?: { modes: Array<"auto" | "off" | "on">; default?: "auto" | "off" | "on"; metadata?: boolean };
+  confidence?: "provider-specific";
+  limits?: {
+    maxQuestions?: number;
+    maxRequestTokens?: number;
+    maxStateAndQuestionTokens?: number;
+    image?: { maxBytes: number; mimeTypes: Array<"image/png" | "image/jpeg" | "image/webp">; remoteUrls: false; maxImages?: number; maxTotalBytes?: number };
+  };
+}
+export type NativeDecisionCapabilities = OpenAiDecisionCapabilities | BasetenSystemOneDecisionCapabilities | SageDecisionCapabilities;
 export interface OpaquePcmSpeechProfile {
   voiceRequired: true;
   responseFormat: "pcm";
