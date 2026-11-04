@@ -6,6 +6,7 @@ import test from "node:test";
 const { prepareNativeMiniMaxMusic } = await import("../native-minimax-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
+const { nativeMatch, prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/minimax/music.json", import.meta.url), "utf8"));
 // Locally generated test tone, not provider synthesis. ffprobe: MP3, 44100 Hz,
 // stereo, 256000 bps; full ffmpeg decode: 13824 PCM16 bytes. No Worker transcoder.
@@ -56,7 +57,7 @@ test("MiniMax music rejects wrong capability, regional destination, aliases and 
   for (const model of ["music-3.0", "music-cover", "music-cover-free", "minimax/music-2.6"])
     assert.throws(() => native(selection(model)));
   for (const change of [{ method: "GET" }, { path: "/v1/t2a_v2" }, { response_format: "audio.binary" },
-    { upstreamPath: endpoint.path }, { path_params: ["model"] }, { query: { GroupId: "synthetic" } }, { streaming: "sse" },
+    { upstreamPath: endpoint.path }, { path_params: ["model"] }, { query: { GroupId: "synthetic" } }, { streaming: "ndjson" },
     { websocket: {} }, { lifecycle: {} }, { responsesLifecycle: {} }, { modelPassthrough: {} }, { requestPricing: {} }])
     assert.throws(() => native({ ...selection(), endpoint: { ...endpoint, ...change } }));
   assert.equal(native({ ...selection(), endpoint: { ...endpoint, request_format: "minimax.speech" } }), undefined);
@@ -169,5 +170,161 @@ test("MiniMax music abort and timeout cancel stalled reading and release capacit
     if (!alreadyAborted) { await new Promise(setImmediate); abort.abort(new DOMException("synthetic", name)); }
     await assert.rejects(pending); assert.equal(canceled, true); assert.equal(bodyBudgetCharged(), baseline);
   }
+});
+
+function streamSelection(model = "music-2.6") {
+  const selected = selection(model);
+  selected.body.stream = true; selected.endpoint = { ...endpoint, streaming: "sse" };
+  return selected;
+}
+function streamResponse(frames, width = 4096, headers = {}) {
+  const bytes = new TextEncoder().encode(frames.map(frame => "data: " + JSON.stringify(frame) + "\n\n").join("") + "data: [DONE]\n\n");
+  let offset = 0;
+  return new Response(new ReadableStream({ pull(c) {
+    if (offset === bytes.length) { c.close(); return; }
+    const end = Math.min(bytes.length, offset + width); c.enqueue(bytes.slice(offset, end)); offset = end;
+  } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream", ...headers } });
+}
+function decodeFrozenConsumer(text) {
+  const chunks = []; let complete = false;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const json = line.slice(5).trim(); if (!json || json === "[DONE]") continue;
+    const frame = JSON.parse(json); assert.equal(frame.base_resp.status_code, 0);
+    if (String(frame.data.status) === "2") { complete = true; if (chunks.length) continue; }
+    if (frame.data.audio) chunks.push(Buffer.from(frame.data.audio, "hex"));
+  }
+  assert.equal(complete, true); return Buffer.concat(chunks);
+}
+
+test("MiniMax streaming emits one complete native SSE aggregate preserving both model identities and playable fixture hash", async t => {
+  const fetch = t.mock.method(globalThis, "fetch", () => { throw new Error("no leaf I/O or paid replay"); });
+  for (const model of ["music-2.6", "music-2.6-free"]) {
+    const selected = streamSelection(model), original = structuredClone(selected), prepared = native(selected), lease = prepared.acquire();
+    try {
+      assert.deepEqual(selected, original); assert.equal(prepared.origin, provider.base_urls.default); assert.equal(prepared.path, endpoint.path);
+      const terminal = { ...payload(), model }, delta = { base_resp: { status_code: 0 }, data: { audio: mp3.subarray(0, 100).toString("hex"), status: 1 } };
+      const result = await prepared.read(streamResponse([delta, terminal], 7, { "x-private-upstream": "synthetic", "set-cookie": "synthetic" }), new AbortController().signal);
+      assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      assert.equal(result.usage.requestCostReceipt, undefined); assert.equal(result.usage.nativeRequestUsage, undefined);
+      assert.equal(result.response.headers.get("content-type"), "text/event-stream");
+      assert.equal(result.response.headers.get("content-length"), null); assert.equal(result.response.headers.get("set-cookie"), null);
+      assert.equal(result.response.headers.get("x-private-upstream"), null);
+      const text = await result.response.text(), frames = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+      assert.equal(frames.length, 1); assert.equal(frames[0].data.status, 2); assert.equal(frames[0].model, model);
+      assert.deepEqual(frames[0].extra_info, terminal.extra_info);
+      assert.equal(createHash("sha256").update(decodeFrozenConsumer(text)).digest("hex"), "7c0efecf1ae057e304fff4b9f7775107044d4db9efe0d82c7df465876aa5a0ce");
+    } finally { lease.release(); }
+  }
+  assert.equal(fetch.mock.callCount(), 0);
+});
+
+test("MiniMax streaming freezes only scalar response context, never a prepared request", async () => {
+  const selected = streamSelection(), prepared = native(selected), lease = prepared.acquire();
+  selected.body.model = "music-cover"; selected.body.stream = false; selected.body.prompt = "changed";
+  selected.model.upstream = "music-2.6-free"; selected.endpoint.streaming = null;
+  try {
+    const result = await prepared.read(streamResponse([{ ...payload(), model: "music-2.6" }]), new AbortController().signal);
+    assert.deepEqual(decodeFrozenConsumer(await result.response.text()), mp3);
+  } finally { lease.release(); }
+});
+
+test("one SSE-capable endpoint preserves explicit unary and streaming for both models through native and manifest request selectors", async () => {
+  // Candidate catalog only: this exercises existing request selectors, not
+  // production registration, credential authority or common dispatch.
+  const shared = { ...endpoint, streaming: "sse", native_proxy: true, methods: ["POST"] };
+  const candidate = { ...provider, endpoints: [shared], routing: { modelPrefixes: ["minimax/"] },
+    capabilities: [{ id: "music.generate", endpoint: shared.id }],
+    models: [selection().model, selection("music-2.6-free").model],
+    adapter: { requestTransforms: { renameFields: [] } } };
+  for (const model of ["music-2.6", "music-2.6-free"]) for (const stream of [false, true]) for (const path of ["native", "manifest"]) {
+    const body = { ...structuredClone(wire.request), model: path === "native" ? model : `minimax/${model}`, stream };
+    const matches = candidate.endpoints.filter(item => nativeMatch(item, endpoint.path));
+    assert.deepEqual(matches, [shared]); // One native path; no mode-based alias ordering.
+    const prepared = path === "native" ? prepareNativeRequest(candidate, matches[0], body, endpoint.path, {})
+      : prepareManifestRequest(candidate, shared, body, {}, {});
+    assert.equal(prepared.model.upstream, model); assert.equal(prepared.body.model, model); assert.equal(prepared.body.stream, stream);
+    const leaf = native({ ...selection(model), provider: candidate, endpoint: shared, ...prepared }), lease = leaf.acquire();
+    try {
+      const nativeBody = { ...payload(), model };
+      const result = await leaf.read(stream ? streamResponse([nativeBody]) : response(nativeBody), new AbortController().signal);
+      assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      if (stream) { assert.equal(result.response.headers.get("content-type"), "text/event-stream"); assert.deepEqual(decodeFrozenConsumer(await result.response.text()), mp3); }
+      else { assert.match(result.response.headers.get("content-type"), /^application\/json/); assert.deepEqual(await result.response.json(), nativeBody); }
+    } finally { lease.release(); }
+  }
+});
+
+test("dual-mode music keeps explicit boolean selection and rejects unsupported endpoint stream modes", () => {
+  for (const model of ["music-2.6", "music-2.6-free"]) {
+    for (const mode of [null, undefined]) {
+      const selected = selection(model); selected.endpoint = { ...endpoint, streaming: mode };
+      assert.ok(native(selected)); selected.body.stream = true; assert.throws(() => native(selected));
+    }
+    for (const mode of ["ndjson", "websocket", "json", "", false, true]) for (const stream of [false, true]) {
+      const selected = selection(model); selected.body.stream = stream; selected.endpoint = { ...endpoint, streaming: mode };
+      assert.throws(() => native(selected));
+    }
+    for (const stream of [undefined, null, 0, 1, "true", "false"]) {
+      const selected = streamSelection(model); selected.body.stream = stream; assert.throws(() => native(selected));
+    }
+  }
+});
+
+test("MiniMax streaming requires exact SSE declaration and excludes CN, cover, references and alternate response routes", () => {
+  for (const change of [{ endpoint: { ...endpoint, streaming: null } }, { endpoint: { ...endpoint, streaming: "sse", response_format: "audio.binary" } },
+    { provider: { ...provider, base_urls: { default: "https://api.minimaxi.com" } } }, { capability: "audio.speech" }, { nativeQuery: {} }])
+    assert.throws(() => native({ ...streamSelection(), ...change }));
+  for (const model of ["music-cover", "music-cover-free", "music-3.0"]) assert.throws(() => native(streamSelection(model)));
+  for (const field of ["audio_url", "audio_base64", "cover_feature_id", "reference", "file_id"]) {
+    const selected = streamSelection(); selected.body[field] = null; assert.throws(() => native(selected));
+    selected.body[field] = undefined; assert.throws(() => native(selected));
+  }
+  const implicit = streamSelection(); delete implicit.body.stream; assert.throws(() => native(implicit));
+});
+
+test("MiniMax streaming keeps caller-owned 64MiB charge through downstream EOF or cancellation", async () => {
+  for (const cancel of [false, true]) {
+    const baseline = bodyBudgetCharged(), ingress = new BodyLease(); assert.equal(ingress.grow(8 * 1024 * 1024), true);
+    const prepared = native(streamSelection()), lease = prepared.acquire();
+    try {
+      assert.equal(bodyBudgetCharged(), baseline + 80 * 1024 * 1024);
+      const result = await prepared.read(streamResponse([payload()]), new AbortController().signal);
+      assert.equal(bodyBudgetCharged(), baseline + 80 * 1024 * 1024);
+      const reader = result.response.body.getReader();
+      if (cancel) { const first = await reader.read(); assert.equal(first.done, false); await reader.cancel(); }
+      else { for (;;) { const part = await reader.read(); if (part.done) break; assert.ok(part.value.length <= 65536); } }
+      reader.releaseLock();
+      // Common delivery owns the lease; the leaf never releases it on read completion.
+      assert.equal(bodyBudgetCharged(), baseline + 80 * 1024 * 1024);
+    } finally { lease.release(); ingress.release(); }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
+
+test("MiniMax streaming rejects partial EOF and cancels stalled reads without returning success or leaking capacity", async () => {
+  for (const completeFrame of [false, true]) {
+    const baseline = bodyBudgetCharged(), abort = new AbortController(), prepared = native(streamSelection()), lease = prepared.acquire();
+    let canceled = false, controller, settled = false;
+    const response = new Response(new ReadableStream({ start(c) { controller = c; }, cancel() { canceled = true; } }), { headers: { "content-type": "text/event-stream" } });
+    const pending = prepared.read(response, abort.signal).then(result => { settled = true; return result; });
+    try {
+      controller.enqueue(new TextEncoder().encode(completeFrame ? "data: " + JSON.stringify(payload()) + "\n\n" : 'data: {"data":{"audio":"'));
+      await new Promise(setImmediate); assert.equal(settled, false); abort.abort(new DOMException("synthetic caller", "AbortError"));
+      await assert.rejects(pending, { message: "invalid_native_minimax_music_response" }); assert.equal(canceled, true);
+    } finally { lease.release(); }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
+
+test("MiniMax streaming downstream signal abort errors delivery without a fallback or lease transfer", async () => {
+  const baseline = bodyBudgetCharged(), prepared = native(streamSelection()), lease = prepared.acquire(), abort = new AbortController();
+  try {
+    const result = await prepared.read(streamResponse([payload()]), abort.signal), reader = result.response.body.getReader();
+    await reader.read(); const reason = new DOMException("synthetic downstream", "AbortError"); abort.abort(reason);
+    await assert.rejects(reader.read(), error => error === reason); reader.releaseLock();
+    assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+  } finally { lease.release(); }
+  assert.equal(bodyBudgetCharged(), baseline);
 });
 

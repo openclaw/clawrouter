@@ -1,4 +1,5 @@
 import { mediaObject } from "./managed-media-json.ts";
+import { createJsonTokenizer } from "./json-tokens.ts";
 
 export const miniMaxMusicModels = ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"] as const;
 export const miniMaxMusicAvailability = {
@@ -150,4 +151,253 @@ function text(value: unknown, limit: number): string {
 function object(value: unknown): Json { if (!mediaObject(value)) fail("object"); return value; }
 function keys(value: Json, allowed: string[]): void { if (Object.keys(value).some(key => !allowed.includes(key))) fail("fields"); }
 function fail(reason: string): never { throw new Error(`invalid_minimax_music_${reason}`); }
+
+export interface MiniMaxMusicStreamObservation {
+  audio: Uint8Array<ArrayBuffer>;
+  terminal: Json;
+  model: string;
+  mimeType: "audio/mpeg";
+  durationMillis: number | null;
+  upstreamCostMicros: null;
+}
+const streamWindow = 64 * 1024, streamReadLimit = 262144, metadataLimit = 64 * 1024;
+
+// Additive bounded mode; the existing complete-frame reader above is unchanged.
+// Owns one 8 MiB accumulator, never the request, full wire, frame array or hex.
+// Caller owns the returned view/backing and capacity through delivery/cancel.
+export async function readMiniMaxMusicStream(response: Response, model: string, signal: AbortSignal): Promise<MiniMaxMusicStreamObservation> {
+  const mime = response.headers.get("content-type"), encoding = response.headers.get("content-encoding"), length = response.headers.get("content-length");
+  if (!["music-2.6", "music-2.6-free"].includes(model) || response.status !== 200 || response.redirected || !response.body
+    || response.headers.has("content-range") || !mime || !/^text\/event-stream(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(mime.trim())
+    || encoding !== null && encoding.trim().toLowerCase() !== "identity"
+    || length !== null && (!/^(0|[1-9][0-9]*)$/.test(length) || Number(length) > maxEnvelope)) {
+    await response.body?.cancel().catch(() => undefined); fail("stream_http");
+  }
+  let byob: ReadableStreamBYOBReader | undefined, regular: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try { byob = response.body.getReader({ mode: "byob" }); }
+  catch { regular = response.body.getReader(); }
+  const reader = byob ?? regular!;
+  let cancellation: Promise<void> | undefined;
+  const cancel = () => { cancellation ??= reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    const state = new BoundedMusicStream(model), framing = musicSse(state), decoder = new TextDecoder("utf-8", { fatal: true });
+    let window = new Uint8Array(streamWindow), size = 0, reads = 0;
+    for (;;) {
+      if (++reads > streamReadLimit) fail("stream_reads");
+      // Never lend audio backing to BYOB. Only the returned view owns a read window.
+      const part = byob ? await byob.read(window) : await regular!.read();
+      signal.throwIfAborted();
+      if (part.done) { if (part.value?.byteLength) fail("stream_eof"); break; }
+      const bytes = part.value;
+      if (!(bytes instanceof Uint8Array) || !(bytes.buffer instanceof ArrayBuffer)
+        || bytes.byteLength > streamWindow || bytes.buffer.byteLength > streamWindow) fail("stream_window");
+      size += bytes.byteLength; if (size > maxEnvelope) fail("stream_size");
+      framing.push(decoder.decode(bytes, { stream: true }));
+      if (byob) window = new Uint8Array(bytes.buffer);
+    }
+    framing.push(decoder.decode()); framing.end();
+    if (length !== null && Number(length) !== size) fail("stream_length");
+    return state.result();
+  } catch { cancel(); return fail("stream_response"); }
+  finally { signal.removeEventListener("abort", cancel); if (cancellation) await cancellation; reader.releaseLock(); }
+}
+
+class BoundedMusicStream {
+  private readonly audio = new Uint8Array(maxAudio);
+  private size = 0;
+  private previous = 0;
+  private count = 0;
+  private nibble = -1;
+  private prefix = true;
+  private aggregateOnly = false;
+  private trailing = false;
+  private hexUnits = 0;
+  private terminal: Json | null = null;
+  private duration: number | null = null;
+  private frames = 0;
+  private readonly model: string;
+  constructor(model: string) { this.model = model; }
+  begin(): void {
+    if (this.terminal || ++this.frames > 2048) fail("stream_frame");
+    this.previous = this.size; this.count = 0; this.nibble = -1; this.prefix = true; this.aggregateOnly = false; this.trailing = false; this.hexUnits = 0;
+  }
+  hex(text: string): void {
+    this.hexUnits += text.length;
+    for (const character of text) {
+      if (!character.trim()) {
+        if (this.nibble >= 0) fail("stream_hex");
+        if (this.count) this.trailing = true;
+        continue;
+      }
+      const code = character.charCodeAt(0), value = code >= 48 && code <= 57 ? code - 48
+        : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
+      if (value < 0 || this.trailing) fail("stream_hex");
+      if (this.nibble < 0) { this.nibble = value; continue; }
+      const byte = this.nibble * 16 + value; this.nibble = -1;
+      if (this.count >= maxAudio) fail("stream_audio_limit");
+      if (this.count < this.previous && this.audio[this.count] !== byte) this.prefix = false;
+      if (!this.aggregateOnly && this.previous + this.count >= maxAudio) {
+        // A delta no longer fits. Only a matching aggregate can still succeed.
+        // Compact its already-received suffix in place; never allocate a second file.
+        if (!this.prefix) fail("stream_audio_limit");
+        this.aggregateOnly = true;
+        if (this.count > this.previous) this.audio.copyWithin(this.previous, this.previous * 2, this.previous + this.count);
+      }
+      if (this.aggregateOnly) { if (this.count >= this.previous) this.audio[this.count] = byte; }
+      else this.audio[this.previous + this.count] = byte;
+      this.count++;
+    }
+  }
+  endHex(): void { if (this.nibble >= 0 || this.hexUnits && !this.count) fail("stream_hex"); }
+  accept(frame: Json): void {
+    if (!mediaObject(frame.base_resp) || frame.base_resp.status_code !== 0 || Object.hasOwn(frame, "error")
+      || Object.hasOwn(frame, "model") && frame.model !== this.model) fail("stream_frame");
+    const data = object(frame.data);
+    if (data.status !== 1 && data.status !== 2 && data.status !== "1" && data.status !== "2") fail("stream_status");
+    if (String(data.status) === "1") {
+      if (this.aggregateOnly) fail("stream_audio_limit");
+      this.size = this.previous + this.count; return;
+    }
+    if (this.count) {
+      if (!this.prefix || this.count < this.previous) fail("stream_terminal_audio");
+      if (!this.aggregateOnly) this.audio.copyWithin(this.previous, this.previous * 2, this.previous + this.count);
+      this.size = this.count;
+    }
+    if (!this.size) fail("stream_empty");
+    const extra = frame.extra_info === undefined ? undefined : object(frame.extra_info);
+    if (extra) {
+      if (extra.music_size !== undefined && extra.music_size !== this.size
+        || extra.music_sample_rate !== undefined && extra.music_sample_rate !== 44100
+        || extra.bitrate !== undefined && extra.bitrate !== 256000) fail("stream_metadata");
+      if (extra.music_duration !== undefined) {
+        if (typeof extra.music_duration !== "number" || !Number.isFinite(extra.music_duration) || extra.music_duration < 0) fail("stream_duration");
+        this.duration = extra.music_duration;
+      }
+    }
+    this.terminal = frame;
+  }
+  result(): MiniMaxMusicStreamObservation {
+    if (!this.terminal) fail("stream_incomplete");
+    return { audio: this.audio.subarray(0, this.size), terminal: this.terminal, model: this.model,
+      mimeType: "audio/mpeg", durationMillis: this.duration, upstreamCostMicros: null };
+  }
+}
+
+// JSON audio strings are consumed as tokenizer chunks, not packed values.
+// Every other field has one bounded metadata graph, discarded at each frame.
+function musicFrame(state: BoundedMusicStream) {
+  type Container = { value: Json | unknown[]; path: string[]; key: string | null; seen: Set<string> };
+  const stack: Container[] = [];
+  let root: unknown, text = "", kind: "key" | "string" | "number" | "audio" | null = null, units = 0, nodes = 0;
+  const charge = (value: string) => { units += value.length; if (units * 2 > metadataLimit) fail("stream_metadata_limit"); };
+  const path = (): string[] => {
+    const parent = stack.at(-1);
+    if (!parent) return [];
+    return [...parent.path, Array.isArray(parent.value) ? String(parent.value.length) : parent.key ?? ""];
+  };
+  const audioPath = () => { const p = path(); return p.length === 2 && p[0] === "data" && p[1] === "audio"; };
+  const add = (value: unknown): void => {
+    if (++nodes > 512) fail("stream_nodes");
+    const parent = stack.at(-1);
+    if (!parent) { if (root !== undefined) fail("stream_root"); root = value; }
+    else if (Array.isArray(parent.value)) parent.value.push(value);
+    else {
+      if (parent.key === null) fail("stream_key");
+      parent.value[parent.key] = value; parent.key = null;
+    }
+  };
+  state.begin();
+  const parser = createJsonTokenizer(token => {
+    if (token.name === "startObject" || token.name === "startArray") {
+      if (audioPath() || stack.length >= 8) fail("stream_depth");
+      const at = path(), value = token.name === "startObject" ? Object.create(null) as Json : [];
+      add(value); stack.push({ value, path: at, key: null, seen: new Set() });
+    } else if (token.name === "endObject" || token.name === "endArray") stack.pop();
+    else if (token.name === "startKey") { kind = "key"; text = ""; }
+    else if (token.name === "endKey") {
+      const parent = stack.at(-1)!;
+      if (parent.seen.has(text) || text.length > 256) fail("stream_duplicate_key");
+      parent.seen.add(text); parent.key = text; kind = null;
+      if ((parent.path.length === 0 || parent.path.length === 1 && parent.path[0] === "data")
+        && ["audio_url", "audio_base64", "file_id", "file", "url", "task_id", "error"].includes(text)) fail("stream_unbound_field");
+    } else if (token.name === "startString" || token.name === "startNumber") {
+      if (audioPath() && token.name !== "startString") fail("stream_audio_type");
+      kind = audioPath() ? "audio" : token.name === "startString" ? "string" : "number"; text = "";
+    } else if (token.name === "stringChunk" || token.name === "numberChunk") {
+      if (kind === "audio") state.hex(token.value);
+      else { charge(token.value); text += token.value; if (kind === "number" && text.length > 64) fail("stream_number"); }
+    } else if (token.name === "endString" || token.name === "endNumber") {
+      if (kind === "audio") {
+        state.endHex(); stack.at(-1)!.key = null; // Omit the native hex from metadata.
+      } else {
+        const value = kind === "number" ? Number(text) : text;
+        if (typeof value === "number" && !Number.isFinite(value)) fail("stream_number"); add(value);
+      }
+      kind = null; text = "";
+    } else if (token.name === "nullValue" || token.name === "trueValue" || token.name === "falseValue") {
+      if (audioPath()) fail("stream_audio_type");
+      add(token.name === "nullValue" ? null : token.name === "trueValue");
+    }
+  });
+  return { push(text: string) { for (let i = 0; i < text.length; i += 1024) parser.push(text.slice(i, i + 1024)); },
+    end() { parser.end(); state.accept(object(root)); } };
+}
+
+function musicSse(state: BoundedMusicStream) {
+  let prefix = "", field: string | null = null, header = "", space = false, lineBytes = 0, carriage = false;
+  let frame: ReturnType<typeof musicFrame> | undefined, data = false, probe = "", done = false, metadata = 0, lines = 0;
+  const payload = (part: string) => {
+    if (done) fail("stream_after_done");
+    if (!frame && probe.startsWith("[")) { if (probe.length + part.length > 6) fail("stream_done"); probe += part; return; }
+    if (!frame && probe.length < 6) {
+      const take = Math.min(6 - probe.length, part.length); probe += part.slice(0, take); part = part.slice(take);
+      if (probe.startsWith("[")) { if (probe.length > 6 || part.length) fail("stream_done"); return; }
+      if (probe.length) { frame = musicFrame(state); frame.push(probe); probe = ""; }
+    }
+    if (frame) frame.push(part);
+  };
+  const consume = (part: string) => {
+    lineBytes += part.length;
+    if (field === null) {
+      const colon = part.indexOf(":");
+      if (colon < 0) { prefix += part; if (prefix.length > 16) fail("stream_field"); return; }
+      prefix += part.slice(0, colon); field = prefix; prefix = "";
+      if (!["", "data", "event", "id", "retry"].includes(field)) fail("stream_field");
+      part = part.slice(colon + 1); space = true;
+      if (field === "data") { if (data) payload("\n"); data = true; }
+    }
+    if (space && part.length) { space = false; if (part[0] === " ") part = part.slice(1); }
+    if (field === "data") payload(part);
+    else { metadata += part.length * 2; if (metadata > metadataLimit) fail("stream_headers"); if (field === "event") header += part; }
+  };
+  const newline = () => {
+    if (++lines > 4096) fail("stream_lines");
+    if (!lineBytes) {
+      if (data) {
+        if (probe === "[DONE]" && !frame) { state.result(); done = true; }
+        else if (frame) frame.end(); else fail("stream_event");
+      }
+      frame = undefined; data = false; probe = ""; metadata = 0; lines = 0;
+    } else {
+      if (field === null) { if (prefix !== "data" && !["event", "id", "retry"].includes(prefix)) fail("stream_field"); if (prefix === "data") { if (data) payload("\n"); data = true; } }
+      if (field === "event" && header.trim() === "error") fail("stream_event_error");
+    }
+    prefix = ""; field = null; header = ""; space = false; lineBytes = 0;
+  };
+  return {
+    push(text: string) {
+      let start = 0;
+      for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (carriage) { carriage = false; if (c === "\n") { start = i + 1; continue; } }
+        if (c !== "\r" && c !== "\n") continue;
+        consume(text.slice(start, i)); newline(); carriage = c === "\r"; start = i + 1;
+      }
+      if (start < text.length) consume(text.slice(start));
+    },
+    end() { if (lineBytes || data || frame || probe) fail("stream_incomplete_event"); },
+  };
+}
 

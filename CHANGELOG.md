@@ -388,6 +388,7 @@
 - Qualify the two frozen Lyria unary music declarations with exact native formats, selected-model paths and unknown-cost guards, keeping shared runtime activation separately gated.
 - Add bounded frozen MiniMax music stream codecs and fixtures with terminal audio validation, required cover references and explicit existing-user/free-discontinuation qualifications.
 - Qualify bounded global MiniMax music-2.6 unary hex responses with complete native JSON, playable test audio and conservative unknown costs; music dispatch still requires separate operation authority.
+- Add bounded global MiniMax music streaming inspection and complete terminal SSE replay without retaining full wire or hex copies; operation authority, actual transport bounds and registered-client activation remain unqualified.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
