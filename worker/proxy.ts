@@ -1,6 +1,7 @@
 import { prepareOpenRouterPcmOwner } from "./openrouter-pcm-owner.ts";
 import { nativeResponseLease } from "./native-response.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
+import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
 import { assertMultipartIntake } from "./transcription-protocol.ts";
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
@@ -912,7 +913,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     const gmiCheck = selection.provider.id === "gmi"
       ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
-    const discoveryCheck = gmiCheck ?? (selection.endpoint.request_format === "openai.models" && selection.capability === "models.list"
+    const discoveryCheck = gmiCheck ?? (["openai.models", REQUESTY_MODELS_FORMAT].includes(selection.endpoint.request_format) && selection.capability === "models.list"
       ? await prepareModelDiscoveryOwner(request, env, auth, selection, upstream, url, headers) : undefined);
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
       for (const name of openCodeSessionHeaders) headers.delete(name);

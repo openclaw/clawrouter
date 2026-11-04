@@ -3,18 +3,20 @@ import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
+import { REQUESTY_MODELS_FORMAT, requestyCatalogRequest } from "./requesty-model-catalog.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
-// Generic OpenAI-shaped list metadata retains the already selected owner. It
+// Qualified list metadata retains the already selected owner. It
 // does not grant inference, select another key, or use environment credentials.
 export async function prepareModelDiscoveryOwner(request: Request, env: Env, auth: AuthorizedIdentity,
   selection: ProxySelection, upstream: UpstreamAuth, url: URL, headers: Headers): Promise<(signal: AbortSignal) => Promise<AccessPolicy>> {
   const { provider, endpoint } = selection, { grant, grantKey } = upstream;
-  if (endpoint.request_format !== "openai.models" || endpoint.response_format !== "openai.models"
+  const requesty = endpoint.request_format === REQUESTY_MODELS_FORMAT;
+  if ((!requesty && endpoint.request_format !== "openai.models") || endpoint.response_format !== endpoint.request_format
     || selection.capability !== "models.list" || selection.model !== null || selection.method !== "GET" || endpoint.method !== "GET"
     || endpoint.path_params.length || Object.keys(selection.pathParams).length || Object.keys(selection.body).length
     || endpoint.auth || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
@@ -34,6 +36,19 @@ export async function prepareModelDiscoveryOwner(request: Request, env: Env, aut
   applyProviderCredential(provider, grant, env, selectedHeaders, selectedQuery);
   if (selectedQuery.size || ![...selectedHeaders].length) unavailable();
   for (const [name, value] of selectedHeaders) if (headers.get(name) !== value || upstream.headers.get(name) !== value) unavailable();
+  if (requesty) {
+    const scheme = provider.auth.schemes.find(value => value.type !== "oauth");
+    const selectedKey = selectedHeaders.get("authorization")?.match(/^Bearer ([\x21-\x7e]{1,8192})$/)?.[1];
+    if (provider.id !== "requesty" || endpoint.id !== "models_managed" || endpoint.path !== "/models/managed"
+      || endpoint.upstreamPath !== undefined || endpoint.inputProfile !== undefined || endpoint.requestPricing !== undefined || Object.keys(endpoint.query).length
+      || scheme?.type !== "bearer" || scheme.header.toLowerCase() !== "authorization" || scheme.format !== "Bearer ${secret}"
+      || scheme.secretKind !== "api_key" || !selectedKey) unavailable();
+    const native = requestyCatalogRequest(upstream.baseUrl, selectedKey, request.signal);
+    if (native.url !== url.href) unavailable();
+    // Only the registered factory's headers reach the managed metadata API.
+    for (const name of [...headers.keys()]) headers.delete(name);
+    native.headers.forEach((value, name) => headers.set(name, value));
+  }
   const original = identity(grant), originalModels = auth.policy.models == null ? null : [...auth.policy.models];
   const caller = publicControlAuthorization(auth), owner = {
     providerId: provider.id, endpointId: endpoint.id, grantKey, lineage: grant.credentialLineage!,
