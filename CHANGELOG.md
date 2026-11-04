@@ -320,6 +320,7 @@
 - Preserve native Copilot picker visibility and unconfigured-consent exclusions, and bind inactive catalog/request headers to one explicit original-owner identity without defaults, inferred entitlement or static-seed resurrection.
 - Add inactive Copilot device-code request/response codecs with original domain/owner binding, bounded text decoding and explicit polling intervals; durable onboarding and credential installation remain separate.
 - Add an inactive bounded Copilot catalog decoder that preserves explicit native facts and unknown limits, rejects duplicate or malformed authority rows, and retains existing visibility and transport filtering without inferred prices or entitlement.
+- Add an inactive Copilot response reader with exact response-URL checks, bounded byte windows, fatal UTF-8 and complete cancellation cleanup; common authority, decoded-graph capacity and account responses remain separately qualified.
 
 - Reject compromised certificate keys in the self-host Worker runtime, and include the system CA bundle required by the patched verifier. Thanks @joshavant.
 
