@@ -137,6 +137,9 @@ jobs:
           - consumer: google-images
             ref: 4d052fa8347c97e876eb885789a82730e860a62f
             test: test/openclaw-google-images.test.mjs
+          - consumer: lyria
+            ref: cf0448492e14bfc66c87693d6ef902e86909562e
+            test: test/openclaw-lyria.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

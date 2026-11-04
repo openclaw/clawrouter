@@ -78,3 +78,37 @@ Eight focused fixtures compose the actual compiler, codec, wrapper and cost
 admission: exact two-model paths and original credentials, unchanged existing
 routes, hard-dollar denial with policy-fixed separation, closed transport/model
 expansions, native input boundaries, and separate image/music model eligibility.
+
+## Serialized integration qualification
+
+Source `ff2715d727f27aea4e00b19b056e4207caf573c8` is composed with authorship on
+qualified landed base `f9315fb03541949fedce6b61fdd552368791f000`. Its 16 YAML
+additions and both focused test files are unchanged. Removing those additions
+restores the complete base Google declaration, including the landed text and
+embedding cards. All 86 manifests compile. The 12 compiler/declaration cases,
+55 codec/wrapper/runtime/pricing cases, Worker types and 1,051 Chat/consumer
+selection regressions pass locally.
+
+Generated snapshot SHA256:
+`621f3a21befc4ba84a1fd21e96eff019207bf7614dced7dcf07fc9943326c5e7`.
+
+`test/openclaw-lyria.test.mjs` runs the actual registered `music_generate` tool,
+catalog, serializer and media delivery from public OpenClaw
+`cf0448492e14bfc66c87693d6ef902e86909562e` through real Worker/SQLite. This pin
+already has its own qualified music, types and SDK evidence; no new SDK report
+is rendered. The fixture narrows real credential-scoped offers to exercise each
+native and manifest transport without manufacturing eligibility. Explicit stale
+and foreign discovery cases test rejection before a paid request.
+
+Thirty actual-client cases cover both frozen models, the pinned offline MP3 and
+valid PCM WAV bytes, host-loaded inline PNG, lyrics/instrumental preservation,
+unknown-price hard-budget denial, proxy-only credentials, incomplete/error output,
+no paid fallback, persistence failure and cancellation before dispatch or after
+EOF. Outer assertions require one seven-micro `policy_fixed` settlement per
+dispatched request and NULL token accounting despite native diagnostic counters.
+These actual-source cases are **AUTHORED/UNRUN** until the final hosted composition
+passes. They are not a native OpenClaw PR readiness or live-entitlement claim.
+
+Physical pre-header host-disconnect propagation remains a separate locked-local-
+runtime limitation. The post-EOF client abort test does not claim that boundary,
+upstream refund, cancelled generation, live playback or invoice accuracy.
