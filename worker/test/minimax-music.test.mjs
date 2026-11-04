@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { miniMaxMusicModels, miniMaxMusicAvailability, prepareMiniMaxMusic, observeMiniMaxMusic, readMiniMaxMusic, readMiniMaxMusicStream } from "../minimax-music.ts";
+import { miniMaxMusicModels, miniMaxMusicAvailability, prepareMiniMaxMusic, inspectMiniMaxCoverBase64, observeMiniMaxMusic, readMiniMaxMusic, readMiniMaxMusicStream } from "../minimax-music.ts";
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/minimax/music.json", import.meta.url)));
 const prepare = body => prepareMiniMaxMusic("global", body);
 const signal = () => new AbortController().signal;
@@ -60,6 +60,81 @@ test("instrumental/lyrics options and missing cover audio fail before egress", (
     { ...wire.cover, audio_base64: "AQID" }, { ...wire.cover, audio_url: "https://user:synthetic@media.example/a.mp3" }]) assert.throws(() => prepare(candidate));
   const { audio_url, ...cover } = wire.cover;
   assert.equal(prepare({ ...cover, audio_base64: "AQID" }).body.audio_base64, "AQID");
+});
+
+// Bounded test-only oracle for the replaced validator, including its roundtrip.
+const oldAtob = globalThis.atob, oldBtoa = globalThis.btoa, coverAudioLimit = 8 * 1024 * 1024;
+function oldCoverBase64(value) {
+  if (typeof value !== "string" || value.length > Math.ceil(coverAudioLimit / 3) * 4
+    || !value || value.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null;
+  try {
+    const raw = oldAtob(value);
+    return raw.length && raw.length <= coverAudioLimit && oldBtoa(raw) === value ? { decodedBytes: raw.length } : null;
+  } catch { return null; }
+}
+function inspectedCoverBase64(value) {
+  try { return inspectMiniMaxCoverBase64(value); }
+  catch (error) { assert.match(error.message, /^invalid_minimax_music_(text|audio_base64)$/); return null; }
+}
+
+test("cover scalar inspection matches the old bounded roundtrip across canonical bytes", () => {
+  for (let size = 1; size <= 96; size++) {
+    const bytes = Buffer.from(Array.from({ length: size }, (_, index) => (index * 73 + size) & 255));
+    const encoded = bytes.toString("base64"), result = inspectMiniMaxCoverBase64(encoded);
+    assert.deepEqual(result, oldCoverBase64(encoded)); assert.equal(result.decodedBytes, size);
+    assert.deepEqual(Object.keys(result), ["decodedBytes"]); assert.equal(Object.isFrozen(result), true);
+  }
+});
+
+test("cover scalar inspection preserves every final-sextet padding and unused-bit decision", () => {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  for (const prefix of alphabet) for (const tail of alphabet) {
+    for (const encoded of [prefix + tail + "==", "A" + prefix + tail + "="])
+      assert.deepEqual(inspectedCoverBase64(encoded), oldCoverBase64(encoded));
+  }
+  for (const encoded of ["AB==", "AAB=", "/x==", "//9="]) assert.equal(inspectedCoverBase64(encoded), null);
+});
+
+test("cover scalar inspection rejects the old invalid alphabet, padding and non-string inputs without echo", () => {
+  for (const value of [undefined, null, 1, [], {}, new String("AQID"), "", "A", "AA", "AAA", "AAAAA",
+    "=AAA", "A=AA", "AA=A", "A===", "====", "AQID=", "AQID====", "AA==AAAA", "AQID\n", "\nAQID",
+    " A==", "AA\t=", "AA\r=", "AA-_=", "AA-_", "____", "----", "AAé=", "AA\0=", "AA😀", "AA\ud800=",
+    "data:audio/mpeg;base64,AQID", "https://media.example/audio.mp3"]) {
+    assert.equal(oldCoverBase64(value), null); assert.equal(inspectedCoverBase64(value), null);
+  }
+});
+
+test("cover inspection preserves exact 8MiB boundary even when max-plus-one has the same encoded length", t => {
+  const { audio_url, ...cover } = wire.cover;
+  for (const size of [coverAudioLimit - 1, coverAudioLimit, coverAudioLimit + 1]) {
+    const encoded = Buffer.alloc(size, 255).toString("base64"), expected = oldCoverBase64(encoded);
+    assert.equal(encoded.length, Math.ceil(coverAudioLimit / 3) * 4);
+    assert.deepEqual(inspectedCoverBase64(encoded), expected);
+    const decode = t.mock.method(globalThis, "atob", () => { throw new Error("unexpected cover decode"); });
+    const encode = t.mock.method(globalThis, "btoa", () => { throw new Error("unexpected cover encode"); });
+    try {
+      for (const model of ["music-cover", "music-cover-free"]) {
+        const body = { ...cover, model, audio_base64: encoded };
+        if (size <= coverAudioLimit) assert.equal(prepare(body).body, body);
+        else assert.throws(() => prepare(body), /invalid_minimax_music_audio_base64/);
+      }
+      assert.equal(decode.mock.callCount(), 0); assert.equal(encode.mock.callCount(), 0);
+    } finally { t.mock.restoreAll(); }
+  }
+});
+
+test("actual cover preparation uses scalar inspection without decoding or changing input ownership", t => {
+  const decode = t.mock.method(globalThis, "atob", () => { throw new Error("unexpected cover decode"); });
+  const encode = t.mock.method(globalThis, "btoa", () => { throw new Error("unexpected cover encode"); });
+  const { audio_url, ...cover } = wire.cover;
+  for (const model of ["music-cover", "music-cover-free"]) for (const region of ["global", "cn"]) {
+    const body = Object.freeze({ ...cover, model, audio_base64: "AQID" });
+    const request = prepareMiniMaxMusic(region, body);
+    assert.equal(request.body, body); assert.equal(request.body.audio_base64, "AQID");
+    for (const audio_base64 of ["AB==", "AAB=", "AA-_", "A==="])
+      assert.throws(() => prepareMiniMaxMusic(region, { ...body, audio_base64 }), /invalid_minimax_music_audio_base64/);
+  }
+  assert.equal(decode.mock.callCount(), 0); assert.equal(encode.mock.callCount(), 0);
 });
 
 test("terminal aggregate replaces matching deltas once and never duplicates audio or invents cost", () => {

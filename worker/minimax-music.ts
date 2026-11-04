@@ -34,10 +34,7 @@ export function prepareMiniMaxMusic(region: keyof typeof origins, value: unknown
       try { url = new URL(source); } catch { fail("audio_url"); }
       if (url.protocol !== "https:" || url.username || url.password || url.hash) fail("audio_url");
     } else {
-      const audio = text(body.audio_base64, Math.ceil(maxAudio / 3) * 4);
-      if (!audio || audio.length % 4 || !/^[A-Za-z0-9+/]*={0,2}$/.test(audio)) fail("audio_base64");
-      let raw: string; try { raw = atob(audio); } catch { fail("audio_base64"); }
-      if (!raw.length || raw.length > maxAudio || btoa(raw) !== audio) fail("audio_base64");
+      inspectMiniMaxCoverBase64(body.audio_base64);
     }
   } else {
     if (body.audio_url !== undefined || body.audio_base64 !== undefined) fail("unexpected_reference");
@@ -52,6 +49,29 @@ export function prepareMiniMaxMusic(region: keyof typeof origins, value: unknown
   return { origin: origins[region], path: "/v1/music_generation", body, model: body.model,
     headers: new Headers({ "content-type": "application/json", accept: body.stream === false ? "application/json" : "text/event-stream, application/json" }) };
 }
+
+// Inspect the original string with scalar state; never decode, normalize or retain it.
+export function inspectMiniMaxCoverBase64(value: unknown): Readonly<{ decodedBytes: number }> {
+  const audio = text(value, Math.ceil(maxAudio / 3) * 4);
+  if (!audio || audio.length % 4) fail("audio_base64");
+  const padding = audio.endsWith("==") ? 2 : audio.endsWith("=") ? 1 : 0;
+  const end = audio.length - padding, decodedBytes = audio.length / 4 * 3 - padding;
+  if (decodedBytes < 1 || decodedBytes > maxAudio) fail("audio_base64");
+  let last = 0;
+  for (let index = 0; index < end; index++) {
+    const code = audio.charCodeAt(index);
+    if (code >= 65 && code <= 90) last = code - 65;
+    else if (code >= 97 && code <= 122) last = code - 71;
+    else if (code >= 48 && code <= 57) last = code + 4;
+    else if (code === 43) last = 62;
+    else if (code === 47) last = 63;
+    else fail("audio_base64");
+  }
+  // Canonical padding requires unused low bits in the final sextet to be zero.
+  if (padding === 2 && (last & 15) !== 0 || padding === 1 && (last & 3) !== 0) fail("audio_base64");
+  return Object.freeze({ decodedBytes });
+}
+
 export function observeMiniMaxMusic(values: unknown[], request: MiniMaxMusicRequest, complete: boolean): MiniMaxMusicObservation {
   if (!complete || values.length < 1 || values.length > 2048 || encoder.encode(JSON.stringify(values)).length > maxEnvelope) fail("frames");
   if (request.body.stream === false && values.length !== 1) fail("unary_frames");
