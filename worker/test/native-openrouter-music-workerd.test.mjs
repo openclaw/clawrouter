@@ -87,9 +87,12 @@ export default { async fetch(request, bindings, context) {
     await putGrantCredentials(env, 'oauth/fixture/openrouter', {provider:'openrouter',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
   })();
   await initialized;
-  if (pending.size || bodyBudgetCharged()) throw new Error('previous delivery still owns capacity');
-  metrics = {fetches:0,nativeReaders:0,reads:0,bytes:0,maxWindow:0,cancels:0,byob:false};
   const mode = url.searchParams.get('mode');
+  if (pending.size || bodyBudgetCharged()) {
+    metrics.guardRejection = {requestedMode:mode,previousMode:metrics.mode,pending:pending.size,capacity:bodyBudgetCharged()};
+    return Response.json({error:'fixture_previous_delivery_pending',...metrics.guardRejection},{status:500});
+  }
+  metrics = {mode,fetches:0,nativeReaders:0,reads:0,bytes:0,maxWindow:0,cancels:0,byob:false};
   if (!['full','delivery-cancel','quarantine-cancel','small','truncated'].includes(mode)) return new Response('invalid fixture mode',{status:400});
   const body = musicBody(); body.messages[0].content = mode;
   const response = await worker.fetch(new Request('https://router.example/v1/native/openrouter/v1/chat/completions',{
@@ -115,17 +118,23 @@ export default {async fetch(request){
   },cancel(){finished=true;parts.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream'}});
 }};`;
 
+async function readFixtureJson(url) {
+  const response = await fetch(url);
+  try { assert.equal(response.status, 200, 'fixture observation failed'); return await response.json(); }
+  finally { await response.body?.cancel().catch(() => {}); }
+}
 async function settled(origin) {
+  let value;
   for (let attempt = 0; attempt < 100; attempt++) {
-    const value = await (await fetch(new URL('/proof', origin))).json();
+    value = await readFixtureJson(new URL('/proof', origin));
     if (value.capacity === 0 && value.pending === 0) return value;
     await delay(50);
   }
-  assert.fail("original music operation did not release capacity after delivery/cancellation");
+  assert.fail("original music operation did not release capacity after delivery/cancellation: " + JSON.stringify(value));
 }
 async function settlement(origin, count, status) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    const { events } = await (await fetch(new URL('/usage', origin))).json();
+    const { events } = await readFixtureJson(new URL('/usage', origin));
     if (events.length >= count) {
       assert.equal(events.length, count); assert.equal(new Set(events.map(event => event.id)).size, count);
       const event = events[0]; assert.equal(event.status, status);
@@ -145,48 +154,83 @@ function assertPhysical(value) {
   assert.equal(value.capacity, 0); assert.equal(value.pending, 0);
 }
 
+// A failed header/status assertion must still stop the HTTP pump and retire its
+// original operation. Otherwise the first case can retain capacity into the next.
+async function musicRequest(origin, mode, run) {
+  const abort = new AbortController(); let response, failure;
+  const pending = fetch(new URL('/?mode=' + mode, origin), {signal:abort.signal})
+    .then(value => { response = value; return value; });
+  void pending.catch(() => {}); // Observe a rejection even if a fixture assertion fails first.
+  try { return await run(pending, abort); }
+  catch (error) { failure = error; throw error; }
+  finally {
+    abort.abort();
+    await pending.catch(() => {});
+    await response?.body?.cancel().catch(() => {});
+    try { await settled(origin); }
+    catch (error) {
+      if (failure) throw new AggregateError([failure,error], 'fixture assertion failed and cleanup did not release the original operation');
+      throw error;
+    }
+  }
+}
+async function assertStatus(response, expected, origin) {
+  if (response.status !== expected)
+    assert.fail(JSON.stringify({expectedStatus:expected,actualStatus:response.status,proof:await readFixtureJson(new URL('/proof',origin))}));
+}
+
 test("workerd full-output music uses actual fetch BYOB, original wire, bounded delivery and cancellation", {timeout:120000}, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-full-music-workerd-")); t.after(() => rm(temporary, {recursive:true,force:true}));
   const instance = await startWorkerdFixture(temporary,router,upstream); t.after(() => instance.dispose());
   const origin = (await instance.ready).origin;
-  await t.test("exact 16 MiB WAV / 32 MiB SSE reaches the consumer with the response lease held", async () => {
-    const response = await fetch(new URL('/?mode=full', origin));
-    assert.equal(response.status,200); assert.equal(response.headers.get('content-type'),'text/event-stream');
-    assert.equal(response.headers.get('content-length'),String(32*1024*1024));
+  await t.test("exact 16 MiB WAV / 32 MiB SSE reaches the consumer with the response lease held", () => musicRequest(origin,'full',async pending => {
+    const response = await pending;
+    await assertStatus(response,200,origin); assert.equal(response.headers.get('content-type'),'text/event-stream');
+    // Workerd ignores manually assigned Content-Length for an ordinary stream:
+    // https://developers.cloudflare.com/workers/runtime-apis/response/#set-the-content-length-header
+    // Prove the actual count/hash after complete delivery, independently of HTTP framing.
     const hash=createHash('sha256'); let bytes=0;
     for await (const chunk of response.body) {bytes+=chunk.byteLength;hash.update(chunk);}
     const expected=createHash('sha256'); for(const part of musicWire())expected.update(part);
-    assert.equal(bytes,32*1024*1024); assert.equal(hash.digest('hex'),expected.digest('hex'));
+    // Independently decoder-qualified 16 MiB WAV in this exact 32 MiB SSE fixture.
+    const expectedHash=expected.digest('hex');
+    assert.equal(expectedHash,'b25351f0c76ebc191d53b6275d14277aff41279a3c1d1af45131af243875bd43');
+    assert.equal(bytes,32*1024*1024); assert.equal(hash.digest('hex'),expectedHash);
     const proof=await settled(origin);assertPhysical(proof);assert.equal(proof.bytes,bytes);
     assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
     await settlement(origin,1,'success');
-  });
-  await t.test("small DONE on an open socket never requires filling the BYOB window", async () => {
-    const response=await fetch(new URL('/?mode=small',origin));assert.equal(response.status,200);
+  }));
+  await t.test("small DONE on an open socket never requires filling the BYOB window", () => musicRequest(origin,'small',async pending => {
+    const response=await pending;await assertStatus(response,200,origin);
     assert.equal(await response.text(),[...musicWire(false,false)].join(''));
     const proof=await settled(origin);assertPhysical(proof);assert.ok(proof.bytes<65536);
     await settlement(origin,2,'success');
-  });
-  await t.test("full-size replay cancellation releases the original operation without replaying POST", async () => {
-    const abort=new AbortController(),response=await fetch(new URL('/?mode=delivery-cancel',origin),{signal:abort.signal});
-    assert.equal(response.status,200);const reader=response.body.getReader();assert.ok((await reader.read()).value.length);
-    abort.abort();await reader.cancel().catch(()=>{});reader.releaseLock();
+  }));
+  await t.test("full-size replay cancellation releases the original operation without replaying POST", () => musicRequest(origin,'delivery-cancel',async (pending,abort) => {
+    const response=await pending;await assertStatus(response,200,origin);
+    const reader=response.body.getReader();
+    try { assert.ok((await reader.read()).value.length); }
+    finally { abort.abort(); await reader.cancel().catch(()=>{}); reader.releaseLock(); }
     const proof=await settled(origin);assertPhysical(proof);assert.equal(proof.bytes,32*1024*1024);
     assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
     await settlement(origin,3,'client_error');
-  });
-  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", async () => {
-    const abort=new AbortController(),pending=fetch(new URL('/?mode=quarantine-cancel',origin),{signal:abort.signal});
-    const rejected=assert.rejects(pending,{name:'AbortError'});
+  }));
+  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", () => musicRequest(origin,'quarantine-cancel',async (pending,abort) => {
+    const outcome=pending.then(response=>({response}),error=>({error}));
     let started=false;
-    for(let attempt=0;attempt<100;attempt++){const p=await(await fetch(new URL('/proof',origin))).json();if(p.nativeReaders===1&&p.bytes>0&&p.bytes<65536){started=true;break;}await delay(20);}
-    assert.equal(started,true);abort.abort();await rejected;assertPhysical(await settled(origin));
-    await settlement(origin,4,'client_error');
-  });
-  await t.test("full audio with missing native DONE is an atomic failure", async () => {
-    const response=await fetch(new URL('/?mode=truncated',origin));assert.equal(response.status,502);
+    for(let attempt=0;attempt<100;attempt++){
+      const p=await readFixtureJson(new URL('/proof',origin));
+      if(p.mode==='quarantine-cancel'&&p.nativeReaders===1&&p.bytes>0&&p.bytes<65536){started=true;break;}
+      await delay(20);
+    }
+    assert.equal(started,true,JSON.stringify(await readFixtureJson(new URL('/proof',origin))));
+    abort.abort();const result=await outcome;assert.equal(result.error?.name,'AbortError');
+    assertPhysical(await settled(origin)); await settlement(origin,4,'client_error');
+  }));
+  await t.test("full audio with missing native DONE is an atomic failure", () => musicRequest(origin,'truncated',async pending => {
+    const response=await pending;await assertStatus(response,502,origin);
     const text=await response.text();assert.ok(text.length<4096);assert.doesNotMatch(text,/UklG|AAAA/);
     assertPhysical(await settled(origin));
     await settlement(origin,5,'provider_error');
-  });
+  }));
 });
