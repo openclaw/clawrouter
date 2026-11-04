@@ -25,17 +25,31 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { alibaba: "task", anthropic: "count_tokens", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", pixverse: "video", replicate: "prediction", runway: "text_task", tavily: "search", voyage: "embeddings", vydra: "job" };
+  const native = { alibaba: "task", anthropic: "count_tokens", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", pixverse: "video", replicate: "prediction", runway: "text_task", tavily: "search", voyage: "embeddings", vydra: "job" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, ["replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway", "azure-speech"].includes(id), id);
+    assert.equal(!!target.unresolved, ["replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway", "azure-speech", "deepgram"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
   assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("Deepgram raw-audio smoke remains unresolved with masked credentials and zero egress", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "deepgram");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { DEEPGRAM_API_KEY: "fixture-private-deepgram-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["DEEPGRAM_API_KEY"]);
+  assert.equal(plan.providers[0].target.endpoint, "listen");
+  assert.match(plan.providers[0].target.unresolved, /no smoke request template for deepgram\.prerecorded/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected raw upload"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["deepgram"], onResult: result => health.push(result) }), /no smoke request template for deepgram\.prerecorded/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-deepgram-key|fixture-proxy-key/);
 });
 
 test("Azure SSML smoke remains unresolved without paid synthesis, secret output or false health", async t => {
