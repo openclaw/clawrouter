@@ -72,3 +72,12 @@ test('diagnostics retain bounded labels without raw error or response content', 
   assert.equal(finishReason('length'), 'length');
   assert.equal(finishReason('private response'), 'other');
 });
+
+
+test('larger explicitly configured runs remain bounded by the authorized campaign ceiling', () => {
+  const config = { ...defaultExperiment, outputTokens: 8192, maxTurns: 30, deadlineMs: 600000,
+    campaignBudgetMicros: 100000000, priorCostMicros: 934028, trialBudgetMicros: 1000000 };
+  assert.equal(validateExperiment(config, 4), 16934028);
+  assert.throws(() => validateExperiment({ ...config, campaignBudgetMicros: 100000001 }, 4));
+  assert.throws(() => validateExperiment({ ...config, priorCostMicros: 99000000 }, 4), /campaign_budget/);
+});

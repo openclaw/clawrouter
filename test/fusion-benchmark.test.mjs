@@ -61,3 +61,11 @@ test('case measurements count all billed calls, failed advisers and final gradin
   const unknown = async () => ({ costMicros: null, response: Response.json({ choices: [] }) });
   await assert.rejects(runCase({ caseId: 'x', input: 'task' }, { name: 'panel' }, engine, unknown), /unknown billed cost/);
 });
+
+
+test('reservation covers enlarged completion limits and rejects unbounded values', () => {
+  const price = { input: 0, output: 0.00001, request: 0, tiers: [] };
+  assert.equal(priceBound({ max_completion_tokens: 8192 }, price), 81920);
+  assert.equal(priceBound({ max_tokens: 512 }, price), 40960);
+  assert.throws(() => priceBound({ max_tokens: Infinity }, price), /invalid_output_limit/);
+});

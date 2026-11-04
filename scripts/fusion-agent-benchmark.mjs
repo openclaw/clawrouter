@@ -18,8 +18,8 @@ export function validateExperiment(config, taskCount) {
   if (JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(Object.keys(defaultExperiment).sort())) throw new Error('invalid_experiment_fields');
   if (!Array.isArray(config.strategies) || !config.strategies.length || new Set(config.strategies).size !== config.strategies.length
     || config.strategies.some(strategy => !defaultExperiment.strategies.includes(strategy))) throw new Error('invalid_strategies');
-  for (const [field, min, max] of [['trials', 1, 3], ['maxTurns', 1, 20], ['outputTokens', 256, 4096], ['deadlineMs', 1000, 300000],
-    ['trialBudgetMicros', 1, 1000000], ['campaignBudgetMicros', 1, 5000000], ['priorCostMicros', 0, 5000000]]) {
+  for (const [field, min, max] of [['trials', 1, 5], ['maxTurns', 1, 60], ['outputTokens', 256, 16384], ['deadlineMs', 1000, 900000],
+    ['trialBudgetMicros', 1, 5000000], ['campaignBudgetMicros', 1, 100000000], ['priorCostMicros', 0, 100000000]]) {
     if (!Number.isSafeInteger(config[field]) || config[field] < min || config[field] > max) throw new Error(`invalid_${field}`);
   }
   const bound = taskCount * config.trials * config.strategies.length * config.trialBudgetMicros + config.priorCostMicros;
