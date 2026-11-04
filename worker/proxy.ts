@@ -1,5 +1,6 @@
 import { nativeResponseLease } from "./native-response.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
+import { assertMultipartIntake } from "./transcription-protocol.ts";
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
 import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
@@ -829,6 +830,7 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
 }
 
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
+  assertMultipartIntake(selection);
   const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground);
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
