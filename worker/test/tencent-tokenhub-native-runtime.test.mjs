@@ -14,6 +14,13 @@ const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-c
 const id = "tencent-tokenhub", base = "https://tokenhub.tencentmaas.com/v1";
 const { providers: [provider] } = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", `providers/${id}.provider.yaml`], { encoding: "utf8" }));
+
+test("tencent-tokenhub model discovery compiles as GET only", () => {
+  const endpoint = provider.endpoints.find(e => e.id === "models_list");
+  assert.equal(endpoint.method, "GET");
+  assert.deepEqual(endpoint.methods, ["GET"]);
+});
+
 const models = ["hy3-preview", "hy3", "hy4-preview"], thinking = "hy4-preview";
 const toolFacts = new Set(["hy3", "hy4-preview"]);
 const alias = { version: "clawrouter.model-availability.v1", status: "upstream_alias", servingModel: "hy3",

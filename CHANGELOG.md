@@ -417,6 +417,7 @@
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
 - Fix global and China StepFun model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Qualify three frozen Tencent TokenHub Chat identities and private model discovery, preserving the documented postpaid Hy3 preview alias, native reasoning/tool replay and separate TokenPlan credentials without inferring tariffs.
+- Fix Tencent TokenHub model discovery to declare GET explicitly and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
