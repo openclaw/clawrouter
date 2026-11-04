@@ -89,37 +89,41 @@ consumed from landed `ed1b1318d8d0e9a2f31c235d1473c8b77dc861ba`, without copying
 or modifying its assertions. No snapshot is regenerated
 in this source slice, and model availability does not establish account entitlement.
 
-## Local declaration integration
+## Serialized declaration and actual-client integration
 
-Source PR698 `21c17f5928c34cdc8f0865f76e86fb7d5b42b01c` is composed on
-landed `81da9416c6e45f5b1ce2114288dc541ede81ce99`, retaining the previous
-local packet `d580436179cda5aa51c417f35c8a96e7182a47e9`. Its declaration commit
-`d17a72f66e76fdade623c3b7297c50b44b193957` adds only the two original image
-cards, image endpoint and capability. Every prior Google row/endpoint and the
-current Vercel fixture are preserved; the already-landed Vercel correction is
-not reapplied over newer accepted proof.
+Source PR698 declaration `d17a72f66e76fdade623c3b7297c50b44b193957` is
+composed from local `7d96b02407417094c2295c8561c629e5d78cfa3d` onto landed
+`f11178a847189325d86ec3fa32f104c346648e66`. It adds only the two original
+image cards, endpoint and capability. The original declaration, compiler and
+Worker fixture blobs are preserved. Existing Google rows, ordinary routes and
+newer qualified Vercel proof remain intact; no old Vercel patch is reapplied.
 
-All 85 manifests compile. Snapshot SHA256 is
-`90b6ab7352b58188df4044b98ce70da7fe3c911ff5d7203e7f2616aeee7de8ff`.
-Refreshed local proof covers 107 focused image/compiler/real-Worker/admission/
-pricing cases, including the existing music-compiler isolation regression,
-Worker types and 1,035 Chat matrix/consumer-selection cases. Frozen dependency
-inputs match; no installation or actual-client execution occurred.
-One music negative fixture originally failed because its inherited image
-endpoint rejected the mutated origin before music validation. The integration
-fixture removes only the unrelated image endpoint/capability/rows; all music
-assertions remain intact, and the changed music fixture file passes.
+All 86 manifests compile. The snapshot is regenerated rather than hand-merged;
+SHA256 `d1ff30a5d05cc07a094a7f92a47a78c7e83c84aee83ef14496603d7441a7dcb7`.
+Local proof passes 107 focused image/compiler/Worker/admission/pricing cases,
+including music-compiler isolation, Worker types and 1,051 Chat matrix/consumer-
+selection cases. Frozen dependency inputs match the existing qualified install.
+The earlier music negative fixture correction removes only unrelated image
+endpoint/capability/rows before checking music; its assertions remain intact.
 
-Fourteen actual image-host cases are AUTHORED/UNRUN against published OpenClaw
-`9ce99ae1521b2d23e85c27688d9db45a31dbe472`: registered ClawRouter selection,
-both exact models, text/edit, native and a separate manifest-only Worker
-isolate, original key binding, byte-exact PNG delivery, unknown-dollar/invalid
-key denial, already-aborted requests and incomplete paid output without replay.
-The tests import the real `generateImage` host and registered provider; no client
-parser is copied and no request is patched. The proposed receipt remains one
-explicit seven-micro policy charge with null token counters.
+Fourteen actual image-host cases are enrolled in ordinary hosted CI against
+reachable public OpenClaw `9ce99ae1521b2d23e85c27688d9db45a31dbe472`.
+The seven unchanged cases execute separately through native and manifest-only
+Worker isolates. They cover actual registered ClawRouter selection, both exact
+models, text/edit, original key binding, byte-exact PNG delivery, unknown-dollar
+and invalid-key denial, already-aborted requests, and incomplete paid output
+without replay. The tests import the real `generateImage` host and provider;
+no parser is copied and no request is patched.
 
-No SDK execution, hosted CI, publication or live inference occurred. The actual
-client pin is not newly qualified here, and the fixtures are not yet enrolled
-in the hosted matrix. Native runtime tests do not substitute for this pending
-actual-client composition or imply account entitlement.
+Pre-publication inspection confirms the pinned registration helper exposes
+`imageGenerationProviders` and the actual image host returns
+`{ provider, model, images, ... }`. The Google adapter supplies manifest
+`pathParams.model` itself. Every outer policy has a real 100-micro cap: positive
+receipts retain seven micro-units and null token counters. Uncapped/null balance
+assumptions do not apply, and no positive pricing assertion is weakened.
+
+These fourteen cases remain authored until the exact composed head passes both
+actual-client/SQLite contracts. Native checks alone do not establish that proof.
+No SDK report, new local install, live inference or account change is performed.
+The declaration preserves frozen GenerateContent transport; current examples or
+an available model ID do not prove live entitlement or backwards compatibility.
