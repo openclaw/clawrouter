@@ -1,4 +1,5 @@
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
+import { manifestOnlyPublicCatalog } from "./public-model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
@@ -466,8 +467,9 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const supportedTiers = model?.nativeCapabilities?.endpoints[endpoint.id]?.supportedServiceTiers;
         const permittedServiceTiers = supportedTiers?.filter(tier => availability.status !== "exact-blocked" && allowedServiceTiers(auth.policy, model!.id, auth.serviceTiers).includes(tier));
         const common = { ...(endpoint.inputProfile ? { inputProfile: endpoint.inputProfile } : {}), ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
-        const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
-        const unified = model && unifiedPathForEndpoint(provider, endpoint);
+        const nativeEnabled = endpoint.native_proxy && !manifestOnlyPublicCatalog(endpoint.request_format);
+        const native: CatalogOffer = { ...common, routeKind: keyScope ? nativeEnabled ? "native" : "manifest" : "playground", route: keyScope && nativeEnabled ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
+        const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
         if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
           const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] });
@@ -475,7 +477,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
             version: "clawrouter.hosted-tool-admission.v1", web_search: hosted.reasonCode === "pricing_required" ? "pricing_required" : "admitted",
           };
         }
-        return [...(mode === "http" || endpoint.native_proxy ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
+        return [...(mode === "http" || nativeEnabled ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
       });
     });
     const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];

@@ -1,4 +1,5 @@
 import { isKeyedModelDiscovery, readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
@@ -9,7 +10,7 @@ import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
+  return publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;

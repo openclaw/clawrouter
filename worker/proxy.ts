@@ -1,4 +1,7 @@
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
+import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
+import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
 import { openCodeSessionHeader, openCodeSessionHeaders } from "./opencode-session.ts";
 import { prepareNativeBedrockEmbedding } from "./native-bedrock-embeddings.ts";
@@ -137,6 +140,7 @@ interface PreparedUpstream {
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
+  publicCatalog?: Awaited<ReturnType<typeof preparePublicDiscoveryOwner>>;
 }
 
 interface ReservedProxyBudget {
@@ -326,7 +330,12 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   try {
     let envelope, prepared;
     try {
-      envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission));
+      if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
+      else {
+        const value = await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission);
+        if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
+        envelope = manifestEnvelope(value);
+      }
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
     } catch (error) {
       if (error instanceof Response) return error;
@@ -351,7 +360,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
   let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
-  if (!endpoint || !endpoint.native_proxy) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
+  if (!endpoint || !endpoint.native_proxy || manifestOnlyPublicCatalog(endpoint.request_format)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
   if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, "proxy_key", provider, endpoint);
@@ -615,7 +624,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
-    const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+    const pending = prepared.publicCatalog
+      ? fetchPublicModelDiscovery({ ...prepared.publicCatalog, operation }).then(result => Response.json(
+        manifestOnlyPublicCatalog(selection.endpoint.request_format) ? result : result.catalog,
+        { headers: { "cache-control": "private, no-store" } }))
+      : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
     if (useSoft) {
       soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
       reservation = soft.reservation;
@@ -654,7 +667,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
     if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
-    if (isModelDiscovery(selection.endpoint)) {
+    if (isModelDiscovery(selection.endpoint) && !prepared.publicCatalog) {
       response = await modelDiscoveryResponse(response, selection.provider, selection.endpoint, auth.policy, discoveryQuery(queryInput), operation, async (cursor, before) => {
         const pageUrl = new URL(prepared.url);
         pageUrl.searchParams.set(before ? "before_id" : "after_id", cursor);
@@ -840,6 +853,15 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     if (search) await assertSingleOpenAiAccount(auth, env, upstream, "search");
     assertPolicyModel(auth.policy, selection);
     assertServiceTier(auth, selection, upstream.transport);
+    if (publicCatalogProvider(selection.endpoint.request_format)) {
+      if (transport !== "http") throw new HttpError(400, "invalid_model_discovery", "public model catalogs require HTTP");
+      const publicCatalog = await preparePublicDiscoveryOwner(request, env, auth, selection, upstream);
+      // The public factories own physical URLs and headers. The selected
+      // inference credential remains local authority and is never forwarded.
+      return { publicCatalog, headers: new Headers(), url: new URL(upstream.baseUrl), requestBody: undefined,
+        grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision,
+        connection, websocket: false, backgroundRecovery: false };
+    }
     const lifecycle = { provider: selection.provider, endpoint: selection.endpoint, mode: transport, responsesLifecycle: true };
     // Decide once from the materialized transport, before reservation. An
     // ordinary failover cannot promote an already reserved request into a job.
