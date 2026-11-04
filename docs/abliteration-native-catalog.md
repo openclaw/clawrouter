@@ -57,13 +57,11 @@ uses a project inference key with Bearer auth under
 different contract. Keep the selected original grant; do not fall back to an
 unrelated provider, caller header or ambient credential.
 
-ClawRouter currently qualifies `ABLITERATION_API_KEY`. Frozen OpenClaw also
-recognizes the vendor's `ABLIT_KEY` name. The existing shared Worker selector
-and readiness logic do not recognize that legacy name; source1 owns the queued
-narrow correction and its proof. This manifest intentionally keeps the currently
-qualified configuration name. Do not activate the legacy name until the common
-selector/readiness pin is qualified, or forward a global environment blindly.
-No new secret or external credential task is required to implement that code.
+The qualified shared selector accepts canonical `ABLIT_KEY` and compatibility
+`ABLITERATION_API_KEY`, with canonical precedence for the exact Abliteration
+origin/Bearer binding. Original selected grants bypass both environment names.
+This manifest retains its existing configuration key; integration verifies the
+landed selector without changing common auth or introducing a new credential.
 
 [Project model discovery](https://docs.abliteration.ai/api-reference/models/list-models-available-to-the-api-key-project)
 is keyed `GET /v1/models`, without query parameters. The native `object: list`
@@ -103,10 +101,22 @@ covers both routes, four identities, canonical efforts, tool/reasoning replay,
 fragmented SSE, missing usage, cache evidence, errors, cancellation, late errors,
 image acceptance/rejection, native structured requests and private discovery.
 
-Prepared tests are not executed proof. Local source stays code-only because
-native dependency qualification refuses an escaping workspace link. Source6
-owns a later explicit serialized snapshot slot and integrated final-head proof;
-this source assumes no snapshot lease. Source2 owns actual frozen-client replay,
-effort mapping and static catalog augmentation. Source1's legacy credential-name
-fix remains distinct. No common/compiler/client edits, live inference, login,
-provisioning, account changes or manual deployment are performed here.
+Integration generates the snapshot serially from the composed source/compiler.
+The metadata endpoint declares explicit GET without a streaming protocol.
+Undeclared native URL aliases stay closed with zero upstream egress.
+
+`test/openclaw-abliteration.test.mjs` pins actual public OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb` in its own frozen CI checkout.
+It imports the registered static catalog augmentation, replay policy, host
+sanitizer, native serializer and both stream hooks. The cases exercise all four
+cards and exact logical-to-native effort ladders, including Large v2 off-to-low,
+image input, cache hints/observations, tool history with and without declared
+tools, credentials, conservative usage, errors and cancellation through real
+Worker/SQLite. Authored cases are not execution proof; final results are in the
+PR. No client parser or request rewriting is substituted.
+
+The actual registered client remains static; native project discovery is
+separate Worker transport proof. Configured native client coverage does not
+establish ClawRouter catalog-driven or manifest client selection, live account
+entitlement or vendor-dollar pricing. No common/compiler/client edits, live
+inference, login, provisioning, account changes or manual deployment occur.

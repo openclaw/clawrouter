@@ -77,13 +77,17 @@ test("Abliteration declaration keeps four exact frozen identities, canonical eff
     assert.deepEqual(native?.input, vision.has(m.upstream) ? ["text", "image"] : ["text"]);
     assert.equal(native?.contextWindow, contexts[i]); assert.equal(native?.maxOutputTokens, outputs[i]);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["models_list", "chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "models_list"]);
+  const metadata = provider.endpoints.find(e => e.id === "models_list");
+  assert.equal(metadata.method, "GET"); assert.equal(metadata.streaming, null);
   const opaque = providerModel(provider, "abliteration/synthetic-tenant-model", provider.endpoints.find(e => e.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { ANTHROPIC_API_KEY: "synthetic-unselected-anthropic", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");
   const upstream = configuredUpstream(provider, null, { ABLITERATION_API_KEY: "synthetic-explicit" });
   assert.equal(upstream.baseUrl, base); assert.equal(upstream.headers.get("authorization"), "Bearer synthetic-explicit");
   assert.equal(upstream.headers.get("x-organization-id"), null); assert.deepEqual(provider.auth.grantTransports, {});
+  const canonical = configuredUpstream(provider, null, { ABLIT_KEY: "synthetic-canonical", ABLITERATION_API_KEY: "synthetic-legacy" });
+  assert.equal(canonical.baseUrl, base); assert.equal(canonical.headers.get("authorization"), "Bearer synthetic-canonical");
 });
 
 test("Abliteration actual catalog exposes only the original direct grant's eligible finite Chat offers", async t => {
@@ -306,9 +310,9 @@ for (const manifest of [false, true]) test(`Abliteration ${manifest ? "manifest"
   assert.equal(f.sent.length, 1);
 });
 
-for (const nativePrefix of ["clawrouter-abliteration"]) test(`Abliteration routing alias ${nativePrefix} retains the canonical provider grant and native model`, async t => {
+test("Abliteration undeclared native URL aliases stay closed without egress", async t => {
   const f = await fixture(t), body = { model: models[0], messages: [{ role: "user", content: "synthetic-input" }] };
-  const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
-  assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
-  assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-abliteration"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+  const r = await f.call(body, { nativePrefix: "clawrouter-abliteration" });
+  assert.equal(r.status, 404); assert.equal((await r.json()).error.code, "provider_not_found");
+  await f.drain(); assert.equal(f.sent.length, 0); assert.equal(f.events.length, 0);
 });
