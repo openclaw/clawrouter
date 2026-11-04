@@ -524,11 +524,13 @@ function validatePublicCatalog(manifest) {
 
 function validateNativeModels(manifest, providerId, baseUrl) {
   const format = `${providerId}.models`;
+  const catalogFormat = providerId === "featherless" ? "featherless.catalog" : null;
   const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
-    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
-    || manifest.id === providerId && (endpoint.path === "/models" || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format) || catalogFormat && value.startsWith(catalogFormat))
+    || manifest.id === providerId && (endpoint.path === "/models" || catalogFormat && id === "catalog"
+      || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error(`${format} requires its native GET /models route, canonical inference origin and original Bearer API-key binding`); };
+  const fail = () => { throw new Error(`${format}${catalogFormat ? ` or ${catalogFormat}` : ""} requires its qualified GET /models route, canonical inference origin and original Bearer API-key binding`); };
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (manifest.id !== providerId || endpoints.length !== 1
     || Object.values(manifest.baseUrls).some(base => base !== baseUrl)
@@ -538,7 +540,9 @@ function validateNativeModels(manifest, providerId, baseUrl) {
     || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
     || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
   const [id, endpoint] = endpoints[0];
-  if (endpoint.requestFormat !== format || endpoint.responseFormat !== format
+  const projection = catalogFormat !== null && id === "catalog", expectedFormat = projection ? catalogFormat : format;
+  if (projection && (endpoint.nativeProxy !== false || manifest.models?.entries?.some(model => model.capabilities?.includes("models.list")))) fail();
+  if (endpoint.requestFormat !== expectedFormat || endpoint.responseFormat !== expectedFormat
     || endpoint.method !== "GET" || endpoint.path !== "/models" || endpoint.upstreamPath !== undefined
     || endpoint.auth !== undefined || endpoint.requestHeaders?.length || Object.keys(endpoint.query ?? {}).length
     || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "accept" || value !== "application/json")) fail();
