@@ -102,7 +102,7 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
     return false;
   });
   // Transport filtering must not reopen environment auth for a configured pool.
-  return { available, recovering, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
+  return { available, recovering, hasConfiguredGrant: configured.length > 0 || !!routing.sharedGrants?.[providerId]?.length || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
 }
 
 export function currentGrantRuntime(grant: UpstreamGrant, state: GrantRuntimeState | null | undefined): GrantRuntimeState | null {

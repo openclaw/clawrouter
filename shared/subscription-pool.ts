@@ -6,7 +6,8 @@ export type PoolEligibility = "eligible" | "exhausted" | "cooldown" | "stale" | 
 
 export function policyGrants(policy: AccessPolicy | undefined, grants: UpstreamGrant[]): UpstreamGrant[] {
   if (!policy) return [];
-  return grants.filter(grant => !!grant.provider && (grant.scope === "policies" ? grant.scopeId === policy.policyId : grant.scopeId === (policy.tenantId ?? "default"))
+  return grants.filter(grant => !!grant.provider && ((grant.scope === "policies" ? grant.scopeId === policy.policyId : grant.scopeId === (policy.tenantId ?? "default"))
+      || grant.kind === "subscription" && policy.grantRouting.sharedGrants?.[grant.provider]?.includes(grant.key))
     && (!policy.providers.length || policy.providers.includes(grant.provider))
     && (!Object.hasOwn(policy.grantRouting.eligibleGrants, grant.provider) || policy.grantRouting.eligibleGrants[grant.provider].includes(grant.tokenRef)));
 }

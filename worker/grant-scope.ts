@@ -11,5 +11,7 @@ export function grantsVisibleToPolicies(grants: GrantRecord[], policies: AccessP
     prefixes.add(`oauth/${entry.policyId}/`);
     prefixes.add(`oauth/tenants/${entry.policy.tenantId ?? "default"}/`);
   }
-  return grants.filter((entry) => [...prefixes].some((prefix) => entry.key.startsWith(prefix)));
+  return grants.filter((entry) => [...prefixes].some((prefix) => entry.key.startsWith(prefix))
+    || entry.grant.kind === "subscription" && !!entry.grant.provider && policies.some(policy =>
+      policy.policy.grantRouting?.sharedGrants?.[entry.grant.provider!]?.includes(entry.key)));
 }
