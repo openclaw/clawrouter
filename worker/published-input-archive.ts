@@ -183,7 +183,7 @@ export async function publishedInputResponse(env: Env, receipt: PublishedInputRe
           pending = undefined;
           if (result.done) {
             if (bytes !== binding.size) publishedInputUnavailable();
-            ended = true; await finish(); controller.close(); controller.byobRequest?.respond(0); return;
+            ended = true; await finish(); controller.close(); if ("byobRequest" in controller) controller.byobRequest?.respond(0); return;
           }
           if (!(result.value instanceof Uint8Array) || result.value.buffer.byteLength > 8 * 1024 * 1024
             || bytes + result.value.byteLength > binding.size) publishedInputUnavailable();

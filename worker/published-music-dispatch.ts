@@ -62,7 +62,7 @@ async function readDispatch(request: Request, operation: HttpOperation): Promise
   try {
     for (;;) {
       operation.signal.throwIfAborted(); if (++reads > 8192) publishedInputUnavailable();
-      const part = await reader.read(window); operation.signal.throwIfAborted();
+      const part: ReadableStreamReadResult<Uint8Array<ArrayBuffer>> = await reader.read(window); operation.signal.throwIfAborted();
       if (part.value) {
         if (part.value.buffer.byteLength > 16 * 1024 || part.value.byteLength > raw.length - size) publishedInputUnavailable();
         raw.set(part.value, size); size += part.value.byteLength; window = new Uint8Array(part.value.buffer);
@@ -167,7 +167,7 @@ export async function publishedMusicOwnerResponse(response: Response, prepared: 
         window = new Uint8Array(part.value.buffer); bytes += part.value.byteLength;
         if (part.value.byteLength) controller.enqueue(part.value.slice());
       }
-      if (part.done) { eof = true; await finish(); controller.close(); controller.byobRequest?.respond(0); }
+      if (part.done) { eof = true; await finish(); controller.close(); if ("byobRequest" in controller) controller.byobRequest?.respond(0); }
     } catch (error) { await finish(error); controller.error(error); }
   }, async cancel(reason) { operation.cancel(reason); await finish(reason ?? new Error("published music transport canceled")); } }, { highWaterMark: 0 });
   return new Response(body, { status: response.status, statusText: response.statusText, headers });
