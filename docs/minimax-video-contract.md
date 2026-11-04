@@ -38,6 +38,44 @@ bounded to 8MiB, below the primary limit; actual dimensions, aspect and media
 validity remain client/runtime asset qualification. HTTPS references are opaque
 upstream inputs, never router downloads or credential destinations.
 
+### Inactive first-frame qualification
+
+`worker/minimax-video-first-frame.ts` exports
+`qualifyMiniMaxFirstFrame(value: unknown): MiniMaxFirstFrame`. The explicit result
+contains only `bytes: Uint8Array<ArrayBuffer>`, `mimeType`, `width` and `height`.
+The byte array has its own exact-sized backing buffer, at most 8MiB; the caller
+owns its lifetime and may mutate or transfer it. The function retains no input
+or result in module state or closures and never mutates the input.
+
+Only canonical `data:image/png;base64,`, `data:image/jpeg;base64,` and
+`data:image/webp;base64,` prefixes qualify. No MIME default, `image/jpg` alias,
+URL-safe alphabet, whitespace, percent encoding, extra URI parameters or HTTPS
+input. Padding and unused trailing bits must be canonical. The validator scans
+the original string, then decodes directly into one exact allocation; it does
+not capture/normalize the payload or use whole-input `atob`/`btoa`. Scratch is
+bounded independently of payload size. The unchanged portable
+`qualifyImageContainer` supplies PNG/JPEG/static-WebP container checks only; its
+reuse carries no PixVerse authority.
+
+Dimensions come from the validated native frame headers (including matching
+extended-WebP canvas/coded dimensions). The short edge must exceed 300 pixels;
+aspect ratio must be within inclusive 2:5 through 5:2. There is no added vendor
+pixel maximum; native container limits still apply. PNG framing/CRC/zlib header,
+JPEG marker/table/scan framing and WebP chunk checks are structural. They do not
+inflate or decode pixels, prove raster integrity or establish playable media.
+Tests label dimension-mutated JPEG/WebP fixtures accordingly; the generated
+301x301 grayscale PNG also has its complete raster checked with a local inflater.
+
+This is an inactive leaf. Existing preparation/managed callers remain unchanged
+and all image routes stay closed. One decoded 8MiB allocation does not qualify
+complete 12MiB JSON admission or the whole-lifetime budget in the existing pool.
+Source1 owns those copies/leases, input digest and original caller, regional
+video grant generation/lineage, exact model/route/slot binding, current policy,
+actual signals and transport. No input publication, upload, fetch, retention
+permission or owned-asset receipt is supplied. OpenRouter publication consent,
+receipts, URLs and namespaces cannot authorize MiniMax input. HTTPS remains
+closed; Messages OAuth, speech and TokenPlan Search grants do not authorize video.
+
 ## Original-job files
 
 Only a successful original task supplies a generated `file_id` descriptor.
