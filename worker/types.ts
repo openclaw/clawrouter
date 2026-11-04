@@ -144,6 +144,7 @@ export interface AccessPolicy {
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
   upstreamRetention?: import("../shared/upstream-retention.ts").UpstreamRetentionPolicy | null;
+  inputPublication?: import("../shared/input-publication.ts").InputPublicationPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }

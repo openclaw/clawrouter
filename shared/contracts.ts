@@ -101,6 +101,7 @@ export interface AccessPolicy {
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
   upstreamRetention?: import("./upstream-retention").UpstreamRetentionPolicy | null;
+  inputPublication?: import("./input-publication").InputPublicationPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }
