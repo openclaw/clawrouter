@@ -59,6 +59,7 @@ export interface AccountingFacts {
   googleImage?: boolean;
   googleAudio?: boolean;
   nativeMusic?: boolean;
+  nativeSpeech?: boolean;
 }
 
 export interface AccountingOutcome {
@@ -85,7 +86,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
-  if ((facts.googleImage || facts.googleAudio || facts.nativeMusic || requestFormat === "minimax.speech") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+  if ((facts.googleImage || facts.googleAudio || facts.nativeMusic || facts.nativeSpeech || requestFormat === "minimax.speech") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: billable ? reservation.reservedMicros : 0,
     cost_basis: billable ? "unpriced_usage" : "none", input_tokens: null, output_tokens: null, total_tokens: null,
     pricing_ref: null, pricing_effective_at: null,
@@ -148,7 +149,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
 
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
-  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, undefined, selection.nativeResponse?.tariff);
+  const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, undefined, selection.nativeResponse?.tariff, selection.provider.id);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const billingBinding = { providerId, capability, requestFormat: selection.endpoint.request_format, method: selection.method, selectedModel: model?.upstream ?? null };
   let chargedUpstreamResponse = false;
@@ -163,6 +164,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const facts: AccountingFacts = {
     googleImage: googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
     googleAudio: googleAudioRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format),
+    nativeSpeech: selection.provider.id === "openrouter" && selection.capability === "audio.speech" && selection.endpoint.request_format === "openai.audio_speech",
     nativeMusic: selection.capability === "music.generate" && selection.endpoint.request_format === "openai.chat_completions",
     ...(selection.endpoint.request_format === "anthropic.messages" && capability !== "llm.count_tokens"
       ? { anthropicWebPrice: anthropicWebPrice(selection.endpoint.toolPricing, selection.body) } : {}),
@@ -232,11 +234,15 @@ export function createProxyAccounting(options: AccountingContext) {
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff, providerId?: string): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (endpoint.request_format === "minimax.speech" && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  // Provider context comes from the selected route, never the request model.
+  // This native speech contract has no qualified character or token tariff.
+  if (providerId === "openrouter" && capability === "audio.speech" && endpoint.request_format === "openai.audio_speech")
+    return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   // A native music envelope carried over Chat SSE has no qualified token tariff.
   if (capability === "music.generate" && endpoint.request_format === "openai.chat_completions")
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
