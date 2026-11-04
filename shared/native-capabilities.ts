@@ -23,10 +23,16 @@ export interface BasetenSystemOneDecisionCapabilities {
   limits: { maxTotalOptions: 512; maxStateAndQuestionTokens: 16384 };
 }
 export type NativeDecisionCapabilities = OpenAiDecisionCapabilities | BasetenSystemOneDecisionCapabilities;
+export interface OpaquePcmSpeechProfile {
+  voiceRequired: true;
+  responseFormat: "pcm";
+  output: { kind: "opaque"; mimeType: "audio/pcm"; sampleRate: null; voiceCompatible: false };
+}
 export interface NativeEndpointCapabilities {
   sources: string[];
   checkedAt: string;
   input?: Array<"text" | "image" | "audio" | "video" | "json">;
+  speech?: OpaquePcmSpeechProfile;
   // Full context, preferred input threshold, and endpoint output bound are
   // distinct from the router's authoritative reservation/pricing limits.
   contextWindow?: number;

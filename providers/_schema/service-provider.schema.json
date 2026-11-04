@@ -1327,6 +1327,7 @@
       "minProperties": 3,
       "additionalProperties": false,
       "properties": {
+        "speech": { "$ref": "#/$defs/opaquePcmSpeechProfile" },
         "sources": {
           "$ref": "#/$defs/modelRequestParameters/properties/sources"
         },
@@ -1386,6 +1387,26 @@
             "decision": {
               "$ref": "#/$defs/nativeDecisionCapabilities"
             }
+          }
+        }
+      }
+    },
+    "opaquePcmSpeechProfile": {
+      "type": "object",
+      "required": ["voiceRequired", "responseFormat", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "voiceRequired": { "const": true },
+        "responseFormat": { "const": "pcm" },
+        "output": {
+          "type": "object",
+          "required": ["kind", "mimeType", "sampleRate", "voiceCompatible"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "opaque" },
+            "mimeType": { "const": "audio/pcm" },
+            "sampleRate": { "const": null },
+            "voiceCompatible": { "const": false }
           }
         }
       }
