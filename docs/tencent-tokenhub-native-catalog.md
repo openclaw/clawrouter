@@ -94,9 +94,9 @@ provider source and invokes the real Worker with existing authority and SQLite
 budget fixtures. It covers both native and manifest routes, exact identities,
 original grant/TokenPlan isolation, fragmented SSE, replay, controls, schema,
 usage subsets, alias versus serving model, strict discovery, errors and cancel.
-Prepared tests are not executed proof. Local work remains code-only after
-native dependency qualification; source6 owns later snapshot integration,
-focused/full checks and actual-client proof on the final composed head.
+The local integration checkpoint below records executed Worker proof separately
+from the authored actual-client cases. Final-head CI and actual-client execution
+remain required before landing.
 
 Availability schema/runtime PR576/614 are already present at this source base.
 Source1 retains shared usage, selected-model/serving-model accounting and auth;
@@ -108,25 +108,26 @@ production deployment, login or live account provisioning is changed here.
 ## Local integration checkpoint
 
 Exact source `1df3552c342f611d83ed23301777b8eb5d34984c` is retained on
-qualified `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The provider YAML and
-Worker fixture retain the exact owner-corrected blobs described below. Only the changelog insertion was
+qualified `f11178a847189325d86ec3fa32f104c346648e66`. The provider YAML retains
+the exact owner-corrected blob described below. The changelog insertion is
 composed with existing unrelated entries.
 
 Exact owner corrections `5256f5837fd43200e7c3807db25576f8fdf5568a` and
 `57d40611aa64ae8e5f42aaff2ffd601034ff72fe` are carried with authorship and
-exact final YAML/test blobs. All 85 manifests compile. Snapshot SHA256:
-`15f9496bb80c917b9a16b2dfc9773510b7b10ff77be5216a1368c4ce970083d5`.
-Worker types and all 1,035 Chat matrix/consumer-selection cases pass.
+exact final YAML. All 86 manifests compile. Snapshot SHA256:
+`e55538e9622134a1cc1b90060de89afc8e864d4b6779eeeed9872b3216583186`.
+Worker types and all 1,051 Chat matrix/consumer-selection cases pass. The
+generated snapshot changes only the Tencent TokenHub provider from this base.
 
-Focused execution passes 56 of 58 cases. The declaration assertion at line 88
-expects insertion order rather than the compiler's sorted endpoint IDs. The
-URL-alias assertion at line 303 expects 200 for
-`/v1/native/clawrouter-tencent-tokenhub/...`, but the frozen runtime resolves
-that segment through exact `providerById` and returns 404 `provider_not_found`.
-These two fixture failures remain unchanged for owner disposition. Canonical
-native/manifest, selected/served preview identity, grant isolation and usage
-cases pass. No production runtime, YAML or positive assertion was changed.
-This checkpoint is not ready to land.
+All 58 focused Worker cases and both generic Tencent contract cases pass.
+Two test-only corrections compare endpoint IDs as exact sorted membership and
+require the unsupported `/v1/native/clawrouter-tencent-tokenhub/...` URL to
+return 404 `provider_not_found` with zero upstream calls. Canonical native and
+manifest routes, selected/served preview identity, grant isolation, tools and
+usage retain their positive assertions. No production runtime or YAML was
+changed by these corrections. The Worker and actual-client fixtures remain
+byte-identical to local checkpoint `334326adddeb6632b6fcfc9d96ce4a7e14f9414c`.
+This local checkpoint has not been published or qualified by final-head CI.
 
 Six actual registered-client cases are AUTHORED/UNRUN in
 `test/fixtures/openclaw-tencent-contract.test.ts`, paired with the real
