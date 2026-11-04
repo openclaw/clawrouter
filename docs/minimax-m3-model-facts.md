@@ -35,3 +35,42 @@ tier preservation, both hard-budget levels, explicit fixed charges and unchanged
 legacy/default/passthrough behavior. Snapshot generation and actual-client proof
 remain with the serialized integration owner; static facts alone do not certify
 runtime or account parity.
+
+## Local integration and authored consumer proof
+
+The local composition carries source
+`5ed3b3a0b3e482cace970054cb49b9cc7776e387` onto qualified router base
+`274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`, preserving the provider YAML and
+four source tests byte-for-byte. All manifests compile; the generated inventory
+adds only the M3 row. M2.7, its prices and ordering are unchanged.
+
+Local validation passes: all four source cases, 1,035 existing manifest-driven
+Chat matrix and consumer-selection cases, and Worker TypeScript. The matrix
+selects each endpoint's offered model; it is not a substitute for the M3
+actual-client assertions below.
+
+`test/openclaw-minimax-m3.test.mjs` and its companion client fixture author
+11 cases against actual public OpenClaw source
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. The registered MiniMax plugin,
+model definitions, catalog, host replay policy and Chat message serializer match
+the frozen `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7` source. The tests import
+those implementations; they do not copy their parsers or patch requests.
+
+The intended composition uses the real Worker and SQLite, the registered
+static M3 card, both stream hooks, explicit Chat configuration, original managed
+credentials and a synthetic fragmented upstream. Assertions cover tool replay,
+the registered policy's deliberate removal of thinking history, exact inline
+PNG bytes, invalid keys, foreign/model restrictions, unknown caller/provider
+hard budgets with zero egress, terminal usage, embedded errors and cancellation
+after partial delivery. Paid outcomes retain one explicit seven-micro
+`policy_fixed` receipt and null tokens when usage is absent. Client tariff and
+output-limit hints never become router reservation facts.
+
+These 11 actual-client cases are **authored, unrun** in this local-only
+preparation. No SDK build, hosted run, publication or live call was performed.
+They are not yet enrolled in the hosted consumer matrix.
+The client defaults to Anthropic; this fixture explicitly selects its existing
+Chat option. It does not prove default Anthropic, OAuth/portal, CN, dynamic
+discovery, ClawRouter manifest-client selection, video, account entitlement or
+physical pre-header cancellation. Final composed client execution and native
+gates remain required before landing.
