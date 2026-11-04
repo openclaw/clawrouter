@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
+
 - Add scoped OpenRouter video/content wrappers with download-only original-job files and bounded MP4 delivery, admitting creates only through explicit policy and original-credential retention qualification.
 
 
