@@ -1,4 +1,5 @@
 import { copilotGithubDomain } from "./provider-copilot.ts";
+import { inspectCopilotJsonText } from "./copilot-json-guard.ts";
 
 const clientId = "Iv1.b507a08c87ecfe98";
 const responseLimit = 8 * 1024;
@@ -53,12 +54,17 @@ function safeSeconds(value: unknown, positive: boolean): number {
   requireDevice(typeof seconds === "number" && Number.isSafeInteger(seconds) && seconds >= (positive ? 1 : 0) && Number.isSafeInteger(seconds * 1000), "duration");
   return seconds * 1000;
 }
-function boundedText(text: string): void {
-  // Check code units first to avoid allocating an unbounded encoder result.
-  // This is a TEXT cap, not fatal-UTF8 or chunk-count transport qualification.
-  requireDevice(typeof text === "string" && text.length <= responseLimit && new TextEncoder().encode(text).byteLength <= responseLimit, "response_limit");
+function boundedText(text: string): boolean {
+  try { inspectCopilotJsonText(text, "device"); return true; }
+  catch (error) {
+    requireDevice(!(error instanceof RangeError), "response_limit");
+    // Preserve HTTP-status precedence over malformed JSON. Tokenization has
+    // already completed or failed; never defer resource admission to JSON.parse.
+    return false;
+  }
 }
-function json(text: string): Record<string, unknown> {
+function json(text: string, valid: boolean): Record<string, unknown> {
+  if (!valid) throw new Error("invalid_copilot_device_response_json");
   let value: unknown;
   try { value = JSON.parse(text); } catch { throw new Error("invalid_copilot_device_response_json"); }
   requireDevice(record(value), "response_body");
@@ -95,9 +101,9 @@ export function prepareCopilotDeviceRequest(context: CopilotDeviceContext, curre
 
 export function decodeCopilotDeviceAuthorization(text: string, status: number, context: CopilotDeviceContext, currentOwner: string): CopilotDeviceAuthorization {
   const domain = boundDomain(context, currentOwner, contextFields);
-  boundedText(text);
+  const valid = boundedText(text);
   requireDevice(ok(status), "http_status");
-  const value = json(text);
+  const value = json(text, valid);
   requireDevice(fields(value, ["device_code", "user_code", "verification_uri", "expires_in", "interval"]), "authorization_response");
   requireDevice(nonempty(value.device_code) && nonempty(value.user_code) && value.user_code.trim().length <= 64, "authorization_response");
   return Object.freeze({ githubDomain: domain, ownerBinding: currentOwner,
@@ -120,9 +126,9 @@ export function decodeCopilotDevicePoll(text: string, status: number, authorizat
   requireDevice(Number.isSafeInteger(intervalMs) && intervalMs >= authorization.intervalMs, "poll_interval");
   const failure = (code: "invalid_response" | "http_error" | "provider_error"): CopilotDevicePollResult => ({ status: "error", code });
   try {
-    boundedText(text);
+    const valid = boundedText(text);
     if (!ok(status)) return failure("http_error");
-    const value = json(text);
+    const value = json(text, valid);
     if (Object.hasOwn(value, "access_token")) {
       requireDevice(fields(value, ["access_token", "token_type", "scope"]), "token_response");
       requireDevice(typeof value.access_token === "string" && /^[A-Za-z0-9._~+/-]+=*$/.test(value.access_token), "token_response");
