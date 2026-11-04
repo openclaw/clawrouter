@@ -625,6 +625,12 @@
         },
         "then": { "$ref": "#/$defs/basetenSystemOneEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^levanto\\.sage_batch" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^levanto\\.sage_batch" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/sageBatchEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "pattern": "^gradium\\." } }, "required": ["requestFormat"] },
@@ -1359,6 +1365,104 @@
         "assetHandles": { "const": false }
       }
     },
+    "publishedMusicInputSupport": {
+      "type": "object",
+      "required": [
+        "version",
+        "publication",
+        "slot",
+        "count",
+        "encoding",
+        "mimeTypes",
+        "maxDecodedBytes",
+        "maxJsonBytes",
+        "maxForwardJsonBytes",
+        "maxLifetimeSeconds",
+        "renewable",
+        "destinationAttempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "clawrouter.published-input.v1"
+        },
+        "publication": {
+          "type": "object",
+          "required": [
+            "method",
+            "path",
+            "query",
+            "body",
+            "idempotencyKey"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/v1/input-assets/openrouter/music"
+            },
+            "query": {
+              "const": false
+            },
+            "body": {
+              "const": "native_plan"
+            },
+            "idempotencyKey": {
+              "type": "object",
+              "required": [
+                "header",
+                "pattern"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "header": {
+                  "const": "Idempotency-Key"
+                },
+                "pattern": {
+                  "const": "^[A-Za-z0-9._:-]{1,128}$"
+                }
+              }
+            }
+          }
+        },
+        "slot": {
+          "const": "messages[0].content[1].image_url.url"
+        },
+        "count": {
+          "const": 1
+        },
+        "encoding": {
+          "const": "base64_data_url"
+        },
+        "mimeTypes": {
+          "const": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ]
+        },
+        "maxDecodedBytes": {
+          "const": 8388608
+        },
+        "maxJsonBytes": {
+          "const": 12582912
+        },
+        "maxForwardJsonBytes": {
+          "const": 262144
+        },
+        "maxLifetimeSeconds": {
+          "const": 900
+        },
+        "renewable": {
+          "const": false
+        },
+        "destinationAttempts": {
+          "const": 1
+        }
+      }
+    },
     "nativeEndpointCapabilities": {
       "type": "object",
       "required": [
@@ -1370,6 +1474,7 @@
       "properties": {
         "speech": { "$ref": "#/$defs/opaquePcmSpeechProfile" },
         "referenceImage": { "$ref": "#/$defs/inlineMusicReferenceImage" },
+        "publishedInput": { "$ref": "#/$defs/publishedMusicInputSupport" },
         "sources": {
           "$ref": "#/$defs/modelRequestParameters/properties/sources"
         },
@@ -2312,6 +2417,22 @@
           { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
         ]
       }
+    },
+    "sageBatchEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/decide/batch" }, "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "requestFormat": { "const": "levanto.sage_batch" }, "responseFormat": { "const": "levanto.sage_batch" },
+        "query": { "maxProperties": 0 }, "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["inputProfile"] }
+      ] }
     },
     "basetenSystemOneEndpoint": {
       "type": "object",

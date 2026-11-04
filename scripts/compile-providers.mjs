@@ -283,6 +283,7 @@ function validateManifest(manifest) {
   if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
   validateInputProfiles(manifest);
+  validateSageBatch(manifest);
   validateBasetenSystemOne(manifest);
   validateGradiumSpeech(manifest);
   validateXaiSpeech(manifest);
@@ -355,7 +356,8 @@ function validateModels(manifest) {
       const supported = manifest.capabilities.filter(capability => capability.endpoint === id && model.capabilities?.includes(capability.id));
       const fail = message => { throw new Error("model " + model.id + " nativeCapabilities " + message); };
       if (!endpoint || !supported.length) fail("must reference a supported endpoint");
-      if (facts.referenceImage) validateReferenceImage(manifest, model, id, endpoint, facts);
+      if (facts.referenceImage) validateMusicImageRoute(manifest, model, id, endpoint, facts, "referenceImage");
+      if (facts.publishedInput) validateMusicImageRoute(manifest, model, id, endpoint, facts, "publishedInput");
       if (facts.speech && (endpoint.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary"
         || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
         || !supported.some(capability => capability.id === "audio.speech")
@@ -368,10 +370,12 @@ function validateModels(manifest) {
       const decision = facts.inference?.decision;
       if (decision) {
         const contract = decisionContracts.get(decision.protocol);
-        if (!contract || manifest.id !== contract.provider || endpoint.requestFormat !== contract.format || endpoint.responseFormat !== contract.format
+        const sageBatch = decision.protocol === "levanto-sage" && endpoint.requestFormat === "levanto.sage_batch";
+        const format = sageBatch ? "levanto.sage_batch" : contract?.format;
+        if (!contract || manifest.id !== contract.provider || endpoint.requestFormat !== format || endpoint.responseFormat !== format
           || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.nativeProxy === false
           || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
-          || !supported.some(capability => capability.id === "llm.decisions")
+          || !supported.some(capability => capability.id === (sageBatch ? "llm.decisions.batch" : "llm.decisions"))
           || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) fail("decision requires the declared Decisions endpoint and qualified protocol/provider pair");
         for (const [kind, question] of Object.entries(decision.questions)) {
           if (question.minOptions > question.maxOptions) fail(`${kind} minOptions exceeds maxOptions`);
@@ -390,7 +394,7 @@ function validateModels(manifest) {
   }
 }
 
-function validateReferenceImage(manifest, model, id, endpoint, facts) {
+function validateMusicImageRoute(manifest, model, id, endpoint, facts, field) {
   const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
   // Support facts describe the registered leaf's input, never asset authority
   // or a capability inherited by another model on the shared Chat wire path.
@@ -406,7 +410,7 @@ function validateReferenceImage(manifest, model, id, endpoint, facts) {
     || endpoint.streaming !== "sse" || endpoint.pathParams?.length || Object.keys(endpoint.query ?? {}).length
     || ["upstreamPath", "websocket", "lifecycle", "responsesLifecycle", "modelPassthrough", "requestPricing", "inputProfile"].some(key => endpoint[key] !== undefined)
     || facts.input?.length !== 2 || !facts.input.includes("text") || !facts.input.includes("image"))
-    throw new Error(`model ${model.id} referenceImage requires the registered OpenRouter Lyria music_generate route with optional inline image input`);
+    throw new Error(`model ${model.id} ${field} requires the registered OpenRouter Lyria music_generate route with optional inline image input`);
 }
 
 function validateModelAvailability(model) {
@@ -1129,6 +1133,35 @@ function validateBedrockEmbeddings(manifest) {
     if (facts && (facts.input?.some(input => input !== "text") || facts.contextWindow !== undefined || facts.contextTokens !== undefined
       || facts.maxOutputTokens !== undefined || facts.inference || facts.hostedTools || facts.supportedServiceTiers)) fail();
   }
+}
+
+function validateSageBatch(manifest) {
+  const format = "levanto.sage_batch", capability = "llm.decisions.batch";
+  const endpoints = Object.entries(manifest.endpoints).filter(([id, endpoint]) =>
+    [endpoint.requestFormat, endpoint.responseFormat].some(value => value.startsWith(format))
+    || manifest.id === "levanto" && manifest.capabilities.some(item => item.endpoint === id && item.id === capability));
+  if (!endpoints.length) return;
+  const fail = () => { throw new Error("levanto.sage_batch requires the finite Sage model, text/list decision metadata and exact batch endpoint"); };
+  if (manifest.id !== "levanto" || endpoints.length !== 1
+    || Object.values(manifest.baseUrls).some(base => base !== "https://sage.levanto.ai")
+    || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(manifest.adapter?.injectQuery ?? {}).length || manifest.adapter?.requestTransforms?.renameFields?.length) fail();
+  const [id, endpoint] = endpoints[0];
+  const capabilities = manifest.capabilities.filter(item => item.endpoint === id);
+  if (id !== "decisions_batch" || endpoint.path !== "/decide/batch"
+    || endpoint.requestFormat !== format || endpoint.responseFormat !== format
+    || capabilities.length !== 1 || capabilities[0].id !== capability
+    || capabilities[0].methods?.some(method => method !== "POST")) fail();
+  const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.includes(capability));
+  if (models.length !== 1) fail();
+  const model = models[0], facts = model.nativeCapabilities?.endpoints?.[id];
+  if (model.id !== "levanto/levanto-sage-2" || model.upstream !== "levanto-sage-2" || model.availability?.status === "upstream_alias"
+    || model.capabilities.some(value => !["llm.decisions", capability].includes(value))) fail();
+  // Existing singular-runtime fixtures carry the closed batch endpoint without
+  // support facts. Preserve omission; it must not manufacture batch support.
+  if (facts && (facts.inference?.decision?.protocol !== "levanto-sage" || facts.inference.chat === true
+    || facts.input?.length !== 2 || !facts.input.includes("text") || !facts.input.includes("json")
+    || facts.inference.decision.limits?.image || facts.inference.decision.questions.choice?.maxImageOptions !== undefined)) fail();
 }
 
 function validateBasetenSystemOne(manifest) {

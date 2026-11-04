@@ -9,7 +9,7 @@ import { proxyCredentialFailure, proxyKeyVerification, type ProxyKeyVerification
 import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
 import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
 
-interface PublicControlBinding {
+export interface PublicControlBinding {
   credentialId: string | null;
   principalId: string | null;
   policyId: string;
@@ -33,8 +33,16 @@ export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseCo
 export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string): Promise<AccessPolicy | undefined> {
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
-  const binding = authorization.binding, proof = binding.proof;
-  assertControlCallerLive(authorization);
+  return authorizeIssuedControl(env, authorization.binding, owner, signal, retentionProtocol);
+}
+
+// The public path obtains this binding only from publicControlAuthorization.
+// Delegated asset reads obtain it only from a validated, verifier-matched
+// durable receipt issued by that path. URL fields never supply caller proof.
+export async function authorizeIssuedControl(env: Env, binding: PublicControlBinding, owner: ContinuationOwner,
+  signal: AbortSignal, retentionProtocol?: string): Promise<AccessPolicy> {
+  const proof = binding.proof;
+  assertIssuedControlLive(binding);
   if (binding.policyGeneration !== owner.policyGeneration) denied();
   if (proof.kind === "proxy_key") {
     if (proof.credentialId !== binding.credentialId || proof.principalId !== binding.principalId) denied();
@@ -64,7 +72,10 @@ export async function authorizeResponseControl(env: Env, authorization: Response
 export function assertControlCallerLive(authorization: ResponseControlAuthorization): void {
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
-  const proof = authorization.binding.proof;
+  assertIssuedControlLive(authorization.binding);
+}
+export function assertIssuedControlLive(binding: PublicControlBinding): void {
+  const proof = binding.proof;
   if (proof.kind === "proxy_key" && credentialExpired(proof)) throw credentialExpiryError(proof.expiresAt!);
   if (proof.kind !== "proxy_key" && (!Number.isSafeInteger(proof.expiresAtMs) || Date.now() >= proof.expiresAtMs)) denied();
 }

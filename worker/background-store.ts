@@ -6,6 +6,9 @@ import type { UsageIngestReceipt } from "./ledgers.ts";
 import type { ManagedFileDescriptor, ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
 import type { UsageEvent } from "./types.ts";
 import { HttpError } from "./utils.ts";
+import { assertPublishedInputLive, samePublishedInput, samePublishedObject, validatePublishedInput, validatePublishedObject,
+  validatePublishedAttempt, publishedInputUnavailable, publishedInputVersion, type PublishedInputBinding,
+  type PublishedInputReceipt, type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
 
 export const backgroundObservationMs = 60 * 60_000;
 export const backgroundAutoRetryMs = 7 * 86_400_000;
@@ -98,6 +101,63 @@ export class BackgroundStore {
     sql.exec("CREATE INDEX IF NOT EXISTS responses_background_due ON responses_background(next_action_ms)");
   }
 
+  // Separate input-publication records share the bounded scope/table, never the
+  // generation type, alarm, collector or financial recovery path. NULL due time
+  // is deliberate. Expired attempts remain tombstones; expiry cannot reset them.
+  allocatePublishedInput(binding: PublishedInputBinding): PublishedInputReceipt {
+    assertPublishedInputLive(binding);
+    const prior = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE phase LIKE 'asset_%' AND json_extract(job_json, '$.binding.idempotencyDigest') = ? LIMIT 1", binding.idempotencyDigest)][0];
+    if (prior) {
+      const receipt = JSON.parse(prior.job_json) as PublishedInputReceipt;
+      if (!samePublishedInput(receipt.binding, binding)) publishedInputUnavailable();
+      return receipt;
+    }
+    if ([...this.sql.exec("SELECT job_id FROM responses_background WHERE job_id = ?", binding.id)].length) publishedInputUnavailable();
+    const count = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background")][0].count;
+    if (count >= backgroundCapacity) capacity();
+    const receipt: PublishedInputReceipt = { version: publishedInputVersion, binding, state: "pending", object: null, attempt: null };
+    this.savePublishedInput(receipt); return receipt;
+  }
+
+  publishedInput(id: string): PublishedInputReceipt {
+    if (typeof id !== "string" || id.length !== 38 || !/^asset_[a-f0-9]{32}$/.test(id)) publishedInputUnavailable();
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ? AND phase LIKE 'asset_%'", id)][0];
+    if (!row) publishedInputUnavailable();
+    const receipt = JSON.parse(row.job_json) as PublishedInputReceipt;
+    assertPublishedInputLive(receipt.binding);
+    return receipt;
+  }
+
+  claimPublishedInputPublication(binding: PublishedInputBinding): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    if (!samePublishedInput(receipt.binding, binding) || receipt.state !== "pending") publishedInputUnavailable();
+    receipt.state = "publication_unknown"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  bindPublishedInputObject(binding: PublishedInputBinding, object: PublishedInputObject): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    validatePublishedObject(object, binding);
+    if (!samePublishedInput(receipt.binding, binding)) publishedInputUnavailable();
+    if (receipt.state === "published" && receipt.object && samePublishedObject(receipt.object, object)) return receipt;
+    if (receipt.state !== "publication_unknown" || receipt.object) publishedInputUnavailable();
+    receipt.object = object; receipt.state = "published"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  claimPublishedInputForward(binding: PublishedInputBinding, attempt: PublishedInputAttempt): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    validatePublishedAttempt(attempt);
+    if (!samePublishedInput(receipt.binding, binding) || receipt.state !== "published" || !receipt.object || receipt.attempt) publishedInputUnavailable();
+    receipt.attempt = attempt; receipt.state = "forwarding_unknown"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  private savePublishedInput(receipt: PublishedInputReceipt): void {
+    validatePublishedInput(receipt.binding);
+    const encoded = JSON.stringify(receipt);
+    if (new TextEncoder().encode(encoded).byteLength > backgroundRowBytes) publishedInputUnavailable();
+    this.sql.exec("INSERT INTO responses_background (job_id, phase, admitted_at_ms, next_action_ms, job_json) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(job_id) DO UPDATE SET phase = excluded.phase, next_action_ms = NULL, job_json = excluded.job_json",
+      receipt.binding.id, `asset_${receipt.state}`, receipt.binding.allocatedAt, encoded);
+  }
+
   admit(input: BackgroundAdmission): BackgroundJob {
     if (!/^bg_[0-9a-f]{32}$/.test(input.id) || !Number.isSafeInteger(input.admittedAt) || Math.abs(Date.now() - input.admittedAt) > 60_000) invalid();
     if (input.managed) {
@@ -179,12 +239,12 @@ export class BackgroundStore {
   }
 
   get(id: string): BackgroundRecord | null {
-    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ?", id)][0];
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ? AND phase NOT LIKE 'asset_%'", id)][0];
     return row ? JSON.parse(row.job_json) : null;
   }
 
   list(after = ""): BackgroundRecord[] {
-    return [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id > ? ORDER BY job_id LIMIT 16", after)].map(row => JSON.parse(row.job_json));
+    return [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id > ? AND phase NOT LIKE 'asset_%' ORDER BY job_id LIMIT 16", after)].map(row => JSON.parse(row.job_json));
   }
 
   beginReserve(id: string, index: number, upload = false): BudgetReservationIntent {
