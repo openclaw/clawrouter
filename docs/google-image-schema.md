@@ -130,8 +130,25 @@ Pre-publication inspection confirms the pinned registration helper exposes
 receipts retain seven micro-units and null token counters. Uncapped/null balance
 assumptions do not apply, and no positive pricing assertion is weakened.
 
-These fourteen cases remain authored until the exact composed head passes both
-actual-client/SQLite contracts. Native checks alone do not establish that proof.
+At router `97ba67a67afae9c9777aabcb0f5aeb01fe3338d6`, the actual native
+consumer's four positive cases fail before image dispatch with
+`UND_ERR_INVALID_ARG: invalid onRequestStart method`. The pinned client's
+`image-google.ts` supplies a custom `fetchFn` closure around ambient Node fetch;
+the guard consequently passes its Undici dispatcher to that closure instead of
+selecting its matching runtime fetch. This requires a client-owner correction
+and a qualified public pin. The fixture does not replace the client's fetch or
+weaken positive image/accounting assertions to bypass the failure.
+
+The separate manifest harness stopped before client execution because its
+catalog assertion incorrectly prohibited native offers for every Google
+capability. It now scopes that prohibition to `image_generate`; the positive
+eligible manifest-image assertion remains. This correction has syntax proof;
+actual native/manifest execution and outer accounting remain unqualified until
+the corrected client is available. The failed consumer job is
+[126615242791](https://github.com/openclaw/clawrouter/actions/runs/41841836680/job/126615242791).
+
+These fourteen cases require both exact composed-head actual-client/SQLite
+contracts to pass. Native checks alone do not establish that proof.
 No SDK report, new local install, live inference or account change is performed.
 The declaration preserves frozen GenerateContent transport; current examples or
 an available model ID do not prove live entitlement or backwards compatibility.

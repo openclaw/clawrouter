@@ -33,7 +33,7 @@ for (const dispatch of ["native", "manifest"]) test(`actual Google image ${dispa
     const catalog = await (await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-gimage_model0_text-fixture-secret" } })).json();
     const offers = catalog.providers.find(p => p.id === "google-gemini").offers;
     assert.ok(offers.some(o => o.endpoint === "image_generate" && o.modelId === "google/" + models[0] && o.routeKind === dispatch && o.eligible));
-    if (dispatch === "manifest") assert.ok(offers.every(o => o.routeKind !== "native"));
+    if (dispatch === "manifest") assert.ok(offers.filter(o => o.endpoint === "image_generate").every(o => o.routeKind !== "native"));
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-google-images-contract.test.ts", import.meta.url), testPath: "extensions/clawrouter/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, GOOGLE_API_KEY: "must-not-fallback", GEMINI_API_KEY: "must-not-fallback" } });
     const upstream = await mf.getWorker("upstream"), calls = await (await upstream.fetch("https://fixture.example/state")).json();
