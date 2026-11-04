@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +35,28 @@ function* musicWire(full = true, padded = true, terminal = true) {
     yield ":" + "p".repeat(size - 3) + "\n\n"; padding -= size;
   }
   if (terminal) yield done;
+}
+
+// A real pending socket keeps the upstream request's read alive. An exhausted
+// JS generator with no pending I/O is a hung request in workerd, not a provider
+// waiting for more audio. This source is private to the quarantine-abort case.
+async function pendingMusicSource(t) {
+  const metrics={requests:0,bytes:0,closed:0};
+  let resolveClosed;
+  const closed=new Promise(resolve=>{resolveClosed=resolve;});
+  const server=createServer((request,response)=>{
+    if(request.method!=='GET'||request.url!=='/pending-music'){response.writeHead(404);response.end();return;}
+    metrics.requests++;metrics.status=200;
+    response.on('close',()=>{metrics.closed++;resolveClosed();});
+    response.writeHead(200,{'content-type':'text/event-stream'});
+    for(const part of musicWire(false,false,false)){metrics.bytes+=Buffer.byteLength(part);response.write(part);}
+    // Deliberately no end(): the caller must cancel this actual response read.
+  });
+  t.after(()=>new Promise((resolve,reject)=>{
+    server.closeAllConnections();server.close(error=>error?reject(error):resolve());
+  }));
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+  return {url:'http://127.0.0.1:'+server.address().port+'/pending-music',metrics,closed};
 }
 
 const router = `
@@ -144,7 +167,7 @@ export default { async fetch(request, bindings, context) {
   return response;
 }, queue:worker.queue };
 `;
-const upstream = `const musicWire = ${musicWire.toString()};
+const upstream = pendingUrl => `const musicWire = ${musicWire.toString()};
 let attempts=0;const phases=[];
 export default {async fetch(request){
   if(request.url==='https://openrouter.ai/__fixture_music_phase'&&request.method==='GET')return Response.json({attempts,phases});
@@ -157,6 +180,23 @@ export default {async fetch(request){
   const body = await request.json(); if(body.model !== 'google/lyria-3-pro-preview' || body.audio.format !== 'wav') {phase.status=400;return new Response('invalid native body',{status:400});}
   const mode = body.messages[0].content, small = mode === 'small' || mode === 'quarantine-cancel';
   phase.mode=['full','delivery-cancel','quarantine-cancel','small','truncated'].includes(mode)?mode:'other';phase.status=200;
+  if(mode==='quarantine-cancel'){
+    // No native credential is forwarded to this loopback byte source. Its real
+    // pending network read belongs to this original synthetic provider request.
+    const network=await fetch(${JSON.stringify(pendingUrl)},{signal:request.signal});
+    phase.networkStatus=network.status;phase.activeReads=0;
+    if(network.status!==200||!network.body)throw new Error('fixture network source unavailable');
+    const reader=network.body.getReader();
+    return new Response(new ReadableStream({async pull(controller){
+      phase.pulls++;phase.activeReads++;
+      try{
+        const part=await reader.read();if(phase.canceled)return;
+        if(part.done){phase.exhausted=true;reader.releaseLock();controller.close();return;}
+        phase.bytes+=part.value.byteLength;controller.enqueue(part.value);
+      }finally{phase.activeReads--;}
+    },async cancel(reason){phase.canceled=true;try{await reader.cancel(reason);}finally{reader.releaseLock();}}},{highWaterMark:0}),
+      {headers:{'content-type':'text/event-stream','x-fixture-music-attempt':String(phase.attempt)}});
+  }
   const parts = musicWire(!small,!small,mode !== 'truncated' && mode !== 'quarantine-cancel'); let finished = false;
   return new Response(new ReadableStream({pull(controller){
     phase.pulls++;
@@ -229,7 +269,8 @@ async function assertStatus(response, expected, origin) {
 
 test("workerd full-output music uses actual fetch BYOB, original wire, bounded delivery and cancellation", {timeout:120000}, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-full-music-workerd-")); t.after(() => rm(temporary, {recursive:true,force:true}));
-  const instance = await startWorkerdFixture(temporary,router,upstream); t.after(() => instance.dispose());
+  const network=await pendingMusicSource(t);
+  const instance = await startWorkerdFixture(temporary,router,upstream(network.url)); t.after(() => instance.dispose());
   const origin = (await instance.ready).origin;
   await t.test("exact 16 MiB WAV / 32 MiB SSE reaches the consumer with the response lease held", () => musicRequest(origin,'full',async pending => {
     const response = await pending;
@@ -293,14 +334,17 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
         if((current&&beforeAbort.status!==undefined) || host.bytes || host.fetchErrorName || host.readErrorName)break;
         await delay(20);
       }
-      const hostBeforeAbort={...host};abort.abort(reason);await outcome;
+      const hostBeforeAbort={...host},networkBeforeAbort={...network.metrics};abort.abort(reason);await outcome;
       const afterAbort=await settled(origin),physical=await readFixtureJson(new URL('/physical-proof',origin));
-      const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical});
+      if(barrier)await network.closed;
+      const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics});
       let receipt;
       try {
         // Record the real ledger outcome before any signal-observation assertion.
         // Common first-cause status remains independently checked below.
         receipt=await settlement(origin,count+1,afterAbort.operationStatus);
+        assert.deepEqual(networkBeforeAbort,{requests:1,bytes:753,closed:0,status:200},trace);
+        assert.deepEqual(network.metrics,{requests:1,bytes:753,closed:1,status:200},trace);
         assert.equal(barrier,true,trace);assert.equal(host.signalInitiallyAborted,false,trace);
         assert.equal(hostBeforeAbort.abortEvents,0,trace);assert.equal(host.abortEvents,1,trace);
         assert.equal(abort.signal.aborted,true,trace);assert.equal(host.signalAborted,true,trace);
@@ -328,7 +372,7 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
         }
         assertPhysical(afterAbort);
       } finally {
-        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,
+        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics,
           receipt:receipt&&{status:receipt.status,cost:receipt.actual_cost_micros,basis:receipt.cost_basis,
             grant:receipt.grant_key,capability:receipt.capability,input:receipt.input_tokens,output:receipt.output_tokens,total:receipt.total_tokens}}));
       }
