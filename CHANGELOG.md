@@ -315,6 +315,7 @@
 
 - Add GitHub Copilot account and native request codecs with explicit public/enterprise identity, advertised model transports and credential-owner binding for runtime integration.
 - Preserve native Copilot picker visibility and unconfigured-consent exclusions, and bind inactive catalog/request headers to one explicit original-owner identity without defaults, inferred entitlement or static-seed resurrection.
+- Add inactive Copilot device-code request/response codecs with original domain/owner binding, bounded text decoding and explicit polling intervals; durable onboarding and credential installation remain separate.
 
 - Reject compromised certificate keys in the self-host Worker runtime, and include the system CA bundle required by the patched verifier. Thanks @joshavant.
 
