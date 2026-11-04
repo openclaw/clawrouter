@@ -86,10 +86,14 @@ test("actual registered Deepgram native raw audio through workerd and SQLite", {
       const usage = await readUsage(origin, id);
       assert.equal(usage.budget.spentMicros, 0); assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
+    await network.closed;
     const final = await readJson(origin + "/fixture/state"), canceled = final.calls.find(call => call.id === "deepgram_cancel");
-    assert.equal(canceled.canceled, true); assert.equal(canceled.bytes, 11); assert.equal(canceled.activeReads, 0);
+    assert.equal(canceled.canceled, true); assert.equal(canceled.bytes, 11);
+    // The canceled upstream event can retain its last producer counter. Observe
+    // the real reader owned by the router, plus physical byte-source closure.
+    assert.deepEqual(final.transport, { readers: 1, activeReads: 0, bytes: 11, cancels: 1, releases: 1 });
     assert.equal(final.control.injected, true); assert.equal(final.control.status, 499); assert.equal(final.control.pending, false);
-    assert.equal(final.capacity, 0); await network.closed;
+    assert.equal(final.capacity, 0);
     assert.deepEqual(network.metrics, { requests: 1, bytes: 11, closed: 1 });
     t.diagnostic("native host abort and controlled incoming Worker cleanup are separate; physical pre-header disconnect propagation is not certified");
   } finally { await mf?.dispose(); await network.close(); await rm(temporary, { recursive: true, force: true }); }
@@ -125,17 +129,41 @@ function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
     import { bodyBudgetCharged } from "./worker/body-budget.ts";
     const requests = [], control = { pending: false, injected: false }; let caller, original;
+    const transport = { readers: 0, activeReads: 0, bytes: 0, cancels: 0, releases: 0 }, bodies = new WeakSet();
+    const nativeFetch = globalThis.fetch, nativeReader = ReadableStream.prototype.getReader;
+    globalThis.fetch = async (input, init) => {
+      const response = await nativeFetch(input, init), url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === "https://api.deepgram.com" && url.pathname === "/v1/listen"
+        && url.searchParams.get("tag") === "deepgram_cancel" && response.body) bodies.add(response.body);
+      return response;
+    };
+    ReadableStream.prototype.getReader = function(...args) {
+      const reader = nativeReader.apply(this, args);
+      if (bodies.has(this)) {
+        bodies.delete(this); transport.readers++;
+        const read = reader.read.bind(reader), cancel = reader.cancel.bind(reader), release = reader.releaseLock.bind(reader);
+        reader.read = async (...args) => {
+          transport.activeReads++;
+          try { const result = await read(...args); transport.bytes += result.value?.byteLength ?? 0; return result; }
+          finally { transport.activeReads--; }
+        };
+        reader.cancel = reason => { transport.cancels++; return cancel(reason); };
+        reader.releaseLock = () => { release(); transport.releases++; };
+      }
+      return reader;
+    };
     export default { ...handler, async fetch(request, env, context) {
       const path = new URL(request.url).pathname;
       if (path === "/fixture/state") {
         const calls = await (await fetch("https://fixture.example/state")).json();
-        return Response.json({ requests, calls, control, capacity: bodyBudgetCharged() });
+        return Response.json({ requests, calls, control, transport, capacity: bodyBudgetCharged() });
       }
       if (path === "/fixture/abort") {
         const calls = await (await fetch("https://fixture.example/state")).json();
         const active = calls.find(call => call.id === "deepgram_cancel");
         if (request.method !== "POST" || !control.pending || control.injected || !caller || caller.signal.aborted
-          || !original || original.signal.aborted || active?.status !== 200 || active?.bytes !== 11 || active?.activeReads !== 1)
+          || !original || original.signal.aborted || active?.status !== 200 || active?.bytes !== 11 || active?.activeReads !== 1
+          || transport.readers !== 1 || transport.activeReads !== 1 || transport.bytes !== 11)
           return new Response("original pending read unavailable", { status: 409 });
         control.injected = true; caller.abort(new DOMException("controlled incoming cancellation", "AbortError"));
         return Response.json({ injected: true });

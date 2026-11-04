@@ -6,7 +6,7 @@ The compiled Deepgram Nova-3 offer drives native selection through a real Worker
 
 The actual client cases cover native selection only. The separate Worker runtime tests exercise native and manifest transports, authoritative post-upload checks, bounded intake, dispatch acknowledgment and response completeness. They do not establish manifest selection by this client.
 
-Cancellation has two explicit observations: the actual host rejects its own abort without delivering a transcript; a guarded fixture signal then cancels the same pending Worker request and verifies reader closure, one original settlement and released capacity. The locked local runtime's physical pre-header disconnect propagation remains unqualified. Controlled cleanup is not a claim of live wire propagation.
+Cancellation has two explicit observations: the actual host rejects its own abort without delivering a transcript; a guarded fixture signal then cancels the same pending Worker request and verifies reader closure, one original settlement and released capacity. The cleanup oracle observes the router's actual reader and lock release, plus closure of the private HTTP byte source; an interrupted upstream producer's last counter is not that reader's state. The locked local runtime's physical pre-header disconnect propagation remains unqualified. Controlled cleanup is not a claim of live wire propagation.
 
 All upstream responses and credentials are synthetic. No live inference, account entitlement or deployment of this candidate is established.
 
