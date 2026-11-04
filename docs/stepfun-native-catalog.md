@@ -119,3 +119,29 @@ frozen-client region mapping, strict discovery and compatibility behavior.
 Source1's cache accounting fix is required; schema/common/client/media files
 remain with their owners. No new secret, provisioning, login, account changes,
 live inference or manual deployment is performed here.
+
+## Local integration checkpoint
+
+Local composition retains source `9d528b3cb448c17be1c94098b6d4c1756c89317f`
+on qualified base `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The source
+regional YAML and 96-case Worker fixture are unchanged. The base already
+contains the provider-scoped `cached_tokens` observer; that old dependency is
+not the current blocker.
+
+All-manifest compilation stops before snapshot generation with
+`provider stepfun-cn endpoint models_list catalog protocol requires explicit GET`.
+Source4 must qualify the declaration against the current catalog endpoint
+contract. No compiler/common-runtime relaxation was made. The 96 Worker cases,
+matrix and actual-client composition remain unrun at this checkpoint, and the
+committed snapshot remains the qualified base inventory.
+
+Eight actual registered-client cases are authored in
+`test/fixtures/openclaw-stepfun-contract.test.ts` with the real Worker/SQLite
+outer harness `test/openclaw-stepfun.test.mjs`, pinned to public OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. They cover both frozen cards on
+explicit global/China proxy routes, canonical low/max mapping, exact inline PNG,
+tool replay, cumulative usage/cache observation, original regional grants and
+zero-egress caller/product/unknown-price denial. These are AUTHORED/UNRUN; no SDK
+execution or hosted job was started. Automatic client region/profile selection,
+registered live discovery, Step Plan entitlement and live inference remain
+separate from this configured native-route fixture.
