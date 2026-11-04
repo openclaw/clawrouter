@@ -86,6 +86,9 @@ jobs:
           - consumer: azure
             ref: 4e27e9ab53dd7215f84ffa06ef5f193be7fb603b
             test: test/openclaw-azure.test.mjs
+          - consumer: novita
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-novita.test.mjs
           - consumer: longcat
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-longcat.test.mjs
