@@ -392,6 +392,9 @@ setInterval(() => {}, 1000);
     return false;
   };
   const deadline = Date.now() + 1_000;
-  while (!terminal() && Date.now() < deadline) await delay(20);
-  assert.equal(terminal(), true, 'descendant must have exited, not merely received a signal');
+  let exited = terminal();
+  while (!exited && Date.now() < deadline) { await delay(20); exited = terminal(); }
+  // Exit is terminal. Do not re-read a zombie while Linux reaps it (or a
+  // subsequently reused PID) after already proving it cannot execute.
+  assert.equal(exited, true, 'descendant must have exited, not merely received a signal');
 });

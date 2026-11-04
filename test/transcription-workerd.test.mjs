@@ -116,7 +116,10 @@ export default { async fetch(request,env) {
     // A separate isolated policy: hard reserve must not turn a one-context
     // model card into an arbitrary-file ceiling. No mutable live/KV authority.
     phase = "unqualified hard-budget upload";
-    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:hardHeaders,body:makeForm()});
+    // Pricing also rejects before reading. Preserve the complete multipart
+    // bytes without racing Undici's streaming writer against that rejection.
+    const hardUpload=new Response(makeForm());
+    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{...hardHeaders,"content-type":hardUpload.headers.get("content-type")},body:await hardUpload.arrayBuffer()});
     assert.equal(blocked.status,400);assert.equal((await blocked.json()).error.code,"pricing_required");
     phase = "post-validation upstream count";
     assert.equal(await count(),7,"invalid/hard-unqualified requests never reached real upstream Worker");
