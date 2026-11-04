@@ -74,6 +74,9 @@ jobs:
           - consumer: runway
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-runway.test.mjs
+          - consumer: runway-defaults
+            ref: b01d76f2480c8d6c5c6b918a6fb71acdf3cfe17a
+            test: test/openclaw-runway-defaults.test.mjs
           - consumer: chutes
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-chutes.test.mjs
