@@ -11,7 +11,7 @@ export async function readGoogleJson<T>(
   if (signal.aborted || response.redirected || response.status !== 200 || !response.body
     || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
     || Number(response.headers.get("content-length")) > maxBytes) {
-    await input.retire("cancel", signal.reason); fail();
+    await input.retire("cancel", signal.reason); return fail();
   }
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const abort = () => { void input.retire("cancel", signal.reason); };
@@ -29,6 +29,6 @@ export async function readGoogleJson<T>(
     text += decoder.decode();
     return observe(JSON.parse(text));
   } catch {
-    await input.retire(eof ? "eof" : "cancel", signal.reason); fail();
+    await input.retire(eof ? "eof" : "cancel", signal.reason); return fail();
   } finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
