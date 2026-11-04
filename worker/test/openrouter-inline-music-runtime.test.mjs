@@ -30,6 +30,10 @@ function maximumPng() {
 async function setup(t, options = {}) {
   const provider = structuredClone(snapshot.providers.find(value => value.id === "openrouter")); configureMusic(provider);
   const f = await fixture(t, { pooled: true, ...options, providerId: "openrouter", configure(selected) { Object.assign(selected, provider); } });
+  // Node's Request constructor requires duplex for a streamed upload; the
+  // actual workerd case exercises the unchanged production fetch separately.
+  const fetchFixture = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (request, init) => fetchFixture(request, { ...init, duplex: "half" }));
   f.env.OPENROUTER_API_KEY = "synthetic-environment-key"; f.env.OPENROUTER_SITE_URL = "https://example.com";
   f.rows = () => [...new Set(f.budgetCalls.map(value => value.name))].flatMap(name => f.budgets.get(name).reservations());
   f.request = (body = input(), { manifest = false, ...extra } = {}) => f.call(manifest ? manifestPath : nativePath,
