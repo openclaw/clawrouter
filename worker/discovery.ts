@@ -1,6 +1,7 @@
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
 import { manifestOnlyPublicCatalog } from "./public-model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
@@ -230,7 +231,7 @@ function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, e
   const reasons = [
     ...(!allowed ? ["No active policy grants the configured fusion aggregator provider."] : []),
     ...(allowed && !executable ? ["The configured fusion aggregator is unavailable under the selected policy, provider budget, or grant."] : []),
-    ...(state.readyAdviserCount < config.adviserModels.length ? [`${state.readyAdviserCount}/${config.adviserModels.length} advisers are currently executable; unavailable advisers fail open.`] : []),
+    ...(state.readyAdviserCount < fusionAdviserModels(config).length ? [`${state.readyAdviserCount}/${fusionAdviserModels(config).length} advisers are currently executable; unavailable advisers fail open.`] : []),
   ];
   const readiness: Readiness = {
     id: "clawrouter",

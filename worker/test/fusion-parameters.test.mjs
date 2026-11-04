@@ -6,6 +6,27 @@ import { normalizeFusionConfig } from "../fusion.ts";
 import { sha256Hex } from "../utils.ts";
 const { default: worker } = await import("../index.ts");
 
+test("single Fusion dispatches only the final model with one-call accounting", async (t) => {
+  const f = await fixture("openai/gpt-4.1-mini", ["retired/unregistered"], "single");
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  });
+  const response = await f.call({ temperature: 0.7 });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-clawrouter-fusion-strategy"), "single");
+  assert.equal(response.headers.get("x-clawrouter-fusion-adviser-count"), "0");
+  assert.match(response.headers.get("access-control-expose-headers"), /x-clawrouter-fusion-strategy/);
+  await response.text(); await f.drain();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].model, "gpt-4.1-mini");
+  assert.equal(sent[0].temperature, 0.7);
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].compound_request_size, 1);
+  assert.equal(f.events[0].compound_request_stage, "fusion_synthesizer");
+});
+
 // Explicit descriptors isolate the constructor proof from catalog generation.
 // The compiler suite separately qualifies the committed manifest and snapshot.
 function parameterFacts(t) {
@@ -218,9 +239,9 @@ test("hosted parameter facts leave public, native, manifest and opaque passthrou
   }
 });
 
-async function fixture(aggregatorModel, adviserModels) {
+async function fixture(aggregatorModel, adviserModels, strategy = "ensemble") {
   const pending = [], events = [], ledgerCalls = [], secret = "fixture-fusion-secret";
-  const config = normalizeFusionConfig({ enabled: true, aggregatorModel, adviserModels, maxProposalChars: 256 });
+  const config = normalizeFusionConfig({ enabled: true, aggregatorModel, adviserModels, strategy, maxProposalChars: 256 });
   const policy = { enabled: true, generation: "g1", providers: [], tenantId: "default", monthlyBudgetMicros: 1_000_000, requestCostMicros: 0, retainRequestContent: false };
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
   const env = {

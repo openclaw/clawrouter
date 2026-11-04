@@ -5,6 +5,14 @@ chat model. It spends extra inference only for requests that explicitly choose
 that model: up to four adviser models run concurrently, then one configured
 synthesizer produces the response.
 
+The configuration's `strategy` selects `ensemble` (the default for existing
+profiles) or `single`. Single sends the original request to the configured final
+model without adviser calls or proposal reservation. Stored adviser choices stay
+available for switching back, but do not affect single-mode model validation,
+readiness, discovery, or charges. Every response reports the selected strategy in
+`x-clawrouter-fusion-strategy`. This is an explicit execution choice, not a
+learned router or a guarantee of better answers.
+
 ```text
 request model=clawrouter/fusion
         |

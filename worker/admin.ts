@@ -24,6 +24,7 @@ import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusio
 import { fusionReadiness } from "./fusion-readiness";
 import { hasPrimaryCredential, inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots, grantUsageSnapshot } from "./ledgers";
 import { startOAuth } from "./oauth";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
@@ -172,7 +173,7 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
   assertFusionModels(config);
   const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
   const [readiness, budget] = await Promise.all([providerReadinessForPolicies(env, [entry], connections), policyBudgetStatus(env, entry.policyId, entry.policy)]);
-  const routes = [...config.adviserModels, config.aggregatorModel].map((modelId) => {
+  const routes = [...fusionAdviserModels(config), config.aggregatorModel].map((modelId) => {
     const route = modelRoute(modelId, "llm.chat")!;
     const endpoint = endpointForPath(route.provider, "/v1/chat/completions")!;
     return {
