@@ -35,3 +35,33 @@ Focused tests cover exact native/manifest model and credential preservation,
 deprecation projection, both hard-budget levels and fixed-charge separation,
 plus unchanged default and unknown-model passthrough behavior. Source6 owns
 serialized snapshot integration and actual-client proof.
+
+## Serialized integration and actual-client scope
+
+The original source `85241b91e394e2fd6c5f84aec3516b370eb67586` is composed
+onto qualified `852d51ea19997053d774b8fe787c42873ad2cd12` with authorship
+preserved. The existing M2.7 and M3 rows, their facts and the default stay intact.
+All 87 manifests compile. Generated snapshot SHA256:
+`31829e6ff6844198ad96a752daaac25a0807d235c473ef01272d0fcd1a6a3944`.
+
+Local proof passes the four unchanged declaration cases, Worker types,
+1,072 compiler/matrix/consumer-selection cases and one actual workerd JSON test.
+The latter sends native and manifest requests, observes original credentials and
+exact upstream identity, settles seven-micro fixed charges with observed usage,
+and rejects unknown-price caller/provider hard budgets before egress.
+
+Ten actual registered MiniMax client cases are enrolled against public source
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. They use both actual stream hooks,
+registered replay policy, real Chat serialization, tool history, fragmented SSE,
+terminal usage, denial, embedded error and post-delivery cancellation through
+Worker/SQLite. They require final-head hosted execution; authored cases are not
+proof. Proxy keys are the only client credentials, and every charged request
+must bind its original provider key, produce one seven-micro receipt and avoid
+replay or ambient-key fallback.
+
+This is explicitly configured OpenAI-compatible Chat. The frozen client's
+context/output/tariff hints are not server-qualified limits or vendor prices.
+No default Anthropic, portal/subscription, dynamic discovery, manifest-client
+selection, live entitlement or full E01 parity is claimed. Direct Worker
+manifest coverage is separate from actual native-client coverage. No new SDK
+report, local install, paid request or deployment is performed.
