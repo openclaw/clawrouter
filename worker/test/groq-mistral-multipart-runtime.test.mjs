@@ -15,7 +15,7 @@ function declaration(id) {
   const value = structuredClone(sources[id]), model = groqMistralAudio[id].model;
   value.capabilities = value.capabilities.filter(item => item.endpoint !== "transcription");
   value.capabilities.push({ id: "audio.transcription", endpoint: "transcription", methods: ["POST"] });
-  value.endpoints.transcription = { method: "POST", path: "/v1/audio/transcriptions", requestFormat: `${id}.transcription`, responseFormat: `${id}.transcription` };
+  value.endpoints.transcription = { method: "POST", path: "/v1/audio/transcriptions", pathParams: [], requestFormat: `${id}.transcription`, responseFormat: `${id}.transcription` };
   value.models.entries = value.models.entries.filter(item => item.id !== `${id}/${model}`);
   value.models.entries.push({ id: `${id}/${model}`, upstream: model, capabilities: ["audio.transcription"] });
   return compileProviderSnapshot([value]).providers[0];
