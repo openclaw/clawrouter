@@ -73,11 +73,12 @@ export async function fetchPublicModelDiscovery(input: Readonly<{
     // Fresh authorization can tighten the policy behind allows. Reader-time
     // filtering is provisional until this final intersection succeeds.
     switch (result.providerId) {
-      case "cerebras": return { ...result, catalog: result.catalog.filter(row => allows(row.id)) };
-      case "nvidia": return { ...result, catalog: result.catalog.filter(row => allows(row.id)) };
-      case "chutes": return { ...result, catalog: { ...result.catalog, data: result.catalog.data.filter(row => allows(row.id)) } };
-      case "venice": return { ...result, catalog: { ...result.catalog, data: result.catalog.data.filter(row => allows(row.id)) } };
+      case "cerebras": result.catalog = result.catalog.filter(row => allows(row.id)); break;
+      case "nvidia": result.catalog = result.catalog.filter(row => allows(row.id)); break;
+      case "chutes": result.catalog = { ...result.catalog, data: result.catalog.data.filter(row => allows(row.id)) }; break;
+      case "venice": result.catalog = { ...result.catalog, data: result.catalog.data.filter(row => allows(row.id)) }; break;
     }
+    return result;
   } finally {
     for (const response of responses) discard(response);
   }
