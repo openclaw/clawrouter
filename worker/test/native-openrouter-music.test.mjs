@@ -47,8 +47,9 @@ async function read(upstream = response(), selected = selection(), signal = new 
 const invalid = { message: "invalid_native_openrouter_music_response" };
 function chunks(values, onCancel = () => {}) {
   let index = 0;
-  return new ReadableStream({ pull(controller) {
-    if (index === values.length) controller.close(); else controller.enqueue(values[index++]);
+  return new ReadableStream({ type: "bytes", pull(controller) {
+    if (index === values.length) { controller.close(); controller.byobRequest?.respond(0); }
+    else controller.enqueue(Uint8Array.from(values[index++]));
   }, cancel: onCancel }, { highWaterMark: 0 });
 }
 
@@ -72,7 +73,7 @@ test("both frozen models preserve complete MP3/WAV native SSE bytes and diagnost
   }
 });
 
-test("decoder-verified near-cap test audio keeps the requested MP3/WAV identity and SSE header", async () => {
+test("decoder-verified original partial-leaf test audio keeps the requested MP3/WAV identity and SSE header", async () => {
   // Repeated test MP3 frames: 2,096,640 bytes -> 6,289,920 decoded PCM bytes.
   // Generated PCM WAV at the exact 2 MiB cap -> 2,097,108 decoded PCM bytes.
   const largeMp3 = Buffer.concat(Array(1820).fill(mp3)), largeWav = Buffer.alloc(2 * 1024 * 1024);
@@ -153,7 +154,7 @@ test("one-byte fragmentation and CRLF keep split base64 and UTF-8 unchanged", as
 
 test("native DONE cancels a still-open upstream without waiting for socket EOF", async () => {
   let pulls = 0, canceled = false;
-  const upstream = new ReadableStream({ pull(controller) { pulls++; if (pulls === 1) controller.enqueue(Buffer.from(wire())); },
+  const upstream = new ReadableStream({ type: "bytes", pull(controller) { pulls++; if (pulls === 1) controller.enqueue(Buffer.from(wire())); },
     cancel() { canceled = true; } }, { highWaterMark: 0 });
   const delivered = await read(response(upstream));
   assert.equal(await delivered.response.text(), wire()); assert.equal(pulls, 1); assert.equal(canceled, true);
@@ -164,7 +165,7 @@ test("no partial SSE is exposed before terminal; missing DONE, truncation and st
     wire() + data(frame({ data: "AAAA" })), wire() + ": late\n\n"]) await assert.rejects(read(response(original)), invalid);
   let controller, ready;
   const entered = new Promise(resolve => { ready = resolve; });
-  const upstream = new ReadableStream({ start(value) { controller = value; controller.enqueue(Buffer.from(wire().replace(data("[DONE]"), ""))); },
+  const upstream = new ReadableStream({ type: "bytes", start(value) { controller = value; controller.enqueue(Buffer.from(wire().replace(data("[DONE]"), ""))); },
     pull() { ready(); } }, { highWaterMark: 0 });
   let resolved = false;
   const pending = read(response(upstream)).then(value => { resolved = true; return value; });
@@ -174,10 +175,10 @@ test("no partial SSE is exposed before terminal; missing DONE, truncation and st
 
 test("cancel before read or while stalled cancels the sole upstream and exposes no audio", async () => {
   let canceled = 0; const before = new AbortController(); before.abort();
-  await assert.rejects(read(response(new ReadableStream({ cancel() { canceled++; } })), selection(), before.signal), invalid);
+  await assert.rejects(read(response(new ReadableStream({ type: "bytes", cancel() { canceled++; } })), selection(), before.signal), invalid);
   assert.equal(canceled, 1);
   let ready; const entered = new Promise(resolve => { ready = resolve; }), abort = new AbortController();
-  const upstream = new ReadableStream({ pull() { ready(); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+  const upstream = new ReadableStream({ type: "bytes", pull() { ready(); }, cancel() { canceled++; } }, { highWaterMark: 0 });
   const pending = read(response(upstream), selection(), abort.signal); await entered; abort.abort();
   await assert.rejects(pending, invalid); assert.equal(canceled, 2);
 });
@@ -199,7 +200,6 @@ test("reject client-incompatible framing, malformed UTF-8, oversized frames and 
   const value = JSON.stringify(frame({ data: fixture.base64 }));
   for (const original of ["data: " + value.slice(0, 20) + "\ndata: " + value.slice(20) + "\n\n" + data("[DONE]"),
     wire().replaceAll("\n", "\r"), "event: error\n" + wire(), "unknown: field\n" + wire(),
-    ":" + "a".repeat(256 * 1024) + "\n\n" + wire(),
     ": header\n".repeat(33) + wire(), ":" + "a".repeat(2 * 1024 * 1024) + "\n\n" + wire()])
     await assert.rejects(read(response(original)), invalid);
   await assert.rejects(read(response(Buffer.concat([Buffer.from("data: "), Buffer.from([0xff]), Buffer.from("\n\n" + wire())]))), invalid);
@@ -210,7 +210,7 @@ test("HTTP status, MIME, redirect, range and encoding cannot bypass complete wir
   for (const status of [201, 206, 302, 422, 500]) await assert.rejects(read(response(wire(), {}, status)), invalid);
   for (const headers of [{ "content-type": "audio/mpeg" }, { "content-type": "application/json" }, { "content-range": "bytes 0-4/20" },
     { "content-encoding": "gzip" }, { "content-encoding": "" }, { "content-encoding": "identity,gzip" },
-    { "content-length": "-1" }, { "content-length": "1.5" }, { "content-length": "x" }, { "content-length": String(4 * 1024 * 1024 + 1) }])
+    { "content-length": "-1" }, { "content-length": "1.5" }, { "content-length": "x" }, { "content-length": String(32 * 1024 * 1024 + 1) }])
     await assert.rejects(read(response(wire(), headers)), invalid);
   const redirected = response(); Object.defineProperty(redirected, "redirected", { value: true });
   await assert.rejects(read(redirected), invalid); await assert.rejects(read(new Response(null)), invalid);
@@ -223,25 +223,25 @@ test("HTTP status, MIME, redirect, range and encoding cannot bypass complete wir
   }
 });
 
-test("all reads and all events, including empty reads and heartbeats, are bounded", async () => {
+test("all BYOB reads and all events, including nonterminal bytes and heartbeats, are bounded", async () => {
   let reads = 0, canceled = false;
-  const endless = new ReadableStream({ pull(controller) { reads++; controller.enqueue(new Uint8Array()); },
+  const endless = new ReadableStream({ type: "bytes", pull(controller) { reads++; controller.byobRequest.view[0] = 32; controller.byobRequest.respond(1); },
     cancel() { canceled = true; } }, { highWaterMark: 0 });
   await assert.rejects(read(response(endless)), invalid);
-  assert.equal(reads, 8192); assert.equal(canceled, true);
+  assert.equal(reads, 262144); assert.equal(canceled, true);
   await assert.rejects(read(response(": heartbeat\n\n".repeat(8193) + wire())), invalid);
   await assert.rejects(read(response("\n".repeat(8193) + wire())), invalid);
 });
 
 test("wire, encoded audio and transcript budgets reject before releasing any SSE", async () => {
   const heartbeat = Buffer.from(":" + "a".repeat(128 * 1024 - 3) + "\n\n");
-  await assert.rejects(read(response(chunks([...Array(32).fill(heartbeat), Buffer.from(wire())]))), invalid);
-  const encoded = Buffer.alloc(2 * 1024 * 1024 + 3).toString("base64");
+  await assert.rejects(read(response(chunks([...Array(256).fill(heartbeat), Buffer.from(wire())]))), invalid);
+  const encoded = Buffer.alloc(16 * 1024 * 1024 + 3).toString("base64");
   const parts = [];
   for (let index = 0; index < encoded.length; index += 128 * 1024) parts.push(data(frame({ data: encoded.slice(index, index + 128 * 1024) })));
   await assert.rejects(read(response(parts.join("") + data("[DONE]"))), invalid);
-  await assert.rejects(read(response(data(frame({ data: fixture.base64, transcript: "a".repeat(128 * 1024 + 1) })) + data("[DONE]"))), invalid);
-  await assert.rejects(read(response(data(frame({ data: fixture.base64, transcript: "音".repeat(43691) })) + data("[DONE]"))), invalid);
+  await assert.rejects(read(response(data(frame({ data: fixture.base64, transcript: "a".repeat(1024 * 1024 + 1) })) + data("[DONE]"))), invalid);
+  await assert.rejects(read(response(data(frame({ data: fixture.base64, transcript: "音".repeat(349526) })) + data("[DONE]"))), invalid);
 });
 
 test("delivery observer preserves null usage rather than treating native audio diagnostics as token pricing", async () => {
@@ -266,4 +266,92 @@ test("canceling quarantined replay stays a canceled delivery, never a free rejec
   const result = await accounting;
   assert.equal(result.delivery, "canceled"); assert.equal(result.tokens, null); assert.equal(result.nonbillable, undefined);
   assert.equal(result.requestCostReceipt, undefined); assert.equal(bodyBudgetCharged(), baseline);
+});
+
+
+test("non-byte upstream bodies fail closed instead of allocating an unbounded fallback chunk", async () => {
+  let canceled = 0, reads = 0;
+  const upstream = new ReadableStream({ pull(controller) { reads++; controller.enqueue(Buffer.from(wire())); },
+    cancel() { canceled++; } }, { highWaterMark: 0 });
+  await assert.rejects(read(response(upstream)), invalid);
+  assert.equal(canceled, 1); assert.equal(reads, 0);
+});
+
+test("BYOB uses only a separate returned 64 KiB window and small DONE never waits for fill", async () => {
+  const original = Buffer.from(wire().replaceAll("\n", "\r\n"));
+  let offset = 0, pulls = 0, canceled = 0, lastView;
+  const upstream = new ReadableStream({ type: "bytes", pull(controller) {
+    const request = controller.byobRequest;
+    assert.ok(request); assert.equal(request.view.byteOffset, 0); assert.equal(request.view.buffer.byteLength, 65536);
+    if (lastView) assert.equal(lastView.buffer.byteLength, 0, "only the returned read view retains ownership");
+    const amount = Math.min(13, original.length - offset);
+    assert.ok(amount > 0, "DONE must cancel before another read of the still-open body");
+    request.view.set(original.subarray(offset, offset + amount)); offset += amount; pulls++;
+    lastView = request.view; request.respond(amount);
+  }, cancel() { canceled++; } }, { highWaterMark: 0 });
+  const delivered = await read(response(upstream));
+  assert.equal(canceled, 1); assert.equal(pulls, Math.ceil(original.length / 13));
+  // Each transferred delivery buffer may detach without detaching quarantine.
+  const reader = delivered.response.body.getReader({ mode: "byob" });
+  let output = "", window = new Uint8Array(1);
+  for (;;) {
+    const part = await reader.read(window);
+    if (part.done) break;
+    output += String.fromCharCode(...part.value); window = new Uint8Array(part.value.buffer);
+  }
+  reader.releaseLock(); assert.equal(output, original.toString());
+});
+
+test("root error keys, including escaped and duplicate keys, cannot become a paid pre-stream rejection", async () => {
+  const good = JSON.stringify(frame({ data: fixture.base64 }));
+  for (const suffix of ['"error":null', '"\\u0065rror":null', '"error":{},"error":null', '"error":false'])
+    await assert.rejects(read(response("data: " + good.slice(0, -1) + "," + suffix + "}\n\n" + data("[DONE]"))), invalid);
+  // A nested diagnostic is not the common sniffer's root error envelope.
+  const nested = { ...frame({ data: fixture.base64 }), usage: { error: null } };
+  assert.equal((await read(response(data(nested) + data("[DONE]")))).usage.tokens, null);
+});
+
+test("original 16 MiB audio and exact 32 MiB wire validate without decoding or retaining audio", async () => {
+  // Host-side generated PCM WAV fixture. Production never builds this aggregate.
+  // Offline decoder qualification: 16,777,172 PCM bytes at 24 kHz mono signed-16.
+  const audio = Buffer.alloc(16 * 1024 * 1024); wav.copy(audio, 0, 0, 44);
+  audio.writeUInt32LE(audio.length - 8, 4); audio.writeUInt32LE(audio.length - 44, 40);
+  const encoded = audio.toString("base64"), parts = [];
+  for (let offset = 0; offset < encoded.length; offset += 65535)
+    parts.push(data(frame({ data: encoded.slice(offset, offset + 65535) })));
+  const tail = parts.join("") + data("[DONE]");
+  let padding = 32 * 1024 * 1024 - Buffer.byteLength(tail), prefix = "";
+  while (padding) {
+    const size = Math.min(padding, 128 * 1024);
+    assert.ok(size >= 3); prefix += ":" + "p".repeat(size - 3) + "\n\n"; padding -= size;
+  }
+  const original = prefix + tail;
+  assert.equal(Buffer.byteLength(original), 32 * 1024 * 1024);
+  const atob = globalThis.atob; globalThis.atob = () => { throw new Error("full audio decode is forbidden in quarantine"); };
+  let result;
+  try { result = await read(response(original, { "content-length": String(Buffer.byteLength(original)) }), selection(models[0], "wav")); }
+  finally { globalThis.atob = atob; }
+  const reader = result.response.body.getReader(), hash = createHash("sha256"); let delivered = 0;
+  for (;;) { const part = await reader.read(); if (part.done) break;
+    assert.ok(part.value.byteLength <= 65536); assert.ok(part.value.buffer.byteLength <= 65536);
+    delivered += part.value.byteLength; hash.update(part.value);
+  }
+  reader.releaseLock(); assert.equal(delivered, Buffer.byteLength(original));
+  assert.equal(hash.digest("hex"), createHash("sha256").update(original).digest("hex"));
+  assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+});
+
+
+test("decoder-verified near-16-MiB MP3 remains native SSE with no aggregate validation decode", async () => {
+  // 14,563 repetitions -> 16,776,576 MP3 bytes / 50,329,728 decoded PCM bytes.
+  const audio = Buffer.concat(Array(14563).fill(mp3)), encoded = audio.toString("base64"), parts = [];
+  assert.equal(audio.length, 16776576);
+  for (let offset = 0; offset < encoded.length; offset += 65535)
+    parts.push(data(frame({ data: encoded.slice(offset, offset + 65535) })));
+  const original = parts.join("") + data("[DONE]");
+  const result = await read(response(original));
+  const hash = createHash("sha256"), reader = result.response.body.getReader();
+  for (;;) { const part = await reader.read(); if (part.done) break; hash.update(part.value); }
+  reader.releaseLock(); assert.equal(hash.digest("hex"), createHash("sha256").update(original).digest("hex"));
+  assert.equal(result.response.headers.get("content-type"), "text/event-stream"); assert.equal(result.usage.tokens, null);
 });
