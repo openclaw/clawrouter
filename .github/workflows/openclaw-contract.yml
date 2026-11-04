@@ -42,7 +42,7 @@ jobs:
       matrix:
         include:
           - consumer: search
-            ref: 1c72f546f839d2790168cd15a9f9d18afaf014ff
+            ref: 0a5f30f82d33eae69d10c5a5ceecd01bdb9706e7
             test: test/openclaw-search.test.mjs
           - consumer: embeddings
             ref: 9d2be9d82c2a6973ae1b025eac4a636964397c28
