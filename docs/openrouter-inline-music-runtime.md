@@ -9,7 +9,10 @@ PixVerse permissions, pixel-decoder guarantees or cross-request asset authority.
 The shared native Chat path resolves the registered model through the existing
 capability selector. Ordinary Chat keeps its 32 MiB envelope and incremental
 body charge. It does not acquire music's 64 MiB ingress reservation or freeze its
-graph. A selected inline music request grows that same lease before validation.
+graph. Until the registered model resolves, byte-zero parsing reserves twice
+the declared/consumed wire bytes under existing thresholds; it retains no raw
+prefix. A selected inline music request grows that same lease to 64 MiB before
+container decoding, digest snapshots or the borrowed codec's string inspection.
 
 ## Ownership phases
 
@@ -25,7 +28,9 @@ graph. A selected inline music request grows that same lease before validation.
 3. Bind request-local evidence to verified caller scope, selected model/route,
    exact slot and original durable API-key generation/lineage. Environment keys,
    alternate credentials and arbitrary destinations cannot qualify this path.
-   Recheck the owner and current policy after budget and retention awaits.
+   Recheck the owner and current policy after budget and retention awaits, and
+   again after complete quarantine before output release. This is fresh-at-check
+   authority, not instantaneous revocation of bytes already released.
 4. If router retention policy applies, stream the immutable record through the
    nonmutating serializer. Await the archive write and its physical pipe; clear
    record/serializer references before transferring capacity. Router retention

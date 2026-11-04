@@ -8,6 +8,7 @@ const { snapshot } = await import("../providers.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const { default: worker } = await import("../index.ts");
+const { overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");
 const MiB = 1024 * 1024;
 // The existing offline-decoded 2x2 PNG, not a magic-only byte prefix.
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACXBIWXMAAAAAAAAAAQCEeRdzAAAAGUlEQVR4nGP8z8Dwn/E/QyMLI8N/IGSsBwA6swYEbMHgjAAAAABJRU5ErkJggg==", "base64");
@@ -69,6 +70,15 @@ test("full 8 MiB inline container preserves every original byte through common d
   const actual = Buffer.from(f.upload.messages[0].content[1].image_url.url.split(",")[1], "base64");
   assert.equal(actual.length, image.length); assert.equal(createHash("sha256").update(actual).digest("hex"), expected);
   assert.equal(f.dispatch.capacity, 96 * MiB); await receipt(f, 700);
+});
+
+for (const [mime, encoded] of [
+  ["image/jpeg", "/9j//gAPTGF2YzYzLjEuMTAyAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAGcAAQEAAAAAAAAAAAAAAAAAAAMHAQEBAQAAAAAAAAAAAAAAAAACBAcQAAICAgIDAQAAAAAAAAAAAAIBAwUGBAARdrQ3BxEAAgICAgEFAQEAAAAAAAAAAwIBBAUGAAcRtXaycyI3NP/AABEIAAIAAgMBEgACEgADEgD/2gAMAwEAAhEDEQA/AKFgFVVz4JiksujpyySUNOckh68RmZlowsiIiBsiJvttvtvj/nfz/EfHqX0IOZD2eYtLsrdqtUj1gA2bPBAALSIIRDyVhUGMaTCIiLEKiLEQsR4iOHtj+p757q2H1Szxrr+ByCxcuYnG27VmIsWbNinXMewYv7IYxSDZyEI8yzu8yzNMzM+eWUf8Vb6BfCOf/9k="],
+  ["image/webp", "UklGRjQAAABXRUJQVlA4TCcAAAAvAUAAEB8w/wKCIv9HExAU+T+agKDouuWCd0KCmrYNWPwmHRH9jwMA"],
+]) test(`inline ${mime} preserves the existing offline-decoded fixture's native spelling and bytes`, async t => {
+  const f = await setup(t), body = input(musicModels[0], Buffer.from(encoded, "base64"), mime);
+  const response = await f.request(body); assert.equal(response.status, 200, await response.clone().text()); await response.text();
+  assert.deepEqual(f.upload, body); await receipt(f, 700);
 });
 
 for (const name of ["https", "mime", "container", "forged-digest", "foreign-model", "foreign-origin", "query", "unknown-dollar", "text-rate", "environment-only"])
@@ -136,10 +146,11 @@ test("retention consumes the frozen graph before transfer without mutating the p
   assert.equal((await receipt(f, 700)).content_retained, true);
 });
 
-test("ordinary shared-path Chat admits concurrent small calls while music capacity is unavailable", async t => {
+test("ordinary shared-path Chat admits concurrent small calls while music capacity is unavailable", { timeout: 15000 }, async t => {
   const f = await setup(t), chat = f.provider.models.find(value => value.capabilities.includes("llm.chat")); assert.ok(chat);
   const held = new BodyLease(); assert.equal(held.grow(40 * MiB), true);
   let release; const barrier = new Promise(resolve => { release = resolve; }); let entered = 0;
+  t.signal.addEventListener("abort", () => release(), { once: true });
   f.upstream = async request => {
     const body = await request.json(); assert.equal(body.model, chat.upstream); entered++;
     assert.equal(bodyBudgetCharged(), 80 * MiB); if (entered === 3) release(); await barrier;
@@ -160,3 +171,128 @@ test("authentication rejects before any candidate input pull", async t => {
   assert.equal(response.status, 401); await response.text(); assert.equal(reads, 0); assert.equal(f.sent.length, 0);
   await body.cancel(); assert.equal(canceled, true);
 });
+
+test("authenticated candidate intake cancellation stops its pending bounded read without paid dispatch", { timeout: 15000 }, async t => {
+  const f = await setup(t), controller = new AbortController(); let ready, canceled = 0, chargeAtCancel;
+  const entered = new Promise(resolve => { ready = resolve; });
+  t.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  const body = new ReadableStream({ type: "bytes", pull() { ready(); }, cancel() { canceled++; chargeAtCancel = bodyBudgetCharged(); } }, { highWaterMark: 0 });
+  const pendingWork = [];
+  const pending = worker.fetch(new Request(`https://router.example${nativePath}`, { method: "POST", body, duplex: "half", signal: controller.signal,
+    headers: { "content-type": "application/json", "content-length": String(12 * MiB), authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), f.env,
+  { waitUntil(value) { pendingWork.push(value); } });
+  await entered; controller.abort(); const response = await pending; assert.ok(response.status >= 400); await response.text();
+  await Promise.all(pendingWork); assert.equal(canceled, 1); assert.equal(chargeAtCancel, 24 * MiB);
+  assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+});
+
+test("abort during the actual upload keeps both phase charges until reader cancellation", { timeout: 15000 }, async t => {
+  const f = await setup(t), controller = new AbortController();
+  t.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  let ready, cancelCharge, canceled = 0; const entered = new Promise(resolve => { ready = resolve; });
+  f.upstream = async request => {
+    const reader = request.body.getReader(); await reader.read();
+    await new Promise(resolve => {
+      request.signal.addEventListener("abort", async () => {
+        cancelCharge = bodyBudgetCharged(); await reader.cancel(); canceled++; reader.releaseLock(); resolve();
+      }, { once: true }); ready();
+    });
+    throw request.signal.reason;
+  };
+  const pending = f.request(input(musicModels[0], maximumPng()), { signal: controller.signal });
+  await entered; assert.equal(bodyBudgetCharged(), 96 * MiB); controller.abort();
+  const response = await pending; assert.equal(response.status, 502); await response.text();
+  assert.equal(cancelCharge, 96 * MiB); assert.equal(canceled, 1); assert.equal(f.sent.length, 1);
+  await receipt(f, 700);
+});
+
+test("abort during quarantine waits for the pending physical read before releasing response capacity", { timeout: 15000 }, async t => {
+  const f = await setup(t), controller = new AbortController();
+  t.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  let ready, cancelCharge, reads = 0, canceled = 0; const entered = new Promise(resolve => { ready = resolve; });
+  f.upstream = async request => {
+    await request.json();
+    const body = new ReadableStream({ type: "bytes", pull(stream) {
+      reads++;
+      if (reads === 1) stream.enqueue(new TextEncoder().encode('data: {'));
+      else ready();
+    }, cancel() { cancelCharge = bodyBudgetCharged(); canceled++; } }, { highWaterMark: 0 });
+    return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  };
+  const pending = f.request(undefined, { signal: controller.signal });
+  await entered; assert.equal(bodyBudgetCharged(), 96 * MiB); controller.abort();
+  const response = await pending; assert.equal(response.status, 502); await response.text();
+  assert.equal(canceled, 1); assert.equal(cancelCharge, 96 * MiB); assert.equal(f.sent.length, 1);
+  await receipt(f, 700);
+});
+
+test("abort during retention remains charged until the actual archive owner returns, with zero paid fetch", { timeout: 15000 }, async t => {
+  const f = await setup(t), controller = new AbortController(); f.policy.retainRequestContent = true;
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  let ready, release; const entered = new Promise(resolve => { ready = resolve; }), finish = new Promise(resolve => { release = resolve; });
+  t.signal.addEventListener("abort", () => { controller.abort(); release(); }, { once: true });
+  f.env.CONTENT_ARCHIVE = { async put(_key, body) { await new Response(body).arrayBuffer(); ready(); await finish; } };
+  const pending = f.request(undefined, { signal: controller.signal });
+  await entered; controller.abort(); assert.equal(bodyBudgetCharged(), 64 * MiB); assert.equal(f.sent.length, 0);
+  release(); const response = await pending; assert.equal(response.status, 503); await response.text(); await f.drain();
+  assert.equal(f.sent.length, 0); assert.ok((await f.events()).every(event => event.actual_cost_micros === 0));
+});
+
+test("downstream cancellation retires response replay once without refund or repeated paid fetch", async t => {
+  const f = await setup(t), response = await f.request(); assert.equal(response.status, 200);
+  // This is direct Worker production, before a host transport can prefetch EOF.
+  // No assertion equates unread host-side bytes with an active Worker owner.
+  assert.equal(bodyBudgetCharged(), 96 * MiB);
+  await response.body.cancel(); assert.equal(f.sent.length, 1); await receipt(f, 700);
+});
+
+for (const change of ["grant", "model-policy", "caller"])
+  test(`inline music withholds quarantined output after ${change} revocation without refund`, async t => {
+    const f = await setup(t);
+    f.upstream = async request => {
+      const body = await request.json();
+      if (change === "grant") await putGrantCredentials(f.env, grantKey,
+        { provider: "openrouter", kind: "api_key", enabled: false, credential: "synthetic-original-key" });
+      if (change === "model-policy") {
+        f.policy.models = ["openrouter/unrelated"];
+        await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+      }
+      if (change === "caller") await f.authority("/credentials/mutate", {
+        credentialId: "fixture", operation: "revoke", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "fixture@example.com" },
+      });
+      return new Response(musicWire(body.model), { headers: { "content-type": "text/event-stream" } });
+    };
+    const response = await f.request(); assert.equal(response.status, 502); const error = await response.text();
+    assert.ok(!error.includes('"audio"')); assert.equal(f.sent.length, 1); await receipt(f, 700);
+  });
+
+for (const change of ["revoke", "rotate", "models", "foreign-grant", "owner-unavailable"])
+  test(`warm inline admission rechecks original ${change} after the final budget await`, async t => {
+    const f = await setup(t);
+    f.policy.grantRouting = { eligibleGrants: { openrouter: ["replicate"] }, environmentFallback: true, failover: true };
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+    overrideHotCacheConfig({ admissionMaxAgeMs: 30000, credentialMaxAgeMs: 60000 });
+    t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED));
+    const warm = await f.request(); assert.equal(warm.status, 200); await warm.text(); await f.drain();
+    assert.equal(f.sent.length, 1);
+    const namespace = f.env.BUDGET_LEDGER; let changed = false;
+    f.env.BUDGET_LEDGER = { idFromName: name => name, get: name => ({ async fetch(url, init) {
+      const response = await namespace.get(name).fetch(url, init);
+      if (!changed && new URL(url).pathname === "/dispatch") {
+        changed = true;
+        if (change === "revoke" || change === "rotate")
+          await putGrantCredentials(f.env, grantKey, { provider: "openrouter", kind: "api_key", enabled: change !== "revoke", credential: "synthetic-rotated-key" });
+        if (change === "models" || change === "foreign-grant") {
+          if (change === "models") f.policy.models = ["openrouter/unrelated"];
+          else f.policy.grantRouting = { eligibleGrants: { openrouter: ["foreign"] }, environmentFallback: true, failover: true };
+          await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+        }
+        if (change === "owner-unavailable") f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => new Response("unavailable", { status: 503 }) }) };
+      }
+      return response;
+    } }) };
+    const response = await f.request(); assert.equal(changed, true); assert.ok(response.status >= 400, await response.text());
+    assert.equal(f.sent.length, 1); await f.drain();
+    const events = await f.events(); assert.equal(events.length, 2);
+    assert.deepEqual(events.map(event => event.actual_cost_micros).sort((a, b) => a - b), [0, 700]);
+  });
