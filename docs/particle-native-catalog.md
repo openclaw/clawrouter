@@ -25,9 +25,10 @@ Keep the existing explicit mapping:
 | Selected global base | `https://api.particle.ai/v1` |
 
 Manifest calls select the router ID and send the existing documented wire
-alias. Native callers send `particle-1`. Returned public IDs remain intact.
-There is no second model row, product/key substitution or replacement tariff.
-Source2 owns the actual client mapping and model/reasoning compatibility.
+alias. Native callers may select the public `particle-ai/particle-1` identity
+or its documented `particle-1` alias; the Worker resolves both to the original
+policy and physical request ID. Returned public IDs remain intact. There is no
+second model row, product/key substitution or replacement tariff.
 
 Particle documents text/image input, text output, function tools, a combined
 1048576-token context and a 131072-token output ceiling. The upstream default
@@ -115,8 +116,10 @@ continues to map to the documented request alias.
 frozen installation and imports the registered Particle catalog/replay policy,
 strict discovery builder, host replay sanitizer and native streaming client.
 The real Worker and SQLite assertions cover selected public-ID to wire-ID
-mapping, the four canonical efforts, cache affinity, tool/reasoning replay,
-original credentials, usage, errors and cancellation. Exact-head execution
+mapping, the four canonical efforts, cache affinity, tool replay, original
+credentials, usage, errors and cancellation. The registered host deliberately
+strips reasoning history before serialization; the Worker preserves reasoning
+when supplied by native wire callers. Exact-head execution
 results are recorded in the PR; authored cases alone are not a passing proof.
 
 Configured native client proof is separate from ClawRouter catalog-driven or
