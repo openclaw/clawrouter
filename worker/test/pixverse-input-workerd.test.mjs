@@ -55,10 +55,19 @@ export default { async fetch(request) {
     const response = await fetch('https://fixture.example/echo', { method: 'POST', body: sent.body.pipeThrough(new FixedLengthStream(sent.length)), signal: operation.signal });
     const echoed = await response.json();
     check(sent.complete && echoed.bytes === expected && echoed.maximum <= 16384, 'native fixed-length transport consumption');
+    const earlyBytes = new Uint8Array(8 * 1024 * 1024).fill(71), early = pixVerseByteStream([earlyBytes]);
+    let earlyResponse;
+    try {
+      earlyResponse = await fetch('https://fixture.example/early', {method:'POST',body:early.body.pipeThrough(new FixedLengthStream(early.length)),signal:operation.signal});
+      check(earlyResponse.status === 200, 'native early upload response');
+      check(!early.complete, 'unread native upload cannot acquire EOF');
+    } finally { early.cancel('early upload response'); await earlyResponse?.body?.cancel(); }
+    await early.done; check(!early.complete && earlyBytes.length === 8 * 1024 * 1024 && earlyBytes[0] === 71, 'native partial upload cancellation preserves input');
     return Response.json({ pulls, maximum, refused, bytes: raw.length, held: bodyBudgetCharged() });
   } finally { operation.stop('complete'); owner.release(); ingress.release(); }
 } };`;
 const upstream = `export default { async fetch(request) {
+  if (new URL(request.url).pathname === '/early') return Response.json({early:true});
   const reader = request.body.getReader({mode:'byob'}); let window = new Uint8Array(16384), bytes = 0, maximum = 0;
   for (;;) { const part = await reader.read(window); if (part.value) { bytes += part.value.length; maximum = Math.max(maximum,part.value.length); window = new Uint8Array(part.value.buffer); } if (part.done) break; }
   reader.releaseLock(); return Response.json({bytes,maximum});
