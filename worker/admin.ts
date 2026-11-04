@@ -1,3 +1,4 @@
+import { normalizeMiniMaxAnthropicBinding, miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
 import { normalizeInputPublicationPolicy, readInputPublicationPolicy } from "../shared/input-publication.ts";
 import { normalizeUpstreamRetentionPolicy } from "../shared/upstream-retention.ts";
 import { normalizeRequestCosts } from "../shared/request-pricing.ts";
@@ -414,6 +415,11 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
     if (Object.hasOwn(body, "nativeMediaBinding") || Object.hasOwn(body, "nativeMediaIntent"))
       throw new HttpError(400, "invalid_native_media_authorization", "Use the explicit native media product authorization");
+    if (Object.hasOwn(body, "minimaxAnthropicBinding") || Object.hasOwn(body, "minimaxAnthropicIntent"))
+      throw new HttpError(400, "invalid_minimax_anthropic_authorization", "Use explicit MiniMax regional credential authorization");
+    const minimaxAnthropic = body.minimaxAnthropicAuthorization === undefined ? undefined
+      : body.minimaxAnthropicAuthorization === null ? null : normalizeMiniMaxAnthropicBinding(body.minimaxAnthropicAuthorization);
+    delete body.minimaxAnthropicAuthorization;
     const nativeMedia = body.nativeMediaAuthorization;
     if (nativeMedia !== undefined && nativeMedia !== null && nativeMedia !== "minimax-global-speech")
       throw new HttpError(400, "invalid_native_media_authorization", "Native media authorization must be minimax-global-speech or null");
@@ -421,7 +427,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia);
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia, minimaxAnthropic);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));
@@ -736,7 +742,8 @@ function grantResponse(key: string, grant: UpstreamGrant) {
   const refresh = grant.refresh ?? snapshot.providers.find((provider) => provider.id === grant.provider)?.auth.refresh;
   const refreshTokenExpiresAt = authorizationTimestamp(grant.refreshTokenExpiresAt);
   const lastManualAuthorizationAt = authorizationTimestamp(grant.lastManualAuthorizationAt);
-  return { nativeMediaBinding: grant.credentialStore === "durable_object" ? readNativeMediaBinding(grant.nativeMediaBinding) : null, refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
+  const minimaxAnthropicBinding = miniMaxAnthropicProjection(grant);
+  return { minimaxAnthropicBinding, nativeMediaBinding: grant.credentialStore === "durable_object" ? readNativeMediaBinding(grant.nativeMediaBinding) : null, refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh || minimaxAnthropicBinding?.kind === "oauth", refreshTokenUrl: minimaxAnthropicBinding?.kind === "oauth" ? minimaxAnthropicBinding.tokenEndpoint : refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
 }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }

@@ -1,3 +1,4 @@
+import type { MiniMaxAnthropicBinding } from "./minimax-anthropic-binding.ts";
 import type { ClientCatalogModel, ModelPricing, GrantRoutingPolicy, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride } from "../shared/contracts";
 export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride, PolicyBinding } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
@@ -213,6 +214,7 @@ export interface OAuthState {
 }
 
 export interface UpstreamGrant {
+  minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: import("../shared/native-media-binding.ts").NativeMediaBinding | null;
   version?: number;
   enabled?: boolean;

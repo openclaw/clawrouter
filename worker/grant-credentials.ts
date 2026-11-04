@@ -1,3 +1,6 @@
+import { mutateMiniMaxAnthropicBinding, miniMaxCredential, miniMaxOwnerBinding } from "./minimax-anthropic-binding.ts";
+import { prepareMiniMaxRefreshRequest, decodeMiniMaxTokenResponse, type MiniMaxOAuthCredential } from "./provider-minimax-oauth.ts";
+import { readMiniMaxTokenBody } from "./minimax-token-body.ts";
 import { authorizationTimestamp, refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
 import { credentialProjection, materializedGrant, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
 import { mutateNativeMediaBinding } from "./native-media-credential.ts";
@@ -200,6 +203,8 @@ export class GrantCredentialObject implements DurableObject {
         record = ownerMetadata(record, input.grant, input.key);
         mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        mutateMiniMaxAnthropicBinding(record, current, input.minimaxAnthropicIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
         const freshAuthority = !current || record.refreshToken !== current.refreshToken;
         record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
@@ -372,52 +377,72 @@ export class GrantCredentialObject implements DurableObject {
       throw new HttpError(502, "grant_refresh_at_risk", "refresh outcome is uncertain; replace with a fresh dedicated login, do not replay the stored token");
     }
     if (timestamp(current.nextRefreshAttemptAt) > Date.now()) throw new HttpError(502, "grant_refresh_failed", "refresh is waiting for its retry window");
-    const config = record.refresh ?? providerRefresh;
-    if (!config?.tokenUrl) {
-      await this.recordRefreshFailure(record, null, "invalid_client");
-      throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no approved refresh configuration");
-    }
-    const clientId = config.clientId ?? (config.clientIdConfig ? envValue(this.env, config.clientIdConfig) : null);
-    const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: record.refreshToken! });
-    if (clientId) form.set("client_id", clientId);
-    if (config.clientSecretConfig) {
-      const secret = envValue(this.env, config.clientSecretConfig);
-      if (!secret) {
+    let nativeCredential: MiniMaxOAuthCredential | undefined;
+    let refreshUrl: string, refreshInit: RequestInit;
+    if (providerId === "minimax") {
+      const credential = miniMaxCredential(record);
+      if (credential.kind !== "oauth") throw new HttpError(400, "grant_refresh_unavailable", "MiniMax refresh requires its original OAuth credential");
+      nativeCredential = credential;
+      const prepared = prepareMiniMaxRefreshRequest(credential, credential.ownerBinding, record.minimaxAnthropicBinding!.resource);
+      refreshUrl = prepared.url; refreshInit = prepared.init;
+    } else {
+      const config = record.refresh ?? providerRefresh;
+      if (!config?.tokenUrl) {
         await this.recordRefreshFailure(record, null, "invalid_client");
-        throw new HttpError(503, "provider_not_configured", `missing refresh client secret ${config.clientSecretConfig}`);
+        throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no approved refresh configuration");
       }
-      form.set("client_secret", secret);
+      const clientId = config.clientId ?? (config.clientIdConfig ? envValue(this.env, config.clientIdConfig) : null);
+      const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: record.refreshToken! });
+      if (clientId) form.set("client_id", clientId);
+      if (config.clientSecretConfig) {
+        const secret = envValue(this.env, config.clientSecretConfig);
+        if (!secret) {
+          await this.recordRefreshFailure(record, null, "invalid_client");
+          throw new HttpError(503, "provider_not_configured", `missing refresh client secret ${config.clientSecretConfig}`);
+        }
+        form.set("client_secret", secret);
+      }
+      for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
+
+      const requestFormat = config.requestFormat ?? "form";
+      refreshUrl = config.tokenUrl;
+      refreshInit = { method: "POST", redirect: "manual",
+        headers: { "content-type": requestFormat === "json" ? "application/json" : "application/x-www-form-urlencoded", accept: "application/json" },
+        body: requestFormat === "json" ? JSON.stringify(Object.fromEntries(form)) : form };
     }
-    for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
 
     if (record.grantKey && record.refreshToken) await claimRefreshOwnership(this.env, record.grantKey, record.refreshToken, { current: true, consume: true });
     record = { ...record, refreshAttempt: { id: crypto.randomUUID(), generation: record.generation } };
     // Durable before egress. A crash or an unpersistable result leaves a fence.
     await this.state.storage.put("credential", record);
-    const requestFormat = config.requestFormat ?? "form";
+    const refreshSignal = AbortSignal.timeout(30_000);
     let response: Response;
     try {
-      response = await fetch(config.tokenUrl, {
-        method: "POST",
-        headers: { "content-type": requestFormat === "json" ? "application/json" : "application/x-www-form-urlencoded", accept: "application/json" },
-        body: requestFormat === "json" ? JSON.stringify(Object.fromEntries(form)) : form,
-        signal: AbortSignal.timeout(30_000),
-        redirect: "manual",
-      });
+      response = await fetch(refreshUrl, { ...refreshInit, signal: refreshSignal });
     } catch {
       await this.recordRefreshFailure(record, null, "network_error", "ambiguous");
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
     // A redirect is a transient endpoint failure, never evidence of token revocation.
-    if (response.status >= 300 && response.status < 400) {
+    if (!nativeCredential && response.status >= 300 && response.status < 400) {
       await response.body?.cancel().catch(() => undefined);
       await this.recordRefreshFailure(record, response.status, "invalid_response", "transient", response.headers.get("retry-after"));
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request (HTTP ${response.status} redirect)`);
     }
     let payload: Record<string, unknown>;
-    try { payload = await boundedRefreshJson(response); }
+    let nativeResult: MiniMaxOAuthCredential | undefined;
+    try {
+      if (nativeCredential) {
+        const text = await readMiniMaxTokenBody(response, refreshSignal);
+        const result = decodeMiniMaxTokenResponse(text, response.status, nativeCredential.region,
+          nativeCredential.ownerBinding, Date.now(), nativeCredential);
+        if (result.status !== "success") throw new Error("invalid_minimax_token_response");
+        nativeResult = result.credential;
+        payload = { access_token: nativeResult.access, refresh_token: nativeResult.refresh };
+      } else payload = await boundedRefreshJson(response);
+    }
     catch (error) {
-      await this.recordRefreshFailure(record, response.status, "invalid_response", response.ok ? "ambiguous" : undefined, response.headers.get("retry-after"));
+      await this.recordRefreshFailure(record, response.status, "invalid_response", nativeCredential || response.ok ? "ambiguous" : undefined, response.headers.get("retry-after"));
       if (error instanceof HttpError) throw error;
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} returned an invalid refresh response`);
     }
@@ -442,7 +467,7 @@ export class GrantCredentialObject implements DurableObject {
         : record.refreshToken,
       tokenType: typeof payload.token_type === "string" && payload.token_type ? payload.token_type : record.tokenType,
       scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean).slice(0, 128) : record.scopes,
-      expiresAt: typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) && payload.expires_in > 0
+      expiresAt: nativeResult ? new Date(nativeResult.expiresAt).toISOString() : typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) && payload.expires_in > 0
         ? new Date(Date.now() + payload.expires_in * 1_000).toISOString()
         : record.expiresAt,
       // Claude Code preserves the known absolute deadline when a rotation
@@ -480,7 +505,7 @@ export class GrantCredentialObject implements DurableObject {
     }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
     const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
-    if (!provider || !transport) return;
+    if (!provider || !transport && miniMaxOwnerBinding(record)?.kind !== "oauth") return;
     const now = Date.now();
     const quotaProbe = quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind: record.kind }, record));
     if (!quotaProbe) record.nextQuotaProbeAt = null;
@@ -497,7 +522,7 @@ export class GrantCredentialObject implements DurableObject {
         return;
       }
     }
-    if (due(record.nextQuotaProbeAt, now) && transport.maintenance.quotaPoll && quotaProbe) {
+    if (due(record.nextQuotaProbeAt, now) && transport?.maintenance.quotaPoll && quotaProbe) {
       try {
         const state = await this.probeQuota(provider, record);
         record.quotaFailureCount = 0;
@@ -514,7 +539,7 @@ export class GrantCredentialObject implements DurableObject {
       await this.state.storage.deleteAlarm();
       return;
     }
-    if (record.maintenance?.keepWarm && due(record.nextKeepWarmAt, now) && transport.maintenance.keepWarm) {
+    if (record.maintenance?.keepWarm && due(record.nextKeepWarmAt, now) && transport?.maintenance.keepWarm) {
       try { await keepWarm(this.env, provider, transport, record); }
       catch { /* the next regular interval retries without making alarm delivery hot-loop */ }
       record.nextKeepWarmAt = new Date(now + transport.maintenance.keepWarm.intervalSeconds * 1_000).toISOString();
@@ -864,8 +889,8 @@ export async function inspectGrantCredentials(env: Env, key: string, signal?: Ab
   return (await ownerCall<OwnerResponse>(env, key, "/inspect", {}, signal)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -898,7 +923,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null };
+  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxAnthropicBinding: null };
 }
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {
