@@ -1359,6 +1359,104 @@
         "assetHandles": { "const": false }
       }
     },
+    "publishedMusicInputSupport": {
+      "type": "object",
+      "required": [
+        "version",
+        "publication",
+        "slot",
+        "count",
+        "encoding",
+        "mimeTypes",
+        "maxDecodedBytes",
+        "maxJsonBytes",
+        "maxForwardJsonBytes",
+        "maxLifetimeSeconds",
+        "renewable",
+        "destinationAttempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "clawrouter.published-input.v1"
+        },
+        "publication": {
+          "type": "object",
+          "required": [
+            "method",
+            "path",
+            "query",
+            "body",
+            "idempotencyKey"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/v1/input-assets/openrouter/music"
+            },
+            "query": {
+              "const": false
+            },
+            "body": {
+              "const": "native_plan"
+            },
+            "idempotencyKey": {
+              "type": "object",
+              "required": [
+                "header",
+                "pattern"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "header": {
+                  "const": "Idempotency-Key"
+                },
+                "pattern": {
+                  "const": "^[A-Za-z0-9._:-]{1,128}$"
+                }
+              }
+            }
+          }
+        },
+        "slot": {
+          "const": "messages[0].content[1].image_url.url"
+        },
+        "count": {
+          "const": 1
+        },
+        "encoding": {
+          "const": "base64_data_url"
+        },
+        "mimeTypes": {
+          "const": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ]
+        },
+        "maxDecodedBytes": {
+          "const": 8388608
+        },
+        "maxJsonBytes": {
+          "const": 12582912
+        },
+        "maxForwardJsonBytes": {
+          "const": 262144
+        },
+        "maxLifetimeSeconds": {
+          "const": 900
+        },
+        "renewable": {
+          "const": false
+        },
+        "destinationAttempts": {
+          "const": 1
+        }
+      }
+    },
     "nativeEndpointCapabilities": {
       "type": "object",
       "required": [
@@ -1370,6 +1468,7 @@
       "properties": {
         "speech": { "$ref": "#/$defs/opaquePcmSpeechProfile" },
         "referenceImage": { "$ref": "#/$defs/inlineMusicReferenceImage" },
+        "publishedInput": { "$ref": "#/$defs/publishedMusicInputSupport" },
         "sources": {
           "$ref": "#/$defs/modelRequestParameters/properties/sources"
         },

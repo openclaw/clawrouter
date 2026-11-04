@@ -355,7 +355,8 @@ function validateModels(manifest) {
       const supported = manifest.capabilities.filter(capability => capability.endpoint === id && model.capabilities?.includes(capability.id));
       const fail = message => { throw new Error("model " + model.id + " nativeCapabilities " + message); };
       if (!endpoint || !supported.length) fail("must reference a supported endpoint");
-      if (facts.referenceImage) validateReferenceImage(manifest, model, id, endpoint, facts);
+      if (facts.referenceImage) validateMusicImageRoute(manifest, model, id, endpoint, facts, "referenceImage");
+      if (facts.publishedInput) validateMusicImageRoute(manifest, model, id, endpoint, facts, "publishedInput");
       if (facts.speech && (endpoint.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary"
         || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
         || !supported.some(capability => capability.id === "audio.speech")
@@ -390,7 +391,7 @@ function validateModels(manifest) {
   }
 }
 
-function validateReferenceImage(manifest, model, id, endpoint, facts) {
+function validateMusicImageRoute(manifest, model, id, endpoint, facts, field) {
   const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id);
   // Support facts describe the registered leaf's input, never asset authority
   // or a capability inherited by another model on the shared Chat wire path.
@@ -406,7 +407,7 @@ function validateReferenceImage(manifest, model, id, endpoint, facts) {
     || endpoint.streaming !== "sse" || endpoint.pathParams?.length || Object.keys(endpoint.query ?? {}).length
     || ["upstreamPath", "websocket", "lifecycle", "responsesLifecycle", "modelPassthrough", "requestPricing", "inputProfile"].some(key => endpoint[key] !== undefined)
     || facts.input?.length !== 2 || !facts.input.includes("text") || !facts.input.includes("image"))
-    throw new Error(`model ${model.id} referenceImage requires the registered OpenRouter Lyria music_generate route with optional inline image input`);
+    throw new Error(`model ${model.id} ${field} requires the registered OpenRouter Lyria music_generate route with optional inline image input`);
 }
 
 function validateModelAvailability(model) {
