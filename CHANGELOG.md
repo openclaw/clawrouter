@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+
 - Accept explicitly selected local provider packages with `compile-providers --plugin`, while preserving the default bundled manifests and snapshot output.
 
 - Define an opt-in provider plugin package contract with local assets, documentation, fixtures, and a starter example; existing provider loading and runtime behavior remain unchanged.
@@ -247,6 +248,7 @@
 - Verify the caller-scoped catalog through native Responses streaming and usage accounting, including tool/reasoning replay, HTTP-200 terminal errors, and credential revocation. These synthetic checks do not certify live-provider or client-runtime parity.
 - Declare Gemini streaming requests with `alt=sse` to match the endpoint's SSE contract. Check compiled provider inventory against source manifests instead of a fixed provider count.
 
+- Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.

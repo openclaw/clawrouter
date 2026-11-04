@@ -78,6 +78,30 @@ test("a provider without a cap still explains the other budget scopes", async ({
   await expect(budget).toContainText("Other policy or provider limits still apply");
 });
 
+test("Fusion presets preserve the panel and single readiness accounts for one call", async ({ page }) => {
+  await openDemo(page);
+  await page.getByRole("button", { name: "Access", exact: true }).click();
+  await page.getByRole("tab", { name: /Fusion/ }).click();
+  const models = page.getByRole("textbox", { name: "adviser models · one per line, maximum four" });
+  const original = await models.inputValue();
+  await page.getByRole("button", { name: /^Single/ }).click();
+  await expect(page.getByRole("button", { name: /^Single/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".fusionAdvisers")).toHaveCount(0);
+  await expect(models).toHaveValue(original);
+  await page.getByRole("button", { name: "Check readiness" }).click();
+  await expect(page.getByRole("region", { name: "Fusion readiness" })).toContainText("1 maximum calls");
+  await models.fill("");
+  await expect(page.getByRole("button", { name: "Save fusion model" })).toBeEnabled();
+  await page.getByRole("button", { name: /^Panel/ }).click();
+  await expect(page.getByRole("button", { name: "Save fusion model" })).toBeDisabled();
+  await expect(page.getByText("Readiness pending", { exact: true })).toBeVisible();
+  await models.fill(original);
+  await expect(page.locator(".fusionAdvisers strong")).not.toHaveText(["No advisers"]);
+  await expectA11yClean(page);
+  await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+  await expectA11yClean(page);
+});
+
 test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) => {
   await openDemo(page);
   await page.getByRole("button", { name: "Access", exact: true }).click();

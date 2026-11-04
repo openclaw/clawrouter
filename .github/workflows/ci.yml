@@ -158,11 +158,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin build
       - run: pnpm --dir admin exec playwright install --only-shell chromium
-      - name: Check Fusion mobile screenshot and accessibility
+      - name: Check Fusion screenshots and accessibility
         id: browser
         run: >-
           pnpm --dir admin exec playwright test dashboard.spec.ts
-          --project mobile --workers 1 --retries 0
+          --workers 1 --retries 0
           --grep 'Fusion preflight is WCAG AA clean and visually stable$'
       - name: Upload Fusion screenshot differences
         if: failure() && steps.browser.outcome == 'failure' && hashFiles('admin/test-results/**/fusion-readiness-actual.png') != ''

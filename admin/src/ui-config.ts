@@ -138,6 +138,7 @@ export const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scop
 export const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };
 export const defaultFusion: FusionConfig = {
   version: 1,
+  strategy: "ensemble",
   enabled: false,
   modelId: "clawrouter/fusion",
   adviserModels: ["local/qwen3:8b"],
