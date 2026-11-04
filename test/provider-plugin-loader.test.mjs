@@ -80,3 +80,16 @@ test("explicit plugin list rejects duplicate IDs and does not scan adjacent fold
   assert.throws(() => loadProviderPlugins([descriptor, descriptor]), /duplicate provider plugin id example/);
   assert.deepEqual(loadProviderPlugins([]), []);
 });
+
+test("multiple collisions report the same provider regardless of input order", t => {
+  const first = fixture(t), second = fixture(t);
+  for (const [entry, id] of [[first, "alpha"], [second, "beta"]]) {
+    const descriptor = JSON.parse(readFileSync(entry.descriptor, "utf8"));
+    descriptor.id = id;
+    writeFileSync(entry.descriptor, JSON.stringify(descriptor));
+  }
+  assert.deepEqual(loadProviderPlugins([second.descriptor, first.descriptor]).map(p => p.descriptor.id), ["alpha", "beta"]);
+  for (const paths of [[first.descriptor, first.descriptor, second.descriptor, second.descriptor], [second.descriptor, second.descriptor, first.descriptor, first.descriptor]]) {
+    assert.throws(() => loadProviderPlugins(paths), /duplicate provider plugin id alpha/);
+  }
+});

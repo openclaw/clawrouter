@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseProviderPluginDescriptor, providerPluginFiles, type ProviderPluginDescriptor } from "../packages/provider-plugin-contract/src/index.ts";
 
 export const PROVIDER_PLUGIN_LIMITS = Object.freeze({
@@ -41,7 +41,7 @@ function readRegularFile(root: string, relativePath: string, maxBytes: number): 
 /** Build-time data loading only. The operator owns and stabilizes the input directory. */
 export function loadProviderPlugin(descriptorPath: string): LoadedProviderPlugin {
   const absolute = resolve(descriptorPath);
-  if (!absolute.endsWith("/clawrouter.plugin.json")) throw new Error("provider plugin descriptor must be named clawrouter.plugin.json");
+  if (basename(absolute) !== "clawrouter.plugin.json") throw new Error("provider plugin descriptor must be named clawrouter.plugin.json");
   const root = realpathSync(dirname(absolute));
   const descriptorBytes = readRegularFile(root, "clawrouter.plugin.json", PROVIDER_PLUGIN_LIMITS.descriptorBytes);
   const descriptor = parseProviderPluginDescriptor(JSON.parse(descriptorBytes.toString("utf8")));
@@ -61,11 +61,11 @@ export function loadProviderPlugin(descriptorPath: string): LoadedProviderPlugin
 
 /** Explicit inputs only; ordering cannot select a winner for a duplicate provider. */
 export function loadProviderPlugins(paths: readonly string[]): LoadedProviderPlugin[] {
-  const loaded = paths.map(loadProviderPlugin);
+  const loaded = paths.map(loadProviderPlugin).sort((a, b) => a.descriptor.id < b.descriptor.id ? -1 : a.descriptor.id > b.descriptor.id ? 1 : 0);
   const ids = new Set<string>();
   for (const { descriptor } of loaded) {
     if (ids.has(descriptor.id)) throw new Error(`duplicate provider plugin id ${descriptor.id}`);
     ids.add(descriptor.id);
   }
-  return loaded.sort((a, b) => a.descriptor.id < b.descriptor.id ? -1 : a.descriptor.id > b.descriptor.id ? 1 : 0);
+  return loaded;
 }
