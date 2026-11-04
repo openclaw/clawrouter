@@ -9,8 +9,8 @@ const sse = frames => frames.map(frame => "data: " + JSON.stringify(frame) + "\n
 
 test("finite frozen music requests retain explicit region, MP3 settings and availability disposition", () => {
   assert.deepEqual(miniMaxMusicModels, ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"]);
-  assert.equal(miniMaxMusicAvailability.paid, "existing_paying_users_only");
-  assert.equal(miniMaxMusicAvailability.free, "discontinuation_announced_date_unspecified");
+  assert.equal(miniMaxMusicAvailability.global.paid, "existing_paying_users_only");
+  assert.equal(miniMaxMusicAvailability.global.free, "discontinuation_announced_date_unspecified");
   for (const model of miniMaxMusicModels) {
     const body = { ...(model.startsWith("music-cover") ? wire.cover : wire.request), model };
     for (const region of ["global", "cn"]) {
@@ -22,6 +22,40 @@ test("finite frozen music requests retain explicit region, MP3 settings and avai
   }
   for (const body of [{ ...wire.request, model: "music-3.0" }, { ...wire.request, stream: null },
     { ...wire.request, output_format: "url" }, { ...wire.request, audio_setting: { ...wire.request.audio_setting, format: "wav" } }]) assert.throws(() => prepare(body));
+});
+
+test("MiniMax music availability requires an explicit region and preserves distinct dated primary notices", () => {
+  assert.equal(miniMaxMusicAvailability.checkedAt, "2026-11-05");
+  assert.deepEqual(Object.keys(miniMaxMusicAvailability).sort(), ["checkedAt", "cn", "global"]);
+  assert.equal(miniMaxMusicAvailability.free, undefined); assert.equal(miniMaxMusicAvailability.paid, undefined);
+  for (const region of ["global", "cn"]) {
+    const observed = miniMaxMusicAvailability[region];
+    assert.equal(observed.paid, "existing_paying_users_only");
+    assert.equal(observed.newPaidUsersDeniedSince, "2026-08-20");
+    assert.equal(observed.source, region === "global"
+      ? "https://platform.minimax.io/docs/guides/music-generation" : "https://platform.minimax.cn/docs/guides/music-generation");
+  }
+  assert.equal(miniMaxMusicAvailability.global.free, "discontinuation_announced_date_unspecified");
+  assert.equal(miniMaxMusicAvailability.cn.free, "stopped");
+  assert.notEqual(miniMaxMusicAvailability.global.free, miniMaxMusicAvailability.cn.free);
+});
+
+test("MiniMax free-service notices are not zero cost, entitlement or permission to remap codec origins", () => {
+  for (const region of ["global", "cn"]) for (const model of ["music-2.6-free", "music-cover-free"]) {
+    const body = { ...(model.startsWith("music-cover") ? wire.cover : wire.request), model };
+    const before = structuredClone(body), request = prepareMiniMaxMusic(region, body);
+    assert.equal(request.body, body); assert.deepEqual(body, before);
+    assert.equal(request.origin, region === "global" ? "https://api.minimax.io" : "https://api.minimaxi.com");
+    assert.equal(request.headers.has("authorization"), false);
+    const observed = observeMiniMaxMusic(wire.frames, request, true);
+    assert.equal(observed.upstreamCostMicros, null); assert.notEqual(observed.upstreamCostMicros, 0);
+    assert.equal(observed.model, model);
+    assert.throws(() => prepareMiniMaxMusic(miniMaxMusicAvailability[region].source, body), /invalid_minimax_music_region/);
+  }
+  // Documentation origins cannot become region selectors or authorize unary CN.
+  for (const region of ["https://api.minimax.cn", "https://api.minimaxi.com"])
+    assert.throws(() => prepareMiniMaxMusic(region, wire.request), /invalid_minimax_music_region/);
+  assert.throws(() => prepareMiniMaxMusic("cn", { ...wire.request, stream: false }), /invalid_minimax_music_unary_request/);
 });
 
 test("MiniMax unary preparation qualifies only global regular frozen models without changing native input", () => {

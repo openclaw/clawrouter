@@ -11,11 +11,18 @@ Checked 2026-11-05: the [global guide](https://platform.minimax.io/docs/guides/m
 closes paid Music/Lyrics APIs to new users from 2026-08-20; existing paying users
 may continue. It announces free-variant discontinuation without a separate date.
 The [CN guide](https://platform.minimax.cn/docs/guides/music-generation) instead
-says free music APIs have stopped. `miniMaxMusicAvailability` retains the earlier
-aggregate disposition; it cannot express this regional difference and is not a
-regional availability or entitlement verdict. A separate regional metadata
-contract is required before catalog activation. Compatibility fixtures prove
-neither continued free service nor account eligibility.
+says free music APIs have stopped. Both regions limit paid service to existing
+paying users and deny new paid users from 2026-08-20.
+
+`miniMaxMusicAvailability` requires explicit `.global` or `.cn` selection; there
+is no region-free `paid` or `free` fallback. Each record carries its primary
+`source`, `paid`, `newPaidUsersDeniedSince` and `free` disposition under the shared
+`checkedAt` observation date. Global retains
+`discontinuation_announced_date_unspecified`; CN records `stopped`. These are
+documentation observations, not a live account check, entitlement, price, policy
+verdict or permission to dispatch. Unknown USD remains unknown, including models
+named `-free`. The older synthetic fixture's availability notice is historical
+global evidence, not a CN status.
 
 The frozen codec retains global `https://api.minimax.io` and legacy CN
 `https://api.minimaxi.com`. The [current CN API contract](https://platform.minimax.cn/docs/api-reference/music-generation)
@@ -24,6 +31,11 @@ qualify an alias or credential interchange. CN activation still requires its own
 origin and original-grant qualification. Native API Bearer, plan keys and E09
 Anthropic OAuth resources are not interchangeable by inference. No login, account
 changes, credential fallback or client upstream-secret forwarding occurs here.
+
+Metadata does not change origins or preparation. Both the current CN URL and
+the legacy CN URL remain ineligible for the global native response leaf in
+unary and streaming modes. Regional metadata tests and these destination
+rejections are deterministic offline proof, not actual provider-request proof.
 
 ## Request and concrete client correction
 
