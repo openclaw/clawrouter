@@ -153,13 +153,40 @@ test("retention consumes the frozen graph before transfer without mutating the p
 test("retention refusal before taking the upload reader retires both unclaimed transports", { timeout: 15000 }, async t => {
   const f = await setup(t); f.policy.retainRequestContent = true;
   await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  const FixedLength = globalThis.FixedLengthStream, streams = [], cancelCharges = [];
+  let canceled, release;
+  const cancelEntered = new Promise(resolve => { canceled = resolve; });
+  const cleanupAllowed = new Promise(resolve => { release = resolve; });
+  t.signal.addEventListener("abort", () => release(), { once: true });
+  t.mock.method(globalThis, "FixedLengthStream", function (bytes) {
+    const stream = new FixedLength(bytes); streams.push(stream);
+    const cancel = stream.readable.cancel.bind(stream.readable);
+    t.mock.method(stream.readable, "cancel", async reason => {
+      cancelCharges.push(bodyBudgetCharged());
+      try { await cancel(reason); } finally { canceled(); await cleanupAllowed; }
+    });
+    return stream;
+  });
   let attempted = 0;
   f.env.CONTENT_ARCHIVE = { async put(_key, body) {
     attempted++; assert.equal(body.locked, false); assert.equal(bodyBudgetCharged(), 64 * MiB);
     throw new Error("synthetic archive refusal before reading");
   } };
-  const response = await f.request(); assert.equal(response.status, 503); await response.text();
+  const pending = f.request();
+  await cancelEntered;
+  // The cleanup promise still owns the charge even after its physical cancel.
+  assert.equal(bodyBudgetCharged(), 64 * MiB); assert.equal(f.sent.length, 0);
+  release();
+  const response = await pending; assert.equal(response.status, 503); await response.text();
   await f.drain(); assert.equal(attempted, 1); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+  assert.equal(streams.length, 2); assert.deepEqual(cancelCharges, [64 * MiB, 64 * MiB]);
+  for (const stream of streams) {
+    assert.equal(stream.readable.locked, false); assert.equal(stream.writable.locked, false);
+    assert.equal(stream.readable.cancel.mock.callCount(), 1);
+    const reader = stream.readable.getReader();
+    // Abort may close or error the stream; neither may retain queued bytes.
+    try { assert.equal(await reader.read().then(part => part.done, () => true), true); } finally { reader.releaseLock(); }
+  }
   assert.ok((await f.events()).every(event => event.actual_cost_micros === 0));
 });
 
