@@ -1344,6 +1344,21 @@
         }
       }
     },
+    "inlineMusicReferenceImage": {
+      "type": "object",
+      "required": ["required", "count", "encoding", "mimeTypes", "maxDecodedBytes", "maxJsonBytes", "https", "assetHandles"],
+      "additionalProperties": false,
+      "properties": {
+        "required": { "const": false },
+        "count": { "const": 1 },
+        "encoding": { "const": "base64_data_url" },
+        "mimeTypes": { "const": ["image/png", "image/jpeg", "image/webp"] },
+        "maxDecodedBytes": { "const": 8388608 },
+        "maxJsonBytes": { "const": 12582912 },
+        "https": { "const": false },
+        "assetHandles": { "const": false }
+      }
+    },
     "nativeEndpointCapabilities": {
       "type": "object",
       "required": [
@@ -1354,6 +1369,7 @@
       "additionalProperties": false,
       "properties": {
         "speech": { "$ref": "#/$defs/opaquePcmSpeechProfile" },
+        "referenceImage": { "$ref": "#/$defs/inlineMusicReferenceImage" },
         "sources": {
           "$ref": "#/$defs/modelRequestParameters/properties/sources"
         },
