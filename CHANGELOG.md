@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
+
 - Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 
 - Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
