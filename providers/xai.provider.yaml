@@ -55,6 +55,100 @@ models:
           inputMicrosPerMillion: 2500000
           cachedInputMicrosPerMillion: 400000
           outputMicrosPerMillion: 5000000
+    - id: xai/grok-4.6
+      upstream: grok-4.6
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.6
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.6
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 500000
+    - id: xai/grok-4.5
+      upstream: grok-4.5
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.5
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.5
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 500000
+    - id: xai/grok-build-0.1
+      upstream: grok-build-0.1
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-build-0.1
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-build-0.1
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 256000
+    - id: xai/grok-4.20-0309-reasoning
+      upstream: grok-4.20-0309-reasoning
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.20-0309-reasoning
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.20-0309-reasoning
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 1000000
+    - id: xai/grok-4.20-0309-non-reasoning
+      upstream: grok-4.20-0309-non-reasoning
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 1000000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

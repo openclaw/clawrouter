@@ -37,6 +37,7 @@
 - Qualify the three frozen fal unary music contracts with native Key dispatch, per-model inputs, bounded audio results and conservative unknown upstream costs.
 - Reject non-string native fal music MIME fields instead of coercing arrays into qualified audio descriptors.
 
+- xAI: add five frozen Chat identities with qualified context/input facts and explicit reasoning defaults where documented, preserving unknown whole-request costs and selected wire identities.
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
