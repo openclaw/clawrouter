@@ -38,3 +38,24 @@ JSON/SSE settlement using SQLite. Static vendor facts are not runtime media
 parity or live access proof. Source6 retains serialized snapshot integration
 and actual client qualification; no generated payload or production state is
 changed by this source PR.
+
+## Local integration proof
+
+Exact source `e6b07bf53cad75ecca062cad9bc90695c109e555` is composed on frozen
+router base `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The complete 39-line
+card and five source tests are unchanged; removing the new row restores the
+entire base YAML. All 85 manifests compile. Five focused cases, Worker types
+and 1,035 existing Chat/consumer-selection cases pass. The generic Chat matrix
+does not prove Google native client behavior.
+
+`test/openclaw-gemini35lite.test.mjs` authors nine actual registered Google
+consumer cases against public OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`,
+using the shared actual-source Worker/SQLite fixture. It preserves exact observed
+cache/thinking usage and the 415-micro standard-tier example, separate fixed
+charges, original credentials, tool replay, inline PNG bytes, denied calls,
+embedded errors and post-delivery cancellation. These cases are **AUTHORED/UNRUN**.
+Only syntax is checked locally; there is no new SDK build, hosted enrollment or
+live call. Explicit GenerateContent configuration does not certify default
+Interactions, live discovery, other modality consumers, entitlement, vendor
+invoice totals or physical pre-header cancellation. Flex and Priority retain
+the exact source rates, independently exercised by the focused Worker cases.
