@@ -100,8 +100,15 @@ test("actual registered MiniMax M3 explicit Chat client through workerd and SQLi
     }
     for (const id of denied) {
       const usage = await (await fetch(`${origin}/v1/usage`, { headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret` } })).json();
-      assert.equal(usage.budget.spentMicros, 0);
-      assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
+      if (id === "minimax_provider_budget") {
+        // Only the provider has a hard cap; an absent caller ledger is not zero spend.
+        assert.equal(usage.budget.configured, false);
+        assert.equal(usage.budget.ledger, "unmetered");
+        assert.equal(usage.budget.limitMicros, null);
+        assert.equal(usage.budget.spentMicros, null);
+        assert.equal(usage.budget.remainingMicros, null);
+      } else assert.equal(usage.budget.spentMicros, 0, id);
+      assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0), id);
     }
   } finally {
     await mf?.dispose();
