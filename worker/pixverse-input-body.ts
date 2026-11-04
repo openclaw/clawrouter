@@ -11,7 +11,7 @@ export const pixVerseInputLimits = Object.freeze({
   publicLease: 20 * 1024 * 1024, ownerLease: 28 * 1024 * 1024,
 });
 const encoder = new TextEncoder();
-const invalid = (): never => { throw new HttpError(400, "invalid_pixverse_input", "composed image input does not satisfy the bounded profile"); };
+function invalid(): never { throw new HttpError(400, "invalid_pixverse_input", "composed image input does not satisfy the bounded profile"); }
 export function pixVerseInputLease(side: "public" | "owner"): BodyLease {
   const lease = new BodyLease();
   if (!lease.grow(side === "public" ? pixVerseInputLimits.publicLease : pixVerseInputLimits.ownerLease))
@@ -66,8 +66,12 @@ export function pixVerseByteStream(parts: readonly Uint8Array[]): PixVerseByteSt
   const done = new Promise<void>(complete => { resolve = complete; });
   const finish = () => { if (!finished) { finished = true; buffers = []; resolve(); } };
   const body = new ReadableStream<Uint8Array>({ type: "bytes",
-    start(value) { controller = value; },
+    start(value) {
+      if (!("byobRequest" in value)) invalid();
+      controller = value;
+    },
     pull(value) {
+      if (!("byobRequest" in value)) invalid();
       const requested = value.byobRequest?.view;
       const chunk = requested ? new Uint8Array(requested.buffer, requested.byteOffset, Math.min(requested.byteLength, pixVerseInputLimits.chunk))
         : new Uint8Array(pixVerseInputLimits.chunk);
