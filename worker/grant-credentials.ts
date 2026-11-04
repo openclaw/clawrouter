@@ -1,4 +1,5 @@
-import { mutateVertexAnthropicBinding } from "./vertex-anthropic-binding.ts";
+import { VertexOwnerRefresh } from "./vertex-owner-refresh.ts";
+import { mutateVertexAnthropicBinding, vertexOwnerBinding } from "./vertex-anthropic-binding.ts";
 import { mutateMiniMaxAnthropicBinding, miniMaxCredential, miniMaxOwnerBinding } from "./minimax-anthropic-binding.ts";
 import { prepareMiniMaxRefreshRequest, decodeMiniMaxTokenResponse, type MiniMaxOAuthCredential } from "./provider-minimax-oauth.ts";
 import { readMiniMaxTokenBody } from "./minimax-token-body.ts";
@@ -47,11 +48,21 @@ export class GrantCredentialObject implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
   private tail: Promise<void> = Promise.resolve();
+  private readonly vertexRefresh: VertexOwnerRefresh;
   private readonly minimaxDevice: MiniMaxDeviceFlow;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+    this.vertexRefresh = new VertexOwnerRefresh({
+      order: run => this.order(run), load: key => this.loadRecord(key),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: record => this.state.storage.put("credential", record),
+      materialize: input => this.materialize(input),
+      result: record => ({ grant: materializedGrant(metadataGrant(record), record) }),
+      publish: async record => { await this.schedule(record); await this.publishProjection(record); },
+      failure: (record, persisted) => this.recordRefreshFailure(record, null, "outcome_unknown", persisted ? "provider_ok_persist_failed" : "ambiguous"),
+    });
     this.minimaxDevice = new MiniMaxDeviceFlow({
       order: run => {
         const operation = this.tail.then(run);
@@ -67,7 +78,27 @@ export class GrantCredentialObject implements DurableObject {
     }, env);
   }
 
+  private order<T>(run: () => Promise<T>): Promise<T> {
+    const operation = this.tail.then(run);
+    this.tail = operation.then(() => undefined, () => undefined);
+    this.state.waitUntil?.(this.tail);
+    return operation;
+  }
+
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/materialize") {
+      const operation = (async () => {
+        try {
+          const input = await readJson<MaterializeRequest>(request);
+          return json(input.providerId === "anthropic-vertex"
+            ? await this.vertexRefresh.materialize(input, request.signal)
+            : await this.order(() => this.materialize(input)));
+        } catch (error) { return this.credentialError(error); }
+      })();
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
+
     if (request.method === "POST" && new URL(request.url).pathname === "/minimax-device") {
       const operation = this.minimaxDevice.fetch(request);
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
@@ -180,10 +211,18 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   alarm(): Promise<void> {
-    const operation = this.tail.then(() => this.maintain());
-    this.tail = operation.then(() => undefined, () => undefined);
-    // Rotation settlement belongs to the DO, not the observing HTTP caller.
-    this.state.waitUntil?.(this.tail);
+    const operation = (async () => {
+      const input = await this.order(async () => {
+        const record = await this.state.storage.get<CredentialRecord>("credential");
+        if (record && vertexOwnerBinding(record)?.source === "service_account") {
+          if (!record.enabled || record.revokedAt || record.status !== "active" || record.refreshAttempt) { await this.state.storage.deleteAlarm(); return; }
+          return { key: record.grantKey!, grant: metadataGrant(record), providerId: "anthropic-vertex", force: false, expectedGeneration: record.generation };
+        }
+        await this.maintain();
+      });
+      if (input) { try { await this.vertexRefresh.materialize(input); } catch { /* durable fence owns failure; no automatic replay */ } }
+    })();
+    this.state.waitUntil?.(operation);
     return operation;
   }
 
@@ -195,8 +234,9 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/put") {
         const input = await readJson<PutRequest>(request);
         await this.minimaxDevice.invalidate();
+        this.vertexRefresh.invalidate();
         const replace = input.intent === "replace";
-        if (replace && !hasPrimaryCredential(input.grant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
+        if (replace && !hasPrimaryCredential(input.grant) && !input.vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
         let current = await this.state.storage.get<CredentialRecord>("credential");
         if (current) nextCredentialGeneration(current.generation);
         let attachment: GrantAttachmentSnapshot;
@@ -221,15 +261,15 @@ export class GrantCredentialObject implements DurableObject {
         const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
         const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
         let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
-          ? updatedCredentialRecord(current, input.grant)
-          : credentialRecord(input.grant, generation);
+          ? updatedCredentialRecord(current, input.grant, !!input.vertexPrivateKey || vertexOwnerBinding(current)?.source === "service_account")
+          : credentialRecord(input.grant, generation, !!input.vertexPrivateKey);
         record = ownerMetadata(record, input.grant, input.key);
         mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         mutateMiniMaxAnthropicBinding(record, current, input.minimaxAnthropicIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
-        mutateVertexAnthropicBinding(record, current, input.vertexAnthropicIntent,
-          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        await mutateVertexAnthropicBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.vertexAnthropicIntent,
+          !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt, input.vertexPrivateKey);
         if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
         const freshAuthority = !current || record.refreshToken !== current.refreshToken;
         record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
@@ -237,7 +277,8 @@ export class GrantCredentialObject implements DurableObject {
         // the refresh authority's fence, rejection, diagnosis or retry floor.
         // Removing only refresh authority is not a fresh access credential.
         const retainsFailedAccess = current && (current.refreshAttempt || current.status === "reauth_required") && !record.refreshToken && !hasFreshPrimaryCredentials(current, record);
-        if (current && (record.refreshToken && !freshAuthority || retainsFailedAccess)) {
+        if (current && (record.refreshToken && !freshAuthority || retainsFailedAccess
+          || current.refreshAttempt && vertexOwnerBinding(current)?.source === "service_account" && record.vertexPrivateKey === current.vertexPrivateKey)) {
           record.status = current.status; record.refreshAttempt = current.refreshAttempt;
           record.refreshDiagnosis = current.refreshDiagnosis; record.nextRefreshAttemptAt = current.nextRefreshAttemptAt;
         }
@@ -293,6 +334,7 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/revoke") {
         const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
         await this.minimaxDevice.invalidate();
+        this.vertexRefresh.invalidate();
         // An unavailable index must not block deleting an owner's secrets.
         const current = await this.state.storage.get<CredentialRecord>("credential");
         const legacy = !current || !current.metadata || current.enabled === undefined ? await legacyGrantMetadata(this.env, key, true) : null;
@@ -316,14 +358,16 @@ export class GrantCredentialObject implements DurableObject {
         return json({ grant: metadataGrant(record) });
       }
       return errorResponse("route_not_found", "route not found", 404);
-    } catch (error) {
+    } catch (error) { return this.credentialError(error); }
+  }
+
+  private async credentialError(error: unknown): Promise<Response> {
       if (error instanceof ReauthorizationRequired) return errorResponse(error.code, error.message, error.status, { projection: error.projection });
       if (error instanceof HttpError) {
         const record = await this.state.storage.get<CredentialRecord>("credential");
         return errorResponse(error.code, error.message, error.status, record ? { projection: credentialProjection(record) } : undefined);
       }
       return errorResponse("credential_owner_error", "grant credential operation failed", 500);
-    }
   }
 
   private async beginMiniMaxDevice(key: string, input: Extract<MiniMaxDeviceInput, { operation: "begin" }>): Promise<CredentialRecord> {
@@ -657,6 +701,7 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async diagnoseUnsettled(record: CredentialRecord): Promise<CredentialRecord> {
+    if (this.vertexRefresh.live(record)) return record;
     // Only reached inside the owner tail, after any live refresh finished. A
     // remaining pending marker means its result was not durably settled.
     if (record.refreshAttempt && !["ambiguous", "provider_ok_persist_failed"].includes(record.refreshDiagnosis?.failure?.failureClass ?? "")) {
@@ -737,8 +782,9 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async schedule(record: CredentialRecord): Promise<void> {
+    const refreshable = !!record.refreshToken || vertexOwnerBinding(record)?.source === "service_account";
     const next = [
-      record.refreshAttempt ? NaN : record.refreshToken && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.refreshToken && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
+      record.refreshAttempt ? NaN : refreshable && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : refreshable && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
       timestamp(record.nextQuotaProbeAt),
       record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
     ].filter(Number.isFinite);
@@ -817,7 +863,8 @@ function metadataGrant(record: CredentialRecord): UpstreamGrant {
 function attachmentStatus(record: CredentialRecord): GrantAttachmentStatus | null {
   if (record.revokedAt) return null;
   if (!record.enabled) return "paused";
-  return record.status === "reauth_required" || !hasPrimaryCredential(record) ? "reauth_required" : "active";
+  return record.status === "reauth_required" || !hasPrimaryCredential(record) && vertexOwnerBinding(record)?.source !== "service_account"
+    ? "reauth_required" : "active";
 }
 
 function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
@@ -972,8 +1019,8 @@ export async function inspectGrantCredentials(env: Env, key: string, signal?: Ab
   return (await ownerCall<OwnerResponse>(env, key, "/inspect", {}, signal)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -987,6 +1034,7 @@ export async function materializeGrantCredentials(
   providerId: string,
   refresh: RefreshConfig | null,
   force: boolean,
+  signal?: AbortSignal,
 ): Promise<UpstreamGrant> {
   const legacy = hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
@@ -997,7 +1045,7 @@ export async function materializeGrantCredentials(
     refresh,
     force,
     expectedGeneration: grant.credentialGeneration ?? null,
-  })).grant;
+  }, signal)).grant;
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata): Promise<UpstreamGrant> {
@@ -1006,7 +1054,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  delete (safe as UpstreamGrant & { minimaxDeviceAttempt?: unknown }).minimaxDeviceAttempt;
+  for (const name of ["minimaxDeviceAttempt", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
   return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
@@ -1014,8 +1062,8 @@ export function hasRawCredential(grant: UpstreamGrant): boolean {
   return grant.credential != null || grant.accessToken != null || grant.refreshToken != null || Object.keys(grant.credentials ?? {}).length > 0;
 }
 
-function credentialRecord(grant: UpstreamGrant, generation: number): CredentialRecord {
-  if (!hasPrimaryCredential(grant)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+function credentialRecord(grant: UpstreamGrant, generation: number, vertexSigningIntent = false): CredentialRecord {
+  if (!hasPrimaryCredential(grant) && !vertexSigningIntent) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
   const now = new Date().toISOString();
   const credentials = grant.credentials && Object.keys(grant.credentials).length ? normalizedCredentials(grant.credentials) : undefined;
   return {
@@ -1042,7 +1090,7 @@ function credentialRecord(grant: UpstreamGrant, generation: number): CredentialR
   };
 }
 
-function updatedCredentialRecord(current: CredentialRecord | undefined, grant: UpstreamGrant): CredentialRecord {
+function updatedCredentialRecord(current: CredentialRecord | undefined, grant: UpstreamGrant, vertexSigningIntent = false): CredentialRecord {
   if (!current) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
   const updated: CredentialRecord = {
     ...current,
@@ -1064,7 +1112,7 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
     refresh: grant.refresh === undefined ? current.refresh : grant.refresh,
     updatedAt: grant.updatedAt ?? new Date().toISOString(),
   };
-  if (![updated.credential, updated.accessToken, ...Object.values(updated.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+  if (!vertexSigningIntent && ![updated.credential, updated.accessToken, ...Object.values(updated.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
   const replaced = ["credential", "accessToken", "refreshToken"].some(key => {
     const value = updated[key as keyof CredentialRecord];
     return typeof value === "string" && value !== current[key as keyof CredentialRecord];
@@ -1141,7 +1189,7 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 

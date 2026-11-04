@@ -200,8 +200,8 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
   return connection;
 }
 
-export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<UpstreamAuth> {
-  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
+export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal): Promise<UpstreamAuth> {
+  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement, signal);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) {
     const unavailable = () => grantPoolUnavailable(provider, resolution.retryAt);
@@ -353,7 +353,7 @@ function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | unde
   return new HttpError(429, "upstream_grant_pool_unavailable", message, { "retry-after": String(Math.max(1, Math.ceil(waitMs / 1_000))) });
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const admitted = recordSelection && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key) : undefined;
   if (!admitted && excludedKeys.size && auth.authType === "proxy_key") stickyHash = await grantStickyInput(auth, proxySessionHash(auth));
@@ -363,7 +363,9 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
-  try { materialized = await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
+  try { materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
+    ? await refreshGrant(key, grant, provider, env, false, signal)
+    : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
   catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's
@@ -383,12 +385,12 @@ function scheduleProjectionRepair(env: Env, key: string): void {
   runInBackground(reconcileGrantAttachment(env, key));
 }
 
-export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {
+export async function refreshStoredGrant(env: Env, key: string, signal?: AbortSignal): Promise<UpstreamGrant> {
   const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
   if (!grant?.provider) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
   const provider = providerById(grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
-  return refreshGrant(key, grant, provider, env, true);
+  return refreshGrant(key, grant, provider, env, true, signal);
 }
 
 export async function refreshStoredGrantQuota(env: Env, key: string): Promise<void> {
@@ -400,8 +402,8 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   await refreshGrantQuota(env, key);
 }
 
-async function refreshGrant(key: string, grant: UpstreamGrant, provider: CompiledProvider, env: Env, force: boolean): Promise<UpstreamGrant> {
-  return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force);
+async function refreshGrant(key: string, grant: UpstreamGrant, provider: CompiledProvider, env: Env, force: boolean, signal?: AbortSignal): Promise<UpstreamGrant> {
+  return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force, signal);
 }
 
 function grantSatisfiesConfig(provider: CompiledProvider, key: string, grants: GrantRecord[]): boolean {

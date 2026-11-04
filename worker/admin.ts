@@ -400,7 +400,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
     return startOAuth(request, env, key, body.provider.trim(), priority as number, weight);
   }
-  if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key)));
+  if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key, request.signal)));
   if (action === "quota-refresh" && request.method === "POST") {
     await refreshStoredGrantQuota(env, key);
     const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
@@ -425,9 +425,16 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
       throw new HttpError(400, "invalid_minimax_anthropic_authorization", "Use explicit MiniMax regional credential authorization");
     if (Object.hasOwn(body, "vertexAnthropicBinding") || Object.hasOwn(body, "vertexAnthropicIntent"))
       throw new HttpError(400, "invalid_vertex_authorization", "Use explicit Vertex resource authorization");
+    if (Object.hasOwn(body, "vertexPrivateKey")) throw new HttpError(400, "invalid_vertex_authorization", "Use the explicit service-account key input");
+    const vertexPrivateKey = body.vertexServiceAccountPrivateKey;
+    delete body.vertexServiceAccountPrivateKey;
+    if (vertexPrivateKey !== undefined && (typeof vertexPrivateKey !== "string" || vertexPrivateKey.length > 16384))
+      throw new HttpError(400, "invalid_vertex_authorization", "Vertex signing key is invalid");
     const vertexAnthropic = body.vertexAnthropicAuthorization === undefined ? undefined
       : body.vertexAnthropicAuthorization === null ? null : normalizeVertexAnthropicBinding(body.vertexAnthropicAuthorization);
     delete body.vertexAnthropicAuthorization;
+    if (vertexPrivateKey !== undefined && vertexAnthropic?.source !== "service_account")
+      throw new HttpError(400, "invalid_vertex_authorization", "Signing key replacement requires explicit service-account authorization");
     const minimaxAnthropic = body.minimaxAnthropicAuthorization === undefined ? undefined
       : body.minimaxAnthropicAuthorization === null ? null : normalizeMiniMaxAnthropicBinding(body.minimaxAnthropicAuthorization);
     delete body.minimaxAnthropicAuthorization;
@@ -435,10 +442,10 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (nativeMedia !== undefined && nativeMedia !== null && nativeMedia !== "minimax-global-speech")
       throw new HttpError(400, "invalid_native_media_authorization", "Native media authorization must be minimax-global-speech or null");
     delete body.nativeMediaAuthorization;
-    if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
+    if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant) && !vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic);
+    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing, !!vertexPrivateKey), mode !== "replace", mode === "replace" ? "replace" : undefined,
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));
@@ -712,7 +719,7 @@ function userGroups(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((group) => typeof group !== "string")) throw new HttpError(400, "invalid_access_user", "groups must be an array of strings");
   return normalizeGroups(value as string[]);
 }
-function normalizeGrant(value: unknown, existing: UpstreamGrant | null): UpstreamGrant {
+function normalizeGrant(value: unknown, existing: UpstreamGrant | null, vertexSigningIntent = false): UpstreamGrant {
   const body = mutationObject(value, "invalid_upstream_grant", "upstream grant");
   const priority = body.priority ?? existing?.priority ?? 100;
   if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
@@ -734,7 +741,7 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   if (grant.maintenance?.keepWarm && (grant.kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_upstream_grant", "provider does not declare keep-warm maintenance for this subscription");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
   // Editing/reconnecting an unavailable grant validates presence, not routing eligibility.
-  if (!grantCredentialPresent({ ...grant, credentialStatus: "active" })) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
+  if (!grantCredentialPresent({ ...grant, credentialStatus: "active" }) && !vertexSigningIntent) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
   return grant;
 }
 function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"], defaultKeepWarm: boolean): UpstreamGrant["maintenance"] {

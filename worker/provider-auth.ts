@@ -31,7 +31,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
     || requirement.endpoint.websocket || requirement.endpoint.lifecycle || requirement.endpoint.responsesLifecycle
     || requirement.endpoint.modelPassthrough || requirement.endpoint.path_params.length || Object.keys(requirement.endpoint.query).length
     || transportForGrant(requirement.provider, grant) !== null || !vertexAnthropicProjection(grant)
-    || Date.parse(grant?.expiresAt ?? "") <= Date.now() + 60_000)) return false;
+    || vertexAnthropicProjection(grant)?.source !== "service_account" && Date.parse(grant?.expiresAt ?? "") <= Date.now() + 60_000)) return false;
   if (requirement.provider.id === "minimax") {
     const native = requirement.endpoint.request_format === "anthropic.messages";
     if (native && (requirement.mode !== "http" || requirement.endpoint.response_format !== "anthropic.messages"
@@ -143,7 +143,7 @@ function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGra
     return;
   }
   const available = grant?.credentialStore === "durable_object"
-    ? grant.credentialStatus !== "reauth_required" && (grant.hasCredential || grant.hasAccessToken)
+    ? grant.credentialStatus !== "reauth_required" && (grant.hasCredential || grant.hasAccessToken || vertexAnthropicProjection(grant)?.source === "service_account")
     : !!providerSecret(provider, scheme, grant, env);
   if (!available && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false))
     throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
