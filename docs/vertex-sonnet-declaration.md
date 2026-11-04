@@ -42,3 +42,27 @@ owner qualification and unknown-dollar denial. Source handoff does not
 include the generated snapshot or establish registered-client execution.
 Serialized snapshot qualification and the actual proxy-key Anthropic Messages
 consumer remain required before campaign activation.
+
+## Composed qualification
+
+The declaration is integrated with its generated snapshot. The focused suite
+covers all four owner locations through native and manifest JSON/SSE, and a real
+workerd/SQLite check verifies native and manifest JSON delivery, original owner
+credentials, a separate fixed policy charge and zero-egress unknown-price denial.
+
+The pinned OpenClaw source is
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. Eleven actual registered Messages
+consumer cases are authored for both stream entrypoints, location binding, tool
+replay and output, thinking/prefill, late errors, cancellation and revocation.
+Their hosted execution is required; authored cases are not completed proof.
+
+This client pin selects the native Messages route. Manifest LLM selection and
+dispatch remain an internal client dependency; Worker manifest tests do not
+certify that client path. The old client's cost projection also does not qualify
+unknown server prices. No deployed, live-account or vendor-invoice parity is
+claimed by deterministic fixtures.
+
+The smoke planner records a non-executable target requiring an original private
+owner grant and a qualified policy. Environment tokens and ADC cannot satisfy it;
+selection returns an explicit unresolved failure with no network request or
+successful health report.
