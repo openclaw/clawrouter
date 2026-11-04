@@ -124,16 +124,24 @@ live inference or manual deployment is performed here.
 
 Local composition retains source `9d528b3cb448c17be1c94098b6d4c1756c89317f`
 on qualified base `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The source
-regional YAML and 96-case Worker fixture are unchanged. The base already
+regional YAML and Worker fixture differ only by the exact owner correction
+below. The base already
 contains the provider-scoped `cached_tokens` observer; that old dependency is
 not the current blocker.
 
-All-manifest compilation stops before snapshot generation with
-`provider stepfun-cn endpoint models_list catalog protocol requires explicit GET`.
-Source4 must qualify the declaration against the current catalog endpoint
-contract. No compiler/common-runtime relaxation was made. The 96 Worker cases,
-matrix and actual-client composition remain unrun at this checkpoint, and the
-committed snapshot remains the qualified base inventory.
+The exact owner correction `bfcd3c1932353856a9991d6e3ef0c4e666bd045e`
+adds explicit GET for China and one compiled-method regression. Its YAML and
+regression blobs are preserved. The changed compiler attempt advances to:
+`provider stepfun-cn endpoint models_list catalog protocol requires an omitted streaming property and no WebSocket transport`.
+Read-only inspection also finds `streaming: none` on both regions and no
+explicit GET on global StepFun. Source4 exclusively owns their declaration
+correction; no compiler/common-runtime relaxation was made. The existing
+endpoint-membership assertion assumes insertion order although the compiler
+sorts IDs; its semantics also need owner-preserving qualification.
+
+The now-97 Worker cases, matrix and actual-client composition remain unrun at
+this checkpoint, and the committed snapshot remains the qualified base
+inventory. No stale snapshot is claimed as activation proof.
 
 Eight actual registered-client cases are authored in
 `test/fixtures/openclaw-stepfun-contract.test.ts` with the real Worker/SQLite
