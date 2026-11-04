@@ -59,6 +59,7 @@ const provider=snapshot.providers.find(value=>value.id==='openrouter');configure
 provider.endpoints.find(value=>value.id==='music_generate').timeout_ms=30000;
 const original=globalThis.fetch.bind(globalThis),pending=[],networkBodies=new WeakSet();
 let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false,controlled,activeReads=0,cancels=0,cancelCharge=0;
+let releaseOutput,outputBytes=0,outputEof=false;
 const getReader=ReadableStream.prototype.getReader;
 ReadableStream.prototype.getReader=function(options){
  const reader=getReader.call(this,options);
@@ -78,7 +79,8 @@ globalThis.fetch=async(input,init)=>{
 };
 export default {async fetch(request,bindings){
  const env={...bindings,OPENROUTER_SITE_URL:'https://example.com'},path=new URL(request.url).pathname;
- if(path==='/fixture/phase')return Response.json({activeReads,cancels,remaining:bodyBudgetCharged()});
+ if(path==='/fixture/phase')return Response.json({activeReads,cancels,outputBytes,outputEof,remaining:bodyBudgetCharged()});
+ if(path==='/fixture/release'){releaseOutput();return new Response('released');}
  if(path==='/fixture/abort'){controlled.abort();return new Response('aborted');}
  if(path==='/fixture/setup'){
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
@@ -90,13 +92,23 @@ export default {async fetch(request,bindings){
  if(path==='/fixture/state'){
   while(pending.length)await Promise.all(pending.splice(0));
   const usage=await(await usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin')).json();
-  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,cancels,cancelCharge,events:usage.events});
+  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,cancels,cancelCharge,outputBytes,outputEof,events:usage.events});
  }
  if(request.headers.has('x-fixture-controlled')){
   controlled=new AbortController();const headers=new Headers(request.headers);headers.delete('x-fixture-controlled');
   request=new Request(request,{headers,signal:controlled.signal});
  }
- return worker.fetch(request,env,{waitUntil(value){pending.push(value);}});
+ const gated=request.headers.has('x-fixture-gated');
+ if(gated){const headers=new Headers(request.headers);headers.delete('x-fixture-gated');request=new Request(request,{headers});}
+ const result=await worker.fetch(request,env,{waitUntil(value){pending.push(value);}});
+ if(!gated||!result.ok)return result;
+ const reader=result.body.getReader(),gate=new Promise(resolve=>{releaseOutput=resolve;});let first=true;
+ return new Response(new ReadableStream({async pull(controller){
+  if(!first)await gate;first=false;
+  const part=await reader.read();
+  if(part.done){outputEof=true;reader.releaseLock();controller.close();}
+  else{outputBytes+=part.value.byteLength;controller.enqueue(part.value);}
+ },async cancel(reason){releaseOutput();await reader.cancel(reason);reader.releaseLock();}},{highWaterMark:0}),result);
 },queue:worker.queue};`;
 const upstream = `${maximumWire.toString()}
 export default {async fetch(request){
@@ -127,16 +139,24 @@ test("workerd full inline music carries exact 8 MiB input and 32 MiB native wire
   for (const part of maximumWire()) { expected.update(part); expectedBytes += part.length; }
   assert.equal(expectedBytes, 32 * MiB);
   const response = await runtime.dispatchFetch("https://router.example/v1/native/openrouter/v1/chat/completions", {
-    method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json", "x-fixture-gated": "true" }, body: JSON.stringify(body),
   });
   assert.equal(response.status, 200, response.status === 200 ? undefined : await response.text());
   const actual = createHash("sha256"), reader = response.body.getReader(); let count = 0;
+  const first = await reader.read(); assert.equal(first.done, false); actual.update(first.value); count += first.value.length;
+  const phase = await (await runtime.dispatchFetch("https://router.example/fixture/phase")).json();
+  // The controlled consumer has not pulled the complete Worker producer. This
+  // measures actual output progress, not merely unread client-buffered bytes.
+  assert.ok(phase.outputBytes > 0 && phase.outputBytes < 32 * MiB); assert.equal(phase.outputEof, false);
+  assert.equal(phase.remaining, 96 * MiB);
+  await runtime.dispatchFetch("https://router.example/fixture/release");
   for (;;) { const part = await reader.read(); if (part.done) break; actual.update(part.value); count += part.value.length; }
   reader.releaseLock(); assert.equal(count, 32 * MiB); assert.equal(actual.digest("hex"), expected.digest("hex"));
   const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
   assert.equal(state.fetches, 1); assert.equal(state.capacity, 96 * MiB); assert.equal(state.uploadBytes, 8 * MiB);
   assert.equal(state.uploadDigest, createHash("sha256").update(image).digest("hex"));
   assert.equal(state.networkByob, true); assert.equal(state.remaining, 0);
+  assert.equal(state.outputBytes, 32 * MiB); assert.equal(state.outputEof, true);
   assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
   assert.equal(state.events[0].cost_basis, "policy_fixed"); assert.equal(state.events[0].grant_key, "oauth/fixture/openrouter");
   for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(state.events[0][field], null);
