@@ -214,6 +214,7 @@ export interface OAuthState {
 }
 
 export interface UpstreamGrant {
+  vertexAnthropicBinding?: import("./vertex-anthropic-binding.ts").VertexAnthropicBinding | null;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: import("../shared/native-media-binding.ts").NativeMediaBinding | null;
   version?: number;
