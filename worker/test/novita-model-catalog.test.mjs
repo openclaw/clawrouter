@@ -18,7 +18,7 @@ test("Novita documented keyed catalog preserves the original credential and body
     const controller = new AbortController(), r = novitaCatalogRequest(base, "synthetic-selected-novita", controller.signal);
     assert.equal(r.url, "https://api.novita.ai/openai/v1/models"); assert.equal(r.method, "GET"); assert.equal(r.body, null);
     assert.deepEqual([...r.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-selected-novita"], ["content-type", "application/json"]]);
-    assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error"); controller.abort(); assert.equal(r.signal.aborted, true);
+    assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual"); controller.abort(); assert.equal(r.signal.aborted, true);
   }
 });
 

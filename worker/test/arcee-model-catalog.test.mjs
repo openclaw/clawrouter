@@ -18,7 +18,7 @@ test("Arcee direct catalog preserves the original selected key without OpenRoute
     const controller = new AbortController(), request = arceeCatalogRequest(base, "synthetic-selected-direct-key", controller.signal);
     assert.equal(request.url, "https://api.arcee.ai/api/v1/models");
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-selected-direct-key"]]);
-    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "error");
+    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "manual");
     controller.abort(); assert.equal(request.signal.aborted, true);
   }
 });

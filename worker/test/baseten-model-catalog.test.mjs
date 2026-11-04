@@ -19,7 +19,7 @@ test("Baseten catalog request binds only the original selected credential to its
     const controller = new AbortController(), request = basetenCatalogRequest(base, "synthetic-selected-key", controller.signal);
     assert.equal(request.url, "https://inference.baseten.co/v1/models");
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-selected-key"]]);
-    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "error");
+    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "manual");
     controller.abort(); assert.equal(request.signal.aborted, true);
   }
 });
