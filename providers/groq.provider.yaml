@@ -41,6 +41,7 @@ endpoints:
     timeoutMs: 600000
   transcription:
     path: /v1/audio/transcriptions
+    pathParams: []
     method: POST
     requestFormat: groq.transcription
     responseFormat: groq.transcription

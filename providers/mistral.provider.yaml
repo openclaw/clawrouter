@@ -50,6 +50,7 @@ endpoints:
     timeoutMs: 120000
   transcription:
     path: /v1/audio/transcriptions
+    pathParams: []
     method: POST
     requestFormat: mistral.transcription
     responseFormat: mistral.transcription
