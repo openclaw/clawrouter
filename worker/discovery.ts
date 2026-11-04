@@ -437,7 +437,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         try { resolveTemplate(provider, model.upstream, env); }
         catch (error) { if (error instanceof HttpError) return { status: "exact-blocked" as const, reasonCode: error.code }; throw error; }
       }
-      return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
+      return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation, {}, provider.id);
     };
     const models = provider.models.filter(model => modelExecutable(provider, model) && pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => inventoryContexts.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability, true).status !== "exact-blocked"));
@@ -472,7 +472,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
         if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
-          const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] });
+          const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] }, provider.id);
           if (hosted.status !== "exact-blocked" || hosted.reasonCode === "pricing_required") hostedToolAdmission = {
             version: "clawrouter.hosted-tool-admission.v1", web_search: hosted.reasonCode === "pricing_required" ? "pricing_required" : "admitted",
           };

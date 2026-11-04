@@ -79,7 +79,8 @@ type AuthMode = "proxy_key" | "access";
 const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits", "openrouter.audio_transcription"]);
 const mediaPaths = new Set(["/v1/responses", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/chat/completions"]);
 const mediaEnvelope = (endpoint: { request_format: string }) => mediaFormats.has(endpoint.request_format);
-const bodyLimit = (endpoint: { request_format: string }) => endpoint.request_format === "openrouter.audio_transcription"
+const bodyLimit = (endpoint: { request_format: string }, providerId?: string) => providerId === "openrouter" && endpoint.request_format === "openai.audio_speech"
+  ? 256 * 1024 : endpoint.request_format === "openrouter.audio_transcription"
   ? 24 * 1024 * 1024 : mediaEnvelope(endpoint) ? maxMediaJsonBodyBytes : undefined;
 // Unified paths admit the media envelope before the model resolves a format.
 const expandedTooLarge = () => errorResponse("request_too_large", `JSON request body exceeds the ${maxJsonBodyBytes} byte limit for this route`, 413);
@@ -335,7 +336,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     try {
       if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
       else {
-        const value = await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission);
+        const value = await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
         if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
         envelope = manifestEnvelope(value);
       }
@@ -417,7 +418,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   try {
     let prepared;
     try {
-      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, bodyLimit(endpoint), admission);
+      const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
       endpoint = nativeModelEndpoint(provider, matching, match[2], method, body) ?? endpoint;
       prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
     } catch (error) {
@@ -507,7 +508,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
       prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
     }
-    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff);
+    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       accounting.fail(500, "provider_error", reservedBudget.reservation);
