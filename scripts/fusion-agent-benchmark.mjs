@@ -1,12 +1,12 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, verify } from './fusion-workloads.mjs';
+import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query'], properties: {
-  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
+  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
   edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
     properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
 } };
@@ -67,7 +67,7 @@ export function replaceEdits(task, files, edits) {
 
 const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
   'invalid_read_paths', 'invalid_edits', 'invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size',
-  'missing_query', 'invalid_action', 'command_timeout', 'command_output_limit']);
+  'missing_query', 'invalid_probe', 'invalid_action', 'command_timeout', 'command_output_limit']);
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
 export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
 
@@ -106,7 +106,7 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   const deadline = AbortSignal.timeout(config.deadlineMs);
-  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges (default first 120 lines). search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; finish submits. Supply empty paths/edits/query when unused. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
+  const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges (default first 120 lines). search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
   try {
@@ -139,7 +139,7 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
       try { action = JSON.parse(content); } catch { actions.push({ turn: turns + 1, action: 'invalid_json', status: 'rejected' }); invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
       if (typeof content !== 'string' || content.length > 40000) { invalidActions++; continue; }
       messages.push({ role: 'assistant', content });
-      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
+      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);
       const toolStarted = performance.now();
       const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
@@ -149,6 +149,9 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
           const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
           if (action.action === 'search' && !action.query) throw new Error('missing_query');
           messages.push({ role: 'user', content: JSON.stringify(sourceView(files, paths, action.action === 'search' ? action.query : '')) });
+        } else if (action.action === 'probe') {
+          const result = await probe(box, action.query, remaining());
+          messages.push({ role: 'user', content: `Behavior probe passed: ${result.passed}\n${result.feedback}` });
         } else if (action.action === 'edit') {
           const files = await readSource(box, task.editPaths, remaining());
           await writeFiles(box, replaceEdits(task, files, action.edits), remaining());

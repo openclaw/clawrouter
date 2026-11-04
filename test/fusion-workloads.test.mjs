@@ -47,3 +47,17 @@ test('qualification rejects empty/malformed reports and distinguishes broken tes
   assert.equal(testResult({ code: 1, stdout: tap(2, 1), stderr: Buffer.alloc(0) }).passed, false);
   assert.equal(testResult({ code: 0, stdout: Buffer.from('success'), stderr: Buffer.alloc(0) }).valid, false);
 });
+
+
+test('behavior probes use bounded stdin in the task sandbox and retain no script in output', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const calls = [];
+  const box = { exec: async (args, options) => { calls.push({args, options}); return { code: 1, stdout: Buffer.from('assertion failed'), stderr: Buffer.alloc(0) }; } };
+  const source = 'throw new Error("regression");';
+  assert.deepEqual(await probe(box, source, 1000), { passed: false, feedback: 'assertion failed' });
+  assert.deepEqual(calls[0].args, ['node', '--input-type=module']);
+  assert.equal(calls[0].options.input, source);
+  assert.equal(calls[0].options.timeout, 1000);
+  await assert.rejects(probe(box, 'x'.repeat(16001)), /invalid_probe/);
+  assert.equal(calls.length, 1);
+});

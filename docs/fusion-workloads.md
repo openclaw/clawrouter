@@ -114,3 +114,18 @@ charges, full trial wall time, tool time, escalation, invalid actions, failed
 advisers, public-test false acceptance and source hashes. Bounded action/error labels and model finish reasons explain failed trials.
 Source and model responses are not saved. Exact private-test counts must match the known repair.
 No trained router, product strategy or deployment is enabled by this harness.
+
+
+### Behavior probes and larger explicit experiments
+
+Visible tests pass on the broken parent. Agents can submit a bounded Node ES
+module through `probe` to reproduce a reported invariant and check their repair.
+It executes through stdin for at most 15 seconds in the same isolated container.
+Only allowed source files cross into the fresh hidden verifier; probe scripts and
+outputs are not retained in run artifacts.
+
+The original defaults remain unchanged. Explicit development configurations can
+use larger reasoning/output allowances, up to the owner's $100 cumulative cap.
+Every requested output token is reserved before dispatch; past unknown charges
+remain included at their full reservation. A new run requires a budget that
+includes all previous measured and reserved spend.

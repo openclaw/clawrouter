@@ -113,6 +113,14 @@ export async function check(box, paths, timeout = 120000) {
   return { ...testResult(result), feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
 }
 
+export async function probe(box, source, timeout = 15000) {
+  if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_probe');
+  const result = await box.exec(['node', '--input-type=module'], { input: source,
+    allowFailure: true, timeout: Math.min(15000, timeout) });
+  return { passed: result.code === 0,
+    feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
+}
+
 export async function buildTask(task, { repo, nodeImage, run = command }) {
   validateTask(task);
   if (!/^node@sha256:[a-f0-9]{64}$/.test(nodeImage)) throw new Error('pinned_node_image_required');
