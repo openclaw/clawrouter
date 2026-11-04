@@ -44,8 +44,12 @@ async function setup(t, options = {}) {
   } });
   Object.assign(f.env, { AWS_ACCESS_KEY_ID: "synthetic-env-access", AWS_SECRET_ACCESS_KEY: "synthetic-env-secret",
     AWS_SESSION_TOKEN: "synthetic-env-session", AWS_REGION: region });
-  if (options.pooled) await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true,
-    credentials: { accessKeyId: "synthetic-grant-access", secretAccessKey: "synthetic-grant-secret", sessionToken: "synthetic-grant-session" } });
+  if (options.pooled) {
+    f.policy.grantRouting = { eligibleGrants: { "aws-bedrock": ["replicate"] }, environmentFallback: false };
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+    await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true,
+      credentials: { accessKeyId: "synthetic-grant-access", secretAccessKey: "synthetic-grant-secret", sessionToken: "synthetic-grant-session" } });
+  }
   f.model = options.model ?? model;
   f.rows = () => [...new Set(f.budgetCalls.map(call => call.name))].flatMap(name => f.budgets.get(name).reservations());
   f.endpoint = streaming => f.provider.endpoints.find(endpoint => endpoint.request_format === (streaming ? "aws_bedrock.converse_stream" : "aws_bedrock.converse"));
@@ -125,7 +129,7 @@ for (const streaming of [false, true]) for (const scenario of ["unpriced", "miss
   });
 }
 
-for (const streaming of [false, true]) test(`Bedrock ${streaming ? "stream" : "unary"} original grant cannot borrow environment credentials after replacement or revocation`, async t => {
+for (const streaming of [false, true]) test(`Bedrock ${streaming ? "stream" : "unary"} grant-scoped policy cannot borrow environment credentials after replacement or revocation`, async t => {
   const f = await setup(t, { pooled: true });
   await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true, credentials: { accessKeyId: "synthetic-grant-access" } });
   await denied(f, { streaming });
