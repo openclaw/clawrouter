@@ -1,0 +1,210 @@
+import "./typescript-setup.mjs";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
+const { assertNativeResponseDestination } = await import("../native-response.ts");
+const { prepareNativeSage } = await import("../native-sage.ts");
+const { sageRequest, sageResponse } = await import("./provider-decision-fixtures.ts");
+
+function selection() {
+  const provider = compileProviderSnapshot([{
+    schema: "clawrouter.service-provider.v1", id: "levanto", displayName: "Sage fixture",
+    auth: { schemes: [{ type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key" }] },
+    baseUrls: { default: "https://sage.levanto.ai" },
+    capabilities: [{ id: "llm.decisions", endpoint: "decisions", methods: ["POST"] }, { id: "llm.decisions.batch", endpoint: "decisions_batch", methods: ["POST"] }],
+    endpoints: { decisions: { method: "POST", path: "/decide", requestFormat: "levanto.sage", responseFormat: "levanto.sage" },
+      decisions_batch: { method: "POST", path: "/decide/batch", requestFormat: "levanto.sage_batch", responseFormat: "levanto.sage_batch" } },
+    models: { entries: [{ id: "levanto/levanto-sage-2", upstream: "levanto-sage-2", capabilities: ["llm.decisions", "llm.decisions.batch"] }] },
+  }]).providers[0];
+  return { provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === "decisions"), model: provider.models[0], capability: "llm.decisions", method: "POST", pathParams: {},
+    body: { ...structuredClone(sageRequest), model: "levanto/levanto-sage-2" } };
+}
+const invalidRoute = e => e.status === 400 && e.code === "invalid_native_sage_route";
+
+test("Sage removes only the admitted model selector and preserves native question/reasoning", () => {
+  for (const model of [undefined, "levanto/levanto-sage-2", "levanto-sage-2"]) {
+    const selected = selection(); if (model === undefined) delete selected.body.model; else selected.body.model = model;
+    const original = structuredClone(selected), native = prepareNativeSage(selected);
+    assert.deepEqual(selected, { ...original, body: sageRequest });
+    assert.equal(native.origin, "https://sage.levanto.ai"); assert.equal(native.path, "/decide");
+    assert.equal(native.tariff, undefined); assert.equal(selected.model.pricing, null);
+  }
+});
+
+test("Sage leaves unrelated formats untouched and batch fails closed", () => {
+  for (const format of ["openai.decisions", "liquid.systemone", "typesafe.systemone", "baseten.systemone"]) {
+    const selected = selection(); selected.endpoint.request_format = format; const before = structuredClone(selected);
+    assert.equal(prepareNativeSage(selected), undefined); assert.deepEqual(selected, before);
+  }
+  const selected = selection(); Object.assign(selected.endpoint, { id: "decisions_batch", path: "/decide/batch", request_format: "levanto.sage_batch", response_format: "levanto.sage_batch" });
+  selected.capability = "llm.decisions.batch"; selected.body = { requests: [{ content: "synthetic", questions: [sageRequest.question] }] };
+  assert.throws(() => prepareNativeSage(selected), invalidRoute);
+});
+
+test("Sage requires exact provider/model/capability/route before changing the body", () => {
+  for (const change of [s => { s.provider.id = "other"; }, s => { s.provider.base_urls.default = "https://other.example"; },
+    s => { s.provider.capabilities = []; }, s => { s.provider.capabilities[0].methods = ["GET"]; }, s => { s.model = null; },
+    s => { s.model.id = "levanto/alias"; }, s => { s.model.upstream = "other"; }, s => { s.model.capabilities = ["llm.chat"]; },
+    s => { s.capability = "llm.chat"; }, s => { s.method = "GET"; }, s => { s.endpoint.method = "GET"; },
+    s => { s.endpoint.id = "other"; }, s => { s.endpoint.path = "/decide/batch"; }, s => { s.endpoint.response_format = "openai.decisions"; },
+    s => { s.endpoint.upstreamPath = "/decide"; }, s => { s.endpoint.path_params = ["model"]; }, s => { s.pathParams = { model: "other" }; },
+    s => { s.endpoint.query = { model: "other" }; }, s => { s.nativeQuery = {}; }, s => { s.endpoint.streaming = "sse"; },
+    s => { s.endpoint.websocket = {}; }, s => { s.endpoint.lifecycle = {}; }, s => { s.endpoint.responsesLifecycle = {}; },
+    s => { s.endpoint.modelPassthrough = {}; }, s => { s.endpoint.requestPricing = {}; }]) {
+    const selected = selection(); change(selected); const before = structuredClone(selected);
+    assert.throws(() => prepareNativeSage(selected), invalidRoute); assert.deepEqual(selected, before);
+  }
+});
+
+test("Sage rejects unqualified images, batch-shaped input, foreign model and hidden fields", () => {
+  for (const body of [[], null, {}, { ...sageRequest, model: "other" }, { ...sageRequest, stream: false },
+    { ...sageRequest, content: { kind: "image", media: "synthetic-private" } },
+    { requests: [{ content: "synthetic", questions: [sageRequest.question] }] }]) {
+    const selected = selection(); selected.body = body;
+    assert.throws(() => prepareNativeSage(selected), e => e.status === 400 && e.code === "invalid_native_sage_request" && !e.message.includes("synthetic-private"));
+    assert.equal(selected.body, body);
+  }
+});
+
+test("Sage keeps native abstention, reasoning and unknown usage without assigning a tariff", async () => {
+  for (const usage of [undefined, { input_tokens: 0, output_tokens: 0 }, { input_tokens: 17, output_tokens: 3 }]) {
+    const body = structuredClone(sageResponse); if (usage === undefined) delete body.meta.usage; else body.meta.usage = usage;
+    const result = await consume(prepareNativeSage(selection()), response(body));
+    assert.deepEqual(result.body, body); assert.equal(result.body.result.answer, null);
+    assert.equal(result.usage.outcome, "success"); assert.equal(result.usage.requestCostReceipt, undefined);
+    assert.equal(result.usage.tokens?.input ?? null, usage?.input_tokens ?? null);
+    assert.equal(result.usage.tokens?.output ?? null, usage?.output_tokens ?? null);
+  }
+  for (const body of [{ ...sageResponse, error: "synthetic-private" }, { ...sageResponse, id: "other" }, { ...sageResponse, kind: "choice" },
+    { ...sageResponse, result: { answer: "yes", probability: 2 } },
+    { ...sageResponse, meta: { usage: { input_tokens: 17 } } }, { error: "synthetic-private", meta: sageResponse.meta }])
+    await assert.rejects(consume(prepareNativeSage(selection()), response(body)), invalidResponse);
+});
+
+const limit = 2 * 1024 * 1024, encoder = new TextEncoder();
+const signal = () => new AbortController().signal;
+const response = value => Response.json(value);
+const invalidResponse = error => error.status === 502 && !error.message.includes("synthetic-private");
+async function consume(native, upstream, abort = signal()) {
+  const lease = native.acquire();
+  try {
+    const result = await native.read(upstream, abort);
+    return { ...result, body: await result.response.json() };
+  } finally { lease.release(); }
+}
+function containers(value) {
+  if (!value || typeof value !== "object") return 0;
+  return 1 + Object.values(value).reduce((sum, item) => sum + containers(item), 0);
+}
+function nested(count) { let value = "leaf"; while (count--) value = { next: value }; return value; }
+
+function responseCases(label, makeNative, envelope) {
+  for (const [name, make] of [
+    ["HTTP rejection", () => new Response("synthetic-private", { status: 403 })],
+    ["redirect", () => new Response(null, { status: 302, headers: { location: "https://other.example" } })],
+    ["redirected response", () => { const r = response(envelope()); Object.defineProperty(r, "redirected", { value: true }); return r; }],
+    ["missing body", () => new Response(null, { headers: { "content-type": "application/json" } })],
+    ["wrong MIME", () => new Response("synthetic-private", { headers: { "content-type": "text/html" } })],
+    ["invalid charset", () => new Response("{}", { headers: { "content-type": "application/json;charset=latin1" } })],
+    ["compression", () => new Response("{}", { headers: { "content-type": "application/json", "content-encoding": "gzip" } })],
+    ["partial range", () => responseWith("{}", { "content-range": "bytes 0-1/100" })],
+    ["malformed JSON", () => responseWith('{"synthetic-private":')],
+    ["invalid UTF-8", () => responseWith(new Uint8Array([123, 34, 255, 34, 58, 49, 125]))],
+    ["declared oversize", () => responseWith("{}", { "content-length": String(limit + 1) })],
+    ["truncated length", () => responseWith(JSON.stringify(envelope()), { "content-length": "999999" })],
+    ["trailing content", () => responseWith(JSON.stringify(envelope()) + "{}")],
+  ]) test(`${label}: ${name} never releases output or invents usage`, async () => {
+    const before = bodyBudgetCharged();
+    await assert.rejects(consume(makeNative(), make()), invalidResponse);
+    assert.equal(bodyBudgetCharged(), before);
+  });
+
+  test(`${label}: exact operational byte/depth/container bounds and native scalar values`, async () => {
+    const body = { ...envelope(), padding: "" };
+    body.padding = "x".repeat(limit - encoder.encode(JSON.stringify(body)).length);
+    assert.equal((await consume(makeNative(), response(body))).body.padding.length, body.padding.length);
+    body.padding += "x"; await assert.rejects(consume(makeNative(), response(body)), invalidResponse);
+    const deep = { ...envelope(), extra: nested(63) };
+    assert.deepEqual((await consume(makeNative(), response(deep))).body.extra, deep.extra);
+    await assert.rejects(consume(makeNative(), response({ ...envelope(), extra: nested(64) })), invalidResponse);
+    const many = { ...envelope(), extra: [] };
+    many.extra = Array.from({ length: 4096 - containers(many) }, () => ({}));
+    assert.equal(containers(many), 4096);
+    assert.deepEqual((await consume(makeNative(), response(many))).body.extra, many.extra);
+    many.extra.push({}); await assert.rejects(consume(makeNative(), response(many)), invalidResponse);
+    const quoted = { ...envelope(), extra: '"\\[]{}' + "[{}]".repeat(5000) };
+    assert.deepEqual((await consume(makeNative(), response(quoted))).body, quoted);
+    await assert.rejects(consume(makeNative(), responseWith(JSON.stringify(envelope()).slice(0, -1) + ',"extra":1e999}')), invalidResponse);
+  });
+
+  test(`${label}: every split preserves UTF-8 and escape/structure state`, async () => {
+    const body = { ...envelope(), extra: 'é 🎲 "\\[{}]' }, bytes = encoder.encode(JSON.stringify(body));
+    for (let split = 1; split < bytes.length; split++) {
+      const chunks = [bytes.subarray(0, split), bytes.subarray(split)];
+      const stream = new ReadableStream({ pull(c) { if (chunks.length) c.enqueue(chunks.shift()); else c.close(); } }, { highWaterMark: 0 });
+      assert.deepEqual((await consume(makeNative(), responseWith(stream))).body, body);
+    }
+  });
+
+  test(`${label}: all chunks including empty chunks count toward the 8192 bound`, async () => {
+    for (const empty of [8191, 8192]) {
+      let sent = 0, canceled = false;
+      const stream = new ReadableStream({ pull(c) {
+        if (sent++ < empty) c.enqueue(new Uint8Array(0));
+        else if (sent === empty + 1) c.enqueue(encoder.encode(JSON.stringify(envelope())));
+        else c.close();
+      }, cancel() { canceled = true; } }, { highWaterMark: 0 });
+      if (empty === 8191) assert.deepEqual((await consume(makeNative(), responseWith(stream))).body, envelope());
+      else { await assert.rejects(consume(makeNative(), responseWith(stream)), invalidResponse); await new Promise(setImmediate); assert.equal(canceled, true); }
+    }
+  });
+
+  test(`${label}: complete EOF precedes publication and caller retains the lease through delivery`, async () => {
+    let controller, published = false;
+    const upstream = responseWith(new ReadableStream({ start(c) { controller = c; c.enqueue(encoder.encode(JSON.stringify(envelope()))); } }));
+    const native = makeNative(), before = bodyBudgetCharged(), lease = native.acquire();
+    assert.equal(bodyBudgetCharged() - before, 64 * 1024 * 1024);
+    try {
+      const reading = native.read(upstream, signal()).then(value => { published = true; return value; });
+      await new Promise(setImmediate); assert.equal(published, false); controller.close();
+      const result = await reading;
+      assert.equal(bodyBudgetCharged() - before, 64 * 1024 * 1024);
+      assert.deepEqual(await result.response.json(), envelope());
+      assert.equal(bodyBudgetCharged() - before, 64 * 1024 * 1024);
+    } finally { lease.release(); }
+    assert.equal(bodyBudgetCharged(), before);
+  });
+
+  test(`${label}: abort cancels a stalled body without publication`, async () => {
+    let canceled = false;
+    const abort = new AbortController(), before = bodyBudgetCharged();
+    const upstream = responseWith(new ReadableStream({ start(c) { c.enqueue(encoder.encode(JSON.stringify(envelope()))); }, cancel() { canceled = true; } }));
+    const reading = consume(makeNative(), upstream, abort.signal);
+    await new Promise(setImmediate); abort.abort();
+    await assert.rejects(reading, invalidResponse); await new Promise(setImmediate);
+    assert.equal(canceled, true); assert.equal(bodyBudgetCharged(), before);
+  });
+
+  test(`${label}: capacity refusal leaks no charge and route cannot choose another destination`, () => {
+    const native = makeNative(), before = bodyBudgetCharged(), occupied = new BodyLease();
+    assert.equal(occupied.grow(bodyBudgetBytes / 2), true);
+    try { assert.throws(() => native.acquire(), e => e.status === 503 && e.code === "server_overloaded"); }
+    finally { occupied.release(); }
+    assert.equal(bodyBudgetCharged(), before);
+    assert.doesNotThrow(() => assertNativeResponseDestination(native, new URL(native.origin + native.path)));
+    for (const url of [native.origin + native.path + "?model=other", "https://other.example" + native.path, native.origin + "/other"])
+      assert.throws(() => assertNativeResponseDestination(native, new URL(url)));
+  });
+}
+function responseWith(body, headers = {}) { return new Response(body, { headers: { "content-type": "application/json", ...headers } }); }
+
+responseCases("Sage", () => prepareNativeSage(selection()), () => structuredClone(sageResponse));
+
+test("Sage preserves the existing codec request byte ceiling", () => {
+  const selected = selection(), body = { ...structuredClone(sageRequest), content: "" };
+  body.content = "x".repeat(4 * 1024 * 1024 - 1 - encoder.encode(JSON.stringify(body)).length);
+  selected.body = body; assert.ok(prepareNativeSage(selected));
+  const tooLarge = selection(); tooLarge.body = { ...body, content: body.content + "x" };
+  assert.throws(() => prepareNativeSage(tooLarge), e => e.code === "invalid_native_sage_request");
+});
