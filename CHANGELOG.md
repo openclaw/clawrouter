@@ -331,6 +331,7 @@
 - Add an inactive Copilot response reader with exact response-URL checks, bounded byte windows, fatal UTF-8 and complete cancellation cleanup; common authority, decoded-graph capacity and account responses remain separately qualified.
 - Bound complete Copilot catalog/device JSON structure before parsing, counting discarded metadata and overwritten values while preserving device duplicate-last-value semantics and existing decoder errors; capacity and account activation remain separate.
 - Add an inactive incremental Copilot account projection that retains only the API endpoint, validates complete UTF-8/JSON with fixed parser storage and rejects duplicate authority fields; transport, canonicalization and capacity qualification remain separate.
+- Add bounded Copilot account response transport with reused BYOB windows, complete projection validation and shared input retirement, preserving catalog/device readers and denying cleanup failures or late aborts; account authority, canonicalization and capacity activation remain separate.
 
 - Reject compromised certificate keys in the self-host Worker runtime, and include the system CA bundle required by the patched verifier. Thanks @joshavant.
 
