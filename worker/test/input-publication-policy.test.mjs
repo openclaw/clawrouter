@@ -2,8 +2,8 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture } from "./credential-fixture.mjs";
-import { normalizePolicy } from "../admin.ts";
-import { normalizePolicyRecord } from "../authority-policy.ts";
+const { normalizePolicy } = await import("../admin.ts");
+const { normalizePolicyRecord } = await import("../authority-policy.ts");
 import { readInputPublicationPolicy } from "../../shared/input-publication.ts";
 
 const permission = () => ({ version: "clawrouter.input-publication.v1", allow: [{ providerId: "openrouter", endpointId: "music_generate",
