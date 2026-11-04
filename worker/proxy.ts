@@ -704,12 +704,22 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
+  let discarded: WeakMap<Response, Promise<void>> | undefined;
+  const discard = (response: Response): Promise<void> => {
+    let pending = discarded?.get(response);
+    if (!pending) {
+      pending = response.body?.cancel(signal.reason).catch(() => undefined) ?? Promise.resolve();
+      (discarded ??= new WeakMap()).set(response, pending);
+    }
+    return pending;
+  };
   const discardNative = (value: { response: Response }) => discard(value.response);
   let response: Response | undefined;
   let priceGuard: AnthropicPriceGuard | undefined;
   let nativeLease: BodyLease | undefined;
   let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
+  let nativeRead: ReturnType<NonNullable<ProxySelection["nativeResponse"]>["read"]> | undefined;
+  let nativeFetch: Promise<Response> | undefined;
   let musicRead: Promise<unknown> | undefined;
   let imageRead: Promise<unknown> | undefined;
   let imageInput: ReturnType<typeof ownMiniMaxImageInput> | undefined;
@@ -729,6 +739,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         manifestOnlyPublicCatalog(selection.endpoint.request_format) ? result : result.catalog,
         { headers: { "cache-control": "private, no-store" } }))
       : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+    if (selection.nativeResponse) nativeFetch = pending;
     if (useSoft) {
       soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
       reservation = soft.reservation;
@@ -783,6 +794,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (selection.nativeResponse) {
       if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
       const reading = selection.nativeResponse.read(imageInput?.response ?? response, signal);
+      nativeRead = reading;
       if (imageInput) imageRead = reading;
       if (music) musicRead = reading;
       const validated = await operation.wait(reading, "upstream", discardNative);
@@ -823,17 +835,27 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       await imageInput.retire(error);
       await imageRead?.catch(() => undefined);
     }
-    nativeLease?.release();
+    const failedLease = nativeLease;
+    nativeLease = undefined;
+    if (nativeRead || nativeFetch) {
+      // Cancellation/accounting can finish now. A qualified reader settles only
+      // after input retirement; late fetch/results also retain their first cleanup.
+      const retirement = (async () => {
+        await nativeRead?.then(discardNative, () => undefined);
+        await nativeFetch?.then(discard, () => undefined);
+      })();
+      context.waitUntil(retirement.then(() => failedLease?.release()));
+    } else failedLease?.release();
     soft?.close();
     if (soft?.denial) {
       operation.stop("upstream", soft.denial);
-      void response?.body?.cancel().catch(() => undefined);
+      if (response) void discard(response);
       if (nativeUsage?.requestCostReceipt && cost.requestTariff) context.waitUntil(accounting.settle(402, "denied", true, null, reservation!, content, null, undefined, "unknown", nativeUsage.requestCostReceipt));
       else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
     operation.stop("upstream", error);
-    void response?.body?.cancel().catch(() => undefined);
+    if (response) void discard(response);
     if (!dispatched && error instanceof HttpError) {
       accounting.fail(error.status, "provider_error", reservation, content);
       return errorResponse(error.code, error.message, error.status);
@@ -866,7 +888,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
   const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
-  if (nativeLease) void observed.result.then(() => nativeLease!.release());
+  if (nativeLease) {
+    const deliveryLease = nativeLease;
+    context.waitUntil(observed.retired.then(() => deliveryLease.release()));
+  }
   if (admission) admission.completion = observed.result;
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));

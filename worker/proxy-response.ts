@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
@@ -33,10 +34,10 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage>; retired: Promise<void> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
-  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
+  if (!response.body) { operation.stop("complete"); return { response, retired: Promise.resolve(), result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mime = contentType.split(";")[0].trim();
   const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
@@ -53,13 +54,13 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
-  const reader = response.body.getReader();
+  const reader = response.body.getReader(), input = inputRetirement(reader);
   let text = "", bytes = 0, nonempty = false, finished = false;
   let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
-    if (finished) return Promise.resolve();
+    if (finished) return input.retired;
     finished = true;
     signal.removeEventListener("abort", aborted);
     if (delivery === "canceled") operation.cancel(reason);
@@ -88,9 +89,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
-    if (delivery !== "complete") void reader.cancel(reason).catch(() => undefined);
-    reader.releaseLock();
-    return Promise.resolve();
+    return input.retire(delivery === "complete" ? "eof" : "cancel", reason);
   }
   let downstream: ReadableStreamDefaultController<Uint8Array>;
   function aborted() {
@@ -102,7 +101,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     start(controller) { downstream = controller; },
     async pull(controller) {
       try {
-        const next = await reader.read();
+        const next = await input.read(() => reader.read());
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
           sse?.end();
@@ -147,7 +146,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   // Ingress abort is the authoritative caller-lifecycle signal in that case.
   if (signal.aborted) aborted();
   else signal.addEventListener("abort", aborted, { once: true });
-  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
+  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired: input.retired };
 }
 
 export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
