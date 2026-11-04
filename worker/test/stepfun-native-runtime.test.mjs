@@ -15,6 +15,13 @@ const providers = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", "providers/stepfun.provider.yaml", "providers/stepfun-cn.provider.yaml"], { encoding: "utf8" })).providers;
 const contracts = [["stepfun", "STEPFUN_API_KEY", "https://api.stepfun.ai/v1"],
   ["stepfun-cn", "STEPFUN_CN_API_KEY", "https://api.stepfun.com/v1"]];
+
+test("stepfun-cn model discovery compiles as GET only", () => {
+  const endpoint = providers.find(p => p.id === "stepfun-cn").endpoints.find(e => e.id === "models_list");
+  assert.equal(endpoint.method, "GET");
+  assert.deepEqual(endpoint.methods, ["GET"]);
+});
+
 for (const [id, binding, base] of contracts) {
   const provider = providers.find(p => p.id === id);
   const models = ["step-3.7-flash", "step-3.5-flash"];

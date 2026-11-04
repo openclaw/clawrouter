@@ -35,6 +35,7 @@ capabilities:
     methods: [POST]
 endpoints:
   models_list:
+    method: GET
     path: /models
     requestFormat: openai.models
     responseFormat: openai.models
