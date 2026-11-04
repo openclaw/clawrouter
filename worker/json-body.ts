@@ -121,6 +121,70 @@ export function jsonBodyStream(value: unknown): ReadableStream<Uint8Array> {
   }, { highWaterMark: 0 });
 }
 
+export type JsonTransportRetirement = "eof" | "cancel" | "error" | "discard";
+export interface JsonBodyTransport {
+  readonly bytes: number;
+  readonly retirement: JsonTransportRetirement | null;
+  stream(): ReadableStream<Uint8Array>;
+  discard(): void;
+}
+
+// The caller supplies validated, structurally bounded plain JSON and keeps it
+// immutable (deeply frozen borrowed input is supported). Only this serializer's
+// references retire here; other input owners and queued wire bytes are separate.
+export function jsonBodyTransport(value: unknown, maximumBytes: number): JsonBodyTransport {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw new RangeError("invalid JSON transport bound");
+  const bytes = jsonBodyBytes(value);
+  if (!Number.isSafeInteger(bytes) || bytes > maximumBytes) throw new RangeError("JSON transport exceeds bound");
+  let body: unknown = value;
+  value = undefined;
+  let chunks: Generator<string> | undefined, controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let started = false, emitted = 0, retirement: JsonTransportRetirement | null = null;
+  function retire(reason: JsonTransportRetirement): void {
+    if (retirement !== null) return;
+    retirement = reason;
+    const iterator = chunks;
+    chunks = undefined; body = undefined; controller = undefined;
+    iterator?.return(undefined);
+  }
+  return {
+    bytes,
+    get retirement() { return retirement; },
+    stream() {
+      if (started || retirement !== null) throw new TypeError("JSON transport is single-use");
+      started = true;
+      chunks = jsonChunks(body); body = undefined;
+      return new ReadableStream<Uint8Array>({
+        start(current) { controller = current; },
+        pull(current) {
+          try {
+            let text = "", done = false;
+            while (text.length < 8192) {
+              const next = chunks!.next();
+              if (next.done) { done = true; break; }
+              text += next.value;
+            }
+            // Each quoted piece is <=24 KiB encoded; the prior coalesced text
+            // is <24 KiB encoded. No whole-document string/buffer is created.
+            const wire = encoder.encode(text);
+            emitted += wire.byteLength;
+            if (wire.byteLength > 64 * 1024 || emitted > bytes || (done && emitted !== bytes)) throw new RangeError("JSON transport size changed");
+            if (wire.byteLength) current.enqueue(wire);
+            if (done) { current.close(); retire("eof"); }
+          } catch (error) { retire("error"); throw error; }
+        },
+        cancel() { retire("cancel"); },
+      }, { highWaterMark: 0 });
+    },
+    discard() {
+      if (retirement !== null) return;
+      const current = controller;
+      retire("discard");
+      current?.error(new TypeError("JSON transport discarded"));
+    },
+  };
+}
+
 // Base64 images and data URLs dominate large bodies. JSON.stringify of the whole
 // value would add a document-sized string plus its encoded bytes, and the
 // chunked serializer above costs 4–20× native CPU. Instead stringify a skeleton
