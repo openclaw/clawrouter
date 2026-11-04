@@ -8,6 +8,29 @@ const row = (id = "fixture-model", patch = {}) => ({ id, model_picker_enabled: t
 const decode = data => decodeCopilotModelCatalog(JSON.stringify({ data }));
 const reject = text => assert.throws(() => decodeCopilotModelCatalog(text), { message });
 
+test("whole-envelope guard counts dense discarded metadata before JSON.parse", () => {
+  const containers = count => '{"data":[],"discarded":[' + Array(count).fill("[]").join(",") + ']}';
+  assert.deepEqual(decodeCopilotModelCatalog(containers(32767)), { data: [] });
+  const hidden = JSON.stringify(row("hidden", { model_picker_enabled: false }));
+  const rejected = [containers(32768),
+    '{"data":[],"discarded":{' + Array(131071).fill('"":0').join(",") + '}}',
+    '{"data":[' + hidden + '],"discarded":[' + Array(131072).fill("0").join(",") + ']}',
+    '{"data":[],"discarded":0} trailing-private-detail'];
+  const original = JSON.parse; let calls = 0;
+  JSON.parse = (...args) => { calls++; return original(...args); };
+  try { for (const text of rejected) reject(text); assert.equal(calls, 0); }
+  finally { JSON.parse = original; }
+});
+
+test("overwritten catalog metadata is counted but valid duplicate-last-value semantics remain", () => {
+  const nested = depth => "[".repeat(depth) + "0" + "]".repeat(depth);
+  assert.deepEqual(decodeCopilotModelCatalog('{"data":[],"extra":' + nested(63) + ',"extra":0}'), { data: [] });
+  const original = JSON.parse; let calls = 0;
+  JSON.parse = (...args) => { calls++; return original(...args); };
+  try { reject('{"data":[],"extra":' + nested(64) + ',"extra":0}'); assert.equal(calls, 0); }
+  finally { JSON.parse = original; }
+});
+
 test("data-only native envelope and authoritative empty projection do not require OpenAI object:list", () => {
   assert.deepEqual(decodeCopilotModelCatalog('{"data":[],"provider_metadata":{"future":true}}'), { data: [] });
   const result = decode([row()]);

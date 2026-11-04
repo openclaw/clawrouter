@@ -9,6 +9,39 @@ const wire = { device_code: "synthetic-device-code", user_code: "ABCD-EFGH", ver
 const authorize = (patch = {}, selected = context) => decodeCopilotDeviceAuthorization(JSON.stringify({ ...wire, ...patch }), 200, selected, owner);
 const poll = (payload, interval = 5000, status = 200) => decodeCopilotDevicePoll(JSON.stringify(payload), status, authorize(), owner, interval);
 
+test("device preparse preserves overwritten deep values and final scalar authorization", () => {
+  const expected = authorize();
+  for (const deep of ["[".repeat(1500) + "0" + "]".repeat(1500), '{"x":'.repeat(500) + "0" + "}".repeat(500)]) {
+    const text = '{"expires_in":' + deep + ',' + JSON.stringify(wire).slice(1);
+    assert.ok(Buffer.byteLength(text) < 8192);
+    assert.deepEqual(decodeCopilotDeviceAuthorization(text, 200, context, owner), expected);
+    const token = '{"access_token":' + deep + ',"access_token":"synthetic-original"}';
+    assert.deepEqual(decodeCopilotDevicePoll(token, 200, expected, owner, 5000), { status: "authorized", githubDomain: "github.com", ownerBinding: owner, accessToken: "synthetic-original" });
+    const pending = '{"error":' + deep + ',"error":"authorization_pending"}';
+    assert.deepEqual(decodeCopilotDevicePoll(pending, 200, expected, owner, 5000), { status: "pending", reason: "authorization_pending", intervalMs: 5000 });
+  }
+  assert.throws(() => decodeCopilotDeviceAuthorization(JSON.stringify(wire).slice(0, -1) + ',"expires_in":[]}', 200, context, owner), { message: "invalid_copilot_device_duration" });
+});
+
+test("device guard preserves status, resource, malformed-JSON and parsed-body error contracts", () => {
+  const authorization = authorize();
+  assert.throws(() => decodeCopilotDeviceAuthorization("null", 200, context, owner), { message: "invalid_copilot_device_response_body" });
+  const original = JSON.parse; let calls = 0;
+  JSON.parse = (...args) => { calls++; return original(...args); };
+  try {
+    for (const text of ["{", '{"device_code":"synthetic-private"} trailing']) {
+      assert.throws(() => decodeCopilotDeviceAuthorization(text, 200, context, owner), { message: "invalid_copilot_device_response_json" });
+      assert.throws(() => decodeCopilotDeviceAuthorization(text, 403, context, owner), { message: "invalid_copilot_device_http_status" });
+      assert.deepEqual(decodeCopilotDevicePoll(text, 200, authorization, owner, 5000), { status: "error", code: "invalid_response" });
+      assert.deepEqual(decodeCopilotDevicePoll(text, 403, authorization, owner, 5000), { status: "error", code: "http_error" });
+    }
+    const oversized = "é".repeat(4097);
+    assert.throws(() => decodeCopilotDeviceAuthorization(oversized, 403, context, owner), { message: "invalid_copilot_device_response_limit" });
+    assert.deepEqual(decodeCopilotDevicePoll(oversized, 403, authorization, owner, 5000), { status: "error", code: "invalid_response" });
+    assert.equal(calls, 0);
+  } finally { JSON.parse = original; }
+});
+
 for (const domain of ["github.com", "fixture.ghe.com"]) {
   test(`device forms bind both requests to the selected ${domain} owner`, () => {
     const selected = { ...context, githubDomain: domain };

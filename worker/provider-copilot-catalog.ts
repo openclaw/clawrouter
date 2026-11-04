@@ -1,7 +1,6 @@
 import { copilotModelFormats, isCopilotCatalogModelVisible } from "./provider-copilot.ts";
+import { inspectCopilotJsonText } from "./copilot-json-guard.ts";
 
-const maxBytes = 2 * 1024 * 1024;
-const maxDepth = 64;
 const maxRows = 4096;
 
 type CopilotModelLimits = Readonly<{
@@ -53,21 +52,7 @@ function observedText(value: unknown): string | undefined {
 }
 
 function preparse(text: string): void {
-  if (typeof text !== "string" || text.length > maxBytes || new TextEncoder().encode(text).byteLength > maxBytes) invalid();
-  // Linear work over bounded text. Count both object and array containers before
-  // JSON.parse allocates a potentially deep graph; braces inside strings are data.
-  let depth = 0, quoted = false, escaped = false;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (quoted) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') quoted = false;
-    } else if (char === '"') quoted = true;
-    else if (char === "{" || char === "[") { if (++depth > maxDepth) invalid(); }
-    else if (char === "}" || char === "]") { if (--depth < 0) invalid(); }
-  }
-  if (quoted || depth !== 0) invalid();
+  try { inspectCopilotJsonText(text, "catalog"); } catch { invalid(); }
 }
 
 function limits(value: unknown): CopilotModelLimits | undefined {
