@@ -109,15 +109,24 @@ production deployment, login or live account provisioning is changed here.
 
 Exact source `1df3552c342f611d83ed23301777b8eb5d34984c` is retained on
 qualified `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The provider YAML and
-57-case Worker fixture remain byte-identical. Only the changelog insertion was
+Worker fixture retain the exact owner-corrected blobs described below. Only the changelog insertion was
 composed with existing unrelated entries.
 
-All-manifest compilation stops before snapshot generation:
-`provider tencent-tokenhub endpoint models_list catalog protocol requires explicit GET`.
-The declaration owner must qualify this endpoint against the current compiler.
-The source tests, matrix and actual client cases are UNRUN on this composition;
-its snapshot remains the qualified base inventory. No shared runtime/compiler
-change or guard bypass is included.
+Exact owner corrections `5256f5837fd43200e7c3807db25576f8fdf5568a` and
+`57d40611aa64ae8e5f42aaff2ffd601034ff72fe` are carried with authorship and
+exact final YAML/test blobs. All 85 manifests compile. Snapshot SHA256:
+`15f9496bb80c917b9a16b2dfc9773510b7b10ff77be5216a1368c4ce970083d5`.
+Worker types and all 1,035 Chat matrix/consumer-selection cases pass.
+
+Focused execution passes 56 of 58 cases. The declaration assertion at line 88
+expects insertion order rather than the compiler's sorted endpoint IDs. The
+URL-alias assertion at line 303 expects 200 for
+`/v1/native/clawrouter-tencent-tokenhub/...`, but the frozen runtime resolves
+that segment through exact `providerById` and returns 404 `provider_not_found`.
+These two fixture failures remain unchanged for owner disposition. Canonical
+native/manifest, selected/served preview identity, grant isolation and usage
+cases pass. No production runtime, YAML or positive assertion was changed.
+This checkpoint is not ready to land.
 
 Six actual registered-client cases are AUTHORED/UNRUN in
 `test/fixtures/openclaw-tencent-contract.test.ts`, paired with the real
