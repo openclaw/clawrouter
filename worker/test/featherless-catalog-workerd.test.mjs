@@ -27,10 +27,10 @@ export default {async fetch(request,env){
  await putGrantCredentials(env,'oauth/fixture/featherless',{provider:'featherless',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
  const call=()=>worker.fetch(new Request('https://router.example/v1/proxy/featherless/catalog',{headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret'}}),env,ctx);
  const held=new BodyLease();held.grow(1024*1024);const refused=await call();const denied=refused.status;await refused.text();const before=fetches;held.release();await drain();
- const response=await call();const charged=bodyBudgetCharged();const reader=response.body.getReader();let wire='',maximum=0;
+ const response=await call();const charged=bodyBudgetCharged();if(response.status!==200)throw new Error('catalog refused status='+response.status+' fetches='+fetches+' capacity='+charged+' body='+await response.text());const reader=response.body.getReader();let wire='',maximum=0;
  const example={id:id(0),context_length:8192,max_completion_tokens:1024,concurrency_cost:1,is_gated:false,available_on_current_plan:true,features:{tool_use:true,image_input:false},pricing:{prompt:'0.2',completion:'0.4',image:'0.1',request:'0.3'}};
  const expected=JSON.stringify({providerId:'featherless',catalog:[]}).length+5000*JSON.stringify(example).length+4999;
- for(;;){const next=await reader.read();if(next.done)break;maximum=Math.max(maximum,next.value.byteLength);wire+=new TextDecoder().decode(next.value);if(wire.length<expected&&bodyBudgetCharged()!==96*1024*1024)throw new Error('lease released while bytes remain');}
+ for(;;){const next=await reader.read();if(next.done)break;maximum=Math.max(maximum,next.value.byteLength);wire+=new TextDecoder().decode(next.value);if(wire.length<expected&&bodyBudgetCharged()!==96*1024*1024)throw new Error('lease released while bytes remain: received='+wire.length+' expected='+expected+' fetches='+fetches+' capacity='+bodyBudgetCharged());}
  reader.releaseLock();if(wire.length!==expected)throw new Error('incomplete catalog');await drain();const result=JSON.parse(wire);const released=bodyBudgetCharged();
  const cancel=await call();const cancelHeld=bodyBudgetCharged();await cancel.body.cancel();await drain();
  return Response.json({denied,before,status:response.status,charged,released,cancelHeld,final:bodyBudgetCharged(),count:result.catalog.length,providerId:result.providerId,bytes:new TextEncoder().encode(wire).byteLength,maximum,fetches,first:result.catalog[0].id,last:result.catalog.at(-1).id});
