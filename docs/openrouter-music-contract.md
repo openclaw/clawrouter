@@ -56,6 +56,52 @@ Exports: `openRouterMusicModels`, `prepareOpenRouterMusic`,
 Fixture: `providers/_fixtures/openrouter/music.json`.
 Checks: `node --test worker/test/openrouter-music.test.mjs`.
 
+The pure response leaf exports
+`prepareNativeOpenRouterMusic(selection: ProxySelection): NativeResponse | undefined`
+from `worker/native-openrouter-music.ts`. Invoke it before generic Chat
+validation. It binds explicit `music.generate`, the selected frozen model,
+`openai.chat_completions` request/response with SSE, configured base
+`https://openrouter.ai/api` and endpoint `/v1/chat/completions`. The final
+destination is `https://openrouter.ai/api/v1/chat/completions`. It neither
+changes the request body nor selects credentials or a direct Google fallback.
+This leaf accepts text-only messages; every image/reference remains closed
+pending original asset authority. The standalone codec's larger input surface
+does not grant that authority.
+
+The leaf bounds request JSON to 256 KiB before the existing codec clones it,
+retaining the 32,768 UTF-16 prompt limit. It quarantines at most 4 MiB of native
+SSE wire with 8,192 reads and 8,192 events (including empty reads and heartbeat
+events), the shared 2 MiB frame limit, 2 MiB decoded audio and 128 KiB UTF-8
+transcript. Encoded audio is bounded before decoding. A 32 MiB response lease
+charges 64 MiB in the existing 96 MiB pool, covering quarantine, parser and JSON
+scratch, base64 copies, decoded validation audio and replay; ingress keeps its
+separate charge. Replay uses bounded views into the same quarantine, and common
+dispatch retains the lease through delivery or cancellation. These are deliberate
+smaller local limits, not duration or upstream-fee guarantees.
+
+Only complete HTTP 200 native SSE with real `[DONE]` is replayed. Socket EOF
+alone, errors, malformed UTF-8/base64, inconsistent native identity, overflow or
+interruption release no partial response. The upstream transport is canceled at
+the native terminal; the wrapper never resubmits generation. LF/CRLF framing and
+one data line per event preserve compatibility with the frozen client's reader.
+Multiline data events, CR-only framing and any top-level `error` field or
+`event:error` are rejected, including `error:null`, which the common error
+sniffer would otherwise classify as a rejection. Identity encoding preserves
+exact original Content-Length checks; other encodings and ranges are closed.
+
+The response remains the original SSE bytes with native usage frames intact,
+not a binary audio response or a synthesized terminal. Local MP3/WAV test
+containers are decoder-verified test audio, not native synthesis evidence.
+Validated usage is `{tokens:null,outcome:"success"}`; no invoice/cost receipt is
+created from native diagnostics. Failed or canceled delivery retains common
+conservative settlement. Unknown hard-dollar admission stays closed; explicit
+policy-fixed charging is separate. Source1 still owns factory wiring, the
+generic Chat bypass guard, original grant/model routing, admission and settlement;
+source2/source6 own actual-client and Worker acceptance. This leaf does not
+activate a route.
+
+Focused leaf checks: `node --test worker/test/native-openrouter-music.test.mjs`.
+
 Primary evidence checked 2026-11-03:
 
 - [Native Chat audio output and SSE](https://openrouter.ai/docs/guides/overview/multimodal/audio)
