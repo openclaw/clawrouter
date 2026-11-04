@@ -493,8 +493,10 @@ test("Sage batch registered request rejection and revoked caller are zero-egress
       await workerFailure(await f.request({ ...batchInput(), model: "levanto-sage-2", ...patch }, { manifest }), 400);
     await workerFailure(await f.request(undefined, { manifest, query: "?model=other" }), 400);
   }
-  await f.authority("/credentials/put", { credentialId: "fixture", credential: { ...f.credential, enabled: false } });
-  assert.equal((await f.request()).status, 401);
+  const revoked = await f.authority("/credentials/mutate", { operation: "revoke", credentialId: "fixture", scope: "admin",
+    actor: { auth: "admin_token", email: "admin@example.test", role: "admin" } });
+  assert.equal((await revoked.json()).outcome, "updated");
+  assert.equal((await f.request()).status, 403);
   assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0); assert.equal(bodyBudgetCharged(), 0);
 });
 
