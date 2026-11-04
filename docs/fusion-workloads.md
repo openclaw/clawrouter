@@ -143,3 +143,9 @@ a Claude executor. `critique` uses Sol as executor and requests one Claude
 review before accepting the first submission. Adviser text remains untrusted,
 is not retained in artifacts, and every adviser call uses the same trial ledger.
 These are development arms, not automatically enabled production strategies.
+
+`handoff` gives Sol the first repair phase, then lets Claude inspect and edit the
+current files independently. Handoff occurs on Sol's submission or after two
+thirds of the shared turn allowance. The second phase receives the source and
+untrusted predecessor notes. It uses the remaining original time, turns and
+dollars; it does not reset the budget or trust visible tests as final grading.

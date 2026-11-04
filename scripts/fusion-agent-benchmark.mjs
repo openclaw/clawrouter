@@ -5,7 +5,7 @@ import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check,
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 
-const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique'];
+const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique', 'handoff'];
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
   memory: { type: 'string' },
   action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
@@ -24,6 +24,7 @@ export function validateExperiment(config, taskCount) {
     ['trialBudgetMicros', 1, 5000000], ['campaignBudgetMicros', 1, 100000000], ['priorCostMicros', 0, 100000000]]) {
     if (!Number.isSafeInteger(config[field]) || config[field] < min || config[field] > max) throw new Error(`invalid_${field}`);
   }
+  if (config.strategies.includes('handoff') && config.maxTurns < 2) throw new Error('handoff_requires_two_turns');
   const bound = taskCount * config.trials * config.strategies.length * config.trialBudgetMicros + config.priorCostMicros;
   if (!Number.isSafeInteger(bound) || bound > config.campaignBudgetMicros) throw new Error('campaign_budget_exceeded');
   return bound;
@@ -74,7 +75,7 @@ export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error
 export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
 
 export const executorModel = (strategy, turn, forced = false) => ['claude', 'planned'].includes(strategy) ? models.critic
-  : ['strong', 'critique'].includes(strategy) || (strategy === 'cascade' && (turn >= 2 || forced)) ? models.strong : models.cheap;
+  : ['strong', 'critique', 'handoff'].includes(strategy) || (strategy === 'cascade' && (turn >= 2 || forced)) ? models.strong : models.cheap;
 
 export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
 
@@ -139,8 +140,16 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   const deadline = AbortSignal.timeout(config.deadlineMs);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
-  let planUsed = false, reviewUsed = false;
+  let planUsed = false, reviewUsed = false, handoffUsed = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
+  const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
+  const handoff = async () => {
+    const files = await readSource(box, task.editPaths, remaining());
+    messages.splice(2, messages.length - 2, { role: 'user', content:
+      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}\nCurrent source:\n${JSON.stringify(files)}` });
+    memory = ''; handoffUsed = true;
+    actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
+  };
   try {
     if (strategy === 'planned') {
       const files = await readSource(box, task.editPaths);
@@ -157,7 +166,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     }
     for (; outcome !== 'budget' && turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      const model = executorModel(strategy, turns, forceEscalation);
+      if (strategy === 'handoff' && !handoffUsed && turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) await handoff();
+      const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
       const context = agentContext(messages, memory);
@@ -188,7 +198,6 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);
       const toolStarted = performance.now();
-      const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
       try {
         if (action.action === 'read' || action.action === 'search') {
           const paths = action.paths?.length ? action.paths : task.editPaths;
@@ -207,7 +216,9 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
           if (action.action === 'finish') {
-            if (strategy === 'critique' && !reviewUsed) {
+            if (strategy === 'handoff' && !handoffUsed) {
+              await handoff();
+            } else if (strategy === 'critique' && !reviewUsed) {
               reviewUsed = true;
               const files = await readSource(box, task.editPaths, remaining());
               const response = await invoke(trialId, models.critic, advisoryBody(task, files, 'review', config), deadline);
@@ -230,7 +241,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, planUsed, reviewUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }

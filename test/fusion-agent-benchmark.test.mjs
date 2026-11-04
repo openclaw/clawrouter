@@ -120,3 +120,10 @@ test('complementary arms retain the intended executor and separate adviser instr
   assert.match(plan.messages[1].content,/worker\/a.ts/);
   assert.throws(()=>advisoryBody(task,files,'other',defaultExperiment),/invalid_advisory_role/);
 });
+
+
+test('handoff requires room for both executors within the same turn budget', () => {
+  assert.throws(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:1}, 4), /two_turns/);
+  assert.doesNotThrow(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:2}, 4));
+  assert.equal(executorModel('handoff', 0), 'openai/gpt-6.1-sol');
+});
