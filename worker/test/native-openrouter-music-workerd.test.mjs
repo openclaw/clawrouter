@@ -45,16 +45,30 @@ import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { sha256Hex } from './worker/utils.ts';
 import { bodyBudgetCharged } from './worker/body-budget.ts';
 import { usageStub } from './worker/ledgers.ts';
+import { HttpOperation } from './worker/http-operation.ts';
 // This is the published source1 composition dependency, not a substitute selector.
 import { configureMusic, musicBody } from './worker/test/openrouter-music-runtime-fixture.mjs';
 configureMusic(snapshot.providers.find(value => value.id === 'openrouter'));
 const originalFetch = globalThis.fetch.bind(globalThis), originalReader = ReadableStream.prototype.getReader;
-const bodies = new WeakSet(); let initialized, metrics = {}, pending = new Set();
+const bodies = new WeakSet(), operations = new WeakMap(); let initialized, metrics = {}, pending = new Set();
+// Observe the original operation; never manufacture a caller signal or change
+// its first cause. A transport read failure is not automatically client_error.
+const originalStop = HttpOperation.prototype.stop;
+HttpOperation.prototype.stop = function(cause, reason) {
+  const current=operations.get(this.signal), first=this.delivery===undefined;
+  const result=originalStop.call(this,cause,reason);
+  if(current&&first){
+    current.operationCause=cause;current.operationStatus=this.status;current.operationDelivery=this.delivery;
+    current.operationReasonName=reason?.name;current.operationStopOrder=++current.sequence;
+  }
+  return result;
+};
 globalThis.fetch = async (input, init) => {
   const url = input instanceof Request ? input.url : String(input);
   if (url !== 'https://openrouter.ai/api/v1/chat/completions') throw new Error('unexpected physical destination');
   const current=metrics; current.fetches++; current.dispatchCapacity=bodyBudgetCharged();
   const signal=init?.signal ?? (input instanceof Request ? input.signal : undefined);
+  if(signal&&current.mode==='quarantine-cancel')operations.set(signal,current);
   current.upstreamAborted=signal?.aborted ?? false;
   signal?.addEventListener('abort',()=>{current.upstreamAborted=true;current.upstreamAbortOrder=++current.sequence;},{once:true});
   const response = await originalFetch(input, init); current.upstreamStatus=response.status;
@@ -99,14 +113,18 @@ export default { async fetch(request, bindings, context) {
     metrics.guardRejection = {requestedMode:mode,previousMode:metrics.mode,pending:pending.size,capacity:bodyBudgetCharged()};
     return Response.json({error:'fixture_previous_delivery_pending',...metrics.guardRejection},{status:500});
   }
-  metrics = {mode,fetches:0,nativeReaders:0,reads:0,activeReads:0,bytes:0,maxWindow:0,cancels:0,byob:false,sequence:0,callerAborted:request.signal.aborted};
+  metrics = {mode,fetches:0,nativeReaders:0,reads:0,activeReads:0,bytes:0,maxWindow:0,cancels:0,byob:false,sequence:0,fixtureRequestAborted:request.signal.aborted,routedRequestAborted:false};
   const current=metrics;
-  request.signal.addEventListener('abort',()=>{current.callerAborted=true;current.callerAbortOrder=++current.sequence;},{once:true});
+  const fixtureSignal=request.signal;
+  fixtureSignal.addEventListener('abort',()=>{current.fixtureRequestAborted=true;current.fixtureRequestAbortOrder=++current.sequence;},{once:true});
   if (!['full','delivery-cancel','quarantine-cancel','small','truncated'].includes(mode)) return new Response('invalid fixture mode',{status:400});
   const body = musicBody(); body.messages[0].content = mode;
-  const response = await worker.fetch(new Request('https://router.example/v1/native/openrouter/v1/chat/completions',{
-    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},body:JSON.stringify(body),signal:request.signal
-  }),env,{waitUntil(promise){const tracked=Promise.resolve(promise).finally(()=>pending.delete(tracked));pending.add(tracked);context.waitUntil(tracked);}});
+  const routedRequest=new Request('https://router.example/v1/native/openrouter/v1/chat/completions',{
+    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},body:JSON.stringify(body),signal:fixtureSignal
+  });
+  const routedSignal=routedRequest.signal;current.routedRequestAborted=routedSignal.aborted;
+  routedSignal.addEventListener('abort',()=>{current.routedRequestAborted=true;current.routedRequestAbortOrder=++current.sequence;},{once:true});
+  const response = await worker.fetch(routedRequest,env,{waitUntil(promise){const tracked=Promise.resolve(promise).finally(()=>pending.delete(tracked));pending.add(tracked);context.waitUntil(tracked);}});
   current.status=response.status;current.returnOrder=++current.sequence;current.beforeDeliveryCapacity=bodyBudgetCharged();
   // Do not call response.text()/arrayBuffer() here: actual delivery must leave
   // the isolate without another whole-wire allocation or synthetic reader.
@@ -150,7 +168,7 @@ async function settlement(origin, count, status) {
       assert.equal(event.actual_cost_micros, 700); assert.equal(event.cost_basis, 'policy_fixed');
       assert.equal(event.grant_key, 'oauth/fixture/openrouter'); assert.equal(event.capability, 'music.generate');
       assert.equal(event.input_tokens, null); assert.equal(event.output_tokens, null); assert.equal(event.total_tokens, null);
-      return;
+      return event;
     }
     await delay(50);
   }
@@ -224,10 +242,14 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
     assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
     await settlement(origin,3,'client_error');
   }));
-  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", async () => {
+  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", async caseTest => {
     const count=(await readFixtureJson(new URL('/usage',origin))).events.length;
     return musicRequest(origin,'quarantine-cancel',async(pending,abort)=>{
-      const host={phase:'fetch-pending',bytes:0};
+      const reason=new DOMException('fixture music caller cancellation','AbortError');
+      const host={phase:'fetch-pending',bytes:0,abortEvents:0,signalInitiallyAborted:abort.signal.aborted};
+      abort.signal.addEventListener('abort',()=>{
+        host.abortEvents++;host.signalAborted=abort.signal.aborted;host.reasonMatches=abort.signal.reason===reason;
+      },{once:true});
       const outcome=pending.then(async response=>{
         host.phase='headers';host.status=response.status;host.mime=response.headers.get('content-type');
         host.headersBeforeAbort=!abort.signal.aborted;
@@ -238,30 +260,56 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
           if(host.bytes && host.bytes<=4096){
             try{const value=JSON.parse(new TextDecoder().decode(part.value));host.bodyErrorCode=typeof value?.error?.code==='string'?value.error.code:undefined;}catch{}
           }
-        } catch(error){host.phase='read-rejected';host.readErrorName=error?.name;}
+        } catch(error){host.phase='read-rejected';host.readErrorName=error?.name;host.readRejectedAfterAbort=abort.signal.aborted;}
         finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
-      },error=>{host.phase='fetch-rejected';host.fetchErrorName=error?.name;});
+      },error=>{host.phase='fetch-rejected';host.fetchErrorName=error?.name;host.fetchReasonMatches=error===reason;host.fetchRejectedAfterAbort=abort.signal.aborted;});
       let beforeAbort,barrier=false;
       for(let attempt=0;attempt<100;attempt++){
         beforeAbort=await readFixtureJson(new URL('/proof',origin));
         const current=beforeAbort.mode==='quarantine-cancel';
         if(current&&beforeAbort.nativeReaders===1&&beforeAbort.bytes>0&&beforeAbort.bytes<65536
-          &&beforeAbort.activeReads===1&&beforeAbort.status===undefined&&!beforeAbort.callerAborted&&!beforeAbort.upstreamAborted){barrier=true;break;}
+          &&beforeAbort.activeReads===1&&beforeAbort.status===undefined&&!beforeAbort.fixtureRequestAborted&&!beforeAbort.routedRequestAborted&&!beforeAbort.upstreamAborted){barrier=true;break;}
         if((current&&beforeAbort.status!==undefined) || host.bytes || host.fetchErrorName || host.readErrorName)break;
         await delay(20);
       }
-      const hostBeforeAbort={...host};abort.abort();await outcome;
+      const hostBeforeAbort={...host};abort.abort(reason);await outcome;
       const afterAbort=await settled(origin),trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort});
-      assert.equal(barrier,true,trace);assert.equal(abort.signal.aborted,true,trace);
-      assert.equal(host.bytes,0,trace);assert.equal(afterAbort.callerAborted,true,trace);assert.equal(afterAbort.upstreamAborted,true,trace);
-      if(host.status===undefined)assert.equal(host.fetchErrorName,'AbortError',trace);
-      else {
-        // A fetch rejection and a headers-then-body rejection are distinct.
-        // Only an original HTTP-200 SSE body rejected by the real caller abort,
-        // with zero bytes and a proven pre-abort upstream read, can qualify.
-        assert.equal(host.status,200,trace);assert.equal(host.mime,'text/event-stream',trace);assert.equal(host.readErrorName,'AbortError',trace);
+      let receipt;
+      try {
+        // Record the real ledger outcome before any signal-observation assertion.
+        // Common first-cause status remains independently checked below.
+        receipt=await settlement(origin,count+1,afterAbort.operationStatus);
+        assert.equal(barrier,true,trace);assert.equal(host.signalInitiallyAborted,false,trace);
+        assert.equal(hostBeforeAbort.abortEvents,0,trace);assert.equal(host.abortEvents,1,trace);
+        assert.equal(abort.signal.aborted,true,trace);assert.equal(host.signalAborted,true,trace);
+        assert.equal(abort.signal.reason,reason,trace);assert.equal(host.reasonMatches,true,trace);
+        assert.equal(host.bytes,0,trace);assert.equal(afterAbort.upstreamAborted,true,trace);assert.equal(afterAbort.activeReads,0,trace);
+        if(host.status===undefined){
+          assert.equal(host.fetchErrorName,'AbortError',trace);assert.equal(host.fetchReasonMatches,true,trace);
+          assert.equal(host.fetchRejectedAfterAbort,true,trace);
+        } else {
+          // Response headers and body cancellation are separate observations.
+          assert.equal(host.status,200,trace);assert.equal(host.mime,'text/event-stream',trace);
+          assert.equal(host.readErrorName,'AbortError',trace);assert.equal(host.readRejectedAfterAbort,true,trace);
+        }
+        // Incoming Request signals and stream cancellation are distinct runtime
+        // observations. Never infer their state from the initiating host signal.
+        assert.equal(typeof afterAbort.fixtureRequestAborted,'boolean',trace);
+        assert.equal(typeof afterAbort.routedRequestAborted,'boolean',trace);
+        if(afterAbort.operationCause==='caller'){
+          assert.equal(receipt.status,'client_error',trace);assert.equal(afterAbort.operationDelivery,'canceled',trace);
+        } else {
+          // The host abort can instead surface as a transport read failure.
+          // Preserve that paid-failure classification; deadline/success cannot pass.
+          assert.equal(afterAbort.operationCause,'upstream',trace);
+          assert.equal(receipt.status,'provider_error',trace);assert.equal(afterAbort.operationDelivery,'failed',trace);
+        }
+        assertPhysical(afterAbort);
+      } finally {
+        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,
+          receipt:receipt&&{status:receipt.status,cost:receipt.actual_cost_micros,basis:receipt.cost_basis,
+            grant:receipt.grant_key,capability:receipt.capability,input:receipt.input_tokens,output:receipt.output_tokens,total:receipt.total_tokens}}));
       }
-      assertPhysical(afterAbort);await settlement(origin,count+1,'client_error');
     });
   });
   await t.test("full audio with missing native DONE is an atomic failure", () => musicRequest(origin,'truncated',async pending => {
