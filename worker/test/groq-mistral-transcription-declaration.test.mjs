@@ -60,7 +60,7 @@ for (const [id, contract] of Object.entries(contracts)) {
     const auth = configuredUpstream(provider, null, { [`${id.toUpperCase()}_API_KEY`]: "synthetic-original-key" });
     assert.equal(auth.baseUrl, contract.base); assert.equal(auth.headers.get("authorization"), "Bearer synthetic-original-key");
     for (const native of [false, true]) {
-      // Parsed fields only: HTTP intake and owner admission await the common registry.
+      // Parsed fields only; HTTP intake and owner admission have separate runtime fixtures.
       const fields = { ...wire.fields, model: native ? model.upstream : model.id }, original = { ...fields };
       const selection = native ? prepareNativeRequest(provider, endpoint, fields, endpoint.path, {})
         : prepareManifestRequest(provider, endpoint, fields, {}, {});

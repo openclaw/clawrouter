@@ -35,10 +35,13 @@ does not prove live availability. Groq preserves its supported prompt field;
 Mistral rejects that field rather than discarding it or converting it to
 `context_bias`. Translation, realtime and streaming remain separate contracts.
 
-## Pending multipart registration
+## Qualified server binding and remaining consumer proof
 
-The common owner must publish the registry binding for these exact paired
-formats and `transcription` endpoint IDs. The intended native paths are
+[PR796](https://github.com/openclaw/clawrouter/pull/796), landed as
+[`2f7855f`](https://github.com/openclaw/clawrouter/commit/2f7855f54b45f2f1a0e7c55951f0c4c7d8f76388),
+qualifies the common registry binding for these exact paired formats and
+`transcription` endpoint IDs, including authenticated multipart intake and
+actual workerd execution. The native paths are
 `/v1/native/groq/v1/audio/transcriptions` and
 `/v1/native/mistral/v1/audio/transcriptions`; the manifest paths are
 `/v1/proxy/groq/transcription` and `/v1/proxy/mistral/transcription`. Parsed
@@ -49,7 +52,11 @@ card ID. No new schema field is required by the existing compiler contract.
 YAML, parsed-field selection, landed multipart codec, complete response reader
 and conservative budget checks. It uses the original four-byte fixtures only
 for wire identity. These tests do not exercise HTTP multipart intake, fresh
-owner checks, playable audio or actual client dispatch. Those proofs require
-the common registered profile and the actual transcription consumer. Keep this
-declaration local until both handoffs qualify; snapshot publication stays with
-the existing integration owner.
+owner checks, playable audio or actual client dispatch. The common runtime's HTTP and owner checks have their separate
+qualified proof. The actual client bridge is
+[OpenClaw PR192558](https://github.com/openclaw/openclaw/pull/192558), handed off
+at `6de028c4e960db91bdf87882989cb6756a6429c3` with 40 authored, unrun client
+cases. That handoff is not actual registered-consumer execution proof. The ten
+declaration cases also remain unrun locally; hosted qualification and the
+integration owner's serialized snapshot/composed consumer proof remain required.
+This declaration makes no live-availability or full-client-parity claim.
