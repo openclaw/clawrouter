@@ -288,11 +288,11 @@ for (const [id, binding, base] of contracts) {
     assert.equal(f.sent.length, 1);
   });
 
-  for (const nativePrefix of id === "stepfun" ? ["clawrouter-stepfun", "stepfun-ai"] : ["clawrouter-stepfun-cn"]) test(`${id} routing alias ${nativePrefix} retains the canonical provider grant and native model`, async t => {
+  for (const nativePrefix of id === "stepfun" ? ["clawrouter-stepfun", "stepfun-ai"] : ["clawrouter-stepfun-cn"]) test(`${id} unadvertised native URL ${nativePrefix} is rejected before upstream egress`, async t => {
     const f = await fixture(t), body = { model: models[0], messages: [{ role: "user", content: "synthetic-input" }] };
-    const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
-    assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
-    assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-stepfun"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+    const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 404, await r.clone().text());
+    assert.equal((await r.json()).error.code, "provider_not_found"); await f.drain();
+    assert.equal(f.sent.length, 0);
   });
 
   if (id === "stepfun") test("StepFun frozen stepfun-ai model prefix retains the canonical global identity", async t => {
