@@ -94,6 +94,7 @@ test("speech facts cannot attach globally, to another model's endpoint, or to a 
     value => {
       value.capabilities.find(item => item.endpoint === "speech").id = "llm.chat";
       entry(value).capabilities = ["llm.chat"];
+      value.models.entries = [entry(value)];
     },
   ]) { const value = manifest(); change(value); assert.throws(() => compile(value), /speech profile requires/); }
 });
@@ -117,7 +118,10 @@ for (const native of [false, true]) test(`public ${native ? "native" : "manifest
   for (const upstream of mp3Models) assert.equal(provider.models.find(model => model.upstream === upstream)?.nativeCapabilities, undefined);
   assert.equal(provider.routes.find(route => route.endpoint === "speech").speech, undefined);
   const offers = provider.offers.filter(offer => offer.endpoint === "speech" && offer.modelId === modelId);
-  assert.ok(offers.length); assert.ok(offers.every(offer => offer.routeKind === (native ? "native" : "manifest")));
+  assert.deepEqual(offers.map(offer => [offer.routeKind, offer.route]).sort(), [
+    [native ? "native" : "manifest", native ? "/v1/native/openrouter/v1/audio/speech" : "/v1/proxy/openrouter/speech"],
+    ["unified", "/v1/audio/speech"],
+  ].sort());
   assert.ok(offers.every(offer => offer.speech === undefined));
   assert.doesNotMatch(JSON.stringify(catalog), /synthetic-original-key/);
   await revokeGrantCredentials(f.env, grantKey);
