@@ -213,7 +213,8 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
       if (!response.ok) throw new Error('unknown_cost');
       const result = nativeResult(model, await response.json());
       attempt.finishReason = finishReason(result.result.choices?.[0]?.finish_reason);
-      attempt.emptyOutput = !result.result.choices?.[0]?.message?.content?.trim();
+      const content = result.result.choices?.[0]?.message?.content;
+      attempt.emptyOutput = typeof content !== 'string' || !content.trim();
       await ledger.settle(attempt, result.costMicros, response.status);
       return result.result;
     } catch { ledger.blocked = true; await snapshot(); throw new Error('unknown_cost'); }
@@ -225,8 +226,19 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
       for (let offset = 0; offset < config.strategies.length; offset++) {
         const strategy = config.strategies[(index + trial - 1 + offset) % config.strategies.length];
         const trialId = `${task.id}:${trial}:${strategy}`, started = performance.now();
-        const result = await runAgent(task, receipt.image, strategy, trialId, config, invoke, engine);
-        const graded = await verify(task, receipt.image, result.files, repo);
+        let result, graded;
+        try {
+          result = await runAgent(task, receipt.image, strategy, trialId, config, invoke, engine);
+          graded = await verify(task, receipt.image, result.files, repo);
+        } catch (error) {
+          details.push({ trialId, outcome: 'interrupted', errorClass: ledger.blocked ? 'unknown_cost' : 'execution_failure',
+            costIncludesReservation: ledger.attempts.some(attempt => attempt.trialId === trialId && attempt.costMicros === null) });
+          records.push({ caseId: task.id, domain: 'repository-regression-development', trial, strategy,
+            configurationId: hash(JSON.stringify({ strategy, config })), score: 0, costMicros: ledger.total(trialId),
+            latencyMs: Math.round(performance.now() - started),
+            callCount: ledger.attempts.filter(attempt => attempt.trialId === trialId).length, status: 'error' });
+          await snapshot(); throw error;
+        }
         // Exact non-skipped test counts must match the qualified known repair.
         const passed = graded.passed && graded.tests === receipt.oracle.tests && graded.skipped === receipt.oracle.skipped;
         const { files, ...detail } = result;

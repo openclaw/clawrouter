@@ -99,7 +99,9 @@ one-shot answer. All agents get ten turns, a three-minute agent deadline and a
 $0.20 inference ceiling. Panel spends its extra calls within that same ceiling.
 The campaign also carries the previous $0.190914 usage/uncertainty ledger and
 has a $5 combined ceiling. Known settled savings may be used; unknown costs
-remain reserved and block more inference.
+remain reserved and block more inference. An interrupted trial is recorded with
+error status and zero score; the campaign remains incomplete. Do not treat a
+reservation as a confirmed charge or silently start a replacement campaign.
 
 Cascade gives Luna two turns. Passing the visible tests accepts that result;
 otherwise Sol continues in the same workspace. Hidden tests then measure false
