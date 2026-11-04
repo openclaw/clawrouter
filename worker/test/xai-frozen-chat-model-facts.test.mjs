@@ -100,8 +100,9 @@ test("actual Worker denies each unpriced frozen xAI model before egress under ei
     env.XAI_API_KEY = "synthetic-original"; env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     const response = await handler.fetch(request(manifestRoute, { model: model.upstream, messages }), env,
       { waitUntil: promise => pending.push(promise) });
-    assert.equal(response.headers.get("x-clawrouter-error-code"), "pricing_required");
-    assert.equal((await response.json()).error.code, "pricing_required");
+    const payload = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(payload.error.code, "pricing_required");
     await Promise.all(pending);
   }
   assert.equal(upstream.mock.callCount(), 0);
