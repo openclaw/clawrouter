@@ -10,6 +10,9 @@ const { configuredUpstream } = await import("../providers.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const existing = parse(readFileSync(new URL("../../providers/google-gemini.provider.yaml", import.meta.url), "utf8"));
+existing.capabilities = existing.capabilities.filter(value => value.endpoint !== "image_generate");
+delete existing.endpoints.image_generate;
+existing.models.entries = existing.models.entries.filter(value => !value.capabilities.includes("image.generate"));
 const compile = manifest => compileProviderSnapshot([manifest]);
 const ids = ["gemini-3.1-flash-image", "gemini-3-pro-image"];
 const body = () => ({ contents: [{ role: "user", parts: [{ text: "Synthetic image contract fixture" }] }],
