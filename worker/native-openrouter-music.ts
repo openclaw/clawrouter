@@ -119,9 +119,11 @@ async function quarantine(body: ReadableStream<Uint8Array>, signal: AbortSignal)
       wire.set(part.value, size); size += part.value.byteLength;
       frames.push(part.value);
       if (frames.overflowed()) invalid();
-      if (done) {
+      // CR completes an SSE line in the shared parser, but the frozen client
+      // needs its paired LF. Keep reading when that pair crosses a chunk.
+      if (done && !carriage) {
         const tail = frames.pending();
-        if (carriage || tail === null || tail.trim()) invalid();
+        if (tail === null || tail.trim()) invalid();
         return wire.subarray(0, size);
       }
     }
@@ -136,7 +138,9 @@ function replay(wire: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     pull(controller) {
       if (offset === wire.byteLength) { controller.close(); return; }
-      const end = Math.min(offset + 64 * 1024, wire.byteLength);
+      let end = Math.min(offset + 64 * 1024, wire.byteLength);
+      // Keep terminal CRLF together for the native codec's DONE/length check.
+      if (end < wire.byteLength && wire[end - 1] === 13 && wire[end] === 10) end--;
       controller.enqueue(wire.subarray(offset, end)); offset = end;
     },
     cancel() { offset = wire.byteLength; },

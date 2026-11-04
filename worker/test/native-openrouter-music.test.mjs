@@ -145,6 +145,10 @@ test("one-byte fragmentation and CRLF keep split base64 and UTF-8 unchanged", as
   const bytes = Buffer.from(original);
   const delivered = await read(response(chunks([...bytes].map(byte => Uint8Array.of(byte)))));
   assert.equal(await delivered.response.text(), original);
+  const tail = wire().replaceAll("\n", "\r\n"), padding = 65537 - Buffer.byteLength(tail);
+  const boundary = ":" + "a".repeat(padding - 5) + "\r\n\r\n" + tail;
+  assert.equal(Buffer.byteLength(boundary), 65537);
+  assert.equal(await (await read(response(boundary))).response.text(), boundary);
 });
 
 test("native DONE cancels a still-open upstream without waiting for socket EOF", async () => {
