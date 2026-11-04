@@ -65,6 +65,12 @@ export function replaceEdits(task, files, edits) {
   return validateEdits(task, [...current].map(([path, content]) => ({ path, content })));
 }
 
+const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
+  'invalid_read_paths', 'invalid_edits', 'invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size',
+  'missing_query', 'invalid_action', 'command_timeout', 'command_output_limit']);
+export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
+export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
+
 export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
 
 export function sourceView(files, selectors, query = '') {
@@ -98,6 +104,7 @@ function bodyFor(messages, config) {
 
 async function runAgent(task, image, strategy, trialId, config, invoke, engine) {
   const box = await sandbox(image), started = performance.now();
+  const actions = [];
   const deadline = AbortSignal.timeout(config.deadlineMs);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges (default first 120 lines). search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; finish submits. Supply empty paths/edits/query when unused. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
@@ -129,9 +136,11 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
       }
       const content = response.choices?.[0]?.message?.content;
       let action;
-      try { action = JSON.parse(content); } catch { invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
+      try { action = JSON.parse(content); } catch { actions.push({ turn: turns + 1, action: 'invalid_json', status: 'rejected' }); invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
       if (typeof content !== 'string' || content.length > 40000) { invalidActions++; continue; }
       messages.push({ role: 'assistant', content });
+      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
+      actions.push(event);
       const toolStarted = performance.now();
       const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
       try {
@@ -153,14 +162,15 @@ async function runAgent(task, image, strategy, trialId, config, invoke, engine) 
             else { outcome = 'submitted'; turns++; break; }
           }
         } else throw new Error('invalid_action');
-      } catch { if (deadline.aborted) { outcome = 'deadline'; break; }
-        invalidActions++; messages.push({ role: 'user', content: 'Invalid action or tool failure. Check allowed paths and exact unique search text.' }); }
+      } catch (error) { event.status = toolErrorCode(error);
+        if (deadline.aborted) { outcome = 'deadline'; break; }
+        invalidActions++; messages.push({ role: 'user', content: `Tool error: ${event.status}. Check allowed paths, line ranges and exact unique search text.` }); }
       finally { toolMs += performance.now() - toolStarted; }
       // This is a development cascade using observable tests, not an oracle gate.
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }
@@ -202,6 +212,8 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
       attempt.httpStatus = response.status;
       if (!response.ok) throw new Error('unknown_cost');
       const result = nativeResult(model, await response.json());
+      attempt.finishReason = finishReason(result.result.choices?.[0]?.finish_reason);
+      attempt.emptyOutput = !result.result.choices?.[0]?.message?.content?.trim();
       await ledger.settle(attempt, result.costMicros, response.status);
       return result.result;
     } catch { ledger.blocked = true; await snapshot(); throw new Error('unknown_cost'); }

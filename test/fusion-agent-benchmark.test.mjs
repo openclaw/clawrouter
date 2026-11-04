@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('every arm fits the predeclared campaign ceiling including previous uncertainty', () => {
@@ -63,4 +63,12 @@ test('failed cheap submissions escalate; accepted or already-strong submissions 
   assert.equal(escalateSubmission('cascade', false, true), false);
   assert.equal(escalateSubmission('cascade', true, false), false);
   assert.equal(escalateSubmission('strong', false, false), false);
+});
+
+
+test('diagnostics retain bounded labels without raw error or response content', () => {
+  assert.equal(toolErrorCode(new Error('search_must_match_once')), 'search_must_match_once');
+  assert.equal(toolErrorCode(new Error('private path or generated source')), 'execution_failed');
+  assert.equal(finishReason('length'), 'length');
+  assert.equal(finishReason('private response'), 'other');
 });

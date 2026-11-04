@@ -109,6 +109,6 @@ claim that visible tests fully prove correctness.
 Records remain labeled `development`, and the evaluator requires an explicit
 `--development` flag. Results include final hidden-test success, all model
 charges, full trial wall time, tool time, escalation, invalid actions, failed
-advisers, public-test false acceptance and source hashes. Source and model
-responses are not saved. Exact private-test counts must match the known repair.
+advisers, public-test false acceptance and source hashes. Bounded action/error labels and model finish reasons explain failed trials.
+Source and model responses are not saved. Exact private-test counts must match the known repair.
 No trained router, product strategy or deployment is enabled by this harness.
