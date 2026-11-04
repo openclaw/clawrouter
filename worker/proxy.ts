@@ -75,7 +75,7 @@ import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
   assertProviderAccess, capabilityForPath, modelRoute, providerById,
-  signSigV4, upstreamAuth, upstreamPath,
+  signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
@@ -953,7 +953,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
-  let upstream;
+  let upstream: UpstreamAuth;
   const stickyHash = await grantStickyHash(request, auth);
   try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
@@ -996,7 +996,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       selection.nativeResponse = prepareNativeBedrockConverse(selection, { origin: upstream.baseUrl })
         ?? prepareNativeBedrockConverseStream(selection, { origin: upstream.baseUrl });
     }
-    const minimaxAnthropic = await prepareMiniMaxAnthropicDispatch(request, env, auth, selection, upstream, hasProxyQuery(queryInput), transport);
+    const minimaxAnthropic = miniMaxAnthropicRoute(selection.provider, selection.endpoint)
+      ? await prepareMiniMaxAnthropicDispatch(request, env, auth, selection, upstream, hasProxyQuery(queryInput), transport) : undefined;
     if (minimaxAnthropic) upstream = minimaxAnthropic.upstream;
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     minimaxAnthropic?.apply(url, headers);

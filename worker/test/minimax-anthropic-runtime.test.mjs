@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { snapshot } from "../providers.ts";
+import { grantSupports } from "../provider-auth.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, inspectGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { overrideHotCacheConfig, HOT_CACHE_DISABLED } from "../hot-cache.ts";
@@ -138,4 +139,14 @@ test("MiniMax rejects query and unregistered model authority, and does not repla
   await denied(f, await f.request(false, { model: "foreign-model" }));
   f.upstream = () => new Response(null, { status: 429 });
   const response = await f.request(); assert.notEqual(response.status, 200); await response.text(); assert.equal(f.sent.length, 1);
+});
+
+// Regional Messages qualification must not remove independently supported
+// global API-key Chat. CN keys and OAuth do not gain that other transport.
+test("MiniMax global API-key qualification preserves the existing Chat grant boundary", async t => {
+  const f = await setup(t), grant = await inspectGrantCredentials(f.env, grantKey);
+  const requirement = { provider: f.provider, endpoint: { ...f.provider.endpoints[0], request_format: "openai.chat_completions", response_format: "openai.chat_completions", path: "/v1/chat/completions" }, mode: "http" };
+  assert.equal(grantSupports(requirement, grant), true);
+  assert.equal(grantSupports(requirement, { ...grant, minimaxAnthropicBinding: authorization("api_key", "cn") }), false);
+  assert.equal(grantSupports(requirement, { ...grant, kind: "oauth" }), false);
 });

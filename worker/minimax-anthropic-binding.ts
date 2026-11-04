@@ -46,7 +46,9 @@ function secret(value: unknown): value is string {
   return typeof value === "string" && value.length <= 4096 && value.trim().length > 0 && !/[\x00-\x1f\x7f]/.test(value);
 }
 
-export function miniMaxOwnerBinding(record: CredentialRecord): MiniMaxAnthropicBinding | null {
+type CredentialSource = Pick<CredentialRecord, "minimaxAnthropicBinding" | "providerId" | "kind" | "subscription" | "credentials" | "refresh" | "credential" | "accessToken" | "refreshToken" | "expiresAt">;
+
+export function miniMaxOwnerBinding(record: CredentialSource): MiniMaxAnthropicBinding | null {
   const binding = readMiniMaxAnthropicBinding(record.minimaxAnthropicBinding);
   if (!binding || record.providerId !== "minimax" || record.kind !== binding.kind || record.subscription
     || Object.keys(record.credentials ?? {}).length || record.refresh) return null;
@@ -78,7 +80,7 @@ export function miniMaxAnthropicProjection(grant: UpstreamGrant | null): MiniMax
     : !grant.hasCredential && grant.hasAccessToken && grant.hasRefreshToken && Number.isFinite(Date.parse(grant.expiresAt ?? "")) ? binding : null;
 }
 
-export function miniMaxCredential(record: CredentialRecord): MiniMaxApiCredential | MiniMaxOAuthCredential {
+export function miniMaxCredential(record: CredentialSource & Pick<CredentialRecord, "grantKey" | "lineage" | "generation">): MiniMaxApiCredential | MiniMaxOAuthCredential {
   const binding = miniMaxOwnerBinding(record);
   if (!binding || !record.grantKey || !record.lineage || !Number.isSafeInteger(record.generation)) miniMaxAnthropicUnavailable();
   const ownerBinding = JSON.stringify([record.grantKey, record.lineage, record.generation]);

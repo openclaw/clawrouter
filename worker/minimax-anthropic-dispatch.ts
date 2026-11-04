@@ -36,8 +36,8 @@ export async function prepareMiniMaxAnthropicDispatch(request: Request, env: Env
     || Object.keys(selection.pathParams).some(name => !["model", "deployment"].includes(name) || selection.pathParams[name] !== model.upstream)
     || !selection.provider.models.some(row => row.id === model.id && row.upstream === model.upstream && row.capabilities.includes("llm.chat"))
     || Array.isArray(selection.body) || selection.body.model !== model.upstream) miniMaxAnthropicUnavailable();
-  const credential = miniMaxCredential({ ...grant, version: 1, providerId: grant.provider, grantKey: key,
-    generation: grant.credentialGeneration!, lineage: grant.credentialLineage, status: "active", updatedAt: grant.updatedAt ?? "" });
+  const credential = miniMaxCredential({ ...grant, providerId: grant.provider, grantKey: key,
+    generation: grant.credentialGeneration!, lineage: grant.credentialLineage });
   let prepared: ReturnType<typeof prepareMiniMaxAnthropicRequest>;
   try { prepared = prepareMiniMaxAnthropicRequest(selection.body, model.upstream, credential, credential.ownerBinding, Date.now()); }
   catch { miniMaxAnthropicUnavailable(); }

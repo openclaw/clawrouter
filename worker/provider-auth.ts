@@ -32,7 +32,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
       || requirement.endpoint.lifecycle || requirement.endpoint.responsesLifecycle || requirement.endpoint.modelPassthrough
       || requirement.endpoint.path_params.length || Object.keys(requirement.endpoint.query).length
       || transportForGrant(requirement.provider, grant) !== null || !miniMaxAnthropicProjection(grant))) return false;
-    if (!native && (grant?.kind === "oauth" || grant?.minimaxAnthropicBinding != null)) return false;
+    if (!native && (grant?.kind === "oauth" || grant?.minimaxAnthropicBinding?.region === "cn")) return false;
   }
   if (openRouterPcmRequirement(requirement) && (requirement.mode !== "http" || !grant || grant.kind !== "api_key"
     || grant.provider !== "openrouter" || grant.credentialStore !== "durable_object" || !grant.credentialLineage
