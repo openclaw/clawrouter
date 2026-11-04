@@ -85,10 +85,14 @@ client tariff/limit hints do not qualify server billing; all five server prices
 remain unknown and hard-dollar admission stays closed. No new SDK report, local
 install, live request, account change or deployment is performed.
 
-The first actual run passed all fifteen client cases but exposed an integration
-fixture mismatch: the xhigh case selected Grok 4.5. Both frozen `31ad71a8` and
-pinned `d8bb9394` use identical model-ID rules and runtime compatibility code
-that map Grok 4.5 xhigh requests to high; Grok 4.6 preserves xhigh. The fixture
-now selects Grok 4.6 for the unchanged positive xhigh wire assertion. This
-consumer does not certify Grok 4.5 xhigh delivery, regardless of the separate
-server declaration. No client, runtime, provider declaration or snapshot changes.
+The consumer runs static catalog rows through the registered
+`normalizeResolvedModel` hook before replay and streaming. That actual hook
+supplies the runtime reasoning map; the fixture does not copy one. It asserts
+unchanged selected identity/transport and Grok 4.6's positive xhigh mapping,
+then independently requires xhigh on the physical upstream wire.
+
+Both frozen `31ad71a8` and pinned `d8bb9394` use identical model-ID rules and
+runtime compatibility code: Grok 4.5 maps xhigh requests to high, while Grok 4.6
+preserves xhigh. This consumer therefore does not certify Grok 4.5 xhigh delivery,
+regardless of the separate server declaration. All five model cases, usage,
+original credentials, denial, cancellation and accounting assertions remain.

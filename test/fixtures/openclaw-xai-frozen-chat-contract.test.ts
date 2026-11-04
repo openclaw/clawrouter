@@ -30,7 +30,11 @@ async function start(id: string, options: { modelIndex?: number; image?: boolean
   // hosted search have separate transport, admission and billing contracts.
   const configured = { ...catalog, api: "openai-completions" as const, baseUrl: origin + "/v1/native/xai/v1", models: [row!] };
   const config = { models: { providers: { xai: configured } } };
-  const model = { ...row, provider: "xai", api: configured.api, baseUrl: configured.baseUrl } as Model<"openai-completions">;
+  const rawModel = { ...row, provider: "xai", api: configured.api, baseUrl: configured.baseUrl } as Model<"openai-completions">;
+  const model = provider.normalizeResolvedModel?.({ provider: "xai", modelId, model: rawModel }) as Model<"openai-completions"> | undefined;
+  if (!model) throw new Error("expected the actual registered xAI model normalizer");
+  expect(model).toMatchObject({ id: modelId, provider: "xai", api: configured.api, baseUrl: configured.baseUrl });
+  if (options.reasoning === "xhigh") expect(model.thinkingLevelMap?.xhigh).toBe("xhigh");
   const history: AgentMessage[] = [
     { role: "user", content: "Run the synthetic tool", timestamp: 1 },
     { role: "assistant", content: [{ type: "thinking", thinking: "synthetic-prior-thinking", thinkingSignature: "reasoning_content" }, { type: "toolCall", id: "callfixture", name: "x_search", arguments: {} }],
