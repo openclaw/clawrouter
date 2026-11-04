@@ -137,7 +137,8 @@ test("actual tokenizer receives at most 1024 UTF-8 bytes without split raw surro
     const guard = await import(guardUrl), observer = await import(observerUrl);
     const text = JSON.stringify({ ["é".repeat(513)]: "🦊".repeat(1100) + "a".repeat(3000), value: 1e42 });
     assert.equal(guard.inspectCopilotJsonText(text, "catalog").utf8Bytes, Buffer.byteLength(text));
-    assert.ok(observer.feeds.length > 10);
+    assert.equal(observer.feeds.reduce((sum, feed) => sum + feed.bytes, 0), Buffer.byteLength(text));
+    assert.ok(observer.feeds.length >= Math.ceil(Buffer.byteLength(text) / 1024));
     assert.ok(observer.feeds.some(feed => feed.bytes === 1024));
     assert.ok(observer.feeds.every(feed => feed.bytes > 0 && feed.bytes <= 1024
       && !(feed.first >= 0xdc00 && feed.first <= 0xdfff) && !(feed.last >= 0xd800 && feed.last <= 0xdbff)));
