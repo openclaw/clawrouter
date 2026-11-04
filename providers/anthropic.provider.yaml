@@ -370,6 +370,44 @@ models:
         outputMicrosPerMillion: 50000000
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-mythos-5
+      upstream: claude-mythos-5
+      capabilities: [llm.messages, llm.count_tokens]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://platform.claude.com/docs/en/models/mythos-5/overview]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+          count_tokens:
+            sources: [https://platform.claude.com/docs/en/models/mythos-5/overview, https://platform.claude.com/docs/en/build-with-claude/token-counting]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+      pricingRef: anthropic-claude-mythos-5-standard-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://platform.claude.com/docs/en/models/mythos-5/overview
+        anthropicModifiers:
+          checkedAt: "2026-11-03"
+          sources:
+            - https://platform.claude.com/docs/en/about-claude/pricing
+            - https://platform.claude.com/docs/en/build-with-claude/fast-mode
+            - https://platform.claude.com/docs/en/api/service-tiers
+          fastMultiplier: null
+          usMultiplier: 1.1
+          serviceTiers: [standard]
+        inputMicrosPerMillion: 10000000
+        cachedInputMicrosPerMillion: 1000000
+        cacheWrite5mInputMicrosPerMillion: 12500000
+        cacheWrite1hInputMicrosPerMillion: 20000000
+        outputMicrosPerMillion: 50000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
     - id: anthropic/claude-opus-4-8
       upstream: claude-opus-4-8
       capabilities: [llm.messages, llm.count_tokens]
