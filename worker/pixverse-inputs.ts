@@ -24,7 +24,10 @@ export async function allocatePixVerseInput(request: Request, env: Env, context:
     || !file.bytes.length || file.bytes.length > managedInputMaxBytes || !["image/png", "image/jpeg", "image/webp"].includes(file.type)
     || selection.provider.id !== "pixverse" || selection.method !== "POST" || selection.capability !== "video.generate"
     || !model || model.upstream !== plan.model || !selection.provider.models.includes(model)
-    || !modelSupportsEndpoint(selection.provider, model, selection.endpoint) || Object.keys(selection.pathParams).length
+    || !modelSupportsEndpoint(selection.provider, model, selection.endpoint)
+    || selection.endpoint.inputProfile !== undefined && (!model.capabilities.includes("video.generate")
+      || !selection.provider.capabilities.some(value => value.id === "video.generate" && value.endpoint === selection.endpoint.id))
+    || Object.keys(selection.pathParams).length
     || new URL(request.url).search) inputUnavailable();
   assertPolicyModel(auth.policy, selection); assertInputOperationPolicy(auth.policy);
   const key = request.headers.get("Idempotency-Key");

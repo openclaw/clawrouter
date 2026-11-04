@@ -268,3 +268,15 @@ test("early upstream upload response cannot acknowledge partially consumed bytes
   assert.equal(f.jobs()[0].job.inputReceipt.state, "dispatch_unknown");
   assert.equal(f.jobs()[0].job.inputReceipt.imageId, null);
 });
+
+test("removing the explicit image capability after allocation cannot borrow the text model binding", async t => {
+  const f = await setup(t), originalGet = f.env.GRANT_CREDENTIALS.get.bind(f.env.GRANT_CREDENTIALS);
+  f.env.GRANT_CREDENTIALS.get = name => { const stub = originalGet(name); return { fetch(url, init) {
+    if (new URL(url).pathname === "/managed-input/compose") {
+      f.provider.models[0].capabilities = ["media.predict"];
+      f.provider.capabilities.push({ id: "media.predict", endpoint: "image_video", methods: ["POST"] });
+    }
+    return stub.fetch(url, init);
+  } }; };
+  await rejected(f, await f.send());
+});

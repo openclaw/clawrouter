@@ -107,7 +107,8 @@ export async function authorizeInputUnderOwner(env: Env, input: PixVerseInputDis
   const provider = providerById("pixverse"), endpoint = provider?.endpoints.find(value => value.id === binding.owner.endpointId);
   const model = provider?.models.find(value => value.id === binding.modelId && value.upstream === binding.model);
   if (!provider || !endpoint || !model || !modelSupportsEndpoint(provider, model, endpoint)) inputUnavailable();
-  if (endpoint.inputProfile !== binding.inputProfile) inputUnavailable();
+  if (endpoint.inputProfile !== binding.inputProfile || binding.inputProfile !== undefined
+    && (!model.capabilities.includes("video.generate") || !provider.capabilities.some(value => value.id === "video.generate" && value.endpoint === endpoint.id))) inputUnavailable();
   const destination = await inputRouteDigest(provider, endpoint, grant, env);
   if (destination.digest !== binding.owner.routeSha256 || destination.origin !== binding.origin || destination.region !== binding.region) inputUnavailable();
   if ((await resolveConnection(env, provider.id))?.enabled === false) inputUnavailable();
