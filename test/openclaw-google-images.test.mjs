@@ -7,7 +7,7 @@ import test from "node:test";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "9ce99ae1521b2d23e85c27688d9db45a31dbe472";
+const sourceHead = "4d052fa8347c97e876eb885789a82730e860a62f";
 const models = ["gemini-3.1-flash-image", "gemini-3-pro-image"];
 const charged = ["model0_text", "model0_edit", "model1_text", "model1_edit", "incomplete"];
 const ids = [...charged, "unpriced", "aborted"];

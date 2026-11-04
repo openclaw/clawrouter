@@ -92,63 +92,42 @@ in this source slice, and model availability does not establish account entitlem
 ## Serialized declaration and actual-client integration
 
 Source PR698 declaration `d17a72f66e76fdade623c3b7297c50b44b193957` is
-composed from local `7d96b02407417094c2295c8561c629e5d78cfa3d` onto landed
-`f11178a847189325d86ec3fa32f104c346648e66`. It adds only the two original
-image cards, endpoint and capability. The original declaration, compiler and
-Worker fixture blobs are preserved. Existing Google rows, ordinary routes and
-newer qualified Vercel proof remain intact; no old Vercel patch is reapplied.
+composed onto qualified `58eac9c245f9585f8a179b1d0a335592824af5b4` with
+its authorship and exact two image cards, endpoint and capability preserved.
+All existing Google rows and ordinary routes remain intact. All 87 manifests
+compile; the snapshot is regenerated, never hand-merged. Its SHA256 is
+`e399655b27106730e569917a162a55747865b484319c8845aba0ddc3fc5967e2`.
 
-All 86 manifests compile. The snapshot is regenerated rather than hand-merged;
-SHA256 `d1ff30a5d05cc07a094a7f92a47a78c7e83c84aee83ef14496603d7441a7dcb7`.
-Local proof passes 107 focused image/compiler/Worker/admission/pricing cases,
-including music-compiler isolation, Worker types and 1,051 Chat matrix/consumer-
-selection cases. Frozen dependency inputs match the existing qualified install.
-The earlier music negative fixture correction removes only unrelated image
-endpoint/capability/rows before checking music; its assertions remain intact.
+Local proof passes 147 focused image, compiler, Worker, admission and pricing
+cases, Worker types and 1,051 Chat matrix/consumer-selection cases. The retained
+negative compiler fixtures omit unrelated image declarations before asserting
+their intended music, Omni, speech or understanding guard. Positive fixtures
+still compile the full manifest; rejection patterns and mutations are unchanged.
+Frozen dependency inputs match the existing qualified install.
 
-The first composed Worker run passed 8,940 of 8,943 cases. Three provider-wide
-negative compiler fixtures reached the new image guard before their intended
-Omni, speech or understanding guard. Their isolated negative inputs now omit
-the unrelated image declarations, while positive tests still compile the full
-manifest. Rejection patterns and mutations are unchanged. All three failed
-cases and all 19 tests across those suites pass locally; final-head CI remains
-required.
+Fourteen unchanged actual image-host cases are enrolled in hosted CI against
+public OpenClaw `4d052fa8347c97e876eb885789a82730e860a62f`, tree
+`ad0cbb314cb080588bc6d6b1b676f6bd1b8da8c2`. This candidate has scoped offline
+image execution qualification; its pending broader native SDK/CI is separate.
+No earlier SDK artifact or test result is transferred to this new source.
 
-Fourteen actual image-host cases are enrolled in ordinary hosted CI against
-reachable public OpenClaw `9ce99ae1521b2d23e85c27688d9db45a31dbe472`.
-The seven unchanged cases execute separately through native and manifest-only
-Worker isolates. They cover actual registered ClawRouter selection, both exact
-models, text/edit, original key binding, byte-exact PNG delivery, unknown-dollar
-and invalid-key denial, already-aborted requests, and incomplete paid output
-without replay. The tests import the real `generateImage` host and provider;
-no parser is copied and no request is patched.
+Seven cases execute separately through native and manifest-only Worker/SQLite
+isolates. They cover actual registered ClawRouter selection, both exact models,
+text/edit, original key binding, byte-exact PNG delivery, unknown-dollar and
+invalid-key denial, already-aborted requests, and incomplete paid output without
+replay. The tests import the real `generateImage` host and provider; no parser is
+copied, fetch stub installed or request patched.
 
-Pre-publication inspection confirms the pinned registration helper exposes
-`imageGenerationProviders` and the actual image host returns
-`{ provider, model, images, ... }`. The Google adapter supplies manifest
-`pathParams.model` itself. Every outer policy has a real 100-micro cap: positive
-receipts retain seven micro-units and null token counters. Uncapped/null balance
-assumptions do not apply, and no positive pricing assertion is weakened.
+The actual registration exposes `imageGenerationProviders`; the image host
+returns `{ provider, model, images, ... }`. The qualified Google adapter uses
+its runtime fetch and supplies manifest `pathParams.model` itself. This replaces
+the prior candidate's ambient-fetch dispatcher mismatch. The manifest harness
+checks eligible image offers without prohibiting unrelated native capabilities.
+Every outer policy retains its real 100-micro cap, positive seven-micro
+`policy_fixed` receipts and null token counters.
 
-At router `97ba67a67afae9c9777aabcb0f5aeb01fe3338d6`, the actual native
-consumer's four positive cases fail before image dispatch with
-`UND_ERR_INVALID_ARG: invalid onRequestStart method`. The pinned client's
-`image-google.ts` supplies a custom `fetchFn` closure around ambient Node fetch;
-the guard consequently passes its Undici dispatcher to that closure instead of
-selecting its matching runtime fetch. This requires a client-owner correction
-and a qualified public pin. The fixture does not replace the client's fetch or
-weaken positive image/accounting assertions to bypass the failure.
-
-The separate manifest harness stopped before client execution because its
-catalog assertion incorrectly prohibited native offers for every Google
-capability. It now scopes that prohibition to `image_generate`; the positive
-eligible manifest-image assertion remains. This correction has syntax proof;
-actual native/manifest execution and outer accounting remain unqualified until
-the corrected client is available. The failed consumer job is
-[126615242791](https://github.com/openclaw/clawrouter/actions/runs/41841836680/job/126615242791).
-
-These fourteen cases require both exact composed-head actual-client/SQLite
-contracts to pass. Native checks alone do not establish that proof.
-No SDK report, new local install, live inference or account change is performed.
-The declaration preserves frozen GenerateContent transport; current examples or
-an available model ID do not prove live entitlement or backwards compatibility.
+Both exact-head actual-client/SQLite contracts must pass before qualification;
+native router checks alone do not establish client proof. No SDK report rerender,
+new local install, live inference or account change is performed. The declaration
+preserves frozen GenerateContent transport; current examples or an available
+model ID do not prove live entitlement or backwards compatibility.
