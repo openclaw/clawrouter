@@ -28,6 +28,7 @@ import { hasPrimaryCredential, inspectGrantCredentials, putGrantCredentials, rev
 import { normalizeFusionConfig } from "./fusion";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots, grantUsageSnapshot } from "./ledgers";
 import { startOAuth } from "./oauth";
+import { miniMaxDeviceAuthorize } from "./minimax-device-admin.ts";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
@@ -101,7 +102,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
     if (path === "/v1/admin/credentials" || path.startsWith("/v1/admin/credentials/")) return await credentialMutationResponse(request, env, path === "/v1/admin/credentials" ? null : path.slice("/v1/admin/credentials/".length), authorization, "admin");
     if (path.startsWith("/v1/admin/connections/") && ["PUT", "PATCH"].includes(request.method)) return putConnection(request, env, path.slice("/v1/admin/connections/".length));
-    if (path.startsWith("/v1/admin/upstream-grants/")) return upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
+    if (path.startsWith("/v1/admin/upstream-grants/")) return await upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
     if (path === "/v1/admin/keys" && request.method === "GET") return privateJson({ keys: (await listPolicies(env)).map(legacyKeyResponse) });
     if (path.startsWith("/v1/admin/keys/")) return await legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length), authorization);
     return errorResponse("route_not_found", "admin route not found", 404);
@@ -389,6 +390,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
   if (action === "authorize" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "OAuth authorization");
+    if (Object.hasOwn(body, "flow")) return miniMaxDeviceAuthorize(request, env, key, body);
     if (typeof body.provider !== "string" || !body.provider.trim()) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
     const priority = body.priority ?? 100;
     if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
@@ -413,6 +415,8 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     const mode = new URL(request.url).searchParams.get("mode");
     if (mode !== null && mode !== "replace") throw new HttpError(400, "invalid_upstream_grant", "grant mutation mode must be replace when specified");
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
+    if (Object.hasOwn(body, "minimaxDeviceAttempt"))
+      throw new HttpError(400, "invalid_minimax_device_request", "Device attempt state is owner-managed");
     if (Object.hasOwn(body, "nativeMediaBinding") || Object.hasOwn(body, "nativeMediaIntent"))
       throw new HttpError(400, "invalid_native_media_authorization", "Use the explicit native media product authorization");
     if (Object.hasOwn(body, "minimaxAnthropicBinding") || Object.hasOwn(body, "minimaxAnthropicIntent"))
