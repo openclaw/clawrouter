@@ -2,6 +2,7 @@ import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
 import { nativeEmbeddingMode } from "./native-embeddings.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
+import { nativeRawFormat } from "./native-raw-input.ts";
 import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
@@ -248,7 +249,7 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
     ? requestPricingGap(model?.pricing, Array.isArray(body) ? {} : body, "google.image_generate") : null;
   if (imageGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: imageGap, inputTokens: null, outputTokens: null };
   // Native embedding shape/byte bounds are not qualified whole-request dollar bounds.
-  if (nativeEmbeddingMode(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
+  if (nativeEmbeddingMode(endpoint.request_format) || nativeRawFormat(endpoint.request_format)) return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   const requestTariff = preparedTariff ?? selectRequestTariff(endpoint, body);
   if (requestTariff?.kind === "successful_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };
   if (requestTariff?.kind === "image_request") return { reserveMicros: requestTariff.micros, basis: "manifest_request", inputTokens: null, outputTokens: null, requestTariff };

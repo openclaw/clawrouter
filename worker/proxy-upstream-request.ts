@@ -1,4 +1,5 @@
 import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
+import { prepareNativeRawDispatch } from "./native-raw-input.ts";
 import { applyProxyQuery, applyStreamingQuery, type ProxyQuery } from "./proxy-query.ts";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
@@ -23,6 +24,8 @@ export function prepareUpstreamRequest(
   const configuredOwnerUrl = new URL(url);
   applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
   applyStreamingQuery(url.searchParams, selection.endpoint);
+  const raw = prepareNativeRawDispatch(selection, url, headers, transport === "http" && upstream.transport === null);
+  if (raw !== undefined) return { headers, url, configuredOwnerUrl, requestBody: raw, streamBody: false };
   const body = transformTransportBody(upstream.transport, selection.body);
   // The 32 MB media envelope must not coexist with whole-document transport
   // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media

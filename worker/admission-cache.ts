@@ -22,9 +22,11 @@ const admissions = registerHotCache(new HotCache<AdmissionResult>(2048));
 
 type CachedAdmissionRequest = AdmissionRequest & { secretSha256: string };
 
-export async function resolveAdmission(env: Env, request: CachedAdmissionRequest): Promise<{ admission: AdmissionResult; cache: HotCacheState }> {
+export async function resolveAdmission(env: Env, request: CachedAdmissionRequest, freshness: "cached" | "authoritative" = "cached"): Promise<{ admission: AdmissionResult; cache: HotCacheState }> {
   const config = hotCacheConfig(env);
-  if (!config.maxAgeMs) return { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", request), cache: "off" };
+  // Delayed uploads re-admit after the body is complete. They must not reuse a
+  // pre-upload isolate/colo snapshot or join another request's old admission.
+  if (!config.maxAgeMs || freshness === "authoritative") return { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", request), cache: "off" };
   const key = cacheKey(request);
   // Failover after an upstream rejection is off the hot path: it always takes a
   // fresh authoritative admission so tenant/pool changes apply to the alternate.
