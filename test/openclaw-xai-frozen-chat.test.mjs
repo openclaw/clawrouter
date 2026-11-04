@@ -12,7 +12,7 @@ const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const provider = snapshot.providers.find(provider => provider.id === "xai");
 const endpoint = provider.endpoints.find(endpoint => endpoint.id === "chat_completions");
 const models = ["grok-4.6", "grok-4.5", "grok-build-0.1", "grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning"];
-const modelFor = id => "xai/" + models[id.startsWith("xai_model") ? Number(id.slice("xai_model".length)) : id === "xai_xhigh" ? 1 : 0];
+const modelFor = id => "xai/" + models[id.startsWith("xai_model") ? Number(id.slice("xai_model".length)) : 0];
 const modelId = modelFor("xai_model0");
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 const charged = [...models.map((_, index) => `xai_model${index}`), "xai_image", "xai_low", "xai_xhigh", "xai_error", "xai_cancel"];

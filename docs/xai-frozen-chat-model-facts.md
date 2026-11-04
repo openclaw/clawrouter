@@ -72,7 +72,7 @@ The exact body and zero-egress assertions remain intact; no runtime changed.
 Fifteen actual registered xAI client cases are enrolled against public source
 `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. They import the actual static
 catalog, registered stream hook, replay sanitizer and Chat serializer. Cases
-cover all five identities, inline image bytes, qualified low/xhigh efforts,
+cover all five identities, inline image bytes, low/xhigh efforts on Grok 4.6,
 ordinary client function `x_search`, tool history, fragmented SSE, terminal
 usage, proxy-key/model/budget denials, embedded errors and post-delivery
 cancellation. Final-head hosted execution and outer SQLite accounting are
@@ -84,3 +84,11 @@ selection remain separate. A function name is not hosted-tool authority. Frozen
 client tariff/limit hints do not qualify server billing; all five server prices
 remain unknown and hard-dollar admission stays closed. No new SDK report, local
 install, live request, account change or deployment is performed.
+
+The first actual run passed all fifteen client cases but exposed an integration
+fixture mismatch: the xhigh case selected Grok 4.5. Both frozen `31ad71a8` and
+pinned `d8bb9394` use identical model-ID rules and runtime compatibility code
+that map Grok 4.5 xhigh requests to high; Grok 4.6 preserves xhigh. The fixture
+now selects Grok 4.6 for the unchanged positive xhigh wire assertion. This
+consumer does not certify Grok 4.5 xhigh delivery, regardless of the separate
+server declaration. No client, runtime, provider declaration or snapshot changes.

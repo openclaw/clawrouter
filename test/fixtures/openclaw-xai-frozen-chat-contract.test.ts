@@ -16,7 +16,8 @@ const key = (id: string) => `clawrouter-live-xai_${id}-fixture-secret`;
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 
 async function start(id: string, options: { modelIndex?: number; image?: boolean; reasoning?: "low" | "xhigh"; apiKey?: string; signal?: AbortSignal } = {}) {
-  const modelId = models[options.modelIndex ?? (id === "xhigh" ? 1 : 0)];
+  // The frozen runtime preserves xhigh from Grok 4.6; Grok 4.5 maps it to high.
+  const modelId = models[options.modelIndex ?? 0];
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.id).toBe("xai");
   const result = await runProviderStaticCatalog({ provider });
