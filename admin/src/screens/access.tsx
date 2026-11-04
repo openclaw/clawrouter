@@ -1,4 +1,5 @@
 import { GrantRefreshHealth } from "../grant-health";
+import { fusionAdviserModels, fusionStrategy } from "../../../shared/fusion-strategy";
 import { GrantExpiry } from "../grant-expiry";
 import { credentialExpiryLabel, KeyTierControls } from "../member-key-controls";
 import React, { type FormEvent, useEffect, useId, useRef, useState } from "react";
@@ -175,35 +176,47 @@ export function FusionPanel({ config, readiness, policies, policyId, onSelectPol
   busy: boolean;
 }) {
   const choices = models.filter((model) => model.id !== config.modelId);
+  const strategy = fusionStrategy(config);
+  const advisers = fusionAdviserModels(config);
   return (
     <div className="entityLayout fusionWorkspace">
       <section className="mainPane">
         <div className="overviewStrip">
           <Metric label="virtual model" value="fusion" meta={config.enabled ? "selectable now" : "disabled"} />
-          <Metric label="parallel advisers" value={String(config.adviserModels.length)} meta="maximum four" />
+          <Metric label="parallel advisers" value={String(advisers.length)} meta={strategy === "single" ? "not used in single mode" : "maximum four"} />
           <Metric label="synthesizer" value={shortFusionModel(config.aggregatorModel)} meta="final answer authority" />
         </div>
-        <div className="tableSectionHeader"><div><strong>On-demand intelligence route</strong><span>Select <code>{config.modelId}</code> only when a turn deserves the ensemble.</span></div><Status label={config.enabled ? "active" : "disabled"} tone={config.enabled ? "active" : "neutral"} /></div>
-        <div className="fusionTopology" aria-label="Fusion request flow">
+        <div className="tableSectionHeader"><div><strong>On-demand intelligence route</strong><span>Select <code>{config.modelId}</code> to use this workflow.</span></div><Status label={config.enabled ? "active" : "disabled"} tone={config.enabled ? "active" : "neutral"} /></div>
+        <div className="fusionPresets" role="group" aria-label="Fusion workflow">
+          <button type="button" aria-pressed={strategy === "single"} onClick={() => setConfig((current) => ({ ...current, strategy: "single" }))}>
+            <strong>Single</strong><span>One model, one answer.</span><small>1 call · no adviser overhead</small>
+          </button>
+          <button type="button" aria-pressed={strategy === "ensemble"} onClick={() => setConfig((current) => ({ ...current, strategy: "ensemble" }))}>
+            <strong>Panel</strong><span>Independent proposals, one final answer.</span><small>Up to {config.adviserModels.length + 1} calls · added time and cost</small>
+          </button>
+        </div>
+        <div className={`fusionTopology${strategy === "single" ? " fusionTopology-single" : ""}`} aria-label="Fusion request flow">
           <div className="fusionInput"><span>01</span><strong>{config.modelId}</strong><small>explicit model selection</small></div>
           <div className="fusionArrow" aria-hidden="true"><span>→</span></div>
-          <div className="fusionAdvisers">
-            {config.adviserModels.map((model, index) => <div key={`${model}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{model}</strong><small>private, bounded proposal</small></div>)}
-            {!config.adviserModels.length ? <div><span>—</span><strong>No advisers</strong><small>Add at least one model</small></div> : null}
-          </div>
-          <div className="fusionArrow" aria-hidden="true"><span>→</span></div>
-          <div className="fusionOutput"><span>FINAL</span><strong>{config.aggregatorModel}</strong><small>verify, resolve, synthesize</small></div>
+          {strategy === "ensemble" ? <>
+            <div className="fusionAdvisers">
+              {advisers.map((model, index) => <div key={`${model}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{model}</strong><small>private, bounded proposal</small></div>)}
+              {!advisers.length ? <div><span>—</span><strong>No advisers</strong><small>Add at least one model</small></div> : null}
+            </div>
+            <div className="fusionArrow" aria-hidden="true"><span>→</span></div>
+          </> : null}
+          <div className="fusionOutput"><span>FINAL</span><strong>{config.aggregatorModel}</strong><small>{strategy === "single" ? "answer directly" : "verify, resolve, synthesize"}</small></div>
         </div>
         <div className="fusionPrinciples">
           <article><strong>Policy-native</strong><p>Every adviser and final call keeps normal provider grants, budgets, retention, and usage accounting.</p></article>
-          <article><strong>Fail-open advisers</strong><p>Unavailable advisers are omitted; the configured synthesizer still answers.</p></article>
+          <article><strong>{strategy === "single" ? "No fan-out" : "Fail-open advisers"}</strong><p>{strategy === "single" ? "Only the final model receives this request. Adviser choices are saved for Panel mode." : "Unavailable advisers are omitted; the configured synthesizer still answers."}</p></article>
           <article><strong>Tool-safe</strong><p>Tool definitions stay out of adviser requests and remain available to the final model.</p></article>
         </div>
         <FusionReadinessPanel readiness={readiness} />
       </section>
       <aside className="inspector wideInspector fusionInspector">
         <form onSubmit={onSave}>
-          <InspectorHeader icon={ServerCog} title="Configure fusion" subtitle="one sparse adviser layer + one final synthesizer" />
+          <InspectorHeader icon={ServerCog} title="Configure fusion" subtitle={strategy === "single" ? "one direct model call" : "one sparse adviser layer + one final synthesizer"} />
           {error ? <InlineError message={error} /> : null}
           <div className="formGrid compact">
             <label className="full"><span>readiness policy</span><select value={policyId} onChange={(event) => onSelectPolicy(event.target.value)}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}{policy.enabled ? "" : " · disabled"}</option>)}</select></label>
@@ -218,7 +231,7 @@ export function FusionPanel({ config, readiness, policies, policyId, onSelectPol
             <label className="full"><span>adviser temperature</span><input type="number" min="0" max="2" step="0.1" value={config.temperature} onChange={(event) => setConfig((current) => ({ ...current, temperature: Number(event.target.value) }))} /></label>
           </div>
           <InlineNote><code>local/*</code> targets the Local OpenAI-compatible provider. A hosted Cloudflare Worker cannot reach your laptop&apos;s loopback address; configure a network-reachable endpoint, or run ClawRouter locally with Ollama/LM Studio.</InlineNote>
-          <div className="inspectorActions"><button type="button" className="buttonSecondary" disabled={busy || !policyId || !config.aggregatorModel.trim()} onClick={onCheck}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Check readiness</span></button><button type="submit" disabled={busy || !policyId || !config.aggregatorModel.trim() || !config.adviserModels.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save fusion model</span></button></div>
+          <div className="inspectorActions"><button type="button" className="buttonSecondary" disabled={busy || !policyId || !config.aggregatorModel.trim()} onClick={onCheck}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Check readiness</span></button><button type="submit" disabled={busy || !policyId || !config.aggregatorModel.trim() || (strategy === "ensemble" && !advisers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save fusion model</span></button></div>
         </form>
       </aside>
     </div>

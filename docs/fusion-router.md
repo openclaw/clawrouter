@@ -52,6 +52,12 @@ can remain a separate future activation policy.
 
 Open the admin console, select **Access**, then **Fusion**. Configure:
 
+Choose **Single** for one final-model call or **Panel** for independent adviser
+proposals followed by synthesis. The cards show maximum call counts, not a
+quality prediction. Switching modes preserves your model choices and invalidates
+the previous readiness check. Single mode can be saved with no advisers. The
+model and resource controls below the cards configure the selected workflow.
+
 - one to four adviser model ids;
 - one final synthesizer model id;
 - adviser timeout and output-token limits;
