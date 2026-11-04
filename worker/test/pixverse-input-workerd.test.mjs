@@ -72,3 +72,88 @@ test("workerd composed input proves bounded pulls, native BYOB, cancellation and
     assert.deepEqual(await response.json(), { pulls: 4, maximum: 16384, refused: true, bytes: length, held: 96 * 1024 * 1024 });
   }
 });
+
+// Transport-only object: the companion composed-runtime suite exercises the
+// actual credential/receipt owners. Here workerd, rather than a Node stub,
+// owns the request/response pipes and pending-read cancellation.
+const transportRouter = `
+export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject } from './worker/index.ts';
+import { pixVerseByteStream, pixVerseInputLease, readPixVerseBytes } from './worker/pixverse-input-body.ts';
+import { HttpOperation } from './worker/http-operation.ts';
+const check = (condition, message) => { if (!condition) throw new Error(message); };
+export class GrantCredentialObject {
+  phase = 'idle'; complete = false; intact = false; held = false;
+  async fetch(request) {
+    if (new URL(request.url).pathname === '/status') return Response.json({phase:this.phase,complete:this.complete,intact:this.intact,held:this.held});
+    const lease = pixVerseInputLease('owner'), operation = new HttpOperation(request.signal, 3000);
+    let stream, delivered = false;
+    this.phase = 'reading'; this.held = true;
+    try {
+      const raw = await readPixVerseBytes(request.body, new URL(request.url).pathname === '/overflow' ? 16384 : 8 * 1024 * 1024, operation);
+      stream = pixVerseByteStream([raw]); this.phase = 'reply';
+      const abort = () => stream.cancel(operation.signal.reason);
+      operation.signal.addEventListener('abort', abort, {once:true});
+      void stream.done.then(() => {
+        operation.signal.removeEventListener('abort', abort);
+        this.complete = stream.complete; this.intact = raw.length > 0 && raw[0] === 71 && raw[raw.length - 1] === 71;
+        this.phase = 'done'; this.held = false; operation.stop('complete'); lease.release();
+      });
+      delivered = true; return new Response(stream.body);
+    } catch { this.phase = 'failed'; return new Response('bounded transport failure', {status:422}); }
+    finally { if (!delivered) { stream?.cancel('failed'); operation.stop('complete'); this.held = false; lease.release(); } }
+  }
+}
+async function state(stub, predicate) {
+  for (let i = 0; i < 100; i++) {
+    const value = await (await stub.fetch('https://owner/status')).json();
+    if (predicate(value)) return value;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('native object transport did not reach the bounded state');
+}
+export default { async fetch(request, env) {
+  const ingress = pixVerseInputLease('public'), operation = new HttpOperation(request.signal, 10000);
+  const object = name => env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(name));
+  try {
+    const full = object('complete'), source = pixVerseByteStream([new Uint8Array(8 * 1024 * 1024).fill(71)]);
+    const response = await full.fetch('https://owner/echo', {method:'POST',body:source.body,signal:operation.signal});
+    check(response.status === 200, 'DO accepted complete byte input');
+    const raw = await readPixVerseBytes(response.body, 8 * 1024 * 1024, operation);
+    check(raw.length === 8 * 1024 * 1024 && raw[0] === 71 && source.complete, 'DO full input/output EOF');
+    const completed = await state(full, value => value.phase === 'done');
+    check(completed.complete && completed.intact && !completed.held, 'DO EOF releases only output and preserves input');
+
+    const canceled = object('cancel-output'), upload = pixVerseByteStream([new Uint8Array(8 * 1024 * 1024).fill(71)]);
+    const partial = await canceled.fetch('https://owner/echo', {method:'POST',body:upload.body,signal:operation.signal});
+    const reader = partial.body.getReader({mode:'byob'});
+    const first = await reader.read(new Uint8Array(16384)); check(!first.done && first.value.length <= 16384, 'bounded DO response window');
+    await reader.cancel('caller stopped output'); reader.releaseLock();
+    const canceledState = await state(canceled, value => value.phase === 'done');
+    check(!canceledState.complete && canceledState.intact && !canceledState.held, 'DO partial cancellation preserves input and releases capacity');
+
+    const pending = object('cancel-input'), abort = new AbortController(); let inputController, emitted = false;
+    const input = new ReadableStream({type:'bytes',start(controller) { inputController = controller; },pull(controller) {
+      if (!emitted) { emitted = true; controller.enqueue(new Uint8Array(16384).fill(71)); }
+    }}, {highWaterMark:0});
+    const waiting = pending.fetch('https://owner/echo', {method:'POST',body:input,signal:abort.signal}).then(response => response.body?.cancel(), () => undefined);
+    await state(pending, value => value.phase === 'reading' && value.held);
+    abort.abort('caller stopped pending input'); inputController.error('caller stopped pending input'); await waiting;
+    const aborted = await state(pending, value => value.phase === 'failed');
+    check(!aborted.complete && !aborted.held, 'DO pending BYOB cancellation unlocks and releases');
+
+    const overflow = object('overflow'), excess = pixVerseByteStream([new Uint8Array(16385).fill(71)]);
+    const rejected = await overflow.fetch('https://owner/overflow', {method:'POST',body:excess.body,signal:operation.signal});
+    check(rejected.status === 422, 'DO overflow rejected'); await rejected.body.cancel(); excess.cancel('rejected');
+    const failed = await state(overflow, value => value.phase === 'failed'); check(!failed.held && !failed.complete, 'DO overflow never completes');
+    return Response.json({complete:true,outputCanceled:true,pendingInputCanceled:true,overflowRejected:true});
+  } finally { operation.stop('complete'); ingress.release(); }
+} };`;
+
+test("workerd Durable Object transport preserves borrowed input and releases EOF, cancellation and overflow leases", { timeout: 60000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-pixverse-transport-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const worker = await startWorkerdFixture(temporary, transportRouter, upstream); t.after(() => worker.dispose());
+  const response = await fetch((await worker.ready).origin);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(await response.json(), { complete: true, outputCanceled: true, pendingInputCanceled: true, overflowRejected: true });
+});
