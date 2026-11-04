@@ -1,4 +1,4 @@
-export const vertexModel = "claude-opus-4-5@20251101";
+export const vertexModel = "claude-sonnet-4-6";
 export const vertexModelId = "anthropic-vertex/" + vertexModel;
 export const vertexAuthorization = (location = "us-east5", project = "fixture-project") => ({ version: "clawrouter.vertex-anthropic.v1", source: "access_token", project, location });
 export const vertexBody = (stream = false) => ({ model: vertexModel, messages: [{ role: "user", content: "synthetic request" }], max_tokens: 16, stream });

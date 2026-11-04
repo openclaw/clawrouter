@@ -41,7 +41,7 @@ async function denied(f, response) {
   assert.doesNotMatch(text, /synthetic-(?:vertex-access|forbidden|replacement)/); await f.drain(); assert.equal(f.sent.length, 0);
   for (const event of await f.events()) assert.equal(event.actual_cost_micros, 0);
 }
-for (const location of ["global", "us", "eu", "us-east5"]) for (const envelope of [false, true]) for (const stream of [false, true])
+for (const location of ["global", "us-east5", "europe-west1", "asia-southeast1"]) for (const envelope of [false, true]) for (const stream of [false, true])
   test(`Vertex ${location} ${envelope ? "manifest" : "native"} ${stream ? "SSE" : "JSON"} uses original resource and token`, async t => {
     const f = await setup(t, { location });
     const response = await f.request(envelope, { stream }, { headers: { "x-goog-user-project": "foreign-project", "x-api-key": "synthetic-forbidden-anthropic" } });

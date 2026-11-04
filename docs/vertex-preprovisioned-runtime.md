@@ -33,6 +33,13 @@ Google resource. The existing codec owns the fixed regional/global host,
 JSON request limit. Caller query/resource overrides and alternate transports
 are denied. Caller/static credential headers cannot replace codec headers.
 
+Model eligibility is currently limited to the exact registered upstream
+`claude-sonnet-4-6` at owner-selected `global`, `us-east5`, `europe-west1`, or
+`asia-southeast1`. Discovery carries the selected model into grant eligibility;
+dispatch repeats the model/location check against the fresh original owner.
+Unknown models, date aliases and other locations remain closed. These support
+facts do not qualify pricing, IAM access, quota or project consent.
+
 Admission requires more than 60 seconds of token life. The final pre-fetch check
 runs after awaited budget and retention work, revalidates current caller policy,
 and compares the original authoritative grant generation, lineage, binding and
