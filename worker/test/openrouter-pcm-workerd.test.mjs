@@ -47,7 +47,7 @@ export default {async fetch(request,bindings,context){
   body:JSON.stringify(envelope?{body:{...body,model:'openrouter/'+body.model}}:body),signal:request.signal});
  try{
   const response=await worker.fetch(routed,env,{waitUntil(p){const tracked=Promise.resolve(p).finally(()=>pending.delete(tracked));pending.add(tracked);context.waitUntil(tracked);}});
-  proof.status=response.status;proof.beforeDelivery=bodyBudgetCharged();return response;
+  proof.status=response.status;proof.nativeLength=response.headers.get("content-length");proof.beforeDelivery=bodyBudgetCharged();return response;
  }finally{lease?.release();}
 },queue:worker.queue};`;
 
@@ -82,12 +82,16 @@ test("workerd PCM common factory preserves opaque native/manifest bytes, capacit
   }
   for (const [mode, manifest, bytes] of [["full", false, 16 * 1024 * 1024], ["small", true, 2048]]) {
     const response = await fetch(new URL(`/?mode=${mode}&manifest=${manifest}`, origin)); assert.equal(response.status, 200, await response.clone().text());
-    assert.equal(response.headers.get("content-type"), "audio/pcm"); assert.equal(response.headers.get("content-length"), String(bytes));
+    assert.equal(response.headers.get("content-type"), "audio/pcm");
+    // Workerd may omit assigned Content-Length on an ordinary output stream.
+    // https://developers.cloudflare.com/workers/runtime-apis/response/#set-the-content-length-header
+    // Wire count/hash below require full EOF independently of HTTP framing.
+    const length = response.headers.get("content-length"); if (length !== null) assert.equal(length, String(bytes));
     const hash = createHash("sha256"); let count = 0;
     for await (const chunk of response.body) { count += chunk.byteLength; hash.update(chunk); }
     const expected = Uint8Array.from({ length: bytes }, (_, i) => i % 251);
     assert.equal(count, bytes); assert.equal(hash.digest("hex"), createHash("sha256").update(expected).digest("hex"));
-    const proof = await settled(); assert.equal(proof.fetches, 1); assert.equal(proof.capacity, 64 * 1024 * 1024); assert.equal(proof.beforeDelivery, 64 * 1024 * 1024);
+    const proof = await settled(); if (proof.nativeLength !== null) assert.equal(proof.nativeLength, String(bytes)); assert.equal(proof.fetches, 1); assert.equal(proof.capacity, 64 * 1024 * 1024); assert.equal(proof.beforeDelivery, 64 * 1024 * 1024);
     assert.equal(proof.body.input, mode); assert.equal(proof.body.model, "google/gemini-3.1-flash-tts-preview");
   }
   for (const [mode, status, fetches] of [["odd", 502, 1], ["capacity", 503, 0], ["deadline", 502, 1]]) {
