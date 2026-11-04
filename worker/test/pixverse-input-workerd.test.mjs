@@ -21,20 +21,20 @@ export default { async fetch(request) {
     let refused = false;
     try { pixVerseInputLease('owner'); } catch { refused = true; }
     check(refused, 'third lease refused');
-    let pulls = 0, maximum = 0;
+    let pulls = 0, maximum = 0; const lengths = [], copies = [];
     class ObservedBytes extends Uint8Array {
-      subarray(start, end) { pulls++; maximum = Math.max(maximum, end - start); return super.subarray(start, end); }
+      subarray(start, end) { pulls++; maximum = Math.max(maximum, end - start); const part = super.subarray(start, end); copies.push([start,end,this.length,part.length]); return part; }
     }
-    const source = pixVerseByteStream([new ObservedBytes(50000).fill(71)]);
+    const observed = new ObservedBytes(50000).fill(71), source = pixVerseByteStream([observed]);
     await Promise.resolve(); check(pulls === 0, 'no read ahead');
     const reader = source.body.getReader();
     let total = 0;
     for (let i = 0; i < 4; i++) {
-      const chunk = await reader.read(); check(!chunk.done && chunk.value.length <= 16384, 'bounded default chunk'); total += chunk.value.length;
+      const chunk = await reader.read(); check(!chunk.done && chunk.value.length <= 16384, 'bounded default chunk'); total += chunk.value.length; lengths.push(chunk.value.length);
       await Promise.resolve(); check(pulls === i + 1, 'no queued speculative data pull');
       if (i < 3) check(!source.complete, 'no completion while bytes remain');
     }
-    check(total === 50000, 'all original bytes delivered');
+    check(total === 50000, 'all original bytes delivered: ' + JSON.stringify({total,lengths,copies,inputLength:observed.length,complete:source.complete}));
     // workerd may request the empty terminal pull when its final data read is
     // fulfilled. That is EOF, not speculative production of another data chunk.
     check(bodyBudgetCharged() === 96 * 1024 * 1024, 'full lease at delivery boundary');
