@@ -21,7 +21,8 @@ before(async () => {
     if (path === "/invalid-utf8") { response.end(Buffer.from([0xc3, 0x28])); return; }
     if (path === "/multibyte") { response.end('"' + "a".repeat(16382) + "é🦊" + '"'); return; }
     response.statusCode = Number(url.searchParams.get("status") ?? 200);
-    const bytes = url.searchParams.has("bytes") ? Number(url.searchParams.get("bytes")) : 2;
+    const requested = url.searchParams.has("bytes") ? Number(url.searchParams.get("bytes")) : 2;
+    const bytes = Number.isSafeInteger(requested) && requested >= 0 ? Math.min(requested, 2 * 1024 * 1024 + 1) : 0;
     if (url.searchParams.has("chunked")) response.setHeader("transfer-encoding", "chunked");
     response.end(path === "/raw" ? "x".repeat(bytes) : "{}");
   });
