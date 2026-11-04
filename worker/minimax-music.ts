@@ -2,8 +2,19 @@ import { mediaObject } from "./managed-media-json.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 
 export const miniMaxMusicModels = ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"] as const;
+// Regional documentation observations, not account entitlement, prices or routing authority.
 export const miniMaxMusicAvailability = {
-  checkedAt: "2026-11-03", paid: "existing_paying_users_only", free: "discontinuation_announced_date_unspecified",
+  checkedAt: "2026-11-05",
+  global: {
+    source: "https://platform.minimax.io/docs/guides/music-generation",
+    paid: "existing_paying_users_only", newPaidUsersDeniedSince: "2026-08-20",
+    free: "discontinuation_announced_date_unspecified",
+  },
+  cn: {
+    source: "https://platform.minimax.cn/docs/guides/music-generation",
+    paid: "existing_paying_users_only", newPaidUsersDeniedSince: "2026-08-20",
+    free: "stopped",
+  },
 } as const;
 const origins = { global: "https://api.minimax.io", cn: "https://api.minimaxi.com" } as const;
 const maxAudio = 8 * 1024 * 1024, maxEnvelope = maxAudio * 5 + 64 * 1024, encoder = new TextEncoder();

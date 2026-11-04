@@ -47,9 +47,10 @@ test("MiniMax music rejects wrong capability, regional destination, aliases and 
   const prepared = native();
   assert.doesNotThrow(() => assertNativeResponseDestination(prepared, new URL(prepared.origin + prepared.path)));
   for (const url of [prepared.origin + prepared.path + "?GroupId=synthetic", prepared.origin + "/anthropic/v1/messages",
-    "https://api.minimaxi.com" + prepared.path, "https://other.example" + prepared.path])
+    "https://api.minimaxi.com" + prepared.path, "https://api.minimax.cn" + prepared.path, "https://other.example" + prepared.path])
     assert.throws(() => assertNativeResponseDestination(prepared, new URL(url)));
   for (const change of [{ provider: { ...provider, id: "minimax-portal" } }, { provider: { ...provider, base_urls: { default: "https://api.minimaxi.com" } } },
+    { provider: { ...provider, base_urls: { default: "https://api.minimax.cn" } } },
     { provider: { ...provider, base_urls: { default: "https://api.minimax.io/anthropic" } } },
     { model: null }, { model: { ...selection().model, capabilities: ["audio.speech"] } }, { capability: "audio.speech" },
     { method: "GET" }, { pathParams: { model: "music-2.6" } }, { nativeQuery: {} }])
@@ -273,6 +274,7 @@ test("dual-mode music keeps explicit boolean selection and rejects unsupported e
 
 test("MiniMax streaming requires exact SSE declaration and excludes CN, cover, references and alternate response routes", () => {
   for (const change of [{ endpoint: { ...endpoint, streaming: null } }, { endpoint: { ...endpoint, streaming: "sse", response_format: "audio.binary" } },
+    { provider: { ...provider, base_urls: { default: "https://api.minimax.cn" } } },
     { provider: { ...provider, base_urls: { default: "https://api.minimaxi.com" } } }, { capability: "audio.speech" }, { nativeQuery: {} }])
     assert.throws(() => native({ ...streamSelection(), ...change }));
   for (const model of ["music-cover", "music-cover-free", "music-3.0"]) assert.throws(() => native(streamSelection(model)));

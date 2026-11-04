@@ -392,6 +392,7 @@
 - Qualify the two frozen Lyria unary music declarations with exact native formats, selected-model paths and unknown-cost guards, keeping shared runtime activation separately gated.
 - Add bounded frozen MiniMax music stream codecs and fixtures with terminal audio validation, required cover references and explicit existing-user/free-discontinuation qualifications.
 - Validate MiniMax cover base64 with scalar inspection instead of full decoded and re-encoded copies, preserving canonical encoding and the 8MiB bound without enabling cover dispatch.
+- Scope MiniMax music availability metadata by region, distinguishing global free-discontinuation notice from stopped CN free service without changing origins, entitlement or pricing.
 - Qualify bounded global MiniMax music-2.6 unary hex responses with complete native JSON, playable test audio and conservative unknown costs; music dispatch still requires separate operation authority.
 - Add bounded global MiniMax music streaming inspection and complete terminal SSE replay without retaining full wire or hex copies; operation authority, actual transport bounds and registered-client activation remain unqualified.
 
