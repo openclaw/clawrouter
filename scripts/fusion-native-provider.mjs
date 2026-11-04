@@ -32,7 +32,7 @@ export function nativeRequest(model, body, env) {
     headers: { 'x-api-key': env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
     body: { model: entry.upstream, max_tokens: body.max_tokens, system,
       messages: body.messages.filter(m => m.role !== 'system' && m.role !== 'developer'),
-      thinking: { type: 'adaptive' }, service_tier: 'standard',
+      thinking: { type: 'adaptive' }, service_tier: 'standard_only',
       output_config: { effort: 'medium', ...(body.response_format ? { format: { type: 'json_schema', schema: answerSchema } } : {}) } },
   };
 }

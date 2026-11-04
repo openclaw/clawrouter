@@ -16,6 +16,7 @@ test('native requests use explicit owned endpoints, medium reasoning and JSON an
   const claude = nativeRequest('anthropic/claude-sonnet-5.5', body, env);
   assert.equal(claude.url, 'https://api.anthropic.com/v1/messages');
   assert.equal(claude.body.model, 'claude-sonnet-5-5');
+  assert.equal(claude.body.service_tier, 'standard_only');
   assert.equal(claude.body.system, 'format instruction');
   assert.deepEqual(claude.body.messages, [body.messages[1]]);
   assert.deepEqual(claude.body.thinking, { type: 'adaptive' });
