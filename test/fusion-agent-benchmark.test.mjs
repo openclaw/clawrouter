@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('every arm fits the predeclared campaign ceiling including previous uncertainty', () => {
@@ -104,4 +104,19 @@ test('independent Claude baseline uses the same loop without changing cascade se
   assert.equal(executorModel('cascade', 0, true), 'openai/gpt-6.1-sol');
   assert.equal(executorModel('cascade', 2), 'openai/gpt-6.1-sol');
   assert.doesNotThrow(() => validateExperiment({...defaultExperiment, strategies:['claude']}, 4));
+});
+
+
+test('complementary arms retain the intended executor and separate adviser instructions', () => {
+  assert.equal(executorModel('planned', 0), 'anthropic/claude-sonnet-5.5');
+  assert.equal(executorModel('critique', 0), 'openai/gpt-6.1-sol');
+  const task={instruction:'repair invariant'}, files=[{path:'worker/a.ts',content:'before'}];
+  const plan=advisoryBody(task, files, 'plan', {...defaultExperiment, outputTokens:16384});
+  const review=advisoryBody(task, files, 'review', defaultExperiment);
+  assert.equal(plan.max_tokens,8192);
+  assert.match(plan.messages[0].content,/replacement anchors/);
+  assert.match(review.messages[0].content,/remaining bugs/);
+  assert.equal(plan.response_format,undefined);
+  assert.match(plan.messages[1].content,/worker\/a.ts/);
+  assert.throws(()=>advisoryBody(task,files,'other',defaultExperiment),/invalid_advisory_role/);
 });

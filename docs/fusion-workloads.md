@@ -134,3 +134,12 @@ Source reads now return complete bounded files by default, with optional 400-lin
 ranges. Agents maintain private working notes across context eviction. Retained
 source history has a byte ceiling, preventing repeated reads from consuming an
 unbounded reservation. Neither working notes nor source history are saved.
+
+### Complementary roles
+
+`claude` is an independent single-agent baseline using the same tools and limits.
+`planned` sends the initial source to Luna once, then gives its compact plan to
+a Claude executor. `critique` uses Sol as executor and requests one Claude
+review before accepting the first submission. Adviser text remains untrusted,
+is not retained in artifacts, and every adviser call uses the same trial ledger.
+These are development arms, not automatically enabled production strategies.

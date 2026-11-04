@@ -5,7 +5,7 @@ import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check,
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 
-const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude'];
+const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique'];
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
   memory: { type: 'string' },
   action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
@@ -73,8 +73,8 @@ const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invali
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
 export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
 
-export const executorModel = (strategy, turn, forced = false) => strategy === 'claude' ? models.critic
-  : strategy === 'strong' || (strategy === 'cascade' && (turn >= 2 || forced)) ? models.strong : models.cheap;
+export const executorModel = (strategy, turn, forced = false) => ['claude', 'planned'].includes(strategy) ? models.critic
+  : ['strong', 'critique'].includes(strategy) || (strategy === 'cascade' && (turn >= 2 || forced)) ? models.strong : models.cheap;
 
 export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
 
@@ -116,6 +116,17 @@ export function agentContext(messages, memory = '') {
   return [...header, ...recent];
 }
 
+export function advisoryBody(task, files, role, config) {
+  if (!['plan', 'review'].includes(role)) throw new Error('invalid_advisory_role');
+  const instruction = role === 'plan'
+    ? 'Plan a concrete source repair for another coding agent. Identify exact locations, replacement anchors, edge cases and a small executable behavior probe. Be concise. Do not claim you ran tests.'
+    : 'Review the candidate source against the task requirements. Identify concrete remaining bugs, missing edge cases and precise corrections. Existing visible tests passed before the bug was fixed; do not treat them as proof. Be concise. Do not claim you ran tests.';
+  return { max_tokens: Math.min(config.outputTokens, 8192), messages: [
+    { role: 'system', content: instruction },
+    { role: 'user', content: `${task.instruction}\nSource files:\n${JSON.stringify(files)}` },
+  ] };
+}
+
 function bodyFor(messages, config) {
   return { messages, max_tokens: config.outputTokens, response_format: { type: 'json_schema',
     json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
@@ -128,8 +139,17 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   const deadline = AbortSignal.timeout(config.deadlineMs);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
+  let planUsed = false, reviewUsed = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
   try {
+    if (strategy === 'planned') {
+      const files = await readSource(box, task.editPaths);
+      const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config), deadline);
+      const plan = response.choices?.[0]?.message?.content;
+      planUsed = typeof plan === 'string' && !!plan.trim();
+      if (planUsed) messages[1].content += `\nIndependent plan; verify its claims and anchors before using them:\n${plan.slice(0, 16000)}`;
+      else adviserFailures++;
+    }
     for (; turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
       const model = executorModel(strategy, turns, forceEscalation);
@@ -182,11 +202,22 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
           if (action.action === 'finish') {
-            if (escalateSubmission(strategy, escalated, publicPassed)) forceEscalation = true;
+            if (strategy === 'critique' && !reviewUsed) {
+              reviewUsed = true;
+              const files = await readSource(box, task.editPaths, remaining());
+              const response = await invoke(trialId, models.critic, advisoryBody(task, files, 'review', config), deadline);
+              const review = response.choices?.[0]?.message?.content;
+              if (typeof review === 'string' && review.trim()) messages.push({ role: 'user',
+                content: `Independent code review; verify these findings and repair any real defects before submitting again:\n${review.slice(0, 16000)}` });
+              else { adviserFailures++; messages.push({ role: 'user', content: 'Independent review was empty. Verify the task invariants before submitting again.' }); }
+            } else if (escalateSubmission(strategy, escalated, publicPassed)) forceEscalation = true;
             else { outcome = 'submitted'; turns++; break; }
           }
         } else throw new Error('invalid_action');
-      } catch (error) { event.status = toolErrorCode(error);
+      } catch (error) {
+        if (error.message === 'unknown_cost') throw error;
+        if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
+        event.status = toolErrorCode(error);
         if (deadline.aborted) { outcome = 'deadline'; break; }
         invalidActions++; messages.push({ role: 'user', content: `Tool error: ${event.status}. Check allowed paths, line ranges and exact unique search text.` }); }
       finally { toolMs += performance.now() - toolStarted; }
@@ -194,7 +225,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, planUsed, reviewUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }
