@@ -9,7 +9,7 @@ import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 // FixedLengthStream shim cannot qualify native stream queue behavior.
 const router = `
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';
-import { pixVerseByteStream, pixVerseInputLease, readPixVerseBytes } from './worker/pixverse-input-body.ts';
+import { pixVerseByteStream, pixVerseInputLease, readPixVerseBytes, inspectPixVerseBytes } from './worker/pixverse-input-body.ts';
 import { bodyBudgetCharged } from './worker/body-budget.ts';
 import { HttpOperation } from './worker/http-operation.ts';
 const check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -39,12 +39,19 @@ export default { async fetch(request) {
     const canceled = pixVerseByteStream([new Uint8Array(50000)]), cancelReader = canceled.body.getReader();
     await cancelReader.read(); await cancelReader.cancel(); await canceled.done;
     check(!canceled.complete, 'cancel is not EOF'); cancelReader.releaseLock();
-    const raw = await readPixVerseBytes(request.body, 65536, operation);
-    check(raw.length === 50000 && raw.buffer.byteLength === 65536, 'native request BYOB fixed buffer');
+    const expected = Number(request.headers.get('content-length'));
+    const raw = await readPixVerseBytes(request.body, 8 * 1024 * 1024 + 32768, operation);
+    check(raw.length === expected && raw.buffer.byteLength === 8 * 1024 * 1024 + 32768, 'native request BYOB fixed buffer');
+    const codecMaximum = await inspectPixVerseBytes(raw.subarray(0, 50000), operation, async response => {
+      const reader = response.body.getReader(); let maximum = 0;
+      for (;;) { const part = await reader.read(); if (part.done) break; maximum = Math.max(maximum, part.value.length); }
+      reader.releaseLock(); return maximum;
+    });
+    check(codecMaximum <= 16384, 'codec response view preserves bounded chunks');
     const sent = pixVerseByteStream([raw]);
     const response = await fetch('https://fixture.example/echo', { method: 'POST', body: sent.body.pipeThrough(new FixedLengthStream(sent.length)), signal: operation.signal });
     const echoed = await response.json();
-    check(sent.complete && echoed.bytes === 50000 && echoed.maximum <= 16384, 'native fixed-length transport consumption');
+    check(sent.complete && echoed.bytes === expected && echoed.maximum <= 16384, 'native fixed-length transport consumption');
     return Response.json({ pulls, maximum, refused, bytes: raw.length, held: bodyBudgetCharged() });
   } finally { operation.stop('complete'); owner.release(); ingress.release(); }
 } };`;
@@ -59,9 +66,9 @@ test("workerd composed input proves bounded pulls, native BYOB, cancellation and
   t.after(() => rm(temporary, { recursive: true, force: true }));
   const worker = await startWorkerdFixture(temporary, router, upstream); t.after(() => worker.dispose());
   const base = (await worker.ready).origin;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await fetch(base, { method: "POST", body: new Uint8Array(50000).fill(71) });
+  for (const length of [50000, 8 * 1024 * 1024]) {
+    const response = await fetch(base, { method: "POST", body: new Uint8Array(length).fill(71) });
     assert.equal(response.status, 200, await response.clone().text());
-    assert.deepEqual(await response.json(), { pulls: 4, maximum: 16384, refused: true, bytes: 50000, held: 96 * 1024 * 1024 });
+    assert.deepEqual(await response.json(), { pulls: 4, maximum: 16384, refused: true, bytes: length, held: 96 * 1024 * 1024 });
   }
 });
