@@ -51,3 +51,36 @@ original global credentials, and exercise real Worker zero-egress budget denial
 plus explicitly fixed native/manifest JSON/SSE accounting. These are deterministic
 fixtures, not live inference or actual downstream-client proof. Source6 owns
 serialized snapshot integration and source2/6 own actual-client acceptance.
+
+## Serialized integration and actual-client scope
+
+Original source `a99fc89075b560e78c643d414f9e2b96e744a41c` is composed
+onto qualified `65358a7750e4bd05236ed3849b4d41fa7dfe8b1a` with source
+authorship and exact model declarations preserved. All 87 manifests compile.
+Generated snapshot SHA256:
+`848a410099984b199f34b26df1f4837d52435f4c0e48068f7785107e1caf76ec`.
+
+Local proof passes all eight focused cases, Worker types and 1,072 compiler,
+Chat-matrix and consumer-selection cases. A real workerd JSON test exercises all
+five models through native and manifest routes, exact original credentials,
+seven-micro policy-fixed receipts with 11/3/14 observed usage, and caller/provider
+hard-dollar rejection before egress. One source fixture assertion was corrected:
+xAI's qualified local error is HTTP400 with `error.code: pricing_required`;
+the separate native-error header is specific to OpenAI/Anthropic envelopes.
+The exact body and zero-egress assertions remain intact; no runtime changed.
+
+Fifteen actual registered xAI client cases are enrolled against public source
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. They import the actual static
+catalog, registered stream hook, replay sanitizer and Chat serializer. Cases
+cover all five identities, inline image bytes, qualified low/xhigh efforts,
+ordinary client function `x_search`, tool history, fragmented SSE, terminal
+usage, proxy-key/model/budget denials, embedded errors and post-delivery
+cancellation. Final-head hosted execution and outer SQLite accounting are
+required; authored cases alone are not proof.
+
+The client is explicitly configured for the proxy Chat route. Its default
+Responses route, hosted search, OAuth/subscription discovery and manifest-client
+selection remain separate. A function name is not hosted-tool authority. Frozen
+client tariff/limit hints do not qualify server billing; all five server prices
+remain unknown and hard-dollar admission stays closed. No new SDK report, local
+install, live request, account change or deployment is performed.

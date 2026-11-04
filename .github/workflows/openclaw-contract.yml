@@ -110,6 +110,9 @@ jobs:
           - consumer: minimax-highspeed
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-minimax-highspeed.test.mjs
+          - consumer: xai-frozen-chat
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-xai-frozen-chat.test.mjs
           - consumer: stepfun
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-stepfun.test.mjs
