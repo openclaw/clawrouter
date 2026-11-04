@@ -27,7 +27,7 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
-  - id: llm.models.list
+  - id: models.list
     endpoint: models_list
     methods: [GET]
   - id: llm.chat
@@ -35,10 +35,10 @@ capabilities:
     methods: [POST]
 endpoints:
   models_list:
+    method: GET
     path: /models
     requestFormat: openai.models
     responseFormat: openai.models
-    streaming: none
     timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}

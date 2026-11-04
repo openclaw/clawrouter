@@ -95,6 +95,9 @@ jobs:
           - consumer: gmi
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-gmi.test.mjs
+          - consumer: particle
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-particle.test.mjs
           - consumer: longcat
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-longcat.test.mjs

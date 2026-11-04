@@ -104,9 +104,24 @@ reasoning/tool replay, fragmented SSE, terminal usage, errors, cancellation,
 image input, finite controls, schema semantics and private filtered discovery.
 Fixtures assert metadata has no inference reservation or tariff requirement.
 
-Local dependency qualification remains code-only. Hosted exact-head compilation
-and tests are execution proof; source6 owns a later serialized snapshot slot
-and actual-client acceptance. Source2 retains strict refresh/mapping/replay
-qualification. Source1 owns common projection/accounting and source3 its schema.
-No helper-only parity, account access, live inference, login, provisioning,
-regional migration or manual deployment is claimed.
+Integration uses the canonical `models.list` capability, explicit GET method
+and nonstreaming metadata endpoint. This keeps discovery outside model-specific
+inference admission while retaining the original credential owner checks.
+Undeclared native URL aliases remain closed; the unified selected model ID
+continues to map to the documented request alias.
+
+`test/openclaw-particle.test.mjs` pins actual OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. Its public CI checkout uses its own
+frozen installation and imports the registered Particle catalog/replay policy,
+strict discovery builder, host replay sanitizer and native streaming client.
+The real Worker and SQLite assertions cover selected public-ID to wire-ID
+mapping, the four canonical efforts, cache affinity, tool/reasoning replay,
+original credentials, usage, errors and cancellation. Exact-head execution
+results are recorded in the PR; authored cases alone are not a passing proof.
+
+Configured native client proof is separate from ClawRouter catalog-driven or
+manifest client selection. Worker fixtures cover native and manifest dispatch.
+Source1 retains common projection/accounting and source3 its pricing schema.
+No account entitlement, live inference, login, provisioning, regional migration
+or manual deployment is claimed. Upstream-dollar tariff qualification remains
+separate from explicit synthetic `policy_fixed` charges.

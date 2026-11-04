@@ -407,6 +407,7 @@
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
+- Verify Particle’s actual keyed catalog, native reasoning/cache controls and replay through Worker/SQLite; preserve public model identity, documented request alias and unknown-price denial.
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.

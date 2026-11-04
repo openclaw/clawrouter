@@ -50,8 +50,8 @@ async function fixture(t, { ownGrant = true } = {}) {
   for (const policyId of ["paid", "unpriced"]) if (ownGrant) await putGrantCredentials(env, `oauth/${policyId}/particle`, {
     provider: "particle", kind: "api_key", enabled: true, credential: "synthetic-selected-particle" });
   const f = { env, events, sent, grantKey: "oauth/paid/particle", reply: async r => Response.json(response((await r.clone().json()).model)),
-    call(body, { manifest = false, policyId = "paid", discovery = false, query = "", nativePrefix = "particle" } = {}) {
-      const path = discovery ? (manifest ? "/v1/proxy/particle/models_list" : `/v1/native/${nativePrefix}/models`)
+    call(body, { manifest = false, policyId = "paid", discovery = false, query = "", nativePrefix = "particle", unified = false } = {}) {
+      const path = unified ? "/v1/chat/completions" : discovery ? (manifest ? "/v1/proxy/particle/models_list" : `/v1/native/${nativePrefix}/models`)
         : (manifest ? "/v1/proxy/particle/chat_completions" : `/v1/native/${nativePrefix}/chat/completions`);
       return worker.fetch(new Request(`https://router.example${path}${query}`, { method: discovery ? "GET" : "POST",
         headers: { authorization: `Bearer clawrouter-live-${policyId}-fixture-${policyId}`, "content-type": "application/json", "x-api-key": "synthetic-caller-key", "x-organization-id": "synthetic-unbound-org" },
@@ -73,7 +73,7 @@ test("Particle declaration keeps one public ID, its documented wire alias and fi
   assert.equal(m.requestParameters.chat_completions.defaultReasoningEffort, "high");
   const native = m.nativeCapabilities.endpoints.chat_completions;
   assert.deepEqual(native.input, ["text", "image"]); assert.equal(native.contextWindow, 1048576); assert.equal(native.maxOutputTokens, 131072);
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["models_list", "chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "models_list"]);
   const opaque = providerModel(provider, "particle/synthetic-tenant-model", provider.endpoints.find(e => e.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");
@@ -230,11 +230,18 @@ for (const manifest of [false, true]) test(`Particle ${manifest ? "manifest" : "
   assert.equal(f.sent.length, 1);
 });
 
-for (const nativePrefix of ["clawrouter-particle"]) test(`Particle routing alias ${nativePrefix} retains the canonical provider grant and native model`, async t => {
-  const f = await fixture(t), body = { model: models[0], messages: [{ role: "user", content: "synthetic-input" }] };
-  const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
+test("Particle unified selected ID retains the documented wire alias and original grant", async t => {
+  const f = await fixture(t), body = { model: wireId, messages: [{ role: "user", content: "synthetic-input" }] };
+  const r = await f.call({ ...body, model: routerId }, { unified: true });
+  assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
   assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
   assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-particle"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+});
+
+test("Particle undeclared native URL alias remains closed without egress", async t => {
+  const f = await fixture(t), r = await f.call({ model: wireId, messages: [] }, { nativePrefix: "clawrouter-particle" });
+  assert.equal(r.status, 404); assert.equal((await r.json()).error.code, "provider_not_found");
+  await f.drain(); assert.equal(f.sent.length, 0);
 });
 
 for (const manifest of [false, true]) test(`Particle ${manifest ? "manifest" : "native"} preserves all four frozen canonical efforts and counts reasoning within output`, async t => {
