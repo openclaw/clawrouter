@@ -16,11 +16,14 @@ const providers = JSON.parse(execFileSync(process.execPath,
 const contracts = [["stepfun", "STEPFUN_API_KEY", "https://api.stepfun.ai/v1"],
   ["stepfun-cn", "STEPFUN_CN_API_KEY", "https://api.stepfun.com/v1"]];
 
-test("stepfun-cn model discovery compiles as GET only", () => {
-  const endpoint = providers.find(p => p.id === "stepfun-cn").endpoints.find(e => e.id === "models_list");
-  assert.equal(endpoint.method, "GET");
-  assert.deepEqual(endpoint.methods, ["GET"]);
-});
+for (const [id] of contracts) {
+  test(`${id} model discovery compiles as GET only without streaming`, () => {
+    const endpoint = providers.find(p => p.id === id).endpoints.find(e => e.id === "models_list");
+    assert.equal(endpoint.method, "GET");
+    assert.deepEqual(endpoint.methods, ["GET"]);
+    assert.equal(endpoint.streaming, null);
+  });
+}
 
 for (const [id, binding, base] of contracts) {
   const provider = providers.find(p => p.id === id);
@@ -88,7 +91,7 @@ for (const [id, binding, base] of contracts) {
       assert.deepEqual(native?.input, vision.has(m.upstream) ? ["text", "image"] : ["text"]);
       assert.equal(native?.contextWindow, undefined); assert.equal(native?.maxOutputTokens, undefined);
     }
-    assert.deepEqual(provider.endpoints.map(e => e.id), ["models_list", "chat_completions"]);
+    assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "models_list"]);
     const opaque = providerModel(provider, `${id}/synthetic-tenant-model`, provider.endpoints.find(e => e.id === "chat_completions"));
     assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
     const foreign = { [contracts.find(([other]) => other !== id)[1]]: "synthetic-foreign-region", STEPFUN_PLAN_API_KEY: "synthetic-plan", STEPFUN_PLAN_CN_API_KEY: "synthetic-cn-plan" };
