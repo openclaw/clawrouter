@@ -71,7 +71,9 @@ test("Qianfan declaration keeps five exact frozen identities and the existing se
     assert.deepEqual(native?.input, vision.has(m.upstream) ? ["text", "image"] : ["text"]);
     assert.equal(native?.contextWindow, undefined); assert.equal(native?.maxOutputTokens, m.upstream === "ernie-5.1" ? 65536 : undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["models_list", "chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "models_list"]);
+  const metadata = provider.endpoints.find(e => e.id === "models_list");
+  assert.equal(metadata.method, "GET"); assert.equal(metadata.streaming, null);
   const opaque = providerModel(provider, "qianfan/synthetic-tenant-model", provider.endpoints.find(e => e.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { ANTHROPIC_API_KEY: "synthetic-unselected-anthropic", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");
@@ -274,9 +276,9 @@ for (const manifest of [false, true]) test(`Qianfan ${manifest ? "manifest" : "n
   assert.equal(f.sent.length, 1);
 });
 
-for (const nativePrefix of ["clawrouter-qianfan"]) test(`Qianfan routing alias ${nativePrefix} retains the canonical provider grant and native model`, async t => {
+test("Qianfan undeclared native URL aliases stay closed without egress", async t => {
   const f = await fixture(t), body = { model: models[0], messages: [{ role: "user", content: "synthetic-input" }] };
-  const r = await f.call(body, { nativePrefix }); assert.equal(r.status, 200, await r.clone().text()); await r.text(); await f.drain();
-  assert.equal(f.sent.length, 1); assert.deepEqual(await f.sent[0].json(), body);
-  assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-selected-qianfan"); assert.equal(f.sent[0].url, `${base}/chat/completions`);
+  const r = await f.call(body, { nativePrefix: "clawrouter-qianfan" });
+  assert.equal(r.status, 404); assert.equal((await r.json()).error.code, "provider_not_found");
+  await f.drain(); assert.equal(f.sent.length, 0); assert.equal(f.events.length, 0);
 });
