@@ -419,14 +419,21 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   } finally { admission.finish(context); }
 }
 
+const nativeUploadGrants = new WeakMap<ProxySelection, PinnedGrant>();
+
 async function proxyNativeRaw(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, provider: CompiledProvider, endpoint: CompiledEndpoint): Promise<Response> {
-  const initial = await preauthenticate(request, env, mode, provider.id);
-  if (initial instanceof Response) return initial;
-  if (!initial) throw new HttpError(401, "invalid_proxy_key", "native upload requires an authenticated caller");
   const selection: ProxySelection = { provider, endpoint, model: null, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id,
     body: {}, pathParams: {}, method: request.method };
+  const initial = await preauthenticate(request, env, mode, provider.id, undefined, selection);
+  if (initial instanceof Response) return initial;
+  if (!initial) throw new HttpError(401, "invalid_proxy_key", "native upload requires an authenticated caller");
   assertPolicyModel(initial.policy, selection);
   await assertProviderAccess(provider, initial, env);
+  const original = await upstreamAuth(provider, initial, env, new Set(), await grantStickyHash(request, initial), true, undefined,
+    { provider, endpoint, mode: "http" });
+  // Upload awaits may revoke or replace the selected owner. Fresh admission
+  // must retain this selection, never reopen environment or another grant.
+  nativeUploadGrants.set(selection, { key: original.grantKey, revision: original.grantRevision });
   await readNativeRawInput(request, selection);
   const fresh = await preauthenticate(request, env, mode, provider.id, undefined, selection, "authoritative");
   if (fresh instanceof Response) return fresh;
@@ -474,7 +481,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (isStandaloneSearch(selection.endpoint)) search = await SearchSession.resolve(env, auth, selection.body as Record<string, unknown>, selection.endpoint.id);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), true, reservedBudget?.connection, search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned, "http", true);
+    const uploadGrant = nativeUploadGrants.get(selection);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant, reservedBudget?.connection, search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true);
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);

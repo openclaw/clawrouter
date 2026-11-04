@@ -148,6 +148,7 @@
 - Add the experimental Gradium unary speech manifest, binary-mode guard and native fixtures, with conservative plan-dependent credit accounting and explicit runtime activation requirements.
 - Route model-less Gradium unary speech through bounded native binary validation, original credentials and conservative reservation settlement without replaying synthesis.
 - Add Azure Speech regional SSML manifests and bounded unary protocol qualification, with conservative character admission and separate resource credentials.
+- Pin the original Azure Speech grant before raw upload so revocation or replacement during intake cannot switch the request to another credential or environment fallback.
 - Add the Azure Speech regional SSML response wrapper with complete bounded MP3 delivery, unchanged native bytes and conservative interruption accounting; dispatch activation remains separately qualified.
 - Route authenticated Azure Speech raw SSML through fresh post-upload admission, original regional credentials, complete MP3 delivery and conservative settlement; reject unpriced hard-budget uploads before egress.
 - Add concrete managed lifecycle adapters for Replicate, fal, Kie and Vydra, with bounded native reads, scoped control-path construction and explicit result/cancel support for the shared durable controller.

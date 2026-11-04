@@ -14,7 +14,12 @@ proxy-key admission reads the authority directly, bypassing isolate/colo caches
 and inflight admission reuse. Access-session requests re-resolve the current
 identity and policy. Caller, principal, tenant and policy identity cannot change
 across intake. The final policy and original selected provider credential govern
-dispatch; the ordinary preflight credential-failover path is disabled.
+dispatch; the ordinary preflight credential-failover path is disabled. The
+runtime selects and materializes that credential before acquiring the upload
+reader, then pins its key and revision through fresh final preparation. A
+disabled original grant denies with zero egress; replacement cannot select a
+new revision or environment fallback. A fresh environment-authorized request
+retains its existing behavior.
 
 `native-raw-input.ts` binds validated input to the internal selection in a
 WeakMap. Caller JSON cannot establish that binding. The existing upstream
