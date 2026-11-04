@@ -20,10 +20,12 @@ const originalWait=HttpOperation.prototype.wait,originalStop=HttpOperation.proto
 HttpOperation.prototype.wait=function(pending,...args){if(pending===physicalPending){operation=this;physical.operation=this;}return originalWait.call(this,pending,...args);};
 HttpOperation.prototype.stop=function(cause,...args){const found=calls.find(c=>c.operation===this);if(found){if(cause==='complete')found.producerEOF=true;if(cause==='caller')found.producerCanceled=true;}return originalStop.call(this,cause,...args);};
 globalThis.fetch=(input,init)=>{
- const request=new Request(input,init),proof={url:request.url,method:request.method,redirect:request.redirect,headers:[...request.headers],capacity:bodyBudgetCharged(),bytes:0,canceled:false,producerEOF:false,producerCanceled:false};calls.push(proof);physical=proof;
+ const request=new Request(input,init),proof={url:request.url,method:request.method,redirect:request.redirect,headers:[...request.headers],capacity:bodyBudgetCharged(),bytes:0,canceled:false,readRejected:false,activeReads:0,fetchAborted:false,producerEOF:false,producerCanceled:false};calls.push(proof);physical=proof;
+ request.signal.addEventListener('abort',()=>{proof.fetchAborted=true;},{once:true});
  physicalPending=originalFetch(request).then(response=>{
   const reader=response.body?.getReader();if(!reader)return response;
-  return new Response(new ReadableStream({async pull(controller){const next=await reader.read();if(next.done){reader.releaseLock();controller.close();}else{proof.bytes+=next.value.byteLength;controller.enqueue(next.value);}},async cancel(reason){proof.canceled=true;await reader.cancel(reason);reader.releaseLock();}},{highWaterMark:0}),{status:response.status,headers:response.headers});
+  let terminal;proof.readerDone=new Promise(resolve=>{terminal=resolve;});
+  return new Response(new ReadableStream({async pull(controller){proof.activeReads++;let ended=false;try{const next=await reader.read();if(next.done){ended=true;reader.releaseLock();controller.close();}else{proof.bytes+=next.value.byteLength;controller.enqueue(next.value);}}catch(error){proof.readRejected=true;ended=true;throw error;}finally{proof.activeReads--;if(ended){proof.chargeAtReadEnd=bodyBudgetCharged();terminal();}}},async cancel(reason){proof.canceled=true;try{await reader.cancel(reason);}finally{reader.releaseLock();terminal();}}},{highWaterMark:0}),{status:response.status,headers:response.headers});
  });return physicalPending;
 };
 const provider=structuredClone(snapshot.providers.find(p=>p.id==='openai'));
@@ -50,8 +52,9 @@ export default {async fetch(request,env){
  const cancel=await call(true),cancelProof=calls.at(-1);await cancel.body.cancel();await drain();
  const cancelResult={status:cancel.status,complete:cancelProof.producerEOF,canceled:cancelProof.producerCanceled,released:bodyBudgetCharged()};
  endpoint.timeout_ms=1000;const deadline=await call(false),deadlineProof=calls.at(-1);const deadlineResult={status:deadline.status,body:await deadline.json()};await drain();
- Object.assign(deadlineResult,{readBytes:deadlineProof.bytes,canceled:deadlineProof.canceled,aborted:deadlineProof.operation.signal.aborted,released:bodyBudgetCharged()});
- return Response.json({denied,before,results,cancelResult,deadlineResult,calls:calls.map(({operation,...proof})=>proof)});
+ await deadlineProof.readerDone;
+ Object.assign(deadlineResult,{readBytes:deadlineProof.bytes,canceled:deadlineProof.canceled,readRejected:deadlineProof.readRejected,activeReads:deadlineProof.activeReads,chargeAtReadEnd:deadlineProof.chargeAtReadEnd,fetchAborted:deadlineProof.fetchAborted,aborted:deadlineProof.operation.signal.aborted,released:bodyBudgetCharged()});
+ return Response.json({denied,before,results,cancelResult,deadlineResult,calls:calls.map(({operation,readerDone,...proof})=>proof)});
 },queue:worker.queue};`;
 
 const upstream = `
@@ -80,5 +83,10 @@ test("workerd Requesty native/manifest actual fetch holds capacity through 4096-
   }
   assert.equal(proof.cancelResult.status, 200); assert.ok(proof.cancelResult.complete || proof.cancelResult.canceled); assert.equal(proof.cancelResult.released, 0);
   assert.equal(proof.deadlineResult.status, 502); assert.ok(proof.deadlineResult.readBytes > 0);
-  assert.equal(proof.deadlineResult.canceled, true); assert.equal(proof.deadlineResult.aborted, true); assert.equal(proof.deadlineResult.released, 0);
+  // A workerd fetch abort may error its pending read before the wrapper can
+  // receive cancel(). Require a real terminal reader and both bound signals.
+  assert.ok(proof.deadlineResult.canceled || proof.deadlineResult.readRejected, JSON.stringify(proof.deadlineResult));
+  assert.equal(proof.deadlineResult.activeReads, 0); assert.equal(proof.deadlineResult.fetchAborted, true);
+  assert.equal(proof.deadlineResult.chargeAtReadEnd, 32 * 1024 * 1024);
+  assert.equal(proof.deadlineResult.aborted, true); assert.equal(proof.deadlineResult.released, 0);
 });
