@@ -53,12 +53,12 @@ test("MiniMax image input retains charge through a pre-read JSON refusal cleanup
   const source = new ReadableStream({ pull() { reads++; }, cancel() { cancelStarted(); return ack; } }, { highWaterMark: 0 });
   const lease = new BodyLease(); assert.equal(lease.grow(32 * 1024 * 1024), true);
   const input = ownMiniMaxImageInput(new Response(source, { headers: { "content-type": "text/plain" } }));
-  await assert.rejects(readNativeJson(input.response, new AbortController().signal, 1024,
+  const rejected = assert.rejects(readNativeJson(input.response, new AbortController().signal, 1024,
     () => assert.fail("invalid MIME must not parse"), () => { throw new Error("invalid image input"); }), /invalid image input/);
   let released = false;
   const retirement = input.retire().then(() => { lease.release(); released = true; });
   await started;
   assert.equal(reads, 0); assert.equal(released, false); assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), 64 * 1024 * 1024);
-  acknowledge(); await retirement;
+  acknowledge(); await rejected; await retirement;
   assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0);
 });
