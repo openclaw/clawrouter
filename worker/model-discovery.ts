@@ -10,7 +10,7 @@ import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
+  return endpoint.request_format === "featherless.catalog" || publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
