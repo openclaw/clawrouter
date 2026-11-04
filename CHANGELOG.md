@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-- Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 
 - Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
 - Define an opt-in provider plugin package contract with local assets, documentation, fixtures, and a starter example; existing provider loading and runtime behavior remain unchanged.
@@ -456,6 +455,8 @@
 - Preserve validated payload formats for caller-scoped manifest-only catalog routes so native embedding clients can qualify offers without enabling disabled native endpoints.
 - Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
 - Qualify legacy speech offers against the OpenAI request and binary response pair, preserving provider-native speech routes and mixed Chat models without advertising an unsupported controller.
+
+- Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 
 ## 0.5.0 - 2026-10-22
 
