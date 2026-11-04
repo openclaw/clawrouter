@@ -77,6 +77,14 @@ export function parsePixVerseImageMultipart(raw: Uint8Array<ArrayBuffer>, conten
   catch { invalid(); }
 }
 
+// Portable byte/container syntax only, not pixels, auth, receipts or regions.
+// Keep the same file/MIME preconditions as the multipart caller; retain no bytes.
+export function qualifyImageContainer(bytes: Uint8Array, type: ImageType): void {
+  if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.length > fileLimit
+    || type !== "image/png" && type !== "image/jpeg" && type !== "image/webp") invalid();
+  qualifyImage(bytes, type);
+}
+
 function qualifyImage(bytes: Uint8Array, type: ImageType): void {
   if (type === "image/png") png(bytes);
   else if (type === "image/jpeg") jpeg(bytes);

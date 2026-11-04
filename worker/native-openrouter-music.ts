@@ -35,7 +35,18 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
   } catch {
     throw new HttpError(400, "invalid_native_openrouter_music_request", "OpenRouter music requires bounded text, explicit MP3 or WAV and native streaming");
   }
-  return musicResponse(Object.freeze({ model: prepared.model, format: prepared.format }));
+  return nativeOpenRouterMusicResponse({ model: prepared.model, format: prepared.format });
+}
+
+// Internal response construction only. The caller owns body validation,
+// original selection/grants, admission and the full input/response lifetime.
+export function nativeOpenRouterMusicResponse(context: OpenRouterMusicContext): NativeResponse {
+  const model = context?.model, format = context?.format;
+  if (typeof model !== "string" || !isMusic(model) || format !== "mp3" && format !== "wav") {
+    throw new HttpError(400, "invalid_native_openrouter_music_context", "OpenRouter music requires its frozen Lyria identity and MP3 or WAV format");
+  }
+  // Never pass a structurally wider caller object into response closures.
+  return musicResponse(Object.freeze({ model, format }));
 }
 
 // This closure scope receives only immutable response metadata, never selection

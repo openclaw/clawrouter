@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
 import test from "node:test";
-const { prepareNativeOpenRouterMusic: prepare } = await import("../native-openrouter-music.ts");
+const { prepareNativeOpenRouterMusic: prepare, nativeOpenRouterMusicResponse: fromContext } = await import("../native-openrouter-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
 const { observeUsage } = await import("../proxy-response.ts");
@@ -53,6 +53,55 @@ function chunks(values, onCancel = () => {}) {
     else controller.enqueue(Uint8Array.from(values[index++]));
   }, cancel: onCancel }, { highWaterMark: 0 });
 }
+
+test("the scalar constructor snapshots only selected metadata and keeps the fixed native destination", async () => {
+  for (const model of models) for (const [format, audio] of [["mp3", mp3], ["wav", wav]]) {
+    const original = { model, format, body: { unvalidated: true }, origin: "https://other.example", path: "/other" };
+    const { proxy, revoke } = Proxy.revocable(original, { get(target, key) {
+      assert.ok(key === "model" || key === "format"); return target[key];
+    } });
+    const native = fromContext(proxy); original.model = "changed"; original.format = "changed"; revoke();
+    assert.doesNotThrow(() => assertNativeResponseDestination(native, new URL("https://openrouter.ai/api/v1/chat/completions")));
+    for (const key of ["body", "headers", "query", "tariff", "receipt", "credential"]) assert.equal(native[key], undefined);
+    const baseline = bodyBudgetCharged(), lease = native.acquire(); let result;
+    try {
+      assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+      const originalWire = wire(audio, model); result = await native.read(response(originalWire), new AbortController().signal);
+      assert.equal(await result.response.text(), originalWire); assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+    } finally { await result?.response.body?.cancel().catch(() => undefined); lease.release(); }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
+
+test("invalid scalar contexts are denied before any response capacity is acquired", () => {
+  const baseline = bodyBudgetCharged();
+  for (const context of [null, undefined, {}, { model: models[0] }, { model: models[0], format: "pcm" },
+    { model: "google/new-lyria", format: "wav" }, { model: "openrouter/auto", format: "mp3" }]) {
+    assert.throws(() => fromContext(context), error => error.code === "invalid_native_openrouter_music_context");
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
+
+test("direct response construction preserves EOF, identity, response bounds and stalled-read cancellation", async () => {
+  const native = fromContext({ model: models[0], format: "mp3" }), baseline = bodyBudgetCharged();
+  for (const upstream of [response(wire().replace(data("[DONE]"), "")), response(wire(mp3, models[1])),
+    response(wire(), { "content-length": String(32 * 1024 * 1024 + 1) })]) {
+    const lease = native.acquire();
+    try { await assert.rejects(native.read(upstream, new AbortController().signal), invalid); }
+    finally { lease.release(); }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+  const abort = new AbortController(); let ready, canceled = 0;
+  const entered = new Promise(resolve => { ready = resolve; });
+  const upstream = new ReadableStream({ type: "bytes", pull() { ready(); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+  const lease = native.acquire(); let pending;
+  try {
+    assert.throws(() => native.acquire(), /capacity is busy/);
+    pending = native.read(response(upstream), abort.signal); await entered; abort.abort();
+    await assert.rejects(pending, invalid); assert.equal(canceled, 1);
+  } finally { abort.abort(); await pending?.catch(() => undefined); lease.release(); }
+  assert.equal(bodyBudgetCharged(), baseline);
+});
 
 let scalarProbe;
 async function scalarPreparationProbe() {
