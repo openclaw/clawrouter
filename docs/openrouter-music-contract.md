@@ -56,7 +56,7 @@ Exports: `openRouterMusicModels`, `prepareOpenRouterMusic`,
 Fixture: `providers/_fixtures/openrouter/music.json`.
 Checks: `node --test worker/test/openrouter-music.test.mjs`.
 
-The pure response leaf exports
+The partial original E12 response leaf exports
 `prepareNativeOpenRouterMusic(selection: ProxySelection): NativeResponse | undefined`
 from `worker/native-openrouter-music.ts`. Invoke it before generic Chat
 validation. It binds explicit `music.generate`, the selected frozen model,
@@ -71,7 +71,7 @@ does not grant that authority.
 The leaf bounds request JSON to 256 KiB before the existing codec clones it,
 retaining the 32,768 UTF-16 prompt limit. It quarantines at most 4 MiB of native
 SSE wire with 8,192 reads and 8,192 events (including empty reads and heartbeat
-events), the shared 2 MiB frame limit, 2 MiB decoded audio and 128 KiB UTF-8
+events), 256 KiB accepted frames with at most 32 lines, 2 MiB decoded audio and 128 KiB UTF-8
 transcript. Encoded audio is bounded before decoding. A 32 MiB response lease
 charges 64 MiB in the existing 96 MiB pool, covering quarantine, parser and JSON
 scratch, base64 copies, decoded validation audio and replay; ingress keeps its
@@ -99,6 +99,50 @@ policy-fixed charging is separate. Source1 still owns factory wiring, the
 generic Chat bypass guard, original grant/model routing, admission and settlement;
 source2/source6 own actual-client and Worker acceptance. This leaf does not
 activate a route.
+
+Payload lifetime within the 64 MiB charged response lease:
+
+| Phase | Retained payload and bounded scratch | Release point |
+| --- | --- | --- |
+| Preparation | Original JSON remains with common ingress; at most 256 KiB JSON and 32,768 UTF-16 prompt units. Codec cloning/serialization adds less than 1 MiB for this text-only shape. | Prepared request stays with the leaf through validation; ingress has its separate reservation. |
+| Quarantine | One 4 MiB buffer; one accepted upstream chunk at most 4 MiB; shared framing buffer at most 2 MiB and decoded framing string at most 4 MiB. Accepted frames are only 256 KiB, at most 32 lines before split/JSON allocation. No decoded audio is retained in this pass. | Reader canceled/released at native terminal or failure; framing/JSON scratch is not returned. |
+| Codec validation | Same 4 MiB quarantine replayed in 64 KiB views; bounded frame/JSON scratch; at most 2,796,204 encoded audio characters. Budget includes UTF-16 concatenation/canonical-base64 copies, the temporary decoded string and at most 2 MiB validated audio, plus 128 KiB transcript. | Codec observation is discarded after validation. No observation audio/transcript is captured by the output stream. |
+| Delivery | Only the same quarantine buffer and 64 KiB views are retained by replay; common SSE inspection is bounded. | Common observer releases the response lease on completion, cancellation or failure. |
+
+The 64 MiB charge reserves headroom for transient JSON objects, string copies
+and parser scratch; it is not a measured JavaScript heap or GC guarantee. Byte,
+frame, line and read bounds remain enforced independently of Content-Length.
+An oversized incoming transport chunk is rejected before copying into quarantine;
+transport allocation itself remains common runtime responsibility.
+
+Offline fixtures include MP3 at 2,096,640 bytes (6,289,920 decoded PCM bytes) and
+PCM WAV at the exact 2,097,152-byte audio cap (2,097,108 decoded PCM bytes), plus
+the small containers above. They are generated/repeated test audio, not vendor
+inference. The HTTP response remains SSE for both requested formats; no binary
+MIME is guessed from base64. The codec checks native protocol completeness,
+not acoustic validity of arbitrary returned audio.
+
+This is not full frozen music parity. The frozen client defaults to WAV and
+permits a 180-second request; neither that duration nor image-conditioned music
+is qualified by the smaller prompt-only leaf. Restoring original codec limits
+(16 MiB decoded audio / 32 MiB wire, one reference image) is an internal original
+E12 dependency, not an external-entitlement blocker or a new product:
+
+- Source5/source1 must agree a codec validation mode that checks fragmented
+  base64 and terminal state without retaining the whole base64 stream and
+  materializing `OpenRouterMusicObservation.audio`. The current mandatory
+  audio-returning reader cannot safely fit those original limits plus 32 MiB
+  quarantine and ingress in this lease by merely raising constants.
+- Source1 must qualify the corresponding original-ingress/quarantine/replay
+  capacity lifetime (or an explicit larger-capacity mechanism), including
+  bounded transport reads and the image body's extra copies. The existing
+  parameterless `acquire()` alone does not establish that larger combined
+  allocation. The existing request codec also clones/serializes image JSON.
+- Original image bytes/references need source1's asset/destination authority
+  contract and source5's byte validation before the text-only exclusion can
+  open. Caller URLs, uploaded IDs or an unqualified boolean supply no authority.
+  Source2's actual frozen consumer and source6's composed proof must exercise
+  the restored surface.
 
 Focused leaf checks: `node --test worker/test/native-openrouter-music.test.mjs`.
 

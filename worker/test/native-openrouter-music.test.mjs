@@ -72,6 +72,32 @@ test("both frozen models preserve complete MP3/WAV native SSE bytes and diagnost
   }
 });
 
+test("decoder-verified near-cap test audio keeps the requested MP3/WAV identity and SSE header", async () => {
+  // Repeated test MP3 frames: 2,096,640 bytes -> 6,289,920 decoded PCM bytes.
+  // Generated PCM WAV at the exact 2 MiB cap -> 2,097,108 decoded PCM bytes.
+  const largeMp3 = Buffer.concat(Array(1820).fill(mp3)), largeWav = Buffer.alloc(2 * 1024 * 1024);
+  wav.copy(largeWav, 0, 0, 44);
+  largeWav.writeUInt32LE(largeWav.length - 8, 4); largeWav.writeUInt32LE(largeWav.length - 44, 40);
+  for (const [format, audio] of [["mp3", largeMp3], ["wav", largeWav]]) {
+    const encoded = audio.toString("base64"), parts = [];
+    for (let offset = 0; offset < encoded.length; offset += 65535)
+      parts.push(data(frame({ data: encoded.slice(offset, offset + 65535) })));
+    const original = parts.join("") + data("[DONE]");
+    assert.ok(Buffer.byteLength(original) < 4 * 1024 * 1024);
+    const result = await read(response(original), selection(models[0], format));
+    assert.equal(result.response.headers.get("content-type"), "text/event-stream");
+    assert.equal(await result.response.text(), original); assert.equal(result.usage.tokens, null);
+  }
+});
+
+test("absent native usage still succeeds without invented counters, prices or receipts", async () => {
+  const original = data(frame({ data: fixture.base64 })) + data("[DONE]");
+  const result = await read(response(original));
+  assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+  assert.equal(await result.response.text(), original);
+  await assert.rejects(read(response(data({ choices: [], usage: { cost: 0 } }) + data("[DONE]"))), invalid);
+});
+
 test("selection binds music capability, exact model, fixed /api destination and SSE before generic Chat", () => {
   const native = prepare(selection());
   assert.doesNotThrow(() => assertNativeResponseDestination(native, new URL("https://openrouter.ai/api/v1/chat/completions")));
@@ -169,7 +195,8 @@ test("reject client-incompatible framing, malformed UTF-8, oversized frames and 
   const value = JSON.stringify(frame({ data: fixture.base64 }));
   for (const original of ["data: " + value.slice(0, 20) + "\ndata: " + value.slice(20) + "\n\n" + data("[DONE]"),
     wire().replaceAll("\n", "\r"), "event: error\n" + wire(), "unknown: field\n" + wire(),
-    ":" + "a".repeat(2 * 1024 * 1024) + "\n\n" + wire()])
+    ":" + "a".repeat(256 * 1024) + "\n\n" + wire(),
+    ": header\n".repeat(33) + wire(), ":" + "a".repeat(2 * 1024 * 1024) + "\n\n" + wire()])
     await assert.rejects(read(response(original)), invalid);
   await assert.rejects(read(response(Buffer.concat([Buffer.from("data: "), Buffer.from([0xff]), Buffer.from("\n\n" + wire())]))), invalid);
   await assert.rejects(read(response(Buffer.concat([Buffer.from(wire()), Buffer.from([0xff])]))), invalid);
@@ -203,8 +230,8 @@ test("all reads and all events, including empty reads and heartbeats, are bounde
 });
 
 test("wire, encoded audio and transcript budgets reject before releasing any SSE", async () => {
-  const heartbeat = Buffer.from(":" + "a".repeat(1024 * 1024 - 3) + "\n\n");
-  await assert.rejects(read(response(chunks([heartbeat, heartbeat, heartbeat, heartbeat, Buffer.from(wire())]))), invalid);
+  const heartbeat = Buffer.from(":" + "a".repeat(128 * 1024 - 3) + "\n\n");
+  await assert.rejects(read(response(chunks([...Array(32).fill(heartbeat), Buffer.from(wire())]))), invalid);
   const encoded = Buffer.alloc(2 * 1024 * 1024 + 3).toString("base64");
   const parts = [];
   for (let index = 0; index < encoded.length; index += 128 * 1024) parts.push(data(frame({ data: encoded.slice(index, index + 128 * 1024) })));

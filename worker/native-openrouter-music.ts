@@ -7,7 +7,7 @@ import { createSseFrames } from "./token-usage.ts";
 import { HttpError } from "./utils.ts";
 
 const wireLimit = 4 * 1024 * 1024, audioLimit = 2 * 1024 * 1024, transcriptLimit = 128 * 1024;
-const readLimit = 8192, eventLimit = 8192;
+const readLimit = 8192, eventLimit = 8192, frameLimit = 256 * 1024;
 const isMusic = (model: unknown) => openRouterMusicModels.some(value => value === model);
 
 // Common selection owns original OpenRouter credentials, admission and pricing.
@@ -65,9 +65,14 @@ export function prepareNativeOpenRouterMusic(selection: ProxySelection): NativeR
 
 async function quarantine(body: ReadableStream<Uint8Array>, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   const wire = new Uint8Array(wireLimit);
-  let size = 0, reads = 0, events = 0, encodedAudio = 0, transcriptBytes = 0, done = false, carriage = false;
+  let size = 0, reads = 0, events = 0, encodedAudio = 0, audioTail = "", transcriptBytes = 0, done = false, carriage = false;
   const frames = createSseFrames(frame => {
-    if (frame === null || ++events > eventLimit || done && frame.trim()) invalid();
+    if (frame === null || ++events > eventLimit || frame.length > frameLimit || utf8Length(frame) > frameLimit
+      || done && frame.trim()) invalid();
+    // Bound split/JSON allocations as well as bytes. The shared framer's 2 MiB
+    // scratch bound alone does not bound the number of tiny SSE header strings.
+    let lines = 0;
+    for (let index = 0; index < frame.length; index++) if (frame[index] === "\n" && ++lines > 32) invalid();
     const data: string[] = [];
     for (const line of frame.split("\n")) {
       if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
@@ -78,7 +83,11 @@ async function quarantine(body: ReadableStream<Uint8Array>, signal: AbortSignal)
     // The frozen client parses each data line independently, unlike multiline SSE.
     if (data.length > 1) invalid();
     if (!data.length) return;
-    if (data[0] === "[DONE]") { done = true; return; }
+    if (data[0] === "[DONE]") {
+      const padding = audioTail.endsWith("==") ? 2 : audioTail.endsWith("=") ? 1 : 0;
+      if (Math.floor((encodedAudio - padding) * 3 / 4) > audioLimit) invalid();
+      done = true; return;
+    }
     const value: unknown = JSON.parse(data[0]);
     if (!mediaObject(value) || Object.hasOwn(value, "error")) invalid();
     const choice = Array.isArray(value.choices) ? value.choices[0] : null;
@@ -86,6 +95,7 @@ async function quarantine(body: ReadableStream<Uint8Array>, signal: AbortSignal)
     const audio = delta && mediaObject(delta.audio) ? delta.audio : null;
     if (audio?.data !== undefined) {
       if (typeof audio.data !== "string" || (encodedAudio += audio.data.length) > Math.ceil(audioLimit / 3) * 4) invalid();
+      audioTail = (audioTail + audio.data.slice(-2)).slice(-2);
     }
     if (audio?.transcript !== undefined) {
       if (typeof audio.transcript !== "string" || (transcriptBytes += utf8Length(audio.transcript)) > transcriptLimit) invalid();
