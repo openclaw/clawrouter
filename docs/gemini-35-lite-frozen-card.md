@@ -41,12 +41,18 @@ changed by this source PR.
 
 ## Local integration proof
 
-Exact source `e6b07bf53cad75ecca062cad9bc90695c109e555` is composed on frozen
-router base `274a9ac7193a06438aa3d6d20402e2acb4aaf8ae`. The complete 39-line
+Exact source `e6b07bf53cad75ecca062cad9bc90695c109e555` is composed on qualified
+landed router base `10b6ce3c1e40d5d96e2599523047daf8be883a9a`. The complete 39-line
 card and five source tests are unchanged; removing the new row restores the
-entire base YAML. All 85 manifests compile. Five focused cases, Worker types
-and 1,035 existing Chat/consumer-selection cases pass. The generic Chat matrix
+entire base YAML. All 86 manifests compile. Five focused cases, Worker types
+and 1,051 existing Chat/consumer-selection cases pass. The generic Chat matrix
 does not prove Google native client behavior.
+
+Serial snapshot SHA256:
+`951c93328fd5434622d02ab5f7908eac00f3952f6bb97edf60613b9fd71b7773`.
+Only `google/gemini-3.5-flash-lite` is added to the base model index. Unlanded
+Gemini 3.6 and Google-image declarations are excluded. Workflow configuration
+is unchanged; this checkpoint is local only and has no hosted enrollment.
 
 `test/openclaw-gemini35lite.test.mjs` authors nine actual registered Google
 consumer cases against public OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`,
