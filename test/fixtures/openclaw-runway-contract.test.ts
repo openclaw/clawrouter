@@ -2,9 +2,28 @@ import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { generateVideo } from "openclaw/plugin-sdk/video-generation-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const MP4 = Buffer.from(process.env.CLAWROUTER_CONTRACT_VIDEO_BASE64!, "base64");
+const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
+const outputUrl = "https://93.184.216.34/clawrouter-runway-fixture.mp4";
+const nativeFetch = globalThis.fetch;
+beforeEach(() => {
+  // Keep actual strict result admission and dispatcher lifetime. Replace only
+  // this public fixture's network transport; never contact its public address.
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (request.url === outputUrl) {
+      expect(request.method).toBe("GET");
+      expect([...request.headers]).toEqual([]);
+      return nativeFetch(origin + "/fixture/output", { signal: request.signal });
+    }
+    expect(new URL(request.url).origin).toBe(origin);
+    return nativeFetch(input, init);
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
 function config(id: string, model: string): OpenClawConfig {
   return {
     plugins: { allow: ["runway"], entries: { runway: { enabled: true } } },
@@ -35,6 +54,9 @@ describe("actual Runway video host through the native Worker route", () => {
   });
   it("stops on native failure instead of replaying creation", async () => {
     await withTempHome(async () => { await expect(run("failed")).rejects.toThrow(/Synthetic failure/i); }, environment);
+  });
+  it("keeps private result URLs rejected after successful native generation", async () => {
+    await withTempHome(async () => { await expect(run("private")).rejects.toThrow(/Blocked hostname or private\/internal\/special-use IP address/); }, environment);
   });
   it.each(["budget", "denied", "invalid"])("does not bypass the router's %s admission", async id => {
     await withTempHome(async () => { await expect(run(id)).rejects.toThrow(/pricing_required|400|401|403|not allowed/i); }, environment);

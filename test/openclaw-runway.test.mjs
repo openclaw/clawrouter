@@ -12,7 +12,7 @@ const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const video = JSON.parse(readFileSync(new URL("./fixtures/wan-output.json", import.meta.url)));
 const cases = [{ id: "gen45", model: "gen4.5", duration: 5 },
   ...["veo3.1", "veo3.1_fast"].flatMap(model => [4, 6, 8].map(duration => ({ id: model === "veo3.1" ? `veo${duration}` : `fast${duration}`, model, duration })))];
-const created = [...cases, ...["empty", "failed"].map(id => ({ id, model: "gen4.5", duration: 5 }))]
+const created = [...cases, ...["empty", "failed", "private"].map(id => ({ id, model: "gen4.5", duration: 5 }))]
   .map((entry, i) => ({ ...entry, task: "00000000-0000-4000-8000-" + String(i + 1).padStart(12, "0") }));
 const ids = [...created.map(entry => entry.id), "budget", "denied"];
 
@@ -60,6 +60,7 @@ test("actual Runway video host through real Worker lifecycle and SQLite", { skip
       assert.equal(call.vendorKey, null);
     }
     const downloads = incoming.filter(call => call.path === "/fixture/output");
+    assert.equal(incoming.filter(call => call.path === "/fixture/private-output").length, 0, "strict result SSRF rejection happens before private output fetch");
     assert.equal(downloads.length, cases.length); assert.ok(downloads.every(call => call.authorization === null), "video URL downloads do not carry the proxy key");
     for (const id of ["budget", "denied"]) {
       const receipt = await usage(origin, id); assert.equal(receipt.budget.spentMicros, 0);
@@ -101,6 +102,6 @@ function upstreamFixture() {
       const job = body ? jobs.find(job => body.promptText === "Synthetic " + job.id) : jobs.find(job => request.url.endsWith("/" + job.task));
       if (!job) return new Response("unknown fixture task", { status: 404 });
       return Response.json(body ? { id: job.task } : { id: job.task, status: job.id === "failed" ? "FAILED" : "SUCCEEDED",
-        ...(job.id === "failed" ? { failure: "Synthetic failure" } : { output: job.id === "empty" ? [] : [origin + "/fixture/output"] }) });
+        ...(job.id === "failed" ? { failure: "Synthetic failure" } : { output: job.id === "empty" ? [] : [job.id === "private" ? origin + "/fixture/private-output" : "https://93.184.216.34/clawrouter-runway-fixture.mp4"] }) });
     } };`;
 }
