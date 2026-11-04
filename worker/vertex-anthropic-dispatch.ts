@@ -1,5 +1,6 @@
 import { vertexAnthropicProjection, vertexAnthropicUnavailable } from "./vertex-anthropic-binding.ts";
 import { prepareVertexAnthropicRequest } from "./provider-vertex.ts";
+import { isQualifiedVertexModelLocation } from "./vertex-model-eligibility.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
@@ -24,6 +25,7 @@ export async function prepareVertexAnthropicDispatch(request: Request, env: Env,
   const { endpoint, model } = selection, grant = upstream.grant, key = upstream.grantKey;
   const binding = vertexAnthropicProjection(grant);
   if (!vertexAnthropicRoute(selection.provider, endpoint) || !grant || !key || !binding || !model || transport !== "http"
+    || !isQualifiedVertexModelLocation(model.upstream, binding.location)
     || hasQuery || new URL(request.url).search || selection.capability !== "llm.chat" || selection.method !== "POST"
     || endpoint.method !== "POST" || endpoint.response_format !== "anthropic.messages" || endpoint.path !== "/v1/messages"
     || endpoint.upstreamPath !== undefined || endpoint.path_params.length || endpoint.auth || endpoint.websocket
@@ -55,7 +57,9 @@ export async function prepareVertexAnthropicDispatch(request: Request, env: Env,
         assertPolicyModel(policy, selection);
         const current = await inspectGrantCredentials(env, key, signal);
         signal.throwIfAborted(); assertControlCallerLive(caller);
-        if (identity(current) !== original || !filterGrantCandidates("anthropic-vertex", [{ key, grant: current, runtimeState: null }],
+        const currentBinding = vertexAnthropicProjection(current);
+        if (!currentBinding || !isQualifiedVertexModelLocation(model.upstream, currentBinding.location)
+          || identity(current) !== original || !filterGrantCandidates("anthropic-vertex", [{ key, grant: current, runtimeState: null }],
           new Set(), grantRoutingPolicy(policy.grantRouting), key, undefined, Date.now()).available.length
           || token.expiresAt * 1000 <= Date.now() + 60_000) vertexAnthropicUnavailable();
       },

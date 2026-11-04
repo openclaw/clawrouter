@@ -381,9 +381,9 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     const grouped = new Map<string, { pools: typeof pools; modelIds: Set<string | null>; passthrough: boolean; modelRequirement?: string }>();
     for (const model of [...provider.models, null, undefined]) {
       const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
-      // The PCM profile requires an owned key even when the same speech
-      // endpoint's other models permit ordinary environment configuration.
-      const modelRequirement = model && openRouterPcmModel(provider, model.id) ? model.id : undefined;
+      // PCM key authority and Vertex model/location support depend on the
+      // selected model even when multiple models share one endpoint.
+      const modelRequirement = model && (provider.id === "anthropic-vertex" || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
       const key = JSON.stringify([matching.map(pool => pool.entry.policyId), modelRequirement ?? null]);
       const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false, modelRequirement };
       if (model === undefined) group.passthrough = true;

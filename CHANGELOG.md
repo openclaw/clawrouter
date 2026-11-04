@@ -308,6 +308,7 @@
 - Bind preprovisioned Anthropic Vertex access tokens to original owner project/location and expiry, with fixed native dispatch, fresh post-budget authority checks and conservative settlement; service-account refresh remains separate.
 - Refresh explicitly authorized Vertex service-account credentials inside the existing durable owner, with fixed JWT exchange, request-start expiry, cancellation outside owner ordering and uncertainty fences that prevent replay or late credential installation.
 - Define an inactive, default-deny Vertex model/location predicate for the exact Sonnet 4.6 identity and four documented locations; catalog and dispatch integration remain separate from these support facts.
+- Enforce the qualified Vertex Sonnet 4.6 model/location pair in model-scoped catalog eligibility and final original-owner dispatch, preserving unknown billing, credential freshness and unrelated provider routes.
 
 - Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
