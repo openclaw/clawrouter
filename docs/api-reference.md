@@ -561,7 +561,9 @@ See the upstream [Responses WebSocket contract](https://developers.openai.com/ap
 | --- | --- | --- |
 | `GET` | `/v1/session` | Verified Access identity, entitlements, and readiness |
 | `GET` | `/v1/session/avatar` | Proxied user avatar |
-| `GET` | `/v1/session/usage` | Session quota and usage summary |
+| `GET` | `/v1/session/usage` | Session quota and legacy shared-policy usage summary; `?budgets_only=true` skips usage ledger reads |
+| `GET` | `/v1/session/usage/report` | Bounded personal-only tokens, price coverage, daily trend and model/provider/key groups |
+| `GET` | `/v1/session/usage/events` | Metadata-only personal event pages with a query-bound cursor |
 | `GET` | `/v1/entitlements` | Compatibility entitlement response |
 | `GET` | `/v1/session/credentials` | Credentials owned by the signed-in user |
 | `POST` | `/v1/session/credentials` | Create a caller-owned credential; reject an existing ID |

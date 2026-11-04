@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { fixtureReport } from "./fixtures/personal-usage";
 
 const summary = (requestCount: number, totalTokens: number) => ({ requestCount, successCount: requestCount, errorCount: 0, inputTokens: totalTokens, outputTokens: 0, totalTokens, actualCostMicros: 0, unpricedRequestCount: 0 });
 const shared = { ledger: "fixture", summary: summary(120, 9_000), providers: [], daily: [], events: [] };
@@ -14,6 +15,9 @@ const admin = {
 
 // Serves one signed-in session with the given role and fixed usage responses.
 async function serve(page: Page, role: "admin" | "user") {
+  const report = fixtureReport();
+  report.metrics = { calls: 7, generationCalls: 7, utilityCalls: 0, successfulCalls: 7, errorCalls: 0, deniedCalls: 0, inputTokens: 300, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0, inputReportedCalls: 7, outputReportedCalls: 7, cacheReadReportedCalls: 0, cacheWriteReportedCalls: 0, reasoningReportedCalls: 0 };
+  report.costs = [{ lane: "api", costClass: "no_charge", calls: 7, amountMicros: 0 }];
   await page.route("**/v1/**", async (route) => {
     const bodies: Record<string, unknown> = {
       "/v1/providers": { providers: [] },
@@ -21,6 +25,7 @@ async function serve(page: Page, role: "admin" | "user") {
       "/v1/session": { authenticated: true, auth: "cloudflare_access", role, email: "alice@example.test", entitlements: { providers: [] } },
       "/v1/session/credentials": { credentials: [] },
       "/v1/session/usage": { policies: [], usage: personal },
+      "/v1/session/usage/report": report,
       "/v1/admin/usage": { policies: [], usage: admin },
       "/v1/admin/bootstrap": { policies: [], credentials: [], users: [], bindings: [], grants: [], rules: [], providers: [], connections: [], fusion: { enabled: false, adviserModels: [], aggregatorModel: "" }, overview: null, tenants: [] },
     };
@@ -29,12 +34,15 @@ async function serve(page: Page, role: "admin" | "user") {
   });
 }
 
-test("members see their own request count next to the shared policy total", async ({ page }) => {
+test("members see personal model calls without shared policy totals in analytics", async ({ page }) => {
   await serve(page, "user");
   await page.goto("/");
-  const stat = page.locator(".dashboardStats > div").filter({ has: page.getByText("your requests", { exact: true }) });
-  await expect(stat.locator("strong")).toHaveText("7");
-  await expect(stat.locator("small")).toContainText("120 across your policy pools");
+  const personalUsage = page.getByRole("region", { name: "Your personal usage", exact: true });
+  await expect(personalUsage.locator(".personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)").first()).toHaveText("7");
+  await expect(personalUsage).toContainText("Model calls");
+  await expect(personalUsage).toContainText("300");
+  await expect(personalUsage).not.toContainText("120 across your policy pools");
+  await expect(page.locator(".dashboardAnalyticsGrid")).toHaveCount(0);
 });
 
 test("admins see thirty-day usage broken down by user", async ({ page }) => {

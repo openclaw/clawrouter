@@ -4,6 +4,7 @@ import { nativeEmbeddingMode } from "./native-embeddings.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { nativeRawFormat } from "./native-raw-input.ts";
 import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
+import { reportingEstimate } from "./reporting-estimate.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
@@ -83,7 +84,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // Moderation is a free upstream operation, not a generation tariff. Even
   // unknown delivery or a future usage-shaped payload cannot create a charge.
   if (requestFormat === "openai.moderations") return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
-    reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", duration_ms: outcome.occurredAtMs - facts.startedAtMs,
+    reserved_cost_micros: 0, actual_cost_micros: 0, cost_basis: "none", reporting_known_cost_micros: null, duration_ms: outcome.occurredAtMs - facts.startedAtMs,
     content_retained: !!outcome.contentRef, content_ref: outcome.contentRef };
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
   if ((facts.googleImage || facts.googleAudio || facts.nativeMusic || facts.nativeSpeech || requestFormat === "minimax.speech") && fixed == null) return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
@@ -136,10 +137,25 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // An unproven reservation bound does not make a published tariff unknown.
   const claudeBasis = claudeWeb && fixed == null && billable
     ? knownNoCharge ? "none" : measured != null && claudeWeb.usageComplete && cost.pricingGap === "hosted_tool_usage" && (!claudeWeb.search || toolFee != null) ? measuredBasis : "unpriced_usage" : null;
+  // Reporting can recover a disclosed estimate from a frozen card without changing the debit.
+  // Hosted fees/partial usage keep their existing unknown remainder, never a token-only total.
+  const reporting = billable && fixed == null && measured == null && actual === 0 && !cost.pricingGap
+    ? reportingEstimate(model?.pricing, tokens, requestFormat) : null;
+  // Reporting evidence is separate from the debit: measured token/tool costs
+  // can establish a component, but fixed tariffs, character estimates, flat
+  // fallbacks and retained reservation bounds cannot. In particular, a hard
+  // Anthropic pricing failure retains its reservation without a known component.
+  const finalBasis = claudeBasis ?? (billable && fixed == null && hostedEvent ? "unpriced_usage" : basis);
+  const knownComponent = billable && fixed == null && tokens && tokens.billable !== false
+    ? Math.min(Number.MAX_SAFE_INTEGER, (model?.pricing && characterEstimate === null && measuredBasis !== "manifest_rate_upper_bound" ? measured ?? 0 : 0) + (toolFee ?? 0)) : 0;
+  const reportingKnown = finalBasis.startsWith("unpriced_") && Number.isSafeInteger(knownComponent) && knownComponent > 0 && knownComponent <= actual ? knownComponent : null;
   return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+    reporting_known_cost_micros: reportingKnown,
+    ...(reporting ? { reporting_estimated_cost_micros: reporting.micros, reporting_estimate_reason: reporting.reason } : {}),
     ...(hostedEvent ? { hosted_tool_calls: { web_search: hosted.webSearch }, hosted_tool_calls_complete: hosted.complete,
       hosted_tool_cost_micros: toolFee, hosted_tool_pricing_ref: searchPrice?.version ?? null } : {}),
     input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null, total_tokens: tokens?.total ?? null,
+    reasoning_output_tokens: tokens?.reasoning ?? null,
     ...(tokens?.image ? { image_usage: { text_input_tokens: tokens.image.textInput, image_input_tokens: tokens.image.imageInput, image_output_tokens: tokens.image.imageOutput } } : {}),
     cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, cost_basis: claudeBasis ?? (billable && fixed == null && hostedEvent ? "unpriced_usage" : basis),
@@ -182,7 +198,7 @@ export function createProxyAccounting(options: AccountingContext) {
       trace_id: correlation.traceId, span_id: correlation.spanId,
       compound_request_id: compound?.id ?? null, compound_request_stage: compound?.stage ?? null, compound_request_index: compound?.index ?? null,
       compound_request_size: compound?.size ?? null, compound_request_started_at_ms: compound?.startedAtMs ?? null,
-      provider: providerId, capability,
+      provider: providerId, capability, request_format: selection.endpoint.request_format,
       model: model?.id ?? null, input_tokens: null, output_tokens: null,
       total_tokens: null, cached_input_tokens: null, cache_write_input_tokens: null,
       reserved_cost_micros: 0, actual_cost_micros: 0, reserved_input_tokens: cost.inputTokens,

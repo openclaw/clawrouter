@@ -1,3 +1,4 @@
+import { MyUsageScreen, PersonalUsageSummary } from "./screens/my-usage";
 import { GrantExpiryPools } from "./grant-expiry";
 import { SubscriptionsScreen } from "./screens/subscriptions";
 import React from "react";
@@ -17,7 +18,7 @@ import type { AccessPolicy } from "./ui-types";
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, usage, personalUsage, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -54,7 +55,7 @@ export function AppShell() {
         <nav className="navTabs" aria-label="console">
           <div className="navGroup">
             <span className="navGroupLabel">Workspace</span>
-            {navItems.filter((item) => item.section === "workspace").map(({ id, label, icon: Icon }) => (
+            {navItems.filter((item) => item.section === "workspace" && (item.id !== "my-usage" || session.role !== "admin")).map(({ id, label, icon: Icon }) => (
               <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                 <Icon className="navIcon" aria-hidden="true" />
                 <span>{label}</span>
@@ -108,6 +109,7 @@ export function AppShell() {
         {view === "home" && session.role === "admin" ? <GrantExpiryPools policies={keys} grants={upstreamGrants} ready={upstream.ready} error={shell.refreshError} onOpenGrant={grant => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }} /> : null}
         {view === "home" ? (
           <DashboardScreen
+            personalUsageSummary={session.role !== "admin" ? <PersonalUsageSummary data={personalUsage} keys={selfServiceKeys.items} onOpen={() => navigateTo("my-usage")} /> : undefined}
             session={session}
             grants={upstreamGrants}
             grantsReady={upstream.ready}
@@ -141,6 +143,8 @@ export function AppShell() {
             onOpenAccess={() => navigateTo("policies")}
           />
         ) : null}
+
+        {view === "my-usage" ? <MyUsageScreen data={personalUsage} keys={selfServiceKeys.items} /> : null}
 
         {view === "catalog" ? (
           <CatalogScreen
@@ -300,7 +304,7 @@ export function AppShell() {
 
         {view === "subscriptions" && session.role === "admin" ? <SubscriptionsScreen data={subscriptions} policies={keys} grants={upstreamGrants} providers={providers} refreshQuota={refreshUpstreamGrantQuota} busy={upstream.busy} actionError={upstream.error} /> : null}
 
-        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /> : null}
+        {view === "usage" && session.role === "admin" ? <><div className="personalActions"><button type="button" className="buttonSecondary" onClick={() => navigateTo("my-usage")}>My usage</button></div><UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /></> : null}
       </section>
     </main>
   );
