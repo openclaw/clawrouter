@@ -42,12 +42,14 @@ function* maximumWire() {
   yield done;
 }
 async function network(t) {
-  let gate, released = false, close, enter;
+  let gate, released = false, close, enter, abortGate, abortReleased = false;
   const closed = new Promise(resolve => { close = resolve; }), entered = new Promise(resolve => { enter = resolve; });
   const metrics = { pending: 0, closed: 0, gates: 0 };
   const server = createServer((request, response) => {
     if (request.headers.authorization) { response.writeHead(400); response.end(); return; }
-    if (request.url === "/gate") { metrics.gates++; gate = response; if (released) response.end("released"); }
+    if (request.url === "/abort-gate") { abortGate = response; if (abortReleased) response.end("released"); }
+    else if (request.url === "/release-abort") { abortReleased = true; abortGate?.end("released"); response.end("released"); }
+    else if (request.url === "/gate") { metrics.gates++; gate = response; if (released) response.end("released"); }
     else if (request.url === "/pending") { metrics.pending++; enter(); response.on("close", () => { metrics.closed++; close(); });
       response.writeHead(200, { "content-type": "text/event-stream" }); response.write("data: {"); }
     else { response.writeHead(404); response.end(); }
@@ -92,7 +94,7 @@ export default {async fetch(request,bindings,context){
   await putGrantCredentials(env,'oauth/fixture/openrouter',{provider:'openrouter',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
   return new Response('ready');
  }
- if(path==='/fixture/abort'){controlled.abort();return new Response('aborted');}
+ if(path==='/fixture/abort'){await (await original('https://fixture.invalid/release-abort')).text();return new Response('aborted');}
  if(path==='/fixture/phase')return Response.json({remaining:bodyBudgetCharged(),outputBytes,outputEof,fetches,dispatchCharge,getCharge,imageBytes,upstreamAborted});
  if(path==='/fixture/state'){
   while(pending.length)await Promise.all(pending.splice(0));
@@ -100,7 +102,9 @@ export default {async fetch(request,bindings,context){
   return Response.json({remaining:bodyBudgetCharged(),outputBytes,outputEof,fetches,dispatchCharge,getCharge,imageBytes,imageDigest,upstreamAborted,events:usage.events});
  }
  const gated=request.headers.has('x-fixture-gated'),headers=new Headers(request.headers);headers.delete('x-fixture-gated');
- if(headers.has('x-fixture-controlled')){controlled=new AbortController();headers.delete('x-fixture-controlled');request=new Request(request,{headers,signal:controlled.signal});}
+ // Keep controlled cancellation in the original request's I/O continuation.
+ if(headers.has('x-fixture-controlled')){controlled=new AbortController();headers.delete('x-fixture-controlled');request=new Request(request,{headers,signal:controlled.signal});
+   const owner=controlled;context.waitUntil(original('https://fixture.invalid/abort-gate').then(response=>response.text()).then(()=>owner.abort()));}
  else request=new Request(request,{headers});
  const response=await worker.fetch(request,env,{waitUntil(value){pending.push(value);context.waitUntil(value);}});
  if(!gated||!response.ok)return response;
@@ -116,6 +120,8 @@ async function start(t, held) {
   const temporary = await mkdtemp(join(tmpdir(), "published-music-workerd-")); t.after(() => rm(temporary, { recursive: true, force: true }));
   const io = await network(t);
   const upstream = `const maximumWire=${maximumWire.toString()};export default {async fetch(request){
+    if(request.url==='https://fixture.invalid/abort-gate')return fetch(${JSON.stringify(io.origin + "/abort-gate")});
+    if(request.url==='https://fixture.invalid/release-abort')return fetch(${JSON.stringify(io.origin + "/release-abort")});
     if(request.url==='https://fixture.invalid/gate')return fetch(${JSON.stringify(io.origin + "/gate")});
     if(request.url!=='https://openrouter.ai/api/v1/chat/completions')return new Response(null,{status:400});
     await request.arrayBuffer();

@@ -216,9 +216,9 @@ test("a rejected counting transform retains its original pipe until source cance
     pull(controller) { if (!sent) { sent = true; controller.enqueue("invalid binary chunk"); } },
     cancel() { cancels++; canceled.resolve(); return cleanup.promise; },
   }, { highWaterMark: 0 });
-  const native = native(), baseline = bodyBudgetCharged(), lease = native.acquire();
+  const prepared = native(), baseline = bodyBudgetCharged(), lease = prepared.acquire();
   t.after(() => { cleanup.resolve(); lease.release(); });
-  const result = native.read(response("mp3", {}, source), new AbortController().signal)
+  const result = prepared.read(response("mp3", {}, source), new AbortController().signal)
     .finally(() => { complete = true; lease.release(); });
   const rejected = assert.rejects(result);
   await canceled.promise; await new Promise(setImmediate);

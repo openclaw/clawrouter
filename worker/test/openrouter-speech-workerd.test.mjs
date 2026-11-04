@@ -69,7 +69,7 @@ export default {async fetch(request,env,ctx){
  });
  const lease=native.acquire(),upstream=await fetch('https://adapter-retirement.example/data',{redirect:'manual'});
  const physical=upstream.body,reader=physical.getReader(),abort=new AbortController(),operation=new HttpOperation(abort.signal);
- const metrics={fetches:1,cancels:0,cleanup:false,readStarted:0,results:0,releases:0,lateEnqueues:0};
+ const metrics={fetches:1,cancels:0,cleanup:false,readStarted:0,results:0,releases:0,lateEnqueues:0,cancelPhase:'none'};
  let ready;const started=new Promise(resolve=>{ready=resolve;});
  const gate=phase=>fetch('https://adapter-retirement.example/gate/'+mode+'/'+phase,{redirect:'manual'}).then(r=>{if(!r.ok)throw new Error('fixture barrier');return r.text();});
  let sent=false,stopped=false,cancellation;
@@ -78,7 +78,13 @@ export default {async fetch(request,env,ctx){
    if(stopped){metrics.lateEnqueues++;return;}
    controller.enqueue(mode==='transform'?'invalid binary chunk':part.value);ready();
  },cancel(reason){
-   if(!cancellation)cancellation=(async()=>{stopped=true;metrics.cancels++;await reader.cancel(reason);await gate('cleanup');reader.releaseLock();metrics.cleanup=true;})();
+   if(!cancellation)cancellation=(async()=>{
+     stopped=true;metrics.cancels++;metrics.cancelPhase='physical-cancel';
+     try{await reader.cancel(reason);}catch(error){metrics.physicalCancelError=error?.name??'other';throw error;}
+     metrics.cancelPhase='cleanup-gate';
+     try{await gate('cleanup');}catch(error){metrics.cleanupError=error?.name??'other';throw error;}
+     reader.releaseLock();metrics.cleanup=true;metrics.cancelPhase='retired';
+   })();
    return cancellation;
  }},{highWaterMark:0});
  active={metrics,source,physical};
@@ -120,7 +126,8 @@ test("workerd binary adapters retain original fetch and transform ownership thro
     await call("/start?mode=" + mode);
     if (mode !== "transform") release(mode, "abort");
     const held = await until(state => state.cancels === 1 && (mode === "transform" || state.results === 1));
-    assert.equal(held.releases, 0); assert.equal(held.cleanup, false); assert.equal(held.locked, true); assert.equal(held.physicalLocked, true);
+    const trace = JSON.stringify({ mode, held, cleanupRequests: counts.get("/" + mode + "/cleanup") ?? 0 });
+    assert.equal(held.releases, 0, trace); assert.equal(held.cleanup, false, trace); assert.equal(held.locked, true, trace); assert.equal(held.physicalLocked, true, trace);
     assert.deepEqual(await call("/contend"), { allowed: false, charged: 64 * 1024 * 1024 });
     release(mode, "cleanup"); const done = await until(state => state.releases === 1 && state.results === 1);
     assert.equal(done.charged, 0); assert.equal(done.locked, false); assert.equal(done.physicalLocked, false);

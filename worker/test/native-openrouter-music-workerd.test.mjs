@@ -43,9 +43,11 @@ function* musicWire(full = true, padded = true, terminal = true) {
 // waiting for more audio. This source is private to the quarantine-abort case.
 async function pendingMusicSource(t) {
   const metrics={requests:0,bytes:0,closed:0};
-  let resolveClosed;
+  let resolveClosed, abortGate, abortReleased=false;
   const closed=new Promise(resolve=>{resolveClosed=resolve;});
   const server=createServer((request,response)=>{
+    if(request.method==='GET'&&request.url==='/abort-gate'){abortGate=response;if(abortReleased)response.end('released');return;}
+    if(request.method==='GET'&&request.url==='/release-abort'){abortReleased=true;abortGate?.end('released');response.end('released');return;}
     if(request.method!=='GET'||request.url!=='/pending-music'){response.writeHead(404);response.end();return;}
     metrics.requests++;metrics.status=200;
     response.on('close',()=>{metrics.closed++;resolveClosed();});
@@ -150,7 +152,7 @@ export default { async fetch(request, bindings, context) {
       ||current.upstreamStatus!==200||current.bytes!==753||current.activeReads!==1)
       return new Response('original fixture read unavailable',{status:409});
     current.controlInjections=1;current.controlInjectionOrder=++current.sequence;
-    active.controller.abort(active.reason);
+    await (await originalFetch('https://openrouter.ai/__fixture_release_abort')).text();
     // Acknowledges injection only. Cleanup and accounting must be observed later.
     return Response.json({injected:true});
   }
@@ -182,6 +184,12 @@ export default { async fetch(request, bindings, context) {
   });
   if(controlled)incomingApplication={current,request:routedRequest,controller:controlled,
     reason:Object.freeze({source:'fixture-controlled incoming application signal'})};
+  if(controlled){
+    const active=incomingApplication;
+    // Cancellation must run in the original request's I/O continuation.
+    context.waitUntil(originalFetch('https://openrouter.ai/__fixture_abort_gate').then(response=>response.text())
+      .then(()=>active.controller.abort(active.reason)));
+  }
   const routedSignal=routedRequest.signal;current.routedRequestAborted=routedSignal.aborted;
   routedSignal.addEventListener('abort',()=>{current.routedRequestAborted=true;current.routedRequestAbortOrder=++current.sequence;},{once:true});
   try {
@@ -196,6 +204,8 @@ export default { async fetch(request, bindings, context) {
 const upstream = pendingUrl => `const musicWire = ${musicWire.toString()};
 let attempts=0;const phases=[];
 export default {async fetch(request){
+  if(request.url==='https://openrouter.ai/__fixture_abort_gate')return fetch(new URL('/abort-gate',${JSON.stringify(pendingUrl)}));
+  if(request.url==='https://openrouter.ai/__fixture_release_abort')return fetch(new URL('/release-abort',${JSON.stringify(pendingUrl)}));
   if(request.url==='https://openrouter.ai/__fixture_music_phase'&&request.method==='GET')return Response.json({attempts,phases});
   const phase={attempt:++attempts,post:request.method==='POST',pathMatches:request.url==='https://openrouter.ai/api/v1/chat/completions',
     pulls:0,bytes:0,exhausted:false,canceled:false,requestAborted:request.signal.aborted};
