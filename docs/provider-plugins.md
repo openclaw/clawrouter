@@ -1,8 +1,8 @@
 # Provider plugins
 
-Status: packaging contract implemented; loader and compiler integration pending.
-Existing `providers/*.provider.yaml` remain the production input. A plugin
-descriptor does not register or activate a provider by itself.
+Status: packaging contract implemented; explicit local loader and compiler
+integration proposed for review. Existing `providers/*.provider.yaml` remain
+the default production input. A descriptor does not activate itself.
 
 ## Start a provider
 
@@ -38,6 +38,24 @@ const declaredFiles = providerPluginFiles(descriptor);
 Adjust the relative import to your checkout location. These functions validate
 the descriptor and enumerate its payload files; they do not load those files,
 validate the provider manifest, sanitize images, or certify upstream support.
+
+### Compile an explicitly selected package
+
+```sh
+node scripts/compile-providers.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json \
+  --output /tmp/example-provider-snapshot.json
+```
+
+Repeat `--plugin` to select more packages. Existing manifest paths can appear
+alongside package inputs. The compiler rejects collisions rather than allowing
+a package to replace a bundled provider. The standard build and deploy commands
+still select only the existing bundled manifests; package inclusion is opt-in.
+
+The loader reads bounded regular files and rejects symlinked files or resource
+directories. It hashes the descriptor and declared files. The compiler validates
+the captured manifest, including its schema and matching provider identity.
+Assets and fixtures are checked as files but are not rendered or executed.
 
 ## Descriptor v1
 
