@@ -22,6 +22,7 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   const catalog = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
   const row = catalog.models.find(row => row.id === modelId);
   expect(row).toBeDefined();
+  expect(row!.reasoning, modelId).toBe(modelId !== models[3]);
   const configured = { ...catalog, baseUrl: origin + "/v1/native/gmi", models: [row!] };
   const config = { models: { providers: { gmi: configured } } };
   const augmented = await provider.augmentModelCatalog?.({ config });
@@ -47,11 +48,6 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   });
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
     tools: options.tools === false ? undefined : [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
-  console.info(JSON.stringify({ kind: "gmi-replay-boundary", fixture: id, model: modelId,
-    hostThinking: messages.some(message => message.role === "assistant" && Array.isArray(message.content) && message.content.some(block => block.type === "thinking" && block.thinking === "synthetic-prior-thinking")),
-    llmThinking: context.messages.some(message => message.role === "assistant" && message.content.some(block => block.type === "thinking" && block.thinking === "synthetic-prior-thinking")),
-    requiresThinkingAsText: model.compat?.requiresThinkingAsText ?? null,
-  }));
   const wrap = options.simpleCompletion ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
   const wrapped = wrap?.({ provider: "gmi", modelId, model, streamFn: streamSimple });
   expect(wrapped).toHaveProperty("preservesGenericCompatibility", true);

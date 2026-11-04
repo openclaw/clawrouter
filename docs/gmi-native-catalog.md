@@ -91,6 +91,12 @@ ordinary-Bearer grants, unknown-price denial, terminal usage, errors and caller
 cancellation. These are deterministic fixtures; passing execution is recorded
 in the PR's exact-head proof, not implied by authored test cases.
 
+The frozen GMI host keeps same-provider thinking in history. Its actual Chat
+serializer preserves reasoning replay for the reasoning-enabled rows and strips
+it for the legacy non-reasoning `deepseek-ai/DeepSeek-V3.2` row. The composed
+fixture asserts both behaviors and retains tool-call/result history for every
+row; it does not turn the legacy card into a reasoning-capable model.
+
 This configured native client proof is separate from a ClawRouter catalog-driven
 client resolver or manifest client selection. The Worker fixtures cover native
 and manifest transport. No inference about live account access, current vendor
