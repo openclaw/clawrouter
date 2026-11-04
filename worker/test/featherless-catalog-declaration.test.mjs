@@ -40,7 +40,7 @@ function assertPageRequests(sent, pages) {
   assert.equal(sent.length, pages.length);
   for (const [index, request] of sent.entries()) {
     assert.equal(request.url, `https://api.featherless.ai/v1/models?capabilities=chat&page=${pages[index]}&per_page=100`);
-    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.redirect, "error");
+    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.redirect, "manual");
     assert.equal(request.credentials, "omit");
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-original-key"]]);
   }

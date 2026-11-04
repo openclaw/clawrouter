@@ -1,6 +1,6 @@
 # Featherless keyed complete-catalog declaration
 
-This local candidate adds only a metadata capability and endpoint to the existing
+This declaration adds only a metadata capability and endpoint to the existing
 Featherless manifest. All existing model, pricing, request-parameter, native
 capability, Chat, authentication, routing and billing blocks are preserved.
 No model roster, compatibility fallback or tariff is introduced.
@@ -37,25 +37,32 @@ helper own enforcement. This declaration does not add knobs or implement a scan.
 See [the compiler contract](featherless-catalog-contract.md) and
 [the actual page codec contract](featherless-model-catalog.md).
 
-## Local qualification boundary
+## Qualified source and remaining integration
 
-This candidate starts from [PR786](https://github.com/openclaw/clawrouter/pull/786)
-source `83c1fe23a1f3b132cc74fcb441a4d3261ab392d1`. Publication, hosted execution,
-provider snapshot generation and discovery activation remain closed until that
-compiler, the source4 scan helper and source1 common runtime qualify. Restack
-this retained candidate onto their actual qualified source before publication.
-Source6 retains the existing serialized snapshot slot; source2 retains actual
-client guarded-GET, selected proxy-key and unknown-fact proof.
+This declaration starts from qualified [PR792](https://github.com/openclaw/clawrouter/pull/792)
+squash `fa12bfab595f438a8abb61fb95d3cd2347936552`. That base contains compiler
+[PR786](https://github.com/openclaw/clawrouter/pull/786), complete-scan helper
+[PR787](https://github.com/openclaw/clawrouter/pull/787) and workerd-compatible
+manual-redirect factories from [PR794](https://github.com/openclaw/clawrouter/pull/794).
+Common runtime qualification includes the complete 5,000-row workerd scan and
+capacity lifetime. This declaration introduces no scan or credential logic.
+Source6 retains serialized snapshot/composed qualification after
+[PR799](https://github.com/openclaw/clawrouter/pull/799). Source2 retains actual
+client guarded GET, selected proxy-key and unknown-fact materialization. The
+accepted client handoff is not client execution or completed E01 parity.
 
 Eight composed cases are authored in
 `worker/test/featherless-catalog-declaration.test.mjs`: preserved declarations,
 original-key multi-page results, authoritative empty scans, manifest-only caller
 exposure, zero-egress overrides, missing/revoked owner, revocation between pages,
 and incomplete traversal. They use the compiled YAML and real Worker fixture;
-they remain unrun while common dispatch is unavailable.
+they remain unrun locally because this checkout has no qualified dependencies.
+All-manifest compilation and hosted final-head checks remain required.
 
 The two owned compiler suites only strip the newly bundled catalog from their
-independent foundation inputs; all existing assertions remain unchanged. The
+independent foundation inputs; their qualified redirect assertions are preserved.
+The new declaration fixture likewise expects the actual manual-redirect factory.
+The
 explicitly authorized two-line correction in
 `worker/test/featherless-native-chat.test.mjs` checks both endpoint memberships
 independent of array order and selects `chat_completions` by ID. All other card,
