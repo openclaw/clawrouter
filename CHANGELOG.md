@@ -92,6 +92,7 @@
 - Validate the two frozen fal Wan video input contracts in the scoped queue adapter, preserving exact version paths and credential boundaries; keep the unsupported Kling 2.1 Master endpoint closed.
 - Dispatch frozen native Google Lyria music through bounded complete audio validation, preserving original credentials, unknown-dollar denial, explicit policy charging and no-replay settlement.
 - Add frozen OpenRouter Lyria streaming music codecs and fixtures, preserving split base64 audio, native completion and unknown-cost outcomes on interrupted delivery.
+- Add a bounded OpenRouter Lyria response leaf that quarantines complete music SSE before unchanged replay, preserving native diagnostics without token pricing; shared dispatch and asset authority remain separate.
 - Keep Google music and speech output out of generic GenerateContent/SSE text dispatch and settlement, preserving selected-model and native AUDIO evidence until qualified audio routes are wired.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 - Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.
