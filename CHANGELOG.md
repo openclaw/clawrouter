@@ -44,6 +44,7 @@
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add the frozen MiniMax M3 Chat identity with primary-sourced context and input facts, retaining unknown output/pricing bounds and existing M2.7 behavior.
 - Compile the MiniMax M3 inventory and prepare pinned registered-client fixtures for explicit Chat routing, original-key isolation and conservative accounting; actual-client execution remains pending.
+- MiniMax: record the frozen M2.7 highspeed identity as deprecated and unpriced, preserving existing-user PAYG selection without applying subscription-plan aliases or inferred tariffs.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
 - Add bounded MiniMax native speech response validation with complete hex delivery and locally generated playable test audio; common native-media grant authority and fee qualification remain closed pending integration.
 - Require explicit owner-bound global MiniMax speech authorization, exact API-key source selection, fingerprint-qualified discovery and a fresh final credential-owner check; keep legacy grants and unknown dollar tariffs closed.
