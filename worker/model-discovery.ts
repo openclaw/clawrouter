@@ -95,8 +95,16 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
   const seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
     if (refreshPolicy && response.status !== 200) {
-      void response.body?.cancel().catch(() => undefined);
-      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
+      if (response.status < 400) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new HttpError(502, "model_discovery_rejected", "upstream rejected model discovery");
+      }
+      // Preserve the native error contract only after bounded complete parsing
+      // and current authority. Restricted callers keep content-free errors.
+      const metadata = await readMetadata(response, operation, true);
+      policy = await refreshPolicy(); restricted = policy.models != null;
+      if (!restricted) return metadataResponse(metadata, response);
+      throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
     if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
       void response.body?.cancel().catch(() => undefined);

@@ -136,3 +136,25 @@ test("catalog bounds even empty chunks before retaining unbounded metadata objec
   const response = await f.request(); assert.equal(response.status, 502); await consume(f, response);
   assert.equal(reads, 8192); assert.equal(canceled, true); assert.equal(f.sent.length, 1);
 });
+
+
+for (const changed of [false, true]) test(`catalog fixed server query remains bound through metadata parsing (${changed})`, async t => {
+  const f = await setup(t); f.provider.endpoints[0].query = { filter: "with_meta", sort_by: "configured" };
+  f.upstream = request => {
+    assert.equal(request.url, "https://catalog.example/v1/models?filter=with_meta&sort_by=configured");
+    if (changed) f.provider.endpoints[0].query.filter = "different";
+    return Response.json(catalog);
+  };
+  const response = await f.request(); assert.equal(response.status, changed ? 503 : 200); const result = await consume(f, response);
+  if (!changed) assert.deepEqual(result, catalog);
+  assert.equal(f.sent.length, 1);
+});
+
+for (const changed of [false, true]) test(`native catalog error delivery requires current original authority (${changed})`, async t => {
+  const f = await setup(t), error = { error: { message: "synthetic native refusal" } };
+  f.upstream = async () => { if (changed) await revokeGrantCredentials(f.env, grantKey); return Response.json(error, { status: 429, headers: { "retry-after": "60" } }); };
+  const response = await f.request(); assert.equal(response.status, changed ? 503 : 429); const result = await consume(f, response);
+  if (!changed) { assert.deepEqual(result, error); assert.equal(response.headers.get("retry-after"), "60"); }
+  else assert.doesNotMatch(JSON.stringify(result), /synthetic native refusal/);
+  assert.equal(f.sent.length, 1); assert.equal((await f.events())[0].actual_cost_micros, 0);
+});

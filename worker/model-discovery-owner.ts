@@ -18,12 +18,16 @@ export async function prepareModelDiscoveryOwner(request: Request, env: Env, aut
     || selection.capability !== "models.list" || selection.model !== null || selection.method !== "GET" || endpoint.method !== "GET"
     || endpoint.path_params.length || Object.keys(selection.pathParams).length || Object.keys(selection.body).length
     || endpoint.auth || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
-    || endpoint.modelPassthrough || Object.keys(endpoint.query).length || new URL(request.url).search || url.search
+    || endpoint.modelPassthrough || new URL(request.url).search
     || upstream.transport !== null || upstream.query.size || !grantKey || !qualified(grant, provider.id)) unavailable();
   const destination = () => {
     const base = resolveTemplate(provider, provider.base_urls.default, env);
     if (base !== upstream.baseUrl) unavailable();
-    return new URL(base.replace(/\/$/, "") + configuredEndpointPath(endpoint, undefined, base)).href;
+    const expected = new URL(base.replace(/\/$/, "") + configuredEndpointPath(endpoint, undefined, base));
+    // Registered metadata parameters belong to server configuration. Caller
+    // pagination/query overrides remain denied by the discovery parser.
+    for (const [name, value] of Object.entries(endpoint.query)) expected.searchParams.set(name, resolveTemplate(provider, value, env));
+    return expected.href;
   };
   if (url.href !== destination() || url.username || url.password || url.hash) unavailable();
   const selectedHeaders = new Headers(), selectedQuery = new URLSearchParams();

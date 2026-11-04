@@ -2,8 +2,8 @@
 
 OpenAI-shaped `models.list` requests keep their selected managed API-key owner,
 configured destination and caller identity. They accept only bodyless, query-free
-GET operations. Existing mapped paths remain qualified by the endpoint path
-validator. No catalog retry selects another key or falls back to an environment
+GET caller operations. Existing fixed server metadata queries remain bound to
+the configured destination; mapped paths remain qualified by the path validator. No catalog retry selects another key or falls back to an environment
 credential after an owner failure.
 
 After budget and retention waits, dispatch reads current caller policy and the
