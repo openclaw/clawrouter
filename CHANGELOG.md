@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
+- Define an opt-in provider plugin package contract with local assets, documentation, fixtures, and a starter example; existing provider loading and runtime behavior remain unchanged.
 
 - Add scoped OpenRouter video/content wrappers with download-only original-job files and bounded MP4 delivery, admitting creates only through explicit policy and original-credential retention qualification.
 
@@ -32,9 +33,13 @@
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
+- Add the frozen MiniMax M3 Chat identity with primary-sourced context and input facts, retaining unknown output/pricing bounds and existing M2.7 behavior.
+- Compile the MiniMax M3 inventory and prepare pinned registered-client fixtures for explicit Chat routing, original-key isolation and conservative accounting; actual-client execution remains pending.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
 - Add bounded MiniMax native speech response validation with complete hex delivery and locally generated playable test audio; common native-media grant authority and fee qualification remain closed pending integration.
 - Require explicit owner-bound global MiniMax speech authorization, exact API-key source selection, fingerprint-qualified discovery and a fresh final credential-owner check; keep legacy grants and unknown dollar tariffs closed.
+- Bind preprovisioned MiniMax Messages credentials to an explicit regional issuer and resource, reusing durable refresh fencing and fresh original-owner checks without environment or cross-region fallback.
+- Add Access-admin-only MiniMax device onboarding with same-origin controls, durable single-attempt exchange fences, cancellable owner-bound polling and atomic credential installation; uncertain exchanges are never replayed.
 - Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
 - Keep native xAI unary speech unpriced before token-card admission and settlement, preserving separately authorized fixed policy charges without inferring an audio invoice from text or service defaults.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
@@ -109,6 +114,10 @@
 - Expose scalar-only native music response construction and the existing bounded PNG/JPEG/WebP container checks for internal integration, without granting input, credential or capacity authority.
 - Route explicitly selected OpenRouter music through complete native SSE validation, original credentials and conservative policy-fixed accounting; keep unknown dollar prices and reference images closed.
 - Restore original OpenRouter music output bounds through scalar inspection and bounded BYOB quarantine/replay, preserving original SSE and response capacity through delivery; reference-image intake remains closed.
+- Admit bounded inline OpenRouter music images with original caller/key binding, immutable streamed input and atomic input/response capacity; preserve ordinary Chat admission and keep HTTPS references closed.
+- Add scoped OpenRouter music image publication, delegated immutable-byte delivery and single-attempt forwarding under the original caller/key and explicit publication policy; keep declaration activation separate from runtime qualification.
+- Add closed, expiring policy permissions for publishing and forwarding the two frozen OpenRouter music inputs, independently of retention and credentials; keep publication runtime and declaration activation separate.
+- Qualify closed model-scoped OpenRouter music publication support and deployment-origin catalog facts, preserving inline defaults and separating cached public origins from permission and automatic selection.
 - Keep Google music and speech output out of generic GenerateContent/SSE text dispatch and settlement, preserving selected-model and native AUDIO evidence until qualified audio routes are wired.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 - Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.
@@ -256,6 +265,7 @@
 - Dispatch qualified native Bedrock embeddings with original regional SigV4 credentials, unchanged model-specific input, complete bounded vectors and conservative accounting without inferred tariffs.
 - Expose the existing Bedrock embedding model recognizer for shared route guards without duplicating family or inference-profile parsing rules.
 - Qualify typed Sage, Liquid/TypeSafe SystemOne and SubQ decision metadata against closed provider/wire contracts without inventing context, prices or client compatibility.
+- Qualify finite Sage batch decision metadata with an exact paired transport and text/list model binding, preserving singular protocols and leaving runtime activation, batch bounds and prices unqualified.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 - Observe native Radius Pi event usage and errors without rewriting SSE bytes or native tool/reasoning payloads. Preserve cancellation and conservative fixed-policy settlement when terminal evidence is incomplete.
 
@@ -272,6 +282,7 @@
 - Document how many screenshots fit in the 32 MB media envelope (about 60 text-heavy or 12 photo-heavy 2048 px screenshots), production-probed over HTTP and WebSocket, plus the remaining limitations: a hard 413 above 32 MB that compaction may not clear, per-isolate 503s under concurrent large bodies, and Claude's 2000 px rule above 20 images.
 
 - Add native Sage and Liquid/TypeSafe SystemOne decision codecs with typed fixtures, preserving abstention, probabilities, rubric scores and aggregate token evidence for runtime and DecisionV2 integration.
+- Wire singular Sage and Liquid/TypeSafe SystemOne decision formats through bounded complete-response validation and original-grant accounting, preserving unknown usage and cancellation through downstream delivery; provider activation, Sage batch and actual DecisionV2 clients remain separate.
 
 - Make image-heavy turns work: OpenAI-format Responses (create, compact, input tokens) and Chat Completions now accept the 32 MB media envelope Claude already had, instead of 413 at 8 MiB, and Responses WebSocket creates accept 32 MB frames instead of 4 MiB. Bodies carrying media splice their large strings into a known-length upstream/R2 stream instead of whole-document copies (a 6.7 MiB image turn holds 7 MiB at dispatch instead of 20.5 MiB; WebSocket creates are parsed once and no longer build an unused HTTP body), and a 96 MiB per-isolate body budget replaces the two-request limit, refusing excess large bodies with a nonbillable `503` + `Retry-After: 1` before they can exceed isolate memory (eight concurrent 6.7 MiB turns: 55 MiB live instead of 122 MiB).
 - Add an atomic body-budget phase transfer that replaces an existing charge with independently owned input/response charges under the same pool, leaving the original lease unchanged on refusal; route activation remains separate.
@@ -406,6 +417,8 @@
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
+- Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
+- Fix global and China StepFun model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.

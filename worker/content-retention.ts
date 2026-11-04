@@ -1,6 +1,6 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
-import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
+import { jsonBodyBytes, jsonBodyStream, jsonBodyTransport, mediaJsonBody } from "./json-body.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -34,6 +34,52 @@ export interface PreparedContentRetention {
   /** Above the parser bound the archive streams the body; keep that write sequential. */
   readonly large: boolean;
   write(): Promise<void>;
+}
+
+// The borrowed music controller invokes this only for its qualified inline
+// profile. Router logging policy remains distinct from upstream asset consent.
+// The archive owns its graph until BOTH the put and its bounded transport end.
+export function prepareInlineMusicRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection,
+  requestId: string, signal: AbortSignal): (PreparedContentRetention & { discard(): void }) | null {
+  if (auth.policy.retainRequestContent === false || auth.contentRetentionDisabled) return null;
+  const contentRef = randomId("content"), occurredAtMs = Date.now();
+  let record: ContentRecord | undefined = {
+    version: "clawrouter.retained-request.v1", contentRef, requestId, occurredAtMs,
+    expiresAtMs: occurredAtMs + retentionPeriodMs, tenantId: auth.policy.tenantId ?? "default",
+    policyId: auth.policyId, credentialId: auth.credentialId, principalId: auth.principalId,
+    provider: selection.provider.id, capability: selection.capability, model: selection.model?.id ?? null,
+    body: selection.body,
+  };
+  let used = false;
+  return { contentRef, large: true, discard() { record = undefined; }, async write() {
+    if (used || !record) throw new TypeError("borrowed retention is single-use");
+    used = true;
+    const key = contentKey(record.tenantId, contentRef), expiresAt = String(record.expiresAtMs);
+    const serializer = jsonBodyTransport(record, 12 * 1024 * 1024 + 64 * 1024);
+    record = undefined;
+    const abort = new AbortController(), cancel = () => abort.abort(signal.reason);
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) cancel();
+    const fixed = new FixedLengthStream(serializer.bytes);
+    const pipe = serializer.stream().pipeTo(fixed.writable, { signal: abort.signal });
+    void pipe.catch(() => undefined);
+    try {
+      signal.throwIfAborted();
+      await env.CONTENT_ARCHIVE.put(key, fixed.readable, {
+        httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt },
+      });
+      await pipe;
+      signal.throwIfAborted();
+    } finally {
+      abort.abort();
+      // R2 may refuse before acquiring the readable. Abort alone can still
+      // wait on its backpressured write; cancel only our unclaimed stream.
+      if (!fixed.readable.locked) await fixed.readable.cancel().catch(() => undefined);
+      await pipe.catch(() => undefined);
+      serializer.discard(); record = undefined;
+      signal.removeEventListener("abort", cancel);
+    }
+  } };
 }
 
 // Allocates the content ref synchronously so usage events can reference it;

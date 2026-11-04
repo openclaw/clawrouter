@@ -1,0 +1,5 @@
+{
+  "description": "Synthetic request and response shape; no live provider verification.",
+  "request": { "input": "example" },
+  "response": { "output": "example" }
+}
