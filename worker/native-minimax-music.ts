@@ -20,7 +20,7 @@ export function prepareNativeMiniMaxMusic(selection: ProxySelection): NativeResp
     || selection.method !== "POST" || endpoint.method !== "POST" || endpoint.path !== "/v1/music_generation"
     || endpoint.response_format !== "minimax.music" || endpoint.upstreamPath !== undefined
     || endpoint.path_params.length || Object.keys(selection.pathParams).length || Object.keys(endpoint.query).length
-    || selection.nativeQuery !== undefined || (streaming ? endpoint.streaming !== "sse" : !!endpoint.streaming) || endpoint.websocket || endpoint.lifecycle
+    || selection.nativeQuery !== undefined || (streaming ? endpoint.streaming !== "sse" : endpoint.streaming != null && endpoint.streaming !== "sse") || endpoint.websocket || endpoint.lifecycle
     || endpoint.responsesLifecycle || endpoint.modelPassthrough || endpoint.requestPricing) {
     throw new HttpError(400, "invalid_native_minimax_music_route", "MiniMax music requires its selected model and qualified global native path");
   }

@@ -90,6 +90,11 @@ endpoint for global `music-2.6` and `music-2.6-free`, `minimax.music` request an
 response formats, and `music.generate`. Input must explicitly select
 `stream:true`, hex MP3, 44100Hz and 256000bps within the existing 64KiB request
 bound. CN, cover and reference input remain unavailable in this leaf.
+The same SSE-capable endpoint also accepts explicit `stream:false` and returns
+the unchanged native unary JSON. Unary requests retain support for absent/null
+stream metadata; `stream:true` requires SSE metadata. Every request must select
+a boolean mode. One native path supports both modes without duplicate endpoint
+aliases or YAML ordering. Other stream modes and WebSockets remain rejected.
 
 The reader requires HTTP 200 SSE, absent or identity encoding, fatal UTF-8,
 matching Content-Length when present, a valid status-2 frame and complete EOF.

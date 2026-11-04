@@ -6,6 +6,7 @@ import test from "node:test";
 const { prepareNativeMiniMaxMusic } = await import("../native-minimax-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
+const { nativeMatch, prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/minimax/music.json", import.meta.url), "utf8"));
 // Locally generated test tone, not provider synthesis. ffprobe: MP3, 44100 Hz,
 // stereo, 256000 bps; full ffmpeg decode: 13824 PCM16 bytes. No Worker transcoder.
@@ -56,7 +57,7 @@ test("MiniMax music rejects wrong capability, regional destination, aliases and 
   for (const model of ["music-3.0", "music-cover", "music-cover-free", "minimax/music-2.6"])
     assert.throws(() => native(selection(model)));
   for (const change of [{ method: "GET" }, { path: "/v1/t2a_v2" }, { response_format: "audio.binary" },
-    { upstreamPath: endpoint.path }, { path_params: ["model"] }, { query: { GroupId: "synthetic" } }, { streaming: "sse" },
+    { upstreamPath: endpoint.path }, { path_params: ["model"] }, { query: { GroupId: "synthetic" } }, { streaming: "ndjson" },
     { websocket: {} }, { lifecycle: {} }, { responsesLifecycle: {} }, { modelPassthrough: {} }, { requestPricing: {} }])
     assert.throws(() => native({ ...selection(), endpoint: { ...endpoint, ...change } }));
   assert.equal(native({ ...selection(), endpoint: { ...endpoint, request_format: "minimax.speech" } }), undefined);
@@ -226,6 +227,48 @@ test("MiniMax streaming freezes only scalar response context, never a prepared r
     const result = await prepared.read(streamResponse([{ ...payload(), model: "music-2.6" }]), new AbortController().signal);
     assert.deepEqual(decodeFrozenConsumer(await result.response.text()), mp3);
   } finally { lease.release(); }
+});
+
+test("one SSE-capable endpoint preserves explicit unary and streaming for both models through native and manifest request selectors", async () => {
+  // Candidate catalog only: this exercises existing request selectors, not
+  // production registration, credential authority or common dispatch.
+  const shared = { ...endpoint, streaming: "sse", native_proxy: true, methods: ["POST"] };
+  const candidate = { ...provider, endpoints: [shared], routing: { modelPrefixes: ["minimax/"] },
+    capabilities: [{ id: "music.generate", endpoint: shared.id }],
+    models: [selection().model, selection("music-2.6-free").model],
+    adapter: { requestTransforms: { renameFields: [] } } };
+  for (const model of ["music-2.6", "music-2.6-free"]) for (const stream of [false, true]) for (const path of ["native", "manifest"]) {
+    const body = { ...structuredClone(wire.request), model: path === "native" ? model : `minimax/${model}`, stream };
+    const matches = candidate.endpoints.filter(item => nativeMatch(item, endpoint.path));
+    assert.deepEqual(matches, [shared]); // One native path; no mode-based alias ordering.
+    const prepared = path === "native" ? prepareNativeRequest(candidate, matches[0], body, endpoint.path, {})
+      : prepareManifestRequest(candidate, shared, body, {}, {});
+    assert.equal(prepared.model.upstream, model); assert.equal(prepared.body.model, model); assert.equal(prepared.body.stream, stream);
+    const leaf = native({ ...selection(model), provider: candidate, endpoint: shared, ...prepared }), lease = leaf.acquire();
+    try {
+      const nativeBody = { ...payload(), model };
+      const result = await leaf.read(stream ? streamResponse([nativeBody]) : response(nativeBody), new AbortController().signal);
+      assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      if (stream) { assert.equal(result.response.headers.get("content-type"), "text/event-stream"); assert.deepEqual(decodeFrozenConsumer(await result.response.text()), mp3); }
+      else { assert.match(result.response.headers.get("content-type"), /^application\/json/); assert.deepEqual(await result.response.json(), nativeBody); }
+    } finally { lease.release(); }
+  }
+});
+
+test("dual-mode music keeps explicit boolean selection and rejects unsupported endpoint stream modes", () => {
+  for (const model of ["music-2.6", "music-2.6-free"]) {
+    for (const mode of [null, undefined]) {
+      const selected = selection(model); selected.endpoint = { ...endpoint, streaming: mode };
+      assert.ok(native(selected)); selected.body.stream = true; assert.throws(() => native(selected));
+    }
+    for (const mode of ["ndjson", "websocket", "json", "", false, true]) for (const stream of [false, true]) {
+      const selected = selection(model); selected.body.stream = stream; selected.endpoint = { ...endpoint, streaming: mode };
+      assert.throws(() => native(selected));
+    }
+    for (const stream of [undefined, null, 0, 1, "true", "false"]) {
+      const selected = streamSelection(model); selected.body.stream = stream; assert.throws(() => native(selected));
+    }
+  }
 });
 
 test("MiniMax streaming requires exact SSE declaration and excludes CN, cover, references and alternate response routes", () => {
