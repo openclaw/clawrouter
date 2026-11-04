@@ -77,7 +77,7 @@ test("full 8 MiB inline container preserves every original byte through common d
 });
 
 for (const [mime, encoded] of [
-  ["image/jpeg", "/9j//gAPTGF2YzYzLjEuMTAyAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAGcAAQEAAAAAAAAAAAAAAAAAAAMHAQEBAQAAAAAAAAAAAAAAAAACBAcQAAICAgIDAQAAAAAAAAAAAAIBAwUGBAARdrQ3BxEAAgICAgEFAQEAAAAAAAAAAwIBBAUGAAcRtXaycyI3NP/AABEIAAIAAgMBEgACEgADEgD/2gAMAwEAAhEDEQA/AKFgFVVz4JiksujpyySUNOckh68RmZlowsiIiBsiJvttvtvj/nfz/EfHqX0IOZD2eYtLsrdqtUj1gA2bPBAALSIIRDyVhUGMaTCIiLEKiLEQsR4iOHtj+p757q2H1Szxrr+ByCxcuYnG27VmIsWbNinXMewYv7IYxSDZyEI8yzu8yzNMzM+eWUf8Vb6BfCOf/9k="],
+  ["image/jpeg", "/9j//gAPTGF2YzYzLjEuMTAyAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAGcAAQEAAAAAAAAAAAAAAAAAAAMHAQEBAQAAAAAAAAAAAAAAAAACBAcQAAICAgIDAQAAAAAAAAAAAAIBAwUGBAARdrQ3BxEAAgICAgEFAQEAAAAAAAAAAwIBBAUGAAcRtXaycyI3NP/AABEIAAIAAgMBEgACEgADEgD/2gAMAwEAAhEDEQA/AKFgFVVz4JiksujpyySUNOckh68RmZlowsiIiBsiJvttvtvj/nfz/EfHqX0IOZD2eYtLsrdqtUj1gA2bPBAALSIIRDyVhUGMaTCIiLEKiLEQsR4iOHtj+p757q2H1Szxrr+ByCxcuYnG27VmIsWbNinXMewYv7IYxSDZyEI8yzu8yzNMzM+eWUf8Vb6BfCOf/9k="],
   ["image/webp", "UklGRjQAAABXRUJQVlA4TCcAAAAvAUAAEB8w/wKCIv9HExAU+T+agKDouuWCd0KCmrYNWPwmHRH9jwMA"],
 ]) test(`inline ${mime} preserves the existing offline-decoded fixture's native spelling and bytes`, async t => {
   const f = await setup(t), body = input(musicModels[0], Buffer.from(encoded, "base64"), mime);
@@ -93,7 +93,13 @@ for (const name of ["https", "mime", "container", "forged-digest", "foreign-mode
     if (name === "mime") body.messages[0].content[1].image_url.url = `data:image/jpeg;base64,${png.toString("base64")}`;
     if (name === "container") body.messages[0].content[1].image_url.url = "data:image/png;base64,AQID";
     if (name === "forged-digest") body.messages[0].content[1].image_url.sha256 = "0".repeat(64);
-    if (name === "foreign-model") body.model = "other/model";
+    if (name === "foreign-model") {
+      // Unknown native IDs retain ordinary Chat passthrough semantics. Bind
+      // this negative to the original caller's explicit music model policy.
+      f.policy.models = musicModels.map(model => `openrouter/${model}`);
+      await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+      body.model = "other/model";
+    }
     if (name === "foreign-origin") f.provider.base_urls.default = "https://other.example/api";
     if (name === "text-rate") for (const model of f.provider.models.filter(value => musicModels.includes(value.upstream)))
       model.pricing = structuredClone(snapshot.providers.find(value => value.id === "openai").models.find(value => value.pricing).pricing);

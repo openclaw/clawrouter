@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32 } from "node:zlib";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 import { musicBody } from "./openrouter-music-runtime-fixture.mjs";
 
@@ -45,6 +46,31 @@ function* maximumWire() {
   yield done;
 }
 
+// Workerd needs actual pending I/O for a stalled provider/read barrier. A bare
+// cross-request promise can instead be terminated as a hung Worker request.
+async function networkBarrier(t) {
+  let gate, released = false, closePending;
+  const closed = new Promise(resolve => { closePending = resolve; });
+  const metrics = { gates: 0, pending: 0, closed: 0 };
+  const server = createServer((request, response) => {
+    if (request.method !== "GET" || request.headers.authorization) { response.writeHead(400); response.end(); return; }
+    if (request.url === "/gate") {
+      metrics.gates++; gate = response;
+      if (released) response.end("released");
+    } else if (request.url === "/pending") {
+      metrics.pending++; response.on("close", () => { metrics.closed++; closePending(); });
+      response.writeHead(200, { "content-type": "text/event-stream" }); response.write("data: {");
+      // No end: the original operation must cancel the physical pending read.
+    } else { response.writeHead(404); response.end(); }
+  });
+  t.after(() => new Promise((resolve, reject) => {
+    server.closeAllConnections(); server.close(error => error ? reject(error) : resolve());
+  }));
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  return { origin: `http://127.0.0.1:${server.address().port}`, metrics, closed,
+    release() { released = true; gate?.end("released"); } };
+}
+
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
@@ -58,13 +84,14 @@ import {configureMusic} from './worker/test/openrouter-music-runtime-fixture.mjs
 const provider=snapshot.providers.find(value=>value.id==='openrouter');configureMusic(provider);
 provider.endpoints.find(value=>value.id==='music_generate').timeout_ms=30000;
 const original=globalThis.fetch.bind(globalThis),pending=[],networkBodies=new WeakSet();
-let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false,controlled,activeReads=0,cancels=0,cancelCharge=0;
-let releaseOutput,outputBytes=0,outputEof=false;
+let fetches=0,capacity=0,uploadBytes=0,uploadDigest='',networkByob=false,controlled,activeReads=0,readerLocks=0,cancels=0,cancelCharge=0;
+let outputBytes=0,outputEof=false;
 const getReader=ReadableStream.prototype.getReader;
 ReadableStream.prototype.getReader=function(options){
  const reader=getReader.call(this,options);
  if(networkBodies.has(this)&&options?.mode==='byob'){
-  const read=reader.read.bind(reader),cancel=reader.cancel.bind(reader);
+  const read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),release=reader.releaseLock.bind(reader);let held=true;readerLocks++;
+  reader.releaseLock=()=>{release();if(held){held=false;readerLocks--;}};
   reader.read=async(...args)=>{activeReads++;try{return await read(...args);}finally{activeReads--;}};
   reader.cancel=async(...args)=>{cancelCharge=bodyBudgetCharged();await cancel(...args);cancels++;};
  }
@@ -77,10 +104,9 @@ globalThis.fetch=async(input,init)=>{
  uploadBytes=Number(response.headers.get('x-fixture-image-bytes'));uploadDigest=response.headers.get('x-fixture-image-digest');
  const reader=response.body.getReader({mode:'byob'});reader.releaseLock();networkByob=true;networkBodies.add(response.body);return response;
 };
-export default {async fetch(request,bindings){
+export default {async fetch(request,bindings,context){
  const env={...bindings,OPENROUTER_SITE_URL:'https://example.com'},path=new URL(request.url).pathname;
- if(path==='/fixture/phase')return Response.json({activeReads,cancels,outputBytes,outputEof,remaining:bodyBudgetCharged()});
- if(path==='/fixture/release'){releaseOutput();return new Response('released');}
+ if(path==='/fixture/phase')return Response.json({activeReads,readerLocks,cancels,outputBytes,outputEof,remaining:bodyBudgetCharged()});
  if(path==='/fixture/abort'){controlled.abort();return new Response('aborted');}
  if(path==='/fixture/setup'){
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
@@ -92,7 +118,7 @@ export default {async fetch(request,bindings){
  if(path==='/fixture/state'){
   while(pending.length)await Promise.all(pending.splice(0));
   const usage=await(await usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin')).json();
-  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,cancels,cancelCharge,outputBytes,outputEof,events:usage.events});
+  return Response.json({fetches,capacity,uploadBytes,uploadDigest,networkByob,remaining:bodyBudgetCharged(),activeReads,readerLocks,cancels,cancelCharge,outputBytes,outputEof,events:usage.events});
  }
  if(request.headers.has('x-fixture-controlled')){
   controlled=new AbortController();const headers=new Headers(request.headers);headers.delete('x-fixture-controlled');
@@ -100,38 +126,41 @@ export default {async fetch(request,bindings){
  }
  const gated=request.headers.has('x-fixture-gated');
  if(gated){const headers=new Headers(request.headers);headers.delete('x-fixture-gated');request=new Request(request,{headers});}
- const result=await worker.fetch(request,env,{waitUntil(value){pending.push(value);}});
+ const result=await worker.fetch(request,env,{waitUntil(value){pending.push(value);context.waitUntil(value);}});
  if(!gated||!result.ok)return result;
- const reader=result.body.getReader(),gate=new Promise(resolve=>{releaseOutput=resolve;});let first=true;
+ const reader=result.body.getReader();let gate,first=true;
  return new Response(new ReadableStream({async pull(controller){
-  if(!first)await gate;first=false;
+  if(!first){gate??=original('https://openrouter.ai/__fixture_delivery_gate').then(response=>response.text());await gate;}first=false;
   const part=await reader.read();
   if(part.done){outputEof=true;reader.releaseLock();controller.close();}
   else{outputBytes+=part.value.byteLength;controller.enqueue(part.value);}
- },async cancel(reason){releaseOutput();await reader.cancel(reason);reader.releaseLock();}},{highWaterMark:0}),result);
+ },async cancel(reason){await reader.cancel(reason);reader.releaseLock();}},{highWaterMark:0}),result);
 },queue:worker.queue};`;
-const upstream = `${maximumWire.toString()}
+const upstream = networkOrigin => `${maximumWire.toString()}
 export default {async fetch(request){
+ if(request.url==='https://openrouter.ai/__fixture_delivery_gate'&&request.method==='GET')return fetch(${JSON.stringify(networkOrigin)}+'/gate',{signal:request.signal});
  if(request.url!=='https://openrouter.ai/api/v1/chat/completions'||request.headers.get('authorization')!=='Bearer synthetic-original-key')return new Response('invalid original owner',{status:400});
  const body=await request.json();if(body.model!=='google/lyria-3-pro-preview'||body.audio.format!=='wav')return new Response('invalid model',{status:400});
  const encoded=body.messages[0].content[1].image_url.url.split(',')[1],binary=atob(encoded),image=new Uint8Array(binary.length);
  for(let index=0;index<image.length;index++)image[index]=binary.charCodeAt(index);
  const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',image)),value=>value.toString(16).padStart(2,'0')).join('');
- const parts=maximumWire();let piece,offset=0,started=false;
+ if(body.messages[0].content[0].text==='Stall quarantine'){
+  const network=await fetch(${JSON.stringify(networkOrigin)}+'/pending',{signal:request.signal});
+  return new Response(network.body,{headers:{'content-type':'text/event-stream','x-fixture-image-bytes':String(image.length),'x-fixture-image-digest':digest}});
+ }
+ const parts=maximumWire();let piece,offset=0;
  const response=new ReadableStream({type:'bytes',pull(controller){
-  if(body.messages[0].content[0].text==='Stall quarantine'){
-   if(!started){started=true;controller.enqueue(new TextEncoder().encode('data: {'));}return;
-  }
   if(!piece||offset===piece.length){const next=parts.next();if(next.done){controller.close();controller.byobRequest?.respond(0);return;}piece=next.value;offset=0;}
   const count=Math.min(16384,piece.length-offset),copy=piece.slice(offset,offset+count);offset+=count;controller.enqueue(copy);
  },cancel(){parts.return();piece=undefined;}},{highWaterMark:0});
- return new Response(response,{headers:{'content-type':'text/event-stream',...(body.messages[0].content[0].text==='Stall quarantine'?{}:{'content-length':String(32*1024*1024)}),'x-fixture-image-bytes':String(image.length),'x-fixture-image-digest':digest}});
+ return new Response(response,{headers:{'content-type':'text/event-stream','content-length':String(32*1024*1024),'x-fixture-image-bytes':String(image.length),'x-fixture-image-digest':digest}});
 }};`;
 
 test("workerd full inline music carries exact 8 MiB input and 32 MiB native wire under the shared 96 MiB charge", { timeout: 90000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "inline-music-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const runtime = await startWorkerdFixture(temporary, router, upstream); t.after(() => runtime.dispose());
+  const network = await networkBarrier(t);
+  const runtime = await startWorkerdFixture(temporary, router, upstream(network.origin)); t.after(() => runtime.dispose());
   assert.equal((await runtime.dispatchFetch("https://router.example/fixture/setup")).status, 200);
   const image = maximumImage(), body = musicBody();
   body.messages[0].content = [{ type: "text", text: "Synthetic instrumental." }, { type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } }];
@@ -149,14 +178,15 @@ test("workerd full inline music carries exact 8 MiB input and 32 MiB native wire
   // measures actual output progress, not merely unread client-buffered bytes.
   assert.ok(phase.outputBytes > 0 && phase.outputBytes < 32 * MiB); assert.equal(phase.outputEof, false);
   assert.equal(phase.remaining, 96 * MiB);
-  await runtime.dispatchFetch("https://router.example/fixture/release");
+  network.release();
   for (;;) { const part = await reader.read(); if (part.done) break; actual.update(part.value); count += part.value.length; }
   reader.releaseLock(); assert.equal(count, 32 * MiB); assert.equal(actual.digest("hex"), expected.digest("hex"));
   const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
   assert.equal(state.fetches, 1); assert.equal(state.capacity, 96 * MiB); assert.equal(state.uploadBytes, 8 * MiB);
   assert.equal(state.uploadDigest, createHash("sha256").update(image).digest("hex"));
-  assert.equal(state.networkByob, true); assert.equal(state.remaining, 0);
+  assert.equal(state.networkByob, true); assert.equal(state.remaining, 0); assert.equal(state.readerLocks, 0);
   assert.equal(state.outputBytes, 32 * MiB); assert.equal(state.outputEof, true);
+  assert.equal(network.metrics.gates, 1); assert.equal(network.metrics.pending, 0);
   assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
   assert.equal(state.events[0].cost_basis, "policy_fixed"); assert.equal(state.events[0].grant_key, "oauth/fixture/openrouter");
   for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(state.events[0][field], null);
@@ -165,7 +195,8 @@ test("workerd full inline music carries exact 8 MiB input and 32 MiB native wire
 test("workerd controlled caller signal cancels the actual pending quarantine read before releasing either phase", { timeout: 45000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "inline-music-cancel-"));
   t.after(() => rm(temporary, { recursive: true, force: true }));
-  const runtime = await startWorkerdFixture(temporary, router, upstream); t.after(() => runtime.dispose());
+  const network = await networkBarrier(t);
+  const runtime = await startWorkerdFixture(temporary, router, upstream(network.origin)); t.after(() => runtime.dispose());
   assert.equal((await runtime.dispatchFetch("https://router.example/fixture/setup")).status, 200);
   const image = maximumImage(), body = musicBody();
   body.messages[0].content = [{ type: "text", text: "Stall quarantine" }, { type: "image_url", image_url: { url: `data:image/png;base64,${image.toString("base64")}` } }];
@@ -179,12 +210,13 @@ test("workerd controlled caller signal cancels the actual pending quarantine rea
     assert.ok(Date.now() < deadline, JSON.stringify(phase));
     await new Promise(resolve => setTimeout(resolve, 20));
   } while (true);
-  assert.equal(phase.remaining, 96 * MiB); assert.equal(phase.cancels, 0);
+  assert.equal(phase.remaining, 96 * MiB); assert.equal(phase.cancels, 0); assert.equal(phase.readerLocks, 1);
   await runtime.dispatchFetch("https://router.example/fixture/abort");
   const response = await pending; assert.equal(response.status, 502); assert.ok(!(await response.text()).includes('"audio"'));
   const state = await (await runtime.dispatchFetch("https://router.example/fixture/state")).json();
-  assert.equal(state.fetches, 1); assert.equal(state.activeReads, 0); assert.equal(state.cancels, 1);
+  assert.equal(state.fetches, 1); assert.equal(state.activeReads, 0); assert.equal(state.readerLocks, 0); assert.equal(state.cancels, 1);
   assert.equal(state.cancelCharge, 96 * MiB); assert.equal(state.remaining, 0);
+  await network.closed; assert.equal(network.metrics.pending, 1); assert.equal(network.metrics.closed, 1);
   assert.equal(state.events.length, 1); assert.equal(state.events[0].actual_cost_micros, 700);
   assert.equal(state.events[0].cost_basis, "policy_fixed");
   // This proves the explicitly supplied caller signal inside workerd. It does
