@@ -7,8 +7,7 @@ import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const schema = JSON.parse(readFileSync(new URL("../../providers/_schema/service-provider.schema.json", import.meta.url)));
 const validator = new Validator(schema), profile = "clawrouter.pixverse-image-input.v1";
-// Text-only contract from the published provider source e87b1729. This fixture
-// does not add or activate a provider manifest owned by the provider lane.
+// Preserve the original text-only source as an independent compatibility fixture.
 const source = {
   schema: "clawrouter.service-provider.v1", id: "pixverse", displayName: "PixVerse", status: "experimental", class: "rest_json",
   service: { platform: "pixverse", kind: "tool_provider", upstreamService: "pixverse", configKeys: ["PIXVERSE_API_KEY"] },
@@ -44,13 +43,17 @@ test("optional input profile leaves the existing text-only contract unchanged an
   assert.ok(createRouteCatalog([provider]).manifestProxy.every(offer => !Object.hasOwn(offer, "inputProfile")));
 });
 
-test("exact profile metadata validates without opening the unqualified image lifecycle", () => {
+test("exact profile compiles the registered native image route alongside its original text route", () => {
   const manifest = fixture(), result = validator.validate(manifest);
   assert.equal(result.valid, true, JSON.stringify(result.errors));
   assert.equal(manifest.endpoints.image_video.inputProfile, profile);
-  // Public composition and shared text/image retrieval remain a later runtime-
-  // qualified activation. Schema acceptance alone is not compiled route proof.
-  assert.throws(() => compile(manifest), /lifecycle requires distinct qualified native create\/control endpoints/);
+  const provider = compile(manifest).providers[0];
+  const image = provider.endpoints.find(endpoint => endpoint.id === "image_video");
+  assert.equal(image.inputProfile, profile);
+  assert.deepEqual(image.lifecycle, { protocol: "pixverse.video", retrieve: "video" });
+  assert.ok(!createRouteCatalog([provider]).manifestProxy.some(offer => offer.endpoint === "image_video"));
+  const original = compile(source).providers[0];
+  for (const endpoint of original.endpoints) assert.deepEqual(provider.endpoints.find(value => value.id === endpoint.id), endpoint);
 });
 
 test("input profile schema rejects aliases, wrong native pairs and caller transport controls", () => {
@@ -90,4 +93,20 @@ test("catalog type support alone never advertises a composed input profile", () 
   const catalog = createRouteCatalog([provider]);
   assert.ok(catalog.manifestProxy.every(offer => !Object.hasOwn(offer, "inputProfile")));
   assert.deepEqual(catalog.openaiCompatible, []);
+});
+
+
+test("profiled image creation requires its exact shared-control pair in either declaration order", () => {
+  const manifest = fixture(), expected = compile(manifest);
+  assert.deepEqual(compile({ ...manifest, endpoints: Object.fromEntries(Object.entries(manifest.endpoints).reverse()) }), expected);
+  for (const change of [
+    m => { delete m.endpoints.image_video.inputProfile; },
+    m => { m.endpoints.image_video.lifecycle.retrieve = "text_video"; },
+    m => { m.endpoints.video.inputProfile = profile; },
+    m => { m.capabilities.push({ id: "video.generate", endpoint: "video", methods: ["GET"] }); },
+    m => { m.endpoints.extra_text = structuredClone(m.endpoints.text_video); m.capabilities.push({ id: "media.predict", endpoint: "extra_text", methods: ["POST"] }); },
+    m => { m.endpoints.extra_image = structuredClone(m.endpoints.image_video); m.capabilities.push({ id: "video.generate", endpoint: "extra_image", methods: ["POST"] }); },
+    m => { m.endpoints.image_video.lifecycle.cancel = "video"; },
+    m => { m.endpoints.image_video.requestPricing = { unit: "request", successfulResponseMicros: 0 }; },
+  ]) { const changed = structuredClone(manifest); change(changed); assert.throws(() => compile(changed), /inputProfile|lifecycle|invalid manifest/, String(change)); }
 });

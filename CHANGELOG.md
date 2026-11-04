@@ -144,6 +144,7 @@
 - Exercise the compiled Wan lifecycle through Worker/SQLite and the actual OpenClaw native video host, preserving proxy credentials, unknown-price denial and one conservative settlement through observation loss.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
 - Support authenticated one-job PixVerse image intake with bounded multipart bytes, original-owner upload/create ordering, dual operation reservations and acknowledged native-response delivery; generic JSON and unowned image IDs remain closed.
+- Declare the exact PixVerse native image input profile for the two frozen video models, preserving text routes, original-create-bound retrieval and runtime-owned operation-price and retention requirements.
 - Qualify PixVerse fresh trace UUIDs and Runway stable version headers against the shared managed dispatch contract, preserving route identity and scoped asset prerequisites. Require both scoped Replicate read/cancel paths when rewriting controls.
 - Add the experimental Gradium unary speech manifest, binary-mode guard and native fixtures, with conservative plan-dependent credit accounting and explicit runtime activation requirements.
 - Route model-less Gradium unary speech through bounded native binary validation, original credentials and conservative reservation settlement without replaying synthesis.

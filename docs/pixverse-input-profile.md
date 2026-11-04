@@ -6,11 +6,11 @@ The optional literal is identical at each boundary:
 inputProfile: clawrouter.pixverse-image-input.v1
 ```
 
-It belongs to the endpoint, compiled endpoint and future native/manifest catalog
-carriers. There is no snake-case alias, arbitrary string, model-level flag or
-implicit multipart inference. The exact common type hunk for the runtime owner
-is `CompiledEndpoint.inputProfile?: "clawrouter.pixverse-image-input.v1"`.
-This change leaves that common file untouched.
+It belongs to the endpoint, compiled endpoint and qualified native catalog
+offer. There is no snake-case alias, arbitrary string, model-level flag or
+implicit multipart inference. The common type is
+`CompiledEndpoint.inputProfile?: "clawrouter.pixverse-image-input.v1"`.
+This declaration leaves that common file untouched.
 
 The declaration is restricted to PixVerse POST
 `/openapi/v2/video/img/generate`, request `pixverse.image_video`, response
@@ -27,13 +27,28 @@ upload and create. The reviewed binary composition uses separate 40/56 MiB
 charges with enforced parsing/window bounds and complete consumption lifetimes;
 those runtime guarantees are not implemented or proved by this declaration.
 
-This is type/schema propagation only. Existing compiler lifecycle guards remain
-text-create-only and reject activating the image route. Catalog carrier types
-accept the optional literal, but neither route-catalog output nor caller-specific
-discovery projects it. No YAML or generated snapshot changes are made.
+The local declaration candidate consumes the actual composed runtime in
+[PR775](https://github.com/openclaw/clawrouter/pull/775), source
+`2eb17306a39d1c70df31066afece7d37b760e1f4`. Publication and generated discovery
+activation require its qualified landing. No snapshot is generated here.
 
-After the actual composed runtime qualifies, a separate bounded integration must
-qualify image-create/`video.generate`, shared retrieval selected by the original
-create owner, and runtime-qualified native/manifest profile projection. Tests
-here distinguish schema metadata acceptance from that still-closed compilation
-and discovery boundary; they do not claim a usable multipart provider route.
+The existing text endpoint keeps `media.predict`; only the separate image
+endpoint receives `video.generate`. Both frozen model identities explicitly
+support both operations without an inferred price. A single text/image pair
+may link the same GET declaration in either order. The runtime selects the
+original job's create route; sharing a path grants no cross-job control rights.
+Raw upload routes, caller image IDs, cancellation and output-download authority
+remain closed.
+
+The runtime, not YAML, requires separate explicit `policy_fixed` prices for
+`pixverse.image_upload` and `video.generate`, plus the original owner-backed
+credential and current retention binding. A global policy fee, an environment
+credential or one operation's price does not satisfy the other requirements.
+Unknown vendor-dollar costs stay closed. Generic manifest JSON cannot enter the
+native multipart profile.
+
+Prepared tests compile the actual declaration, preserve the text endpoints,
+exercise the published registry's unbound-ID denial, and check real Worker
+catalog qualification against the exact policy and owner-retention contract.
+The common runtime's original-job upload/create/control and capacity proofs
+remain PR775's responsibility; test source alone is not executed acceptance.
