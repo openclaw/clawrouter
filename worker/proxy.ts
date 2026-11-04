@@ -1,3 +1,4 @@
+import { prepareOpenRouterPcmOwner } from "./openrouter-pcm-owner.ts";
 import { nativeResponseLease } from "./native-response.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
@@ -69,7 +70,7 @@ import {
   assertProviderAccess, capabilityForPath, modelRoute, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
-import { assertOperationConfiguration, grantSupports } from "./provider-auth.ts";
+import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
@@ -833,7 +834,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -933,6 +934,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     if (chatCheck) selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
     const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
       ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
+    const pcmCheck = openRouterPcmRequirement({ ...selection, model: selection.model?.upstream })
+      ? await prepareOpenRouterPcmOwner(env, auth, selection, upstream, url, headers) : undefined;
     const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
       ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;
@@ -951,7 +954,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : pcmCheck ? { revalidateAccount: pcmCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

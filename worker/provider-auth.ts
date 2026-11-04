@@ -13,7 +13,20 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
 
 export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
 
+// This one opaque PCM profile is qualified only for an original owned API key.
+export function openRouterPcmModel(provider: CompiledProvider, modelId?: string | null): boolean {
+  return provider.id === "openrouter"
+    && (provider.models.find(model => model.id === modelId)?.upstream ?? modelId) === "google/gemini-3.1-flash-tts-preview";
+}
+export function openRouterPcmRequirement(requirement: Pick<GrantRequirement, "provider" | "endpoint" | "model">): boolean {
+  return requirement.endpoint.request_format === "openai.audio_speech" && openRouterPcmModel(requirement.provider, requirement.model);
+}
+
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (openRouterPcmRequirement(requirement) && (requirement.mode !== "http" || !grant || grant.kind !== "api_key"
+    || grant.provider !== "openrouter" || grant.credentialStore !== "durable_object" || !grant.credentialLineage
+    || !Number.isSafeInteger(grant.credentialGeneration) || !(grant.credential || grant.hasCredential && !grant.credentialFields?.length)
+    || transportForGrant(requirement.provider, grant) !== null)) return false;
   const publicProvider = publicCatalogProvider(requirement.endpoint.request_format);
   if (publicProvider && (requirement.provider.id !== publicProvider || requirement.mode !== "http"
     || requirement.endpoint.response_format !== requirement.endpoint.request_format || !grant || grant.kind !== "api_key"

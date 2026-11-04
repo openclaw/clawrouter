@@ -12,7 +12,7 @@ import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from
 import { resolveTemplate } from "./provider-templates.ts";
 import { listConnections } from "./authority";
 import { activeOperationCandidates, policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
-import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth";
+import { assertOperationConfiguration, openRouterPcmModel, type GrantRequirement } from "./provider-auth";
 import { budgetPrincipal } from "./budget-scope";
 import { budgetStatus, providerBudgetStatus } from "./ledgers";
 import { operationAffordability, type OperationAffordability } from "./operation-budget";
@@ -347,18 +347,21 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     let providerBalance: ReturnType<typeof providerBudgetStatus> | undefined;
     // Group models by their ordered eligible policies, not policies by allowlist.
     // Each model gets one policy choice before affordability is observed.
-    const grouped = new Map<string, { pools: typeof pools; modelIds: Set<string | null>; passthrough: boolean }>();
+    const grouped = new Map<string, { pools: typeof pools; modelIds: Set<string | null>; passthrough: boolean; modelRequirement?: string }>();
     for (const model of [...provider.models, null, undefined]) {
       const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
-      const key = JSON.stringify(matching.map(pool => pool.entry.policyId));
-      const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false };
+      // The PCM profile requires an owned key even when the same speech
+      // endpoint's other models permit ordinary environment configuration.
+      const modelRequirement = model && openRouterPcmModel(provider, model.id) ? model.id : undefined;
+      const key = JSON.stringify([matching.map(pool => pool.entry.policyId), modelRequirement ?? null]);
+      const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false, modelRequirement };
       if (model === undefined) group.passthrough = true;
       else group.modelIds.add(model?.id ?? null);
       grouped.set(key, group);
     }
     const poolGroups = [...grouped.values()];
     const contexts = await Promise.all(provider.endpoints.filter((endpoint) => !responsesControl(provider, endpoint)).flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).flatMap(mode => poolGroups.map(async group => {
-      const requirement: GrantRequirement = { provider, endpoint, mode };
+      const requirement: GrantRequirement = { provider, endpoint, mode, model: group.modelRequirement };
       const candidates = endpoint.request_format === "cloudflare_ai_gateway.universal" ? group.pools.filter(pool => pool.entry.policy.models == null) : group.pools;
       const selected = selectPolicyCandidates(candidates, requirement);
       if (!selected) return null;
