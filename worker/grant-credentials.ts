@@ -18,6 +18,8 @@ import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { MiniMaxDeviceFlow } from "./minimax-device-flow.ts";
+import type { MiniMaxDeviceInput } from "./minimax-device-admin.ts";
 
 const MAX_LEGACY_GRANT_BYTES = 3 * 1024 * 1024;
 const MIN_ALARM_DELAY_MS = 1_000;
@@ -44,13 +46,32 @@ export class GrantCredentialObject implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
   private tail: Promise<void> = Promise.resolve();
+  private readonly minimaxDevice: MiniMaxDeviceFlow;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
+    this.minimaxDevice = new MiniMaxDeviceFlow({
+      order: run => {
+        const operation = this.tail.then(run);
+        this.tail = operation.then(() => undefined, () => undefined);
+        this.state.waitUntil?.(this.tail);
+        return operation;
+      },
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: record => this.state.storage.put("credential", record),
+      begin: (key, input) => this.beginMiniMaxDevice(key, input),
+      install: (record, credential, revalidate) => this.installMiniMaxDevice(record, credential, revalidate),
+      publish: async record => { await this.schedule(record); await this.publishProjection(record); },
+    }, env);
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/minimax-device") {
+      const operation = this.minimaxDevice.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && new URL(request.url).pathname === OWNERSHIP_CURRENT) {
       return this.state.storage.get<CredentialRecord>("credential").then(record => json({ exists: !!record, refreshToken: record?.refreshToken ?? null }));
     }
@@ -172,6 +193,7 @@ export class GrantCredentialObject implements DurableObject {
       if (path === OWNERSHIP_CLAIM) return await reserveRefreshOwnership(this.state.storage, this.env, request);
       if (path === "/put") {
         const input = await readJson<PutRequest>(request);
+        await this.minimaxDevice.invalidate();
         const replace = input.intent === "replace";
         if (replace && !hasPrimaryCredential(input.grant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
         let current = await this.state.storage.get<CredentialRecord>("credential");
@@ -267,6 +289,7 @@ export class GrantCredentialObject implements DurableObject {
       }
       if (path === "/revoke") {
         const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
+        await this.minimaxDevice.invalidate();
         // An unavailable index must not block deleting an owner's secrets.
         const current = await this.state.storage.get<CredentialRecord>("credential");
         const legacy = !current || !current.metadata || current.enabled === undefined ? await legacyGrantMetadata(this.env, key, true) : null;
@@ -298,6 +321,63 @@ export class GrantCredentialObject implements DurableObject {
       }
       return errorResponse("credential_owner_error", "grant credential operation failed", 500);
     }
+  }
+
+  private async beginMiniMaxDevice(key: string, input: Extract<MiniMaxDeviceInput, { operation: "begin" }>): Promise<CredentialRecord> {
+    const current = await this.state.storage.get<CredentialRecord>("credential");
+    // Missing issuer history/legacy metadata never becomes an onboarding owner
+    // by inference. An existing legacy grant needs explicit operator replacement.
+    if (current && (!canonicalRecord(current) || current.grantKey !== key || current.providerId !== "minimax" || current.refreshAttempt)
+      || !current && await legacyGrantMetadata(this.env, key, true))
+      throw new HttpError(409, "minimax_device_owner_unavailable", "Original credential owner is unavailable");
+    if ((current?.generation ?? 0) !== input.expectedGeneration)
+      throw new HttpError(409, "minimax_device_conflict", "Credential generation changed");
+    const { result: attachment } = await this.reconcileAttachment(key);
+    if (attachment.generation !== (current?.generation ?? 0))
+      throw new HttpError(409, "minimax_device_conflict", "Credential attachment changed");
+    const now = new Date().toISOString();
+    const record: CredentialRecord = {
+      version: 1, generation: nextCredentialGeneration(current?.generation ?? 0), lineage: crypto.randomUUID(),
+      grantKey: key, providerId: "minimax", kind: "oauth", enabled: true, status: "reauth_required",
+      updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
+      metadata: { provider: "minimax", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight,
+        createdAt: current?.createdAt ?? now, updatedAt: now },
+      nativeMediaBinding: null, minimaxAnthropicBinding: null,
+    };
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "minimax", status: "reauth_required",
+    });
+    record.poolAdmissionRevision = admitted.revision;
+    return record;
+  }
+
+  private async installMiniMaxDevice(current: CredentialRecord, credential: MiniMaxOAuthCredential, revalidate: () => Promise<void>): Promise<CredentialRecord> {
+    const attempt = current.minimaxDeviceAttempt!;
+    if (credential.region !== attempt.region || credential.ownerBinding !== attempt.session?.ownerBinding)
+      throw new HttpError(409, "minimax_device_conflict", "Device credential binding changed");
+    await claimRefreshOwnership(this.env, current.grantKey!, credential.refresh);
+    const grant: UpstreamGrant = { ...current.metadata, provider: "minimax", kind: "oauth", enabled: true,
+      accessToken: credential.access, refreshToken: credential.refresh, tokenType: "Bearer",
+      expiresAt: new Date(credential.expiresAt).toISOString(), lastManualAuthorizationAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), revokedAt: null };
+    let installed = ownerMetadata(credentialRecord(grant, nextCredentialGeneration(current.generation)), grant, current.grantKey!);
+    installed.credentialProvenance = "clawrouter_oauth";
+    mutateMiniMaxAnthropicBinding(installed, undefined, { version: "clawrouter.minimax-anthropic.v1", kind: "oauth",
+      region: credential.region, issuer: new URL(credential.tokenEndpoint).origin, tokenEndpoint: credential.tokenEndpoint,
+      resource: credential.resource.anthropicBaseUrl }, false);
+    const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: current.grantKey });
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key: current.grantKey, generation: current.generation, revision: attachment.revision, provider: "minimax", status: "active",
+    });
+    installed.poolAdmissionRevision = admitted.revision;
+    installed.minimaxDeviceAttempt = { ...attempt, phase: "committed", generation: installed.generation, lineage: installed.lineage!,
+      session: undefined, authorization: undefined };
+    await revalidate();
+    if (Date.now() >= attempt.expiresAt) throw new HttpError(409, "minimax_device_expired", "Device attempt expired");
+    // One owner row atomically records the credential AND terminal attempt.
+    // Failed publication can retry this projection, never the token exchange.
+    await this.state.storage.put("credential", installed);
+    return installed;
   }
 
   private async materialize(input: MaterializeRequest): Promise<OwnerResponse> {
@@ -923,6 +1003,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
+  delete (safe as UpstreamGrant & { minimaxDeviceAttempt?: unknown }).minimaxDeviceAttempt;
   return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxAnthropicBinding: null };
 }
 
