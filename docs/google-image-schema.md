@@ -106,6 +106,14 @@ selection cases. Frozen dependency inputs match the existing qualified install.
 The earlier music negative fixture correction removes only unrelated image
 endpoint/capability/rows before checking music; its assertions remain intact.
 
+The first composed Worker run passed 8,940 of 8,943 cases. Three provider-wide
+negative compiler fixtures reached the new image guard before their intended
+Omni, speech or understanding guard. Their isolated negative inputs now omit
+the unrelated image declarations, while positive tests still compile the full
+manifest. Rejection patterns and mutations are unchanged. All three failed
+cases and all 19 tests across those suites pass locally; final-head CI remains
+required.
+
 Fourteen actual image-host cases are enrolled in ordinary hosted CI against
 reachable public OpenClaw `9ce99ae1521b2d23e85c27688d9db45a31dbe472`.
 The seven unchanged cases execute separately through native and manifest-only

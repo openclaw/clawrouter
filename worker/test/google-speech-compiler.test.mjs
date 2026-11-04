@@ -15,8 +15,14 @@ const compile = manifest => compileProviderSnapshot([manifest]);
 const ids = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"];
 const now = Date.parse("2026-11-03T00:00:00Z");
 test.beforeEach(t => t.mock.method(Date, "now", () => now));
-function fixture() {
+function fixture(isolated = false) {
   const manifest = structuredClone(existing);
+  if (isolated) {
+    // Provider-wide mutations must reach the speech guard, not the image guard.
+    manifest.capabilities = manifest.capabilities.filter(row => row.endpoint !== "image_generate");
+    delete manifest.endpoints.image_generate;
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.includes("image.generate"));
+  }
   for (const [id, interactions] of [["speech_generate_content", false], ["speech_interactions", true]]) {
     manifest.capabilities.push({ id: "audio.speech", endpoint: id, methods: ["POST"] });
     manifest.endpoints[id] = { method: "POST", path: interactions ? "/v1beta/interactions" : "/v1beta/models/${model}:generateContent",
@@ -111,6 +117,7 @@ test("Google speech declarations reject format/path aliases, stream or query byp
 });
 
 test("Google speech declarations reject origin, credential and transformation overrides", () => {
+  assert.doesNotThrow(() => compile(fixture(true)));
   const changes = [
     m => { m.id = "other"; }, m => { m.baseUrls.default += "/v1beta"; }, m => { m.baseUrls.other = "https://other.example"; },
     m => { m.routing.baseUrlParam = "base_url"; }, m => { m.routing.serviceParam = "service"; },
@@ -121,7 +128,7 @@ test("Google speech declarations reject origin, credential and transformation ov
     m => { m.adapter.injectHeaders = { "x-goog-api-key": "synthetic" }; }, m => { m.adapter.injectQuery = { key: "synthetic" }; },
     m => { m.adapter.passthroughHeaders = ["x-goog-api-key"]; },
   ];
-  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /Google speech|Google embeddings|invalid manifest/, String(change)); }
+  for (const change of changes) { const manifest = fixture(true); change(manifest); assert.throws(() => compile(manifest), /Google speech|Google embeddings|invalid manifest/, String(change)); }
 });
 
 test("Google speech declarations reject newer models, aliases, generic Chat capabilities and borrowed tariffs", () => {

@@ -13,10 +13,11 @@ function fixture(isolated = false) {
   const manifest = structuredClone(bundled);
   if (isolated) {
     // Provider-wide negative cases must exercise the Omni guard itself.
-    const embeddingEndpoints = new Set(manifest.capabilities.filter(row => row.id === "llm.embeddings").map(row => row.endpoint));
-    for (const id of embeddingEndpoints) delete manifest.endpoints[id];
-    manifest.capabilities = manifest.capabilities.filter(row => !embeddingEndpoints.has(row.endpoint));
-    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.includes("llm.embeddings"));
+    const unrelatedCapabilities = ["llm.embeddings", "image.generate"];
+    const unrelatedEndpoints = new Set(manifest.capabilities.filter(row => unrelatedCapabilities.includes(row.id)).map(row => row.endpoint));
+    for (const id of unrelatedEndpoints) delete manifest.endpoints[id];
+    manifest.capabilities = manifest.capabilities.filter(row => !unrelatedEndpoints.has(row.endpoint));
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => unrelatedCapabilities.includes(id)));
   }
   manifest.capabilities.push({ id: "media.predict", endpoint: "video", methods: ["POST"] });
   Object.assign(manifest.endpoints, {
@@ -54,6 +55,7 @@ test("Omni endpoint links preserve Google's existing origin and require explicit
 });
 
 test("Omni declarations reject orphan controls, widened paths, file query injection and credential overrides", () => {
+  assert.doesNotThrow(() => compile(fixture(true)));
   const changes = [
     m => { m.id = "other"; }, m => { m.endpoints.video.lifecycle.protocol = "google.interactions"; },
     m => { delete m.endpoints.video.lifecycle; }, m => { delete m.endpoints.video.lifecycle.files; },
