@@ -25,7 +25,9 @@ source cleanup; calling a second cancel after discarding the first is not proof.
 Their header, size, parse, observation and abort paths now join owned cleanup.
 `observeUsage.result` remains prompt usage/accounting evidence, while its separate
 `retired` promise joins reader retirement and the active delivery pull, including
-its actual inspection/publication callback. The pull never awaits its own retirement. The proxy retains failed native reads,
+its actual inspection/publication callback. Downstream cancellation returns
+promptly while that retirement remains pending. The pull never awaits its own
+retirement. The proxy retains failed native reads,
 late fetched/validated responses and delivery charges with `waitUntil`; release
 runs once after the corresponding retirement. This does not change budgets,
 prices, deadlines, replay policy or the 96 MiB pool.

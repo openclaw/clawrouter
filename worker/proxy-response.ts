@@ -69,8 +69,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     try { return await pending; }
     catch (error) { operation.stop("publication", error); throw error; }
   }
-  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
-    if (finished) return retired;
+  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
+    if (finished) return;
     finished = true;
     signal.removeEventListener("abort", aborted);
     if (delivery === "canceled") operation.cancel(reason);
@@ -103,7 +103,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     // finish() never awaits this from inside pull: joining our own active pull
     // here is safe only because the pull returns without awaiting retirement.
     void Promise.all([cleanup, pulling]).then(resolveRetired, rejectRetired);
-    return retired;
+    // Downstream cancellation remains prompt. Only retired certifies cleanup
+    // and permits the proxy's separately retained capacity owner to release.
   }
   let downstream: ReadableStreamDefaultController<Uint8Array>;
   function aborted() {

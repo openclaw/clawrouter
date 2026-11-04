@@ -16,12 +16,13 @@ for (const cause of ["abort", "downstream"]) for (const rejects of [false, true]
   const releasedCharge = observed.retired.then(() => { released = true; lease.release(); });
   await entered.promise;
   const cancellation = cause === "downstream" ? reader.cancel("synthetic downstream cancel") : (signal.abort(new Error("synthetic abort")), Promise.resolve());
+  await cancellation; // Notification must not wait for the held source cleanup.
   await started.promise;
   assert.equal((await observed.result).delivery, "canceled"); assert.equal(results, 1); assert.equal(released, false);
   assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), 64 * 1024 * 1024);
   const competitor = new BodyLease(); assert.equal(competitor.grow(17 * 1024 * 1024), false); competitor.release();
   if (rejects) ack.reject(new Error("synthetic cleanup rejection")); else ack.resolve();
-  await cancellation; await releasedCharge; await capturedRead; reader.releaseLock();
+  await releasedCharge; await capturedRead; reader.releaseLock();
   assert.equal(cancels, 1); assert.equal(results, 1); assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0);
 });
 test("native terminal data does not retire delivery before actual EOF", async () => {

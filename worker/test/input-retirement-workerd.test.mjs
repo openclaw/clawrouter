@@ -17,7 +17,7 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
 let active;
 const state=()=>active?{mode:active.mode,fetches:active.fetches,cancels:active.cancels,cleanup:active.cleanup,readStarted:active.readStarted,
  sourceLocked:active.source.locked,physicalLocked:active.physical.locked,results:active.results,releases:active.releases,
- result:active.result,charged:bodyBudgetCharged(),lateEnqueues:active.lateEnqueues,inspectionStarted:active.inspectionStarted,inspectionFinished:active.inspectionFinished}:{};
+ result:active.result,charged:bodyBudgetCharged(),lateEnqueues:active.lateEnqueues,cancelSettled:active.cancelSettled,inspectionStarted:active.inspectionStarted,inspectionFinished:active.inspectionFinished}:{};
 export default {async fetch(request,env,ctx){
  const url=new URL(request.url);
  if(url.pathname==='/state')return Response.json(state());
@@ -33,7 +33,7 @@ export default {async fetch(request,env,ctx){
  const lease=new BodyLease();if(!lease.grow(32*1024*1024))throw new Error('fixture capacity');
  const upstream=await fetch('https://retirement-upstream.example/data',{redirect:'manual'});
  const physical=upstream.body,reader=physical.getReader(),ack=deferred(),ready=deferred();
- const a={mode,fetches:1,cancels:0,cleanup:false,readStarted:0,results:0,releases:0,result:null,lateEnqueues:0,physical,ack,cancelRequest:deferred(),inspection:deferred(),inspectionReady:deferred(),inspectionStarted:false,inspectionFinished:false,abort:new AbortController()};
+ const a={mode,fetches:1,cancels:0,cleanup:false,readStarted:0,results:0,releases:0,result:null,lateEnqueues:0,cancelSettled:false,physical,ack,cancelRequest:deferred(),inspection:deferred(),inspectionReady:deferred(),inspectionStarted:false,inspectionFinished:false,abort:new AbortController()};
  let first=true,stopped=false,cancellation;
  const cancel=reason=>cancellation??=(async()=>{stopped=true;a.cancels++;await reader.cancel(reason);ready.resolve();await ack.promise;reader.releaseLock();a.cleanup=true;})();
  a.source=new ReadableStream({async pull(c){
@@ -42,7 +42,7 @@ export default {async fetch(request,env,ctx){
    // not a physical host-disconnect or provider entitlement claim.
  },cancel},{highWaterMark:0});active=a;
  ctx.waitUntil(a.cancelRequest.promise.then(()=>a.mode==='downstream'
-   ? a.output.cancel('synthetic downstream cancel') : a.abort.abort(new Error('synthetic cancellation'))));
+   ? a.output.cancel('synthetic downstream cancel') : a.abort.abort(new Error('synthetic cancellation'))).then(()=>{a.cancelSettled=true;}));
  const operation=new HttpOperation(a.abort.signal);
  const response=new Response(a.source,{headers:{'content-type':mode==='header'?'text/plain':'application/json'}});
  let retirement;
@@ -73,7 +73,7 @@ for (const modes of [["native","google","header"],["delivery","downstream","insp
   const f=await fixture(t);
   for(const mode of modes){
     let state=await f.call('/start?mode='+mode);assert.equal(state.fetches,1);assert.equal(state.charged,64*1024*1024);assert.equal(state.readStarted,mode==='header'?0:1);
-    await f.call('/cancel');state=await f.until(s=>s.results===1&&s.cancels===1);
+    await f.call('/cancel');state=await f.until(s=>s.results===1&&s.cancels===1&&s.cancelSettled);
     assert.equal(state.releases,0);assert.equal(state.cleanup,false);assert.equal(state.sourceLocked,true);assert.equal(state.physicalLocked,true);
     assert.deepEqual(await f.call('/contend'),{allowed:false,charged:64*1024*1024});
     await f.call('/release');
