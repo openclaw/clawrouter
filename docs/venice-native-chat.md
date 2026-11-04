@@ -80,26 +80,32 @@ Opaque encrypted-reasoning placeholders survive replay. `max_tokens` and
 `cost.diem` survive the response independently; no currency conversion, advance
 price ceiling, zero cache price or native settlement claim is made.
 
-## Remaining owner integrations
+## Qualified profile and remaining integrations
 
-- Source1: qualify the documented `fallbacks[]` and returned-model boundary
-  against the original grant and reserve. Current selected-model validation
-  alone does not prove alternate deliveries are authorized. Qualify optional
-  USD/DIEM receipts separately from policy settlement; do not alias currencies
-  or assume a complete preflight price. This slice enables no fallback alias.
-- Sources1/3: consume landed `venice.models` request/filter/reader and its
-  credential-free `veniceCatalogRequest(base, signal)`. Original private caller
-  authorization and grant filtering remain local. Canonical paired GET
-  `/models`, no endpoint auth override; the helper fixes `type=text`. No
-  discovery endpoint is declared before actual compiler/runtime proof.
-- Source2: actual native SDK/client proof remains required, including the
-  frozen Grok tool-schema/HTML-entity argument compatibility and opaque replay.
-  Fable/Opus codeMode hints do not establish a separate coding runtime.
-- Source6: serialized generated snapshot and composed consumer qualification.
-  No source4 snapshot lease is held. Unknown pricing still blocks upstream-USD
-  hard budgets; model facts alone are not live activation or account entitlement.
+- The qualified [Chat runtime](venice-chat-runtime.md) rejects every caller
+  `fallbacks` field before egress, including an empty array. Complete JSON and
+  each SSE data payload must explicitly name the selected model before delivery.
+  Non-200 replies and embedded errors are withheld with conservative dispatched
+  settlement. No alternate-model, vendor-default, beta or Responses fallback is
+  qualified. The frozen native SDK does not send fallbacks.
+- Optional USD/DIEM observations remain separate from policy settlement. Do not
+  alias currencies or infer a complete upstream-dollar price.
+- Public native discovery is separate from these nineteen Chat cards. Its
+  `venice.models` request/filter/reader uses credential-free
+  `veniceCatalogRequest(base, signal)`; original private caller authorization
+  and grant filtering remain local. Canonical paired GET `/models` has no
+  endpoint auth override, and the helper fixes `type=text`. This PR adds no
+  discovery endpoint or discovery-consumer acceptance.
+- The configured-native consumer fixture imports the actual public client,
+  registered model/stream hooks and host replay sanitizer, including Grok
+  tool-schema/HTML-entity argument compatibility. Its exact-head hosted run is
+  the execution gate. Fable/Opus codeMode hints establish no separate coding
+  runtime, and configured-native proof is not catalog-driven client selection.
+- Serialized generated-snapshot and composed consumer qualification belong to
+  integration. Unknown pricing still blocks upstream-USD hard budgets; model
+  facts alone are not live availability or account entitlement.
 
-Local source execution is code-only. Hosted exact-head checks determine whether
-these actual Worker fixtures ran; a snapshot gate before Worker tests must be
-reported as skipped, never passed. No live inference, login, provisioning or
-manual deployment was performed.
+The original source checkout was code-only. Serialized integration uses its
+qualified own-install checkout, generated snapshot and exact-head hosted checks.
+A snapshot gate before Worker tests remains unrun proof. No live inference,
+login, provisioning or manual deployment was performed.

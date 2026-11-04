@@ -172,8 +172,15 @@ test("Venice direct rejects foreign policy, missing/revoked credentials and unkn
 for (const status of [400, 401, 403, 404, 410, 429, 500, 503]) test(`Venice native ${status} never retries a product, model or credential`, async t => {
   const f = await fixture(t);
   f.reply = () => Response.json({ error: { type: "invalid_request_error", message: "synthetic-upstream-rejection" } }, { status });
-  const r = await f.call({ model: models[0], messages: [] }); assert.equal(r.status, status, await r.clone().text()); await r.text(); await f.drain();
-  assert.equal(f.sent.length, 1); assert.equal((await f.sent[0].json()).model, models[0]);
+  const r = await f.call({ model: models[0], messages: [] });
+  // The strict selected-model response gate does not publish an unqualified
+  // non-200 payload, even when its native status was a client-side rejection.
+  assert.equal(r.status, 502); const text = await r.text();
+  assert.equal(JSON.parse(text).error.code, "provider_unavailable"); assert.doesNotMatch(text, /synthetic-upstream-rejection/);
+  await f.drain(); assert.equal(f.sent.length, 1); assert.equal((await f.sent[0].json()).model, models[0]);
+  const events = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(events.length, 1);
+  assert.equal(events[0].status, "provider_error"); assert.equal(events[0].actual_cost_micros, 7); assert.equal(events[0].cost_basis, "policy_fixed");
+  assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].total_tokens], [null, null, null]);
 });
 
 for (const manifest of [false, true]) for (const outcome of ["usage-absent", "disconnect", "embedded-error"]) test(`Venice native ${manifest ? "manifest" : "native"} ${outcome} preserves conservative settlement`, async t => {
@@ -182,13 +189,16 @@ for (const manifest of [false, true]) for (const outcome of ["usage-absent", "di
     : frame({ id: "chatcmpl_fixture", object: "chat.completion.chunk", model, choices: [{ index: 0, delta: { reasoning_content: "synthetic-partial-reasoning" }, finish_reason: null }] }) + (outcome === "disconnect" ? "" : "data: [DONE]\n\n");
   let canceled = false;
   f.reply = () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(wire)); if (outcome !== "disconnect") c.close(); }, cancel() { canceled = true; } }), { headers: { "content-type": "text/event-stream" } });
-  const r = await f.call({ model: manifest ? `venice/${model}` : model, messages: [], stream: true }, { manifest }); assert.equal(r.status, 200);
+  const r = await f.call({ model: manifest ? `venice/${model}` : model, messages: [], stream: true }, { manifest }); assert.equal(r.status, outcome === "embedded-error" ? 502 : 200);
   if (outcome === "disconnect") { const reader = r.body.getReader(); assert.equal((await reader.read()).done, false); await reader.cancel("synthetic disconnect"); assert.equal(canceled, true); }
-  else assert.equal(await r.text(), wire);
+  else if (outcome === "embedded-error") {
+    const text = await r.text(); assert.equal(JSON.parse(text).error.code, "provider_unavailable");
+    assert.doesNotMatch(text, /synthetic-stream-error/);
+  } else assert.equal(await r.text(), wire);
   await f.drain(); const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1");
   assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]);
   assert.equal(event.status, outcome === "disconnect" ? "client_error" : outcome === "embedded-error" ? "provider_error" : "success");
-  assert.equal(event.actual_cost_micros, outcome === "embedded-error" ? 0 : 7); assert.equal(f.sent.length, 1);
+  assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(f.sent.length, 1);
   assert.doesNotMatch(JSON.stringify(event), /synthetic-partial-reasoning/);
 });
 
