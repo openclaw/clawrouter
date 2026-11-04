@@ -1,6 +1,7 @@
 import { prepareOpenRouterPcmOwner } from "./openrouter-pcm-owner.ts";
 import { prepareInlineMusicOwner } from "./openrouter-music-owner.ts";
 import { inlineMusicInput, prepareInlineMusicInput, type InlineMusicInput } from "./openrouter-music-runtime.ts";
+import { publishedMusicInput, preparePublishedMusicInput, PublishedMusicUnsent, type PublishedMusicInput } from "./published-music-runtime.ts";
 import { readInlineMusicJson } from "./openrouter-music-input.ts";
 import { nativeResponseLease } from "./native-response.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
@@ -104,7 +105,7 @@ class JsonAdmission implements JsonIntake {
   expanded = false;
   private authenticated = false;
   private lease = new BodyLease();
-  private input?: InlineMusicInput;
+  private input?: InlineMusicInput | PublishedMusicInput;
   private intakeOperation?: HttpOperation;
   private intakeStartedAt = 0;
   private intakeBytes = 0;
@@ -150,7 +151,8 @@ class JsonAdmission implements JsonIntake {
     const remaining = Math.min(selection.timeoutMs ?? 120_000, selection.endpoint.timeout_ms ?? 120_000) - (Date.now() - this.intakeStartedAt);
     if (remaining <= 0) throw new HttpError(504, "request_timeout", "music input deadline expired");
     this.intakeOperation = new HttpOperation(this.request.signal, remaining);
-    try { this.input = await prepareInlineMusicInput(selection, this.lease, this.intakeOperation); }
+    try { this.input = preparePublishedMusicInput(selection, this.lease, this.intakeOperation)
+      ?? await prepareInlineMusicInput(selection, this.lease, this.intakeOperation); }
     catch (error) { selection.body = {}; throw error; }
     if (!this.input) { this.intakeOperation.stop("complete"); this.intakeOperation = undefined; }
   }
@@ -529,7 +531,8 @@ async function proxyNativeRaw(request: Request, env: Env, context: ExecutionCont
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
-  const music = inlineMusicInput(selection);
+  const published = publishedMusicInput(selection);
+  const music = inlineMusicInput(selection) ?? published;
   const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
@@ -565,11 +568,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let search: SearchSession | undefined;
   let grantFailover = false;
   try {
+    // Published assets require an acknowledged reservation before their sole
+    // destination claim. A soft-budget request cannot supply that authority.
+    if (published && softBudgetPolicy(auth.policy)) throw new HttpError(400, "published_input_reservation_required", "published input forwarding requires authoritative budget reservation");
+    const publishedPin = await published?.resolve(env, auth);
     if (isStandaloneSearch(selection.endpoint)) search = await SearchSession.resolve(env, auth, selection.body as Record<string, unknown>, selection.endpoint.id);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant, reservedBudget?.connection, search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true);
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
@@ -606,7 +613,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let retention: PreparedContentRetention | null;
   try {
     if (music) {
-      const pending = prepareInlineMusicRetention(env, auth, selection, requestId, music.operation.signal);
+      const pending = prepareInlineMusicRetention(env, auth, published?.retentionSelection() ?? selection, requestId, music.operation.signal);
       if (pending) music.retain(() => pending.discard());
       retention = pending;
     } else retention = prepareContentRetention(env, auth, selection, requestId);
@@ -706,7 +713,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = true;
     const upstreamStart = performance.now();
-    const pending = prepared.featherlessCatalog
+    const pending = published ? published.dispatch(env, prepared.requestBody, { requestId, eventId: accounting.facts.event.id,
+      reservedMicros: cost.reserveMicros, reservations: (reservation?.reservations ?? []).map(({ objectName, reservationId }) => ({ objectName, reservationId })) }) : prepared.featherlessCatalog
       ? featherlessCatalogResponse(prepared.featherlessCatalog, operation)
       : prepared.publicCatalog
       ? fetchPublicModelDiscovery({ ...prepared.publicCatalog, operation }).then(result => Response.json(
@@ -792,6 +800,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       response = priceGuard.response;
     }
   } catch (error) {
+    if (error instanceof PublishedMusicUnsent) dispatched = false;
     if (music) {
       operation.stop("upstream", error);
       // The operation's rejection may win before a physical quarantined read
@@ -913,7 +922,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || inlineMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || selection.endpoint.request_format === "minimax.speech" || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -1016,7 +1025,9 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const pcmCheck = openRouterPcmRequirement({ ...selection, model: selection.model?.upstream })
       ? await prepareOpenRouterPcmOwner(env, auth, selection, upstream, url, headers) : undefined;
     const music = inlineMusicInput(selection);
-    const musicCheck = music ? await prepareInlineMusicOwner(env, auth, selection, upstream, url, headers, music.evidence) : undefined;
+    const published = publishedMusicInput(selection);
+    const musicCheck = published ? await published.bind(upstream, url, headers)
+      : music ? await prepareInlineMusicOwner(env, auth, selection, upstream, url, headers, music.evidence) : undefined;
     const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
       ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
     let continuation: ContinuationOwner | undefined;

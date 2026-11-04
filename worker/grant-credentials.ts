@@ -51,6 +51,28 @@ export class GrantCredentialObject implements DurableObject {
     if (request.method === "POST" && new URL(request.url).pathname === OWNERSHIP_CURRENT) {
       return this.state.storage.get<CredentialRecord>("credential").then(record => json({ exists: !!record, refreshToken: record?.refreshToken ?? null }));
     }
+    if (request.method === "POST" && new URL(request.url).pathname === "/published-input/forward") {
+      return import("./published-music-dispatch.ts").then(async dispatch => {
+        let prepared: Awaited<ReturnType<typeof dispatch.preparePublishedMusicForward>> | undefined;
+        try {
+          // Parse and bound the small URL-bearing native request before taking
+          // credential ordering. No raw image or alternate secret crosses here.
+          prepared = await dispatch.preparePublishedMusicForward(request);
+          const current = prepared;
+          const operation = this.tail.then(async () => {
+            const record = await this.state.storage.get<CredentialRecord>("credential");
+            return dispatch.dispatchPublishedMusicUnderOwner(this.env, current, record,
+              record && canonicalRecord(record) ? materializedGrant(metadataGrant(record), record) : undefined);
+          });
+          this.tail = operation.then(() => undefined, () => undefined);
+          const started = await operation;
+          return await dispatch.publishedMusicOwnerResponse(await started.response, prepared);
+        } catch (error) {
+          prepared?.operation.stop("upstream", error); prepared?.lease.release();
+          return dispatch.publishedMusicDispatchFailure(error, prepared?.attempted ?? false);
+        }
+      });
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/managed-input/compose") {
       return import("./pixverse-input-compose.ts").then(async ({ composePixVerseInput }) => {
         const { authorizeInputUnderOwner, dispatchInputUnderOwner } = await import("./pixverse-input-dispatch.ts");

@@ -47,6 +47,11 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     // Private responses must not pass through public correlation, logging, or CORS.
     if (privatePath(new URL(request.url).pathname)) return privateCodex(request, env);
     const path = canonicalPath(new URL(request.url).pathname);
+    // Bearer asset paths must not enter correlation/logging/CORS. Publication
+    // itself uses the ordinary authenticated API path below and returns no
+    // verifier until the private owner and immutable archive acknowledge it.
+    if (path.startsWith("/v1/input-assets/") && path !== "/v1/input-assets/openrouter/music")
+      return (await import("./published-music.ts")).servePublishedMusicInput(request, env);
     const correlated = correlateIngressRequest(request);
     let response: Response;
     try {
@@ -94,6 +99,8 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/health") return Response.json(healthStatus(env));
   if (request.method === "GET" && path === "/v1/providers") return Response.json(snapshot);
   if (request.method === "GET" && path === "/v1/routes") return Response.json(routeCatalog());
+  if (request.method === "POST" && path === "/v1/input-assets/openrouter/music")
+    return (await import("./published-music.ts")).publishMusicInput(request, env);
   if (request.method === "GET" && path === "/v1/session") return sessionResponse(request, env);
   if (request.method === "POST" && path === "/v1/session/login") return localLogin(request, env);
   if (request.method === "POST" && path === "/v1/session/logout") return localLogout(request, env);
