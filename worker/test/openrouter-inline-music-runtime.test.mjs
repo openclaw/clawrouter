@@ -150,6 +150,19 @@ test("retention consumes the frozen graph before transfer without mutating the p
   assert.equal((await receipt(f, 700)).content_retained, true);
 });
 
+test("retention refusal before taking the upload reader retires both unclaimed transports", { timeout: 15000 }, async t => {
+  const f = await setup(t); f.policy.retainRequestContent = true;
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  let attempted = 0;
+  f.env.CONTENT_ARCHIVE = { async put(_key, body) {
+    attempted++; assert.equal(body.locked, false); assert.equal(bodyBudgetCharged(), 64 * MiB);
+    throw new Error("synthetic archive refusal before reading");
+  } };
+  const response = await f.request(); assert.equal(response.status, 503); await response.text();
+  await f.drain(); assert.equal(attempted, 1); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+  assert.ok((await f.events()).every(event => event.actual_cost_micros === 0));
+});
+
 test("ordinary shared-path Chat admits concurrent small calls while music capacity is unavailable", { timeout: 15000 }, async t => {
   const f = await setup(t), chat = f.provider.models.find(value => value.capabilities.includes("llm.chat")); assert.ok(chat);
   const held = new BodyLease(); assert.equal(held.grow(40 * MiB), true);

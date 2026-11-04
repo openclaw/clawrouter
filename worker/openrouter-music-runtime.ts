@@ -91,7 +91,7 @@ export class InlineMusicInput {
   readonly operation: HttpOperation;
   private inputLease: BodyLease;
   private responseLease?: BodyLease;
-  private upload?: { serializer: JsonBodyTransport; done: Promise<void>; abort: AbortController };
+  private upload?: { serializer: JsonBodyTransport; readable: ReadableStream<Uint8Array>; done: Promise<void>; abort: AbortController };
   private transferred = false;
   private uploadStarted = false;
   private finished?: Promise<void>;
@@ -128,7 +128,7 @@ export class InlineMusicInput {
     // A consumer may not have reached fetch yet. Keep rejection observed while
     // preserving it for completeUpload/finish and the original operation.
     void done.catch(() => undefined);
-    this.upload = { serializer, done, abort };
+    this.upload = { serializer, readable: fixed.readable, done, abort };
     return fixed.readable;
   }
 
@@ -164,6 +164,10 @@ export class InlineMusicInput {
     const upload = this.upload;
     if (upload) {
       upload.abort.abort();
+      // Before fetch takes its reader, an unread fixed-length pipe can keep an
+      // in-flight write backpressured even after pipeTo abort. Retire that
+      // unclaimed readable explicitly; a transport-held reader owns its cancel.
+      if (!upload.readable.locked) await upload.readable.cancel().catch(() => undefined);
       await upload.done.catch(() => undefined);
       upload.serializer.discard();
       this.upload = undefined;

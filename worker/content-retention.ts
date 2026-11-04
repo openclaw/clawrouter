@@ -71,7 +71,11 @@ export function prepareInlineMusicRetention(env: Env, auth: AuthorizedIdentity, 
       await pipe;
       signal.throwIfAborted();
     } finally {
-      abort.abort(); await pipe.catch(() => undefined);
+      abort.abort();
+      // R2 may refuse before acquiring the readable. Abort alone can still
+      // wait on its backpressured write; cancel only our unclaimed stream.
+      if (!fixed.readable.locked) await fixed.readable.cancel().catch(() => undefined);
+      await pipe.catch(() => undefined);
       serializer.discard(); record = undefined;
       signal.removeEventListener("abort", cancel);
     }
