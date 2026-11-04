@@ -88,7 +88,7 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
         return { providerId: "featherless", catalog };
       }
     }
-    invalid();
+    return invalid();
   } finally {
     if (active) discard(active);
   }
