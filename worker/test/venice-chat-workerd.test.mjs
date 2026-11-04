@@ -15,23 +15,37 @@ import { authorityCall } from './worker/authority.ts';
 import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { sha256Hex } from './worker/utils.ts';
 import { bodyBudgetCharged } from './worker/body-budget.ts';
-const originalFetch = globalThis.fetch.bind(globalThis), pending = []; let fetches = 0;
+const originalFetch = globalThis.fetch.bind(globalThis); let fetches = 0;
 globalThis.fetch = (input, init) => { const url = input instanceof Request ? input.url : String(input);
   if(url !== 'https://api.venice.ai/api/v1/chat/completions') throw new Error('unexpected physical destination');
   fetches++; return originalFetch(input, init);
 };
 export default { async fetch(request, env) {
-  const path = new URL(request.url).pathname;
-  if(path === '/release') return originalFetch('https://api.venice.ai/release');
-  if(path === '/proof') { while(pending.length) await Promise.all(pending.splice(0)); return Response.json({fetches,capacity:bodyBudgetCharged()}); }
+  // Keep the response consumer, its upstream I/O and settlement promises in
+  // the same actual workerd request scope. The upstream barrier stays closed
+  // until the real Worker response has delivered the complete first frame.
+  const pending = [];
+  async function phase(name, promise) {
+    let timer; try { return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('phase timed out: '+name)),10000);})]); }
+    finally { clearTimeout(timer); }
+  }
   await authorityCall(env, '/policies/initialize-all', [{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['venice'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
   await authorityCall(env, '/credentials/initialize-all', [{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
   await authorityCall(env, '/connections/initialize-all', [{providerId:'venice',enabled:true,monthlyBudgetMicros:10000}]);
   await putGrantCredentials(env, 'oauth/fixture/venice', {provider:'venice',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
-  return worker.fetch(new Request('https://router.example/v1/native/venice/chat/completions',{method:'POST',
+  const response = await phase('Worker response',worker.fetch(new Request('https://router.example/v1/native/venice/chat/completions',{method:'POST',
     headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},
     body:JSON.stringify({model:${JSON.stringify(selected)},messages:[{role:'user',content:'Synthetic prompt.'}],stream:true})
-  }),env,{waitUntil(value){pending.push(value);}});
+  }),env,{waitUntil(value){pending.push(value);}}));
+  const reader=response.body.getReader(); let initial='',rest='',failed=false;
+  try {
+    while(initial.length<${first.length}){const next=await phase('first selected frame',reader.read());if(next.done)throw new Error('early EOF');initial+=new TextDecoder().decode(next.value);}
+    if(initial!==${JSON.stringify(first)})throw new Error('unexpected first frame');
+    const released=await phase('release future upstream bytes',originalFetch('https://api.venice.ai/release'));await released.text();
+    try{for(;;){const next=await phase('foreign-frame denial',reader.read());if(next.done)break;rest+=new TextDecoder().decode(next.value);}}catch(error){if(error?.code!=='invalid_venice_returned_model')throw error;failed=true;}
+  }finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
+  while(pending.length)await phase('settlement',Promise.all(pending.splice(0)));
+  return Response.json({status:response.status,initial,rest,failed,fetches,capacity:bodyBudgetCharged()});
 },queue:worker.queue};`;
 const upstream = `
 let release; const barrier = new Promise(resolve=>{release=resolve;});
@@ -50,13 +64,8 @@ test("workerd Venice sends selected-model output before future bytes, withholds 
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-venice-workerd-")); t.after(() => rm(temporary, { recursive: true, force: true }));
   const instance = await startWorkerdFixture(temporary, router, upstream); t.after(() => instance.dispose());
   const origin = (await instance.ready).origin;
-  const response = await fetch(origin); assert.equal(response.status, 200);
-  const reader = response.body.getReader(); let initial = "";
-  while (initial.length < first.length) { const next = await reader.read(); assert.equal(next.done, false); initial += new TextDecoder().decode(next.value); }
-  assert.equal(initial, first);
-  const release = await fetch(`${origin}/release`); assert.equal(release.status, 200); await release.text();
-  let rest = "";
-  try { for (;;) { const next = await reader.read(); if(next.done) break; rest += new TextDecoder().decode(next.value); } } catch {} finally { reader.releaseLock(); }
-  assert.doesNotMatch(rest, /FORBIDDEN_CONTENT|synthetic-foreign/);
-  const proof = await (await fetch(`${origin}/proof`)).json(); assert.equal(proof.fetches, 1); assert.equal(proof.capacity, 0);
+  const response = await fetch(origin); assert.equal(response.status, 200, await response.clone().text());
+  const proof = await response.json(); assert.equal(proof.status, 200); assert.equal(proof.initial, first);
+  assert.equal(proof.failed, true); assert.doesNotMatch(proof.rest, /FORBIDDEN_CONTENT|synthetic-foreign/);
+  assert.equal(proof.fetches, 1); assert.equal(proof.capacity, 0);
 });

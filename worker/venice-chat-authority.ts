@@ -1,6 +1,7 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { assertPolicyModel } from "./policy-models.ts";
+import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
@@ -12,13 +13,16 @@ import { envValue, HttpError, safeEqual, sha256Hex } from "./utils.ts";
 export async function prepareVeniceChatAuthority(env: Env, auth: AuthorizedIdentity, selection: ProxySelection,
   upstream: UpstreamAuth, url: URL, headers: Headers): Promise<{ revalidate(signal: AbortSignal): Promise<void>; assertLive(): void }> {
   const { grant, grantKey } = upstream;
-  const authorization = upstream.headers.get("authorization");
+  const selectedHeaders = new Headers();
+  applyProviderCredential(selection.provider, grant, env, selectedHeaders, new URLSearchParams());
+  const authorization = selectedHeaders.get("authorization");
   if (selection.provider.id !== "venice" || !selection.model || upstream.transport !== null
     || upstream.baseUrl !== "https://api.venice.ai/api/v1" || url.href !== "https://api.venice.ai/api/v1/chat/completions"
-    || !authorization || headers.get("authorization") !== authorization || upstream.query.size) unavailable();
+    || !authorization || upstream.headers.get("authorization") !== authorization
+    || headers.get("authorization") !== authorization || upstream.query.size) unavailable();
   const original = grantKey && qualified(grant) ? identity(grant) : null;
   const environment = !grantKey && !grant ? envValue(env, "VENICE_API_KEY") : null;
-  if (grantKey ? !original || typeof grant?.credential !== "string" || authorization !== `Bearer ${grant.credential}`
+  if (grantKey ? !original
     : !environment || authorization !== `Bearer ${environment}`) unavailable();
   const caller = publicControlAuthorization(auth);
   const owner = { providerId: "venice", endpointId: selection.endpoint.id, grantKey,
@@ -41,7 +45,7 @@ export async function prepareVeniceChatAuthority(env: Env, auth: AuthorizedIdent
           grantKey, undefined, Date.now()).available.length) unavailable();
     } else {
       // An explicit grant allowlist cannot silently become environment authority.
-      if (routing.eligibleGrants.venice?.length && !routing.environmentFallback
+      if (Object.hasOwn(routing.eligibleGrants, "venice") && !routing.environmentFallback
         || !safeEqual(envValue(env, "VENICE_API_KEY") ?? "", environment!)) unavailable();
     }
     signal.throwIfAborted(); assertLive();

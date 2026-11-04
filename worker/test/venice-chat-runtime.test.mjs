@@ -134,6 +134,19 @@ test("Venice first fresh environment selection works but cannot rotate its key d
   assert.equal(f.sent.length, 2); await f.drain(); const rows = await f.events(); assert.equal(rows.length, 2); assert.ok(rows.every(row => row.actual_cost_micros === 700));
 });
 
+test("Venice preserves an original registered API-key bundle without changing credential selection", async t => {
+  const f = await setup(t);
+  await putGrantCredentials(f.env, grantKey, { provider: "venice", kind: "api_key", enabled: true, credentials: { api_key: "synthetic-bundled-key" } });
+  const response = await f.request(); assert.equal(response.status, 200, await response.clone().text()); await response.text();
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-bundled-key");
+  await settled(f, 700, [7, 3, 10]);
+});
+
+test("Venice static authorization cannot replace the original selected credential", async t => {
+  const f = await setup(t); f.provider.adapter.injectHeaders.Authorization = "Bearer synthetic-static-key";
+  const response = await f.request(); assert.equal(response.status, 503); await response.text(); assert.equal(f.sent.length, 0);
+});
+
 test("Venice pre-dispatch capacity denial remains known-unsent", async t => {
   const f = await setup(t), held = new BodyLease(); assert.equal(held.grow(32 * 1024 * 1024), true);
   try { const response = await f.request(); assert.equal(response.status, 503); await response.text(); assert.equal(f.sent.length, 0); await settled(f, 0); }
@@ -157,8 +170,8 @@ test("Venice preserves explicit unpriced model passthrough without inventing a c
   assert.equal(f.provider.models.some(row => row.upstream === selected), false); await settled(f, 700, [7, 3, 10]);
 });
 
-for (const change of ["disabled", "replaced", "policy", "caller", "environment"]) test(`Venice ${change} change after reservation denies an admitted warm request before egress`, async t => {
-  const f = await setup(t, { pooled: change !== "environment" }); overrideHotCacheConfig({ admissionMaxAgeMs: 30000, credentialMaxAgeMs: 60000 });
+for (const change of ["disabled", "replaced", "policy", "caller", "environment", "grant-policy", "environment-policy"]) test(`Venice ${change} change after reservation denies an admitted warm request before egress`, async t => {
+  const f = await setup(t, { pooled: !change.startsWith("environment") }); overrideHotCacheConfig({ admissionMaxAgeMs: 30000, credentialMaxAgeMs: 60000 });
   const warm = await f.request(); assert.equal(warm.status, 200); await warm.text(); await f.drain(); assert.equal(f.sent.length, 1);
   const namespace = f.env.BUDGET_LEDGER; let changed = false;
   f.env.BUDGET_LEDGER = { ...namespace, get(id) { const ledger = namespace.get(id); return { async fetch(url, init) {
@@ -170,6 +183,7 @@ for (const change of ["disabled", "replaced", "policy", "caller", "environment"]
       if (change === "policy") { f.policy.models = [`venice/${foreign}`]; await f.authority("/policies/put", { policyId: "fixture", policy: f.policy }); }
       if (change === "caller") await f.authority("/credentials/mutate", { scope: "admin", actor: { auth: "admin_token", email: "fixture@example.com", role: "admin" }, operation: "revoke", credentialId: "fixture" });
       if (change === "environment") f.env.VENICE_API_KEY = "synthetic-replacement-key";
+      if (change.endsWith("-policy")) { f.policy.grantRouting = { eligibleGrants: { venice: [] }, environmentFallback: false }; await f.authority("/policies/put", { policyId: "fixture", policy: f.policy }); }
     }
     return response;
   } }; } };
