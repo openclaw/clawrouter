@@ -174,6 +174,14 @@ materializing a second full response inside the router isolate. Common runtime,
 auth, pricing, declarations, snapshots and actual-client acceptance remain with
 their existing owners.
 
+Quarantine cancellation proof uses an explicitly **controlled incoming application
+signal**. It verifies real operation cancellation, conservative settlement,
+upstream network closure and capacity release. Host abort/socket observations are
+separate: physical pre-header disconnect propagation remains **blocked** in the
+locked local Miniflare 5.20261023.3-beta/workerd 1.20261023.1 runtime. Application
+signal forwarding is intact; controlled injection does not prove physical wire
+propagation. No TCP-RST or OS root cause is established by this fixture.
+
 Primary evidence checked 2026-11-03:
 
 - [Native Chat audio output and SSE](https://openrouter.ai/docs/guides/overview/multimodal/audio)
