@@ -74,7 +74,7 @@ import { HttpOperation } from './worker/http-operation.ts';
 import { configureMusic, musicBody } from './worker/test/openrouter-music-runtime-fixture.mjs';
 configureMusic(snapshot.providers.find(value => value.id === 'openrouter'));
 const originalFetch = globalThis.fetch.bind(globalThis), originalReader = ReadableStream.prototype.getReader;
-const bodies = new WeakSet(), operations = new WeakMap(); let initialized, metrics = {}, pending = new Set();
+const bodies = new WeakSet(), operations = new WeakMap(); let initialized, metrics = {}, pending = new Set(), incomingApplication;
 // Capture only fixed categories, never upstream messages, bodies or credentials.
 function readFailure(error) {
   const message=typeof error?.message==='string'?error.message:'';
@@ -83,8 +83,8 @@ function readFailure(error) {
       :message==='unbounded transport window'?'fixture_input_window'
       :message==='unbounded returned window'?'fixture_returned_window':'unclassified'};
 }
-// Observe the original operation; never manufacture a caller signal or change
-// its first cause. A transport read failure is not automatically client_error.
+// Observe the original operation without changing its first cause. The explicit
+// fixture-controlled incoming signal below is not physical-disconnect evidence.
 const originalStop = HttpOperation.prototype.stop;
 HttpOperation.prototype.stop = function(cause, reason) {
   const current=operations.get(this.signal), first=this.delivery===undefined;
@@ -92,6 +92,7 @@ HttpOperation.prototype.stop = function(cause, reason) {
   if(current&&first){
     current.operationCause=cause;current.operationStatus=this.status;current.operationDelivery=this.delivery;
     current.operationReasonName=reason?.name;current.operationStopOrder=++current.sequence;
+    current.controlledReasonMatches=incomingApplication?.current===current&&reason===incomingApplication.reason;
   }
   return result;
 };
@@ -138,6 +139,21 @@ export default { async fetch(request, bindings, context) {
   // upstream request alive or provide the cancellation barrier itself.
   if (url.pathname === '/physical-proof') return originalFetch('https://openrouter.ai/__fixture_music_phase');
   if (url.pathname === '/usage') return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
+  if (url.pathname === '/__fixture/music/abort-incoming') {
+    if(request.method!=='POST'||url.search)return new Response('invalid fixture control',{status:400});
+    const active=incomingApplication,current=active?.current;
+    // The slot owns the original application Request, never a caller-supplied ID.
+    // It is single-use and only injectable while that exact paid read is pending.
+    if(!active||current!==metrics||current.mode!=='quarantine-cancel'||current.controlInjections
+      ||active.controller.signal.aborted||active.request.signal.aborted||current.operationCause!==undefined
+      ||current.status!==undefined||current.fetches!==1||current.nativeReaders!==1
+      ||current.upstreamStatus!==200||current.bytes!==753||current.activeReads!==1)
+      return new Response('original fixture read unavailable',{status:409});
+    current.controlInjections=1;current.controlInjectionOrder=++current.sequence;
+    active.controller.abort(active.reason);
+    // Acknowledges injection only. Cleanup and accounting must be observed later.
+    return Response.json({injected:true});
+  }
   initialized ??= (async () => {
     await authorityCall(env, '/policies/initialize-all', [{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['openrouter'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
     await authorityCall(env, '/credentials/initialize-all', [{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
@@ -155,17 +171,26 @@ export default { async fetch(request, bindings, context) {
   const fixtureSignal=request.signal;
   fixtureSignal.addEventListener('abort',()=>{current.fixtureRequestAborted=true;current.fixtureRequestAbortOrder=++current.sequence;},{once:true});
   if (!['full','delivery-cancel','quarantine-cancel','small','truncated'].includes(mode)) return new Response('invalid fixture mode',{status:400});
+  const controlled=mode==='quarantine-cancel'?new AbortController():undefined;
+  if(controlled){
+    current.incomingApplicationAborted=controlled.signal.aborted;
+    controlled.signal.addEventListener('abort',()=>{current.incomingApplicationAborted=true;current.incomingApplicationAbortOrder=++current.sequence;},{once:true});
+  }
   const body = musicBody(); body.messages[0].content = mode;
   const routedRequest=new Request('https://router.example/v1/native/openrouter/v1/chat/completions',{
-    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},body:JSON.stringify(body),signal:fixtureSignal
+    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},body:JSON.stringify(body),signal:controlled?.signal??fixtureSignal
   });
+  if(controlled)incomingApplication={current,request:routedRequest,controller:controlled,
+    reason:Object.freeze({source:'fixture-controlled incoming application signal'})};
   const routedSignal=routedRequest.signal;current.routedRequestAborted=routedSignal.aborted;
   routedSignal.addEventListener('abort',()=>{current.routedRequestAborted=true;current.routedRequestAbortOrder=++current.sequence;},{once:true});
-  const response = await worker.fetch(routedRequest,env,{waitUntil(promise){const tracked=Promise.resolve(promise).finally(()=>pending.delete(tracked));pending.add(tracked);context.waitUntil(tracked);}});
-  current.status=response.status;current.returnOrder=++current.sequence;current.beforeDeliveryCapacity=bodyBudgetCharged();
-  // Do not call response.text()/arrayBuffer() here: actual delivery must leave
-  // the isolate without another whole-wire allocation or synthetic reader.
-  return response;
+  try {
+    const response = await worker.fetch(routedRequest,env,{waitUntil(promise){const tracked=Promise.resolve(promise).finally(()=>pending.delete(tracked));pending.add(tracked);context.waitUntil(tracked);}});
+    current.status=response.status;current.returnOrder=++current.sequence;current.beforeDeliveryCapacity=bodyBudgetCharged();
+    // Do not call response.text()/arrayBuffer() here: actual delivery must leave
+    // the isolate without another whole-wire allocation or synthetic reader.
+    return response;
+  } finally {if(incomingApplication?.current===current)incomingApplication=undefined;}
 }, queue:worker.queue };
 `;
 const upstream = pendingUrl => `const musicWire = ${musicWire.toString()};
@@ -347,8 +372,12 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
     assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
     await settlement(origin,3,'client_error');
   }));
-  await t.test("cancellation during quarantine exposes no partial HTTP 200 or audio", async caseTest => {
-    // Bypass Miniflare's unflagged entry Worker only for this caller-signal case.
+  await t.test("controlled incoming signal cancels quarantine without partial audio; host transport is separate", async caseTest => {
+    // HOST TRANSPORT ONLY: on locked workerd 1.20261023.1, the real host abort
+    // and socket close did not propagate before headers (90d5553 trace).
+    // Physical pre-header propagation remains BLOCKED, not a cancellation PASS.
+    // This case explicitly injects an application signal to prove common cleanup.
+    // The outer signal stays observed; a future runtime may propagate it.
     const origin=(await instance.unsafeGetDirectURL('router')).origin;
     const count=(await readFixtureJson(new URL('/usage',origin))).events.length;
     const transport=observeMusicHostTransport(origin);
@@ -373,7 +402,7 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
         } catch(error){host.phase='read-rejected';host.readErrorName=error?.name;host.readRejectedAfterAbort=abort.signal.aborted;transport.record('host-read-rejected',{afterAbort:host.readRejectedAfterAbort});}
         finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
       },error=>{host.phase='fetch-rejected';host.fetchErrorName=error?.name;host.fetchReasonMatches=error===reason;host.fetchRejectedAfterAbort=abort.signal.aborted;transport.record('host-fetch-rejected',{afterAbort:host.fetchRejectedAfterAbort,reasonMatches:host.fetchReasonMatches});});
-      let beforeAbort,barrier=false,hostBeforeAbort,networkBeforeAbort,afterAbort,physical,receipt;
+      let beforeAbort,barrier=false,hostBeforeAbort,networkBeforeAbort,beforeInjection,injection,afterAbort,physical,receipt;
       try {
         for(let attempt=0;attempt<100;attempt++){
           beforeAbort=await readFixtureJson(new URL('/proof',origin));
@@ -384,12 +413,19 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
           await delay(20);
         }
         hostBeforeAbort={...host};networkBeforeAbort={...network.metrics};abort.abort(reason);await outcome;
+        // Host transport completion does not authorize a cleanup claim. Explicit
+        // injection into the original application Request begins a separate proof.
+        beforeInjection=await readFixtureJson(new URL('/proof',origin));
+        const control=await fetch(new URL('/__fixture/music/abort-incoming',origin),{method:'POST'});
+        try {assert.equal(control.status,200,'original incoming signal injection rejected');injection=await control.json();}
+        finally {await control.body?.cancel().catch(()=>{});}
+        assert.deepEqual(injection,{injected:true});
         afterAbort=await settled(origin);physical=await readFixtureJson(new URL('/physical-proof',origin));
         if(barrier)await network.closed;
-        const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics});
+        const trace=JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,beforeInjection,injection,afterAbort,physical,networkBeforeAbort,network:network.metrics});
         // Record the real ledger outcome before any signal-observation assertion.
         // Common first-cause status remains independently checked below.
-        receipt=await settlement(origin,count+1,afterAbort.operationStatus);
+        receipt=await settlement(origin,count+1,'client_error');
         assert.deepEqual(networkBeforeAbort,{requests:1,bytes:753,closed:0,status:200},trace);
         assert.deepEqual(network.metrics,{requests:1,bytes:753,closed:1,status:200},trace);
         assert.equal(barrier,true,trace);assert.equal(host.signalInitiallyAborted,false,trace);
@@ -405,21 +441,25 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
           assert.equal(host.status,200,trace);assert.equal(host.mime,'text/event-stream',trace);
           assert.equal(host.readErrorName,'AbortError',trace);assert.equal(host.readRejectedAfterAbort,true,trace);
         }
-        // Incoming Request signals and stream cancellation are distinct runtime
-        // observations. Never infer their state from the initiating host signal.
+        // The real outer signal is an observation, not a prescribed false value.
+        // Controlled incoming/routed signals and first cause are strict proof.
         assert.equal(typeof afterAbort.fixtureRequestAborted,'boolean',trace);
-        assert.equal(typeof afterAbort.routedRequestAborted,'boolean',trace);
-        if(afterAbort.operationCause==='caller'){
-          assert.equal(receipt.status,'client_error',trace);assert.equal(afterAbort.operationDelivery,'canceled',trace);
-        } else {
-          // The host abort can instead surface as a transport read failure.
-          // Preserve that paid-failure classification; deadline/success cannot pass.
-          assert.equal(afterAbort.operationCause,'upstream',trace);
-          assert.equal(receipt.status,'provider_error',trace);assert.equal(afterAbort.operationDelivery,'failed',trace);
-        }
+        assert.equal(beforeInjection.incomingApplicationAborted,false,trace);
+        assert.equal(beforeInjection.routedRequestAborted,false,trace);
+        assert.equal(afterAbort.incomingApplicationAborted,true,trace);
+        assert.equal(afterAbort.routedRequestAborted,true,trace);
+        assert.equal(afterAbort.controlInjections,1,trace);assert.equal(afterAbort.controlledReasonMatches,true,trace);
+        assert.ok(afterAbort.controlInjectionOrder<afterAbort.operationStopOrder,trace);
+        assert.equal(afterAbort.operationCause,'caller',trace);assert.equal(afterAbort.operationStatus,'client_error',trace);
+        assert.equal(receipt.status,'client_error',trace);assert.equal(afterAbort.operationDelivery,'canceled',trace);
+        const attempts=physical.phases.filter(value=>value.mode==='quarantine-cancel');
+        assert.equal(attempts.length,1,trace);assert.equal(attempts[0].attempt,afterAbort.physicalAttempt,trace);
+        assert.equal(physical.attempts,afterAbort.physicalAttempt,trace);
+        assert.equal(attempts[0].post,true,trace);assert.equal(attempts[0].pathMatches,true,trace);
         assertPhysical(afterAbort);
       } finally {
-        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,afterAbort,physical,networkBeforeAbort,network:network.metrics,transport:transport.snapshot(),
+        caseTest.diagnostic(JSON.stringify({barrier,beforeAbort,hostBeforeAbort,host,beforeInjection,injection,afterAbort,physical,networkBeforeAbort,network:network.metrics,
+          hostTransportOnly:transport.snapshot(),physicalPreHeaderPropagation:'BLOCKED in locked runtime; controlled signal is not wire proof',
           receipt:receipt&&{status:receipt.status,cost:receipt.actual_cost_micros,basis:receipt.cost_basis,
             grant:receipt.grant_key,capability:receipt.capability,input:receipt.input_tokens,output:receipt.output_tokens,total:receipt.total_tokens}}));
       }
