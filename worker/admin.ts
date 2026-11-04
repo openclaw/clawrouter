@@ -384,7 +384,7 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const ultrafastPolicy = id === "team_server" || id === "openclaw_stable";
   if (policy.serviceTiers?.allowed.includes("ultrafast") || Object.entries(policy.serviceTiers?.models ?? {}).some(([model, tiers]) => tiers.includes("ultrafast") && (!ultrafastPolicy || model !== "openai/gpt-6.1-sol"))) throw new HttpError(400, "invalid_policy", "ultrafast may only be granted by team_server or openclaw_stable for openai/gpt-6.1-sol");
-  if (Object.keys(policy.grantRouting.sharedGrants ?? {}).length) {
+  if (Object.keys(policy.grantRouting?.sharedGrants ?? {}).length) {
     const authorization = await authorizeAdmin(request, env);
     if (authorization instanceof Response) return authorization;
   }
