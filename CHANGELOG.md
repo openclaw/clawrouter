@@ -198,6 +198,7 @@
 - Qualify literal endpoint upstream-path mappings while preserving caller routes, native formats and selected credentials; reject ambiguous paths and conflicting grant transport overrides.
 - Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
 - Declare Google's stable 001 and 2 embedding models on the qualified native unary and synchronous batch routes; preserve unknown prices and deny upstream-dollar hard budgets before dispatch.
+- Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
 - Add the two frozen Gemini 2.5 native model cards with dated deprecation facts, conservative published rate ceilings and distinct served-tier cache prices, preserving unknown hosted costs.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
@@ -458,7 +459,7 @@
 - Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
 - Qualify legacy speech offers against the OpenAI request and binary response pair, preserving provider-native speech routes and mixed Chat models without advertising an unsupported controller.
 
-- Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
+- Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
 
 ## 0.5.0 - 2026-10-22
 
