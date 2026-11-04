@@ -8,7 +8,7 @@ import test from "node:test";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "cf0448492e14bfc66c87693d6ef902e86909562e";
+const sourceHead = "3645a2c86518e9e98e4df2a81d00355bc6b082c0";
 const models = ["lyria-3-clip-preview", "lyria-3-pro-preview"];
 const dispatched = ["clip", "pro", "image", "text", "eof", "error", "persist", "cancel"];
 const denied = ["budget", "denied", "missing", "stale", "foreign", "preabort"];
@@ -63,6 +63,7 @@ for (const route of ["native", "manifest"]) test(`actual registered Lyria music 
       assert.ok(post, entry.id);
       assert.equal(post.path, entry.route === "native" ? `/v1/native/google-gemini/v1beta/models/${entry.model}:generateContent` : "/v1/proxy/google-gemini/music_generate");
       assert.equal(post.vendorKey, null); assert.equal(post.otherKey, null);
+      assert.equal(post.acceptEncoding, "identity", entry.id);
       assert.deepEqual(post.body, entry.route === "native" ? call.body : { body: call.body, pathParams: { model: entry.model } });
       const [event] = receipt.usage.events;
       assert.equal(receipt.usage.events.length, 1); assert.equal(receipt.budget.spentMicros, 7);
@@ -74,6 +75,51 @@ for (const route of ["native", "manifest"]) test(`actual registered Lyria music 
       assert.doesNotMatch(JSON.stringify(event), /Synthetic|fixture-original|fixture-secret|must-not-/);
     }
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+});
+
+test("real Worker negotiates identity without changing complete audio or accounting", { timeout: 30_000 }, async () => {
+  const audio = { mp3: "", wav: silenceWav().toString("base64") };
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  for (const route of ["native", "manifest"]) {
+    const temporary = await mkdtemp(join(tmpdir(), "clawrouter-lyria-encoding-"));
+    let mf;
+    try {
+      mf = await startWorkerdFixture(temporary, routerFixture(route), upstreamFixture(audio));
+      const kv = await mf.getKVNamespace("POLICY_KV", "router");
+      for (const kind of ["pro", "negotiated"]) {
+        const id = `lyria_${route}_${kind}`;
+        await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: ["google-gemini"],
+          models: ["google/lyria-3-pro-preview"], tenantId: "fixture", monthlyBudgetMicros: 100,
+          requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false }));
+        await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
+      }
+      await kv.put("connections/google-gemini", JSON.stringify({ providerId: "google-gemini", enabled: true }));
+      const origin = String(await mf.ready).replace(/\/$/, "");
+      for (const kind of ["pro", "negotiated"]) {
+        const id = `lyria_${route}_${kind}`;
+        const body = { contents: [{ role: "user", parts: [{ text: `Synthetic ${id}` }] }], generationConfig: { responseModalities: ["AUDIO", "TEXT"] } };
+        const response = await fetch(origin + (route === "native" ? "/v1/native/google-gemini/v1beta/models/lyria-3-pro-preview:generateContent" : "/v1/proxy/google-gemini/music_generate"), {
+          method: "POST", headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret`, "content-type": "application/json", "accept-encoding": kind === "pro" ? "identity" : "gzip" },
+          body: JSON.stringify(route === "native" ? body : { body, pathParams: { model: "lyria-3-pro-preview" } }),
+        });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("content-encoding"), kind === "pro" ? null : "gzip");
+        const result = await response.json();
+        assert.equal(result.candidates[0].content.parts[1].inlineData.data, audio.wav, "both negotiated responses deliver the exact complete WAV");
+        const observed = await (await fetch(origin + "/fixture/requests")).json();
+        const post = observed.find(call => call.authorization === `Bearer clawrouter-live-${id}-fixture-secret` && call.method === "POST");
+        assert.equal(post.acceptEncoding, kind === "pro" ? "identity" : "gzip", "observe the original client header before edge normalization");
+        const receipt = await settledUsage(origin, id, true);
+        assert.equal(receipt.usage.events.length, 1); assert.equal(receipt.budget.spentMicros, 7);
+        const [event] = receipt.usage.events;
+        assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.actual_cost_micros, 7); assert.equal(event.status, "success");
+        assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]);
+      }
+      const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
+      assert.equal(calls.length, 2);
+      for (const call of calls) assert.equal(call.headers["x-goog-api-key"], "fixture-original-google-key");
+    } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+  }
 });
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVQI12NkYPj/n4GBgYGJAQoAHRkCAhxhMhsAAAAASUVORK5CYII=";
@@ -103,11 +149,11 @@ function routerFixture(transport) {
     export default { ...handler, async fetch(request, env, context) {
       const path = new URL(request.url).pathname;
       if (path === "/fixture/requests") return Response.json(requests);
-      if (path !== "/v1/usage") requests.push({ path, method: request.method, authorization: request.headers.get("authorization"), vendorKey: request.headers.get("x-goog-api-key"), otherKey: request.headers.get("x-api-key"), body: request.method === "POST" ? await request.clone().json() : null });
+      if (path !== "/v1/usage") requests.push({ path, method: request.method, authorization: request.headers.get("authorization"), vendorKey: request.headers.get("x-goog-api-key"), otherKey: request.headers.get("x-api-key"), acceptEncoding: request.cf?.clientAcceptEncoding ?? request.headers.get("accept-encoding"), body: request.method === "POST" ? await request.clone().json() : null });
       if (path === "/fixture/alternate") return new Response("unexpected alternate");
       const response = await handler.fetch(request, { ...env, GOOGLE_API_KEY: "fixture-original-google-key" }, context);
-      if (path !== "/v1/catalog" || !response.ok) return response;
       const id = /^Bearer clawrouter-live-([^-]+)-/.exec(request.headers.get("authorization") ?? "")?.[1] ?? "";
+      if (path !== "/v1/catalog" || !response.ok) return response;
       const route = id.includes("_manifest_") ? "manifest" : "native", catalog = await response.json();
       // Narrow only real scoped offers; preserve model, eligibility and billing facts.
       for (const provider of catalog.providers) provider.offers = provider.offers.filter(offer => offer.endpoint === "music_generate" && offer.routeKind === route);

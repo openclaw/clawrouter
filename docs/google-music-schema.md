@@ -82,32 +82,53 @@ expansions, native input boundaries, and separate image/music model eligibility.
 ## Serialized integration qualification
 
 Source `ff2715d727f27aea4e00b19b056e4207caf573c8` is composed with authorship on
-qualified landed base `f9315fb03541949fedce6b61fdd552368791f000`. Its 16 YAML
-additions and both focused test files are unchanged. Removing those additions
-restores the complete base Google declaration, including the landed text and
-embedding cards. All 86 manifests compile. The 12 compiler/declaration cases,
-55 codec/wrapper/runtime/pricing cases, Worker types and 1,051 Chat/consumer
-selection regressions pass locally.
+qualified landed base `655990cdb4c33a148b03425fd6a2c8831c6766ef`. Its 16 YAML
+additions and declaration test file are unchanged. Removing those additions
+restores the complete base Google declaration, including the landed image,
+text and embedding cards. The compiler tests retain the landed image-isolation
+setup and every source assertion. Three neighboring negative compiler fixtures
+isolate both image and music declarations before testing their own contracts.
+
+All 87 manifests compile and match the generated snapshot. Locally, 86 focused
+compiler/codec/wrapper/runtime/pricing cases, 1,061 provider-compiler and
+manifest-driven Chat cases, and Worker types pass. The real-workerd encoding
+fixture also verifies native and manifest responses: default gzip negotiation
+and explicit identity deliver identical complete WAV bytes with one seven-micro
+receipt and NULL tokens for each request.
 
 Generated snapshot SHA256:
-`621f3a21befc4ba84a1fd21e96eff019207bf7614dced7dcf07fc9943326c5e7`.
+`6103cc1003eb7d189ba03346c4ae6e36e661d05214276dfc8c3edc6825e97a8d`.
+Only the Google provider payload changes.
 
 `test/openclaw-lyria.test.mjs` runs the actual registered `music_generate` tool,
 catalog, serializer and media delivery from public OpenClaw
-`cf0448492e14bfc66c87693d6ef902e86909562e` through real Worker/SQLite. This pin
-already has its own qualified music, types and SDK evidence; no new SDK report
-is rendered. The fixture narrows real credential-scoped offers to exercise each
-native and manifest transport without manufacturing eligibility. Explicit stale
-and foreign discovery cases test rejection before a paid request.
+`3645a2c86518e9e98e4df2a81d00355bc6b082c0` through real Worker/SQLite. Its
+qualified offline receipt includes build, production/test types, lint and
+26 Node plus 26 Bun real-HTTP cases. Native PR landing remains separate; no new
+SDK report is rendered or older artifact transferred to this composition.
+
+The fixture narrows real credential-scoped offers to exercise each native and
+manifest transport without manufacturing eligibility. The manifest isolate
+disables native preference only on the actual compiled music endpoint so its
+manifest offer remains available. Explicit stale and foreign discovery cases
+test rejection before a paid request.
 
 Thirty actual-client cases cover both frozen models, the pinned offline MP3 and
 valid PCM WAV bytes, host-loaded inline PNG, lyrics/instrumental preservation,
 unknown-price hard-budget denial, proxy-only credentials, incomplete/error output,
 no paid fallback, persistence failure and cancellation before dispatch or after
-EOF. Outer assertions require one seven-micro `policy_fixed` settlement per
+EOF. Actual POST assertions require the client's identity encoding request,
+observed through `request.cf.clientAcceptEncoding` before edge normalization.
+Outer assertions require one seven-micro `policy_fixed` settlement per
 dispatched request and NULL token accounting despite native diagnostic counters.
 These actual-source cases are **AUTHORED/UNRUN** until the final hosted composition
 passes. They are not a native OpenClaw PR readiness or live-entitlement claim.
+
+The locked edge fixture normalizes a forced gzip response to the caller's
+requested identity encoding. Optional caller-boundary forced-gzip injection is
+therefore not claimed here; the selected client's existing qualified real-HTTP
+negative proof rejects gzip with one POST and no fallback. No production response
+header, reader bound, encoding guard or timeout is changed.
 
 Physical pre-header host-disconnect propagation remains a separate locked-local-
 runtime limitation. The post-EOF client abort test does not claim that boundary,

@@ -46,7 +46,7 @@ async function select(id: string) {
 }
 const execute = (id: string, args: Record<string, unknown> = {}, signal?: AbortSignal) => withPluginRuntimeRegistryScope(acquired.registry, () =>
   tool.execute(id, { prompt: `Synthetic ${id}`, lyrics: "Synthetic lyrics", instrumental: true, ...args }, signal));
-const requests = async () => await (await fetch(origin + "/fixture/requests")).json() as Array<{ path: string; method: string; authorization: string | null }>;
+const requests = async () => await (await fetch(origin + "/fixture/requests")).json() as Array<{ path: string; method: string; authorization: string | null; acceptEncoding: string | null }>;
 const originalPosts = (calls: Awaited<ReturnType<typeof requests>>) => calls.filter(call => call.method === "POST" && call.path.startsWith("/v1/"));
 
 beforeAll(async () => {
@@ -84,7 +84,7 @@ describe(`actual registered Lyria ${route} through Worker`, () => {
     expect(save.mock.calls).toHaveLength(1);
     expect(save.mock.calls[0]?.[0]).toEqual(Buffer.from(kind === "pro" ? audio.wav : audio.mp3, "base64"));
     const calls = (await requests()).slice(before), posts = originalPosts(calls);
-    expect(posts).toHaveLength(1); expect(posts[0]?.path).toBe(route === "native" ? `/v1/native/google-gemini/v1beta/models/${kind === "pro" ? "lyria-3-pro-preview" : "lyria-3-clip-preview"}:generateContent` : "/v1/proxy/google-gemini/music_generate");
+    expect(posts).toHaveLength(1); expect(posts[0]?.acceptEncoding).toBe("identity"); expect(posts[0]?.path).toBe(route === "native" ? `/v1/native/google-gemini/v1beta/models/${kind === "pro" ? "lyria-3-pro-preview" : "lyria-3-clip-preview"}:generateContent` : "/v1/proxy/google-gemini/music_generate");
     expect(calls.some(call => call.path === "/fixture/alternate")).toBe(false);
   });
 
