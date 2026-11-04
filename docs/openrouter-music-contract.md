@@ -146,6 +146,37 @@ E12 dependency, not an external-entitlement blocker or a new product:
 
 Focused leaf checks: `node --test worker/test/native-openrouter-music.test.mjs`.
 
+An independent codec continuation exports
+`createOpenRouterMusicInspector(request: OpenRouterMusicRequest)`, with
+`accept(data: string)`, `isDone()` and `result()` methods. Its result is
+`{audioBytes, transcriptBytes, format, usage, responseId, upstreamCostMicros:null}`.
+It retains neither a whole base64 stream nor decoded audio nor transcript.
+Canonical base64 is checked across fragments with quartet position, final sextet
+and padding state; tail bits, split padding and unpadded final quartets obey the
+existing codec's contract. Transcript validation retains only a pending high
+surrogate and the original per-fragment UTF-8 byte count.
+
+Inspection keeps the original 16 MiB audio, 1 MiB transcript, 8,192 data-event
+and 2 MiB frame bounds. The existing tokenizer bounds JSON amplification before
+parsing: depth 32, 4,096 nodes/properties, 128 fields per object, 256-unit keys
+and 128-unit numeric literals. Existing `OpenRouterMusicStream` and
+`readOpenRouterMusic` default behavior and assertions remain intact, including
+their decoded output and image-request syntax. The inspector consumes decoded
+data events; its caller still owns fatal UTF-8 framing, wire limits, original
+terminal/cancellation lifetime and the response lease. Native usage is diagnostic,
+not an invoice or pricing authority.
+
+This codec continuation does not raise the landed response leaf's limits.
+At reviewed main `ecefad76f02039e57e11967b2e02a9a71483cd12`,
+`validateSelectedInput` has no music factory registration. Source1 must publish
+the qualified common-path composition so a real Worker fetch can prove BYOB
+support through every intervening wrapper before larger quarantine activation.
+An isolated byte-stream fixture cannot substitute for that proof. The planned
+32 MiB fixed quarantine must never be passed as detachable BYOB backing;
+only a separate bounded window may follow the reader's returned-view ownership.
+Source5 can qualify scalar inspection independently while original image
+ingress/ownership and common delivery qualification remain required internal work.
+
 Primary evidence checked 2026-11-03:
 
 - [Native Chat audio output and SSE](https://openrouter.ai/docs/guides/overview/multimodal/audio)
