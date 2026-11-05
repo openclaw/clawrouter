@@ -408,6 +408,7 @@
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
 - Complete the six frozen Z.AI global standard dispositions with model-specific input facts, preserving CN/Coding Plan isolation and qualifying GLM 5.1 against its explicit global standard API contract without turning a frozen deprecation into a shutdown.
+- Verify the registered Z.AI global client through the Worker and SQLite for both stream entrypoints, model-specific thinking defaults, tool replay, original-grant isolation and explicit policy-fixed accounting.
 - Qualify the five frozen Moonshot Chat models and authenticated model discovery on isolated global/China credentials, preserving native replay, account-dependent K2 availability and unknown tariffs.
 - Add isolated Singapore and Beijing Qwen Token Plan Chat routes with dedicated credentials and seven frozen unpriced model identities.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
