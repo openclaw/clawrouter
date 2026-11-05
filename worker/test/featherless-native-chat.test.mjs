@@ -69,8 +69,8 @@ test("Featherless declaration preserves the existing seed and one frozen card wi
     assert.equal(m.requestParameters.chat_completions.toolCalling, "supported");
     assert.equal(m.requestParameters.chat_completions.defaultReasoningEffort, undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions"]);
-  const opaque = providerModel(provider, "featherless/synthetic-tenant-model", provider.endpoints[0]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["catalog", "chat_completions"]);
+  const opaque = providerModel(provider, "featherless/synthetic-tenant-model", provider.endpoints.find(endpoint => endpoint.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { HF_TOKEN: "synthetic-unselected-huggingface", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");
   const upstream = configuredUpstream(provider, null, { FEATHERLESS_API_KEY: "synthetic-explicit" });
