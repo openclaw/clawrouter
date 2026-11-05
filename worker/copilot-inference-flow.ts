@@ -89,7 +89,7 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
       const completion = observed.result.then(result => {
         // All possibly-paid failures retain the reservation. Generic parsed
         // error/consumer cancellation is not evidence of an upstream refund.
-        settled ??= accounting!.settle(200, current.status ?? (result.delivery === "complete" ? result.outcome ?? "success" : "provider_error"), true,
+        settled ??= accounting!.settle(upstream.response.status, current.status ?? (result.delivery === "complete" ? result.outcome ?? "success" : "provider_error"), true,
           result.delivery === "complete" && result.outcome !== "provider_error" ? result.tokens : null, reservation, null, null, undefined,
           result.delivery === "complete" && result.outcome !== "provider_error" ? "succeeded" : "unknown");
         return settled;

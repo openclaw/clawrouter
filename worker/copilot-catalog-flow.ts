@@ -2,7 +2,7 @@ import { assertCopilotAccountRecord, type CopilotAccountBinding } from "./copilo
 import { readCopilotDeviceJson } from "./copilot-device-admin.ts";
 import { copilotAccountRequest, copilotCatalogRequest, copilotModelFormats, qualifyCopilotIdentity, prepareCopilotRequest, type CopilotRuntimeIdentity, type CopilotWireFormat } from "./provider-copilot.ts";
 import { runCopilotInference } from "./copilot-inference-flow.ts";
-import { copilotInferenceInput, copilotInferenceUnavailable } from "./copilot-inference-dispatch.ts";
+import { copilotInferenceInput, copilotInferenceUnavailable, copilotInferenceUpload } from "./copilot-inference-dispatch.ts";
 import { disposeCopilotInferenceResponse } from "./copilot-inference-response.ts";
 import { readCopilotAccountResponse } from "./copilot-account-response.ts";
 import { readCopilotResponseText } from "./copilot-response-body.ts";
@@ -124,15 +124,17 @@ export class CopilotCatalogFlow {
           if (Date.now() >= selected!.deadline || posted) throw unavailable();
           const upstream = prepareCopilotRequest(inference.body, scope.binding, scope.binding.ownerBinding, scope.token, model,
             inference.selected.selection.format, selected!.runtimeIdentity, inference.context);
+          const upload = copilotInferenceUpload(upstream, current.operation);
           posted = true; dispatched();
           let response: Promise<Response>;
-          try { response = fetch(upstream, { signal: current.operation.signal, redirect: "manual" }); }
+          try { response = fetch(upload.request, { signal: current.operation.signal, redirect: "manual" }); }
           catch (error) { response = Promise.reject(error); }
-          return { response, url: upstream.url, upload: upstream };
+          return { response, url: upstream.url, upload };
         });
         let response: Response | undefined;
         try {
           response = await this.response(sent.response, current);
+          await sent.upload.retired;
           await this.policy(selected, current.operation, control);
           await this.owner.order(async () => { this.scope(await this.owner.read(), selected!, original); current.operation.signal.throwIfAborted(); control.assertControlCallerLive(selected!.authorization); });
           return { response, url: sent.url };
@@ -140,9 +142,8 @@ export class CopilotCatalogFlow {
           if (response && !response.bodyUsed && !response.body?.locked) await disposeCopilotInferenceResponse(response, error);
           throw error;
         } finally {
-          // fetch owns upload consumption; a rejected/pre-header exchange may
-          // leave an unclaimed request body. Never retain it as a retry buffer.
-          if (sent.upload.body && !sent.upload.bodyUsed && !sent.upload.body.locked) await sent.upload.body.cancel();
+          // Join the original upload reader, not just fetch/header completion.
+          await sent.upload.discard().catch(() => undefined);
         }
       },
       revalidate: async (force = false) => {

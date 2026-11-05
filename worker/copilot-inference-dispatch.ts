@@ -4,6 +4,8 @@ import type { CopilotInferenceContext, CopilotWireFormat } from "./provider-copi
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { AccessPolicy, AuthorizedIdentity, CompiledProvider } from "./types.ts";
 import { HttpError } from "./utils.ts";
+import { inputRetirement } from "./input-retirement.ts";
+import type { HttpOperation } from "./http-operation.ts";
 
 export const copilotInferenceUnavailable = () => new HttpError(409, "copilot_inference_unavailable", "Original Copilot inference authority unavailable");
 export const copilotInferencePaths: Readonly<Record<CopilotWireFormat, string>> = {
@@ -93,4 +95,67 @@ export function copilotAccountingIdentity(input: CopilotInferenceInput, policy: 
   const { binding } = authorization;
   return { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId, policy,
     authType: binding.proof.kind === "proxy_key" ? "proxy_key" : "access", contentRetentionDisabled: true };
+}
+
+// The pure factory creates one bounded JSON Request representation. Keep its
+// ORIGINAL reader until upload EOF/cancel rather than treating response headers
+// as evidence that fetch has finished consuming the request body.
+export function copilotInferenceUpload(prepared: Request, operation: HttpOperation) {
+  if (!prepared.body || prepared.bodyUsed || prepared.body.locked) throw copilotInferenceUnavailable();
+  const reader = prepared.body.getReader();
+  let cleanupFailed = false, ended = false, complete = false, total = 0, reads = 0;
+  let chunk: Uint8Array | undefined, offset = 0, pulling: Promise<void> | undefined;
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const owner = inputRetirement({
+    async cancel(reason) { try { await reader.cancel(reason); } catch (error) { cleanupFailed = true; throw error; } },
+    releaseLock: () => reader.releaseLock(),
+  });
+  let resolve!: () => void, reject!: (error: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void retired.catch(() => undefined);
+  const finish = (kind: "eof" | "cancel", reason?: unknown) => {
+    if (ended) return retired;
+    ended = true; complete = kind === "eof";
+    operation.signal.removeEventListener("abort", abort);
+    const cleanup = owner.retire(kind, reason), active = pulling;
+    void Promise.allSettled([cleanup, active]).then(results => {
+      chunk = undefined; controller = undefined;
+      const failure = results.find(result => result.status === "rejected");
+      if (failure?.status === "rejected") reject(failure.reason);
+      else if (cleanupFailed || !complete) reject(copilotInferenceUnavailable()); else resolve();
+    });
+    return retired;
+  };
+  const abort = () => { try { controller?.error(operation.signal.reason); } catch {} void finish("cancel", operation.signal.reason); };
+  operation.signal.addEventListener("abort", abort, { once: true });
+  const stream = new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    pull(output) {
+      const work = Promise.resolve().then(async () => {
+        try {
+          operation.signal.throwIfAborted();
+          if (!chunk || offset === chunk.length) {
+            chunk = undefined; offset = 0;
+            if (++reads > 8192) throw copilotInferenceUnavailable();
+            const next = await owner.read(() => reader.read()); operation.signal.throwIfAborted();
+            if (ended) return;
+            if (next.done) { if (!total) throw copilotInferenceUnavailable(); output.close(); void finish("eof"); return; }
+            if (!(next.value instanceof Uint8Array) || !(next.value.buffer instanceof ArrayBuffer)
+              || next.value.buffer.byteLength > 512 * 1024 || next.value.length > 512 * 1024 - total) throw copilotInferenceUnavailable();
+            total += next.value.length; chunk = next.value;
+          }
+          if (ended) return;
+          const end = Math.min(chunk.length, offset + 16 * 1024);
+          output.enqueue(chunk.slice(offset, end)); offset = end;
+        } catch (error) { try { output.error(error); } catch {} void finish("cancel", error); }
+      });
+      pulling = work; return work.finally(() => { if (pulling === work) pulling = undefined; });
+    },
+    cancel(reason) { void finish("cancel", reason); },
+  }, { highWaterMark: 0 });
+  if (operation.signal.aborted) abort();
+  // No tee or whole-body replay copy. The factory's headers and exact URL stay
+  // unchanged, while this private stream owns consumption and retirement.
+  const request = new Request(prepared, { body: stream, duplex: "half" } as RequestInit);
+  return { request, retired, discard: (reason?: unknown) => { abort(); return finish("cancel", reason); } };
 }

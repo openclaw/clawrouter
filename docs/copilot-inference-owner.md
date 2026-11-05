@@ -70,6 +70,11 @@ construction, bounded headers/control, promises and scratch. The prepared body
 is measured without a second whole-document serialization before the existing
 factory constructs its Request. It must fit 512 KiB. The original input graph and
 request owners stay charged until the operation and upload consumption retire.
+The factory-created request has a separate original reader: its backing is bounded
+by the already-measured 512 KiB representation and it emits fresh chunks of at
+most 16 KiB. This is not a fallback for external input or response BYOB. Its
+physical EOF/FIRST cancellation and lock are joined explicitly; receiving response
+headers alone cannot retire upload ownership. There is no tee or replay copy.
 
 The 8 MiB response allowance includes a 256 KiB unary or 64 KiB frame buffer,
 16 KiB original read backing, decoded guard text/strings and at most 4096 parsed

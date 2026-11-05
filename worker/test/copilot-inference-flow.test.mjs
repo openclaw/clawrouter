@@ -55,7 +55,7 @@ async function fixture(t){
 }
 async function body(response,status=200){const text=await response.text();assert.equal(response.status,status,text);assert.match(response.headers.get('cache-control'),/no-store/);assert.doesNotMatch(text,/synthetic-original|acquisitionBinding|apiBaseUrl|ownerBinding|copilotDeviceCredential/);return JSON.parse(text);}
 const formats=['openai.chat_completions','anthropic.messages','openai.responses'];
-for(const format of formats)for(const stream of [false,true])test('original owner inference '+format+' stream='+stream,async t=>{
+for(const format of formats)for(const stream of [false,true])test('original owner inference '+format+' stream='+stream, {timeout:30000}, async t=>{
  const f=await fixture(t),before=f.record(),original=f.reply;
  f.reply=(url,...args)=>url.endsWith('/user')||url.endsWith('/models')?original(url,...args):vendor(url,stream?'data: {"model":"fixture-model","usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}\n\ndata: [DONE]\n\n':{id:'reply',model,usage:{prompt_tokens:2,completion_tokens:3,total_tokens:5}},{headers:{'content-type':stream?'text/event-stream':'application/json'}});
  const r=await f.run({selection:{modelId:'github-copilot/'+model,format},body:{model,stream,...(format==='openai.responses'?{input:'hello'}:{messages:[{role:'user',content:'hello'}]})}});
@@ -63,37 +63,43 @@ for(const format of formats)for(const stream of [false,true])test('original owne
  assert.equal(f.sent.length,3);assert.equal(f.sent.filter(x=>x.method==='POST').length,1);assert.ok(f.sent.every(x=>x.signal===f.sent[0].signal));assert.equal(f.sent[2].body.model,model);assert.equal(f.sent[2].headers.get('x-initiator'),'user');assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,700);assert.equal(f.events[0].cost_basis,'policy_fixed');assert.deepEqual(f.record(),before);
  await assert.rejects(materializeGrantCredentials(f.env,key,await inspectGrantCredentials(f.env,key),'github-copilot',null,false));
 });
-for(const change of [{monthlyBudgetMicros:1000,requestCostMicros:null},{dailyBudgetMicros:1000,requestCostMicros:null},{weeklyBudgetMicros:1000,requestCostMicros:null}])test('unknown USD denies ALL authenticated egress '+JSON.stringify(change),async t=>{
+for(const change of [{monthlyBudgetMicros:1000,requestCostMicros:null},{dailyBudgetMicros:1000,requestCostMicros:null},{weeklyBudgetMicros:1000,requestCostMicros:null}])test('unknown USD denies ALL authenticated egress '+JSON.stringify(change), {timeout:30000}, async t=>{
  const f=await fixture(t);await f.policyChange(change);await body(await f.run(),400);await f.retired();assert.equal(f.sent.length,0);assert.equal(bodyBudgetCharged(),0);
 });
-test('unmetered unknown cost is not known free',async t=>{
+test('unmetered unknown cost is not known free', {timeout:30000}, async t=>{
  const f=await fixture(t);await f.policyChange({requestCostMicros:null});await body(await f.run());await f.retired();assert.equal(f.events.length,1);assert.equal(f.events[0].cost_basis,'unpriced_usage');assert.equal(f.events[0].actual_cost_micros,0);assert.equal(f.events[0].reporting_known_cost_micros,null);assert.equal(f.events[0].reporting_estimated_cost_micros,undefined);
 });
-for(const patch of [{body:{model:'foreign',stream:false,input:'hello'}},{body:{model,stream:false,input:'hello',previous_response_id:'old'}},{initiator:'forged'},{expectedGeneration:999},{expectedLineage:'foreign-lineage-0000'},{runtimeIdentity:{}},{accessToken:'forged'}])test('forged inference input '+JSON.stringify(patch),async t=>{
+for(const patch of [{body:{model:'foreign',stream:false,input:'hello'}},{body:{model,stream:false,input:'hello',previous_response_id:'old'}},{initiator:'forged'},{expectedGeneration:999},{expectedLineage:'foreign-lineage-0000'},{runtimeIdentity:{}},{accessToken:'forged'}])test('forged inference input '+JSON.stringify(patch), {timeout:30000}, async t=>{
  const f=await fixture(t);await body(await f.run(patch),409);await f.retired();assert.equal(f.sent.length,0);assert.equal(bodyBudgetCharged(),0);
 });
-for(const patch of [{model_picker_enabled:false},{policy:{state:'disabled'}},{policy:{state:'unconfigured'}},{policy:{}},{supported_endpoints:['/messages']}])test('model verdict denies inference '+JSON.stringify(patch),async t=>{
+for(const patch of [{model_picker_enabled:false},{policy:{state:'disabled'}},{policy:{state:'unconfigured'}},{policy:{}},{supported_endpoints:['/messages']}])test('model verdict denies inference '+JSON.stringify(patch), {timeout:30000}, async t=>{
  const f=await fixture(t);f.reply=url=>vendor(url,url.endsWith('/models')?{data:[row(patch)]}:{endpoints:{api:base}});await body(await f.run(),409);await f.retired();assert.equal(f.sent.length,2);assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,0);
 });
-test('empty catalog cannot become seed authority',async t=>{
+test('empty catalog cannot become seed authority', {timeout:30000}, async t=>{
  const f=await fixture(t);f.reply=url=>vendor(url,url.endsWith('/models')?{data:[]}:{endpoints:{api:base}});await body(await f.run(),409);await f.retired();assert.equal(f.sent.length,2);
 });
-for(const change of ['generation','token','account','policy'])test('replacement after catalog forbids POST '+change,async t=>{
+for(const change of ['generation','token','account','policy'])test('replacement after catalog forbids POST '+change, {timeout:30000}, async t=>{
  const f=await fixture(t);f.reply=async url=>{if(url.endsWith('/models')){if(change==='policy')await f.policyChange({models:[]});else f.mutate(r=>{if(change==='generation')r.generation++;if(change==='token')r.copilotDeviceCredential.accessToken='replacement';if(change==='account')r.copilotAccountAttempt.phase='cancelled';});}return vendor(url,url.endsWith('/models')?{data:[row()]}:{endpoints:{api:base}});};await body(await f.run(),409);await f.retired();assert.equal(f.sent.length,2);
 });
-test('reservation ACK await cannot lend a replacement key',async t=>{
+test('reservation ACK await cannot lend a replacement key', {timeout:30000}, async t=>{
  const f=await fixture(t);await f.policyChange({monthlyBudgetMicros:1000});const fetch=f.ledger.fetch;f.ledger.fetch=async url=>{const r=await fetch(url);if(new URL(url).pathname==='/dispatch')f.mutate(r=>r.generation++);return r;};await body(await f.run(),409);await f.retired();assert.equal(f.sent.length,2);assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,0);
 });
-test('atomic composite contention does not start account fetch',async t=>{
+test('atomic composite contention does not start account fetch', {timeout:30000}, async t=>{
  const f=await fixture(t),other=new BodyLease();assert.ok(other.grow(MiB));await body(await f.run(),503);await f.retired();assert.equal(f.sent.length,0);assert.equal(bodyBudgetCharged(),2*MiB);other.release();const r=await f.run();assert.equal(bodyBudgetCharged(),96*MiB);const competing=new BodyLease();assert.equal(competing.grow(MiB),false);await r.body.cancel();await f.retired();assert.equal(bodyBudgetCharged(),0);assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,700);
 });
-for(const phase of ['account','catalog','inference'])for(const rejectCleanup of [false,true])test('held FIRST read and cancellation '+phase+' reject='+rejectCleanup,async t=>{
+for(const phase of ['account','catalog','inference'])for(const rejectCleanup of [false,true])test('held FIRST read and cancellation '+phase+' reject='+rejectCleanup, {timeout:30000}, async t=>{
  const f=await fixture(t),entered=gate(),reading=gate(),cleanup=gate(),cancelled=gate(),abort=new AbortController();let physical,cancels=0,unlocks=0;
  t.after(()=>{reading.resolve();cleanup.resolve();});const ordinary=f.reply;f.reply=(url,...args)=>{const current=url.endsWith('/user')?'account':url.endsWith('/models')?'catalog':'inference';if(current!==phase)return ordinary(url,...args);physical=vendor(url,{});const original=physical.body.getReader.bind(physical.body);physical.body.getReader=options=>{const native=original(options);return{async read(view){entered.resolve();await reading.promise;return{done:false,value:view.subarray(0,0)};},async cancel(reason){cancels++;cancelled.resolve();await native.cancel(reason);await cleanup.promise;if(rejectCleanup)throw Error('cleanup');},releaseLock(){native.releaseLock();unlocks++;}};};return physical;};
  const pending=f.run({},abort.signal);let response;if(phase==='inference'){response=await pending;const read=response.text();void read.catch(()=>{});await Promise.race([entered.promise,read.then(()=>{throw Error('delivery completed before held read');},()=>{throw Error('delivery failed before held read');})]);abort.abort();await assert.rejects(read);}else{await Promise.race([entered.promise,pending.then(async r=>{const status=r.status;await r.text();throw Error('response before held read: '+status);})]);abort.abort();await body(await pending,503);}await cancelled.promise;assert.equal(bodyBudgetCharged(),96*MiB);assert.equal(physical.body.locked,true);assert.equal(cancels,1);cleanup.resolve();await Promise.resolve();assert.equal(bodyBudgetCharged(),96*MiB);assert.equal(physical.body.locked,true);reading.resolve();await f.retired();assert.equal(bodyBudgetCharged(),0);assert.equal(unlocks,1);assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,phase==='inference'?700:0);
 });
-for(const phase of ['account','catalog','inference'])test('late physical response disposal '+phase,async t=>{
+for(const phase of ['account','catalog','inference'])test('late physical response disposal '+phase, {timeout:30000}, async t=>{
  const f=await fixture(t),entered=gate(),late=gate(),cleanup=gate(),cancelled=gate(),abort=new AbortController();let physical;t.after(()=>{late.resolve();cleanup.resolve();});const ordinary=f.reply;
  f.reply=async(url,...args)=>{const current=url.endsWith('/user')?'account':url.endsWith('/models')?'catalog':'inference';if(current!==phase)return ordinary(url,...args);entered.resolve();await late.promise;physical=vendor(url,{});const get=physical.body.getReader.bind(physical.body);physical.body.getReader=options=>{const native=get(options);return{read:v=>native.read(v),async cancel(reason){cancelled.resolve();await native.cancel(reason);await cleanup.promise;},releaseLock:()=>native.releaseLock()};};return physical;};
  const pending=f.run({},abort.signal);await Promise.race([entered.promise,pending.then(async r=>{const status=r.status;await r.text();throw Error('response before held fetch: '+status);})]);abort.abort();await body(await pending,503);assert.equal(bodyBudgetCharged(),96*MiB);late.resolve();await cancelled.promise;assert.equal(physical.body.locked,true);cleanup.resolve();await f.retired();assert.equal(bodyBudgetCharged(),0);assert.equal(f.events.length,1);assert.equal(f.sent.filter(s=>s.method==='POST').length,phase==='inference'?1:0);
+});
+test('Copilot price guard cannot borrow a misleading LLM card and preserves fixed pricing', {timeout:30000}, async()=>{
+ const {estimateCost}=await import('../proxy-accounting.ts');const endpoint={id:'responses',method:'POST',path:'/responses',request_format:'openai.responses',response_format:'openai.responses'};
+ const card={id:'github-copilot/fixture-model',upstream:'fixture-model',capabilities:['llm.chat'],pricing_ref:'misleading',pricing:{inputPerMillion:1000000,outputPerMillion:1000000}};
+ assert.deepEqual(estimateCost(card,{model,stream:false,input:'hello'},null,'llm.chat',endpoint,undefined,undefined,'github-copilot'),{reserveMicros:0,basis:'unpriced_request',pricingGap:'opaque_input_bound',inputTokens:null,outputTokens:null});
+ assert.deepEqual(estimateCost(card,{model,stream:false,input:'hello'},700,'llm.chat',endpoint,undefined,undefined,'github-copilot'),{reserveMicros:700,basis:'policy_fixed',inputTokens:null,outputTokens:null});
 });

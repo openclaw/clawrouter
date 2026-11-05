@@ -108,7 +108,9 @@ export function copilotInferenceResponse(response: Response, operation: HttpOper
   let pending: Uint8Array | undefined, pendingOffset = 0, unaryReady = false, frameReady = false, ended = false, upstreamEOF = false;
   let lineSize = 0, skipLF = false, boundaryCR = false;
   const qualify = async (final = false) => {
+    if (ended) throw invalid();
     await revalidate(final);
+    if (ended) throw invalid();
     operation.signal.throwIfAborted();
   };
   let pulling: Promise<void> | undefined, controller: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -141,6 +143,7 @@ export function copilotInferenceResponse(response: Response, operation: HttpOper
       if (!streaming && !unaryReady) {
         for (;;) {
           const next = await input.read();
+          if (ended) return;
           if (next.value) { buffer.set(next.value, used); used += next.value.byteLength; }
           if (next.done) break;
         }
@@ -184,7 +187,7 @@ export function copilotInferenceResponse(response: Response, operation: HttpOper
           if (used || !input.size || expected !== null && expected !== input.size) throw invalid();
           await input.retire("eof"); await qualify(true); output.close(); finish("eof"); return;
         }
-        const next = await input.read(); upstreamEOF = next.done;
+        const next = await input.read(); if (ended) return; upstreamEOF = next.done;
         pending = next.value;
       }
     } catch (error) { try { output.error(error); } catch {} finish("cancel", error); }
@@ -196,5 +199,5 @@ export function copilotInferenceResponse(response: Response, operation: HttpOper
   }, { highWaterMark: 0 });
   if (operation.signal.aborted) abort();
   const headers = new Headers({ "content-type": streaming ? "text/event-stream" : "application/json", "cache-control": "private, no-store" });
-  return { response: new Response(body, { status: 200, headers }), retired };
+  return { response: new Response(body, { status: headerError ? 502 : 200, headers }), retired };
 }
