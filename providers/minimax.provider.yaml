@@ -41,6 +41,13 @@ models:
     - id: minimax/MiniMax-M2.7
       upstream: MiniMax-M2.7
       capabilities: [llm.chat]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-10-19"
+        checkedAt: "2026-11-04"
+        sources:
+          - https://platform.minimax.io/docs/faq/models
       pricingRef: minimax-m2-7-standard-2026-06-22
       pricing:
         effectiveAt: "2026-06-22"

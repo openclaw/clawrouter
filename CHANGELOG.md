@@ -180,6 +180,7 @@
 - Qualify the distinct buffered Bedrock ConverseStream compiler contract alongside unary Converse, preserving explicit Chat selection, regional SigV4 binding and unknown-price denial.
 - Dispatch explicit native Bedrock Converse and buffered ConverseStream through original regional credentials, preparing payloads before SigV4 and withholding incomplete responses while preserving observed usage and conservative settlement.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
+- Record the existing MiniMax M2.7 PAYG deprecation without changing its selected identity, price card or default, or importing the separate subscription-plan alias.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 - Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
