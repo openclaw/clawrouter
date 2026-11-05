@@ -69,7 +69,7 @@ globalThis.fetch=async(input,init)=>{
 };
 const groq=structuredClone(snapshot.providers.find(p=>p.id==='groq'));
 const audio={id:'transcription',path:'/v1/audio/transcriptions',path_params:[],path_param_styles:{},
- request_format:'groq.transcription',response_format:'groq.transcription',native_proxy:true,timeout_ms:10000,method:'POST',methods:['POST'],headers:{},query:{},streaming:undefined};
+ request_format:'groq.transcription',response_format:'groq.transcription',native_proxy:true,timeout_ms:10000,method:'POST',methods:['POST'],auth:null,headers:{},request_headers:[],response_headers:[],query:{},streaming:null};
 groq.capabilities=groq.capabilities.filter(c=>c.endpoint!=='transcription');groq.capabilities.push({id:'audio.transcription',endpoint:'transcription',methods:['POST']});
 groq.endpoints=groq.endpoints.filter(e=>e.id!=='transcription');groq.endpoints.push(audio);
 groq.models=groq.models.filter(m=>m.id!=='groq/whisper-large-v3-turbo');groq.models.push({id:'groq/whisper-large-v3-turbo',upstream:'whisper-large-v3-turbo',capabilities:['audio.transcription'],pricing:null,pricing_ref:null});
