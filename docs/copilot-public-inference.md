@@ -5,6 +5,10 @@ generated snapshot or native-client compatibility is activated by this branch.
 The three existing wire formats are Chat Completions, Responses and Messages.
 Configured Copilot Proxy is a separate provider.
 
+An owner response created after its original public transport aborts is disposed
+before handoff. Its producer retirement does not release admission: physical input,
+the frontend retirement acknowledgment and control replies must also retire.
+
 ## Authority and routing
 
 Only an administrator can attest a proxy credential's closed integration profile:

@@ -376,7 +376,7 @@ export class CopilotCatalogFlow {
       const scope = this.scope(await this.owner.read(), selected, original);
       let currentPolicy = policy;
       if (active.publicIdentity) currentPolicy = (await currentCopilotPublicIdentity(this.env, selected.authorization, operation.signal, active.publicIdentity)).policy;
-      if (selected.selection && !policyAllowsModel(currentPolicy, provider, selected.selection.modelId)) throw unavailable();
+      if (active.publicIdentity && selected.selection && !policyAllowsModel(currentPolicy, provider, selected.selection.modelId)) throw unavailable();
       const request = catalog
         ? copilotCatalogRequest(scope.binding, scope.binding.ownerBinding, scope.token, selected.runtimeIdentity)
         : copilotAccountRequest(scope.binding.githubDomain, scope.token);

@@ -233,9 +233,18 @@ export class CopilotPublicOwner {
     if (phase !== "/copilot-public/execute" || active.catalog || active.closed || active.started || !active.seed
       || active.operation.signal.aborted || Date.now() >= active.deadline) return errorResponse("copilot_public_unavailable", "Original Copilot public operation unavailable", 409);
     active.started = true; active.operation.stop("complete");
-    return this.hooks.execute(request, active.seed, active.admission, active.retired, () => {
+    const execution = this.hooks.execute(request, active.seed, active.admission, active.retired, () => {
       if (this.active === active) this.active = undefined;
+    }).then(async response => {
+      // An aborted transport may reject before the owner creates its error
+      // response. Retire that unpublished producer here; no receiver owns it.
+      if (!request.signal.aborted) return response;
+      await disposeCopilotInferenceResponse(response, request.signal.reason);
+      return new Response(null, { status: response.status });
     });
+    active.reservePhysical = Promise.allSettled([active.reservePhysical, execution]).then(() => undefined);
+    this.hooks.retain(active.reservePhysical);
+    return execution;
   }
 
   private async reserve(request: Request, pin: ReturnType<typeof privateHeaders>, catalog: boolean): Promise<Response> {
