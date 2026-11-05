@@ -69,6 +69,8 @@ and joins all original readers before releasing capacity. Cleanup rejection is
 settlement, not a claim that cancellation succeeded. An unowned locked/used body
 or failed lock retirement cannot certify release. Successful publication keeps
 the existing `observeUsage.retired` delivery boundary.
+Across pages the registry retains settlement promises, weak reader lookup and
+only unclaimed responses; completed page responses/readers are not archived.
 
 `readNativeJson` accepts optional `NativeJsonInputHooks` as its sixth argument.
 `registerInput(owner, response)` runs synchronously before header cleanup or the

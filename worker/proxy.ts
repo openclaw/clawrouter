@@ -706,11 +706,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
   }
   const catalogInputs = prepared.featherlessCatalog || prepared.acquireDiscovery
-    ? new Map<ReadableStream<Uint8Array>, InputRetirement>() : undefined;
-  const catalogFetches: Array<{ pending: Promise<Response>; discard: (response: Response) => Promise<void> }> = [];
+    ? new WeakMap<ReadableStream<Uint8Array>, InputRetirement>() : undefined;
+  const catalogFetches: Promise<void>[] = [], catalogRetired: Promise<void>[] = [];
+  const activeCatalogInputs = new Set<InputRetirement>();
+  const unclaimedCatalogResponses = new Map<Response, (response: Response) => Promise<void>>();
   let catalogWork: Promise<Response> | undefined;
   const registerCatalogInput = (input: InputRetirement, response: Response): void => {
     if (response.body) catalogInputs?.set(response.body, input);
+    unclaimedCatalogResponses.delete(response);
+    activeCatalogInputs.add(input);
+    catalogRetired.push(input.retired);
+    // Keep settlement evidence across pages, not completed readers/page bodies.
+    void input.retired.then(() => activeCatalogInputs.delete(input), () => activeCatalogInputs.delete(input));
     if (signal.aborted) void input.retire("cancel", signal.reason).catch(() => undefined);
   };
   let discarded: WeakMap<Response, Promise<void>> | undefined;
@@ -735,10 +742,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return pending;
   };
   const registerCatalogFetch = (pending: Promise<Response>, dispose = discard): void => {
-    // Keep the physical response, including one that arrives after the public
-    // race. Failure joins this same disposer even if its callback already ran.
-    catalogFetches.push({ pending, discard: dispose });
-    void pending.catch(() => undefined);
+    // A fetched body transfers into its reader registration. Only unclaimed
+    // bodies remain strong references; settled evidence carries no page payload.
+    const retired = pending.then(async response => {
+      if (signal.aborted) await dispose(response);
+      else unclaimedCatalogResponses.set(response, dispose);
+    }, () => undefined);
+    catalogFetches.push(retired);
+    void retired.catch(() => undefined);
   };
   const discardNative = (value: { response: Response }) => discard(value.response);
   let response: Response | undefined;
@@ -877,11 +888,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         // Whole scan/projection completion closes registration. A late fetch can
         // still add its original reader while disposal is settling.
         const work = await Promise.allSettled([catalogWork?.then(discard, () => undefined), response ? discard(response) : undefined]);
-        const fetches = await Promise.allSettled(catalogFetches.map(({ pending, discard }) => pending.then(discard, () => undefined)));
-        const inputs = await Promise.allSettled([...catalogInputs.values()].map(input => input.retire("cancel", signal.reason)));
+        const fetches = await Promise.allSettled(catalogFetches);
+        const late = await Promise.allSettled([...unclaimedCatalogResponses].map(async ([response, dispose]) => {
+          await dispose(response); unclaimedCatalogResponses.delete(response);
+        }));
+        for (const input of activeCatalogInputs) void input.retire("cancel", signal.reason).catch(() => undefined);
+        const inputs = await Promise.allSettled(catalogRetired);
         // Cleanup settlement is not success: failed ownership/lock retirement
         // cannot certify release, and never replaces the public error outcome.
-        const failed = [...work, ...fetches, ...inputs].find(result => result.status === "rejected");
+        const failed = [...work, ...fetches, ...late, ...inputs].find(result => result.status === "rejected");
         if (failed?.status === "rejected") throw failed.reason;
       })();
       context.waitUntil(retirement.then(() => failedLease?.release()));
