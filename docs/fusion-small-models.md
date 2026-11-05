@@ -81,3 +81,33 @@ explicit local model names and bounded requests. Keep model responses in memory;
 retain only finite labels, correctness, counts, timings and hashes. Never execute
 model-generated code on the host. Repository execution still requires the
 qualified isolated runner.
+
+## Local selector smoke
+
+Start a task-owned Ollama server on a free loopback port. Load local models
+separately; the runner never pulls models or chooses a cloud model. Then run:
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-selector-smoke.mjs \
+  /path/to/fresh-results qwen3:0.6b qwen3:4b-instruct-2507-q4_K_M
+```
+
+One model is also supported to compare its first sample with a three-sample
+vote. With two models, put the smaller model first. The second model is sampled
+once per case. The fixed confidence cascade accepts the first decision only if
+it selects a candidate with confidence at least 80; otherwise it uses the second
+model. These policies replay the same recorded responses. They do not tune a
+threshold on the results or claim online latency savings.
+
+The 48 hand-authored cases cover 12 contract families with three candidate-order
+variants and one all-incorrect variant per family. Reference tests validate the
+candidate implementations independently of model responses. The smoke tests
+selection and abstention, not candidate generation, sandboxed execution, or
+production quality. One lucky run cannot qualify a learned router.
+
+Each request is bounded to 96 output tokens, 4096 context tokens and one minute.
+A full two-model run makes at most 192 requests and has a 15-minute campaign
+deadline checked before each call. There is no automatic transport retry.
+HTTP, identity or usage failures and recognized safety notices stop the run.
+Completed outputs record finite decisions, token counts, timing and hashes;
+raw prompts, responses and reasoning are not retained.

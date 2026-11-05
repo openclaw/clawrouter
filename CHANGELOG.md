@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a local small-model selector smoke test with counterbalanced candidates, abstention checks and content-free replay metrics.
+
 - Add an offline Fusion opportunity analyzer and small-model research plan to screen experiments before paid inference.
 
 - Retain bounded provider error categories in Fusion benchmark accounting without persisting request or response text.
