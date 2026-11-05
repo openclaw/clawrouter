@@ -23,10 +23,12 @@ async function fixture(t){
  await call('/policies/initialize-all',[{policyId:'policy',policy}]);
  await call('/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,policyId:'policy',policyGeneration:'g1',principalId:null,secretSha256:await sha256Hex('abcdefgh')}}]);
  const auth=await authenticateProxyKey(new Headers({authorization:'Bearer clawrouter-live-fixture-abcdefgh'}),env);assert.equal(auth instanceof Response,false);
- await putGrantCredentials(env,key,{provider:'github-copilot',kind:'oauth',enabled:true});
+ await putGrantCredentials(env,key,{provider:'github-copilot',kind:'oauth',enabled:true,accessToken:'synthetic-bootstrap-only'});
  const owner=env.GRANT_CREDENTIALS.objects.get(key);owner.state.waitUntil=p=>{const work=p.catch(()=>undefined);retained.add(work);void work.finally(()=>retained.delete(work));};
  const record=owner.values.get('credential'),deviceId='device-attempt-fixture',accountId='account-attempt-fixture',acquisition='original-acquisition-binding',binding='current-account-binding',actor='original-admin-actor';
- record.status='reauth_required';record.copilotDeviceCredential={version:1,githubDomain:'github.com',ownerBinding:acquisition,accessToken:'synthetic-original-github-token'};
+ // Bootstrap the real owner/attachment, then seed the private post-onboarding state.
+ // The actual workerd fixture obtains this state through device/account admin flows.
+ delete record.accessToken;record.status='reauth_required';record.copilotDeviceCredential={version:1,githubDomain:'github.com',ownerBinding:acquisition,accessToken:'synthetic-original-github-token'};
  record.copilotDeviceAttempt={version:1,id:deviceId,key,generation:record.generation,lineage:record.lineage,githubDomain:'github.com',actor,ownerBinding:acquisition,phase:'committed',expiresAt:1};
  const scope={key,generation:record.generation,lineage:record.lineage,deviceAttemptId:deviceId,acquisitionBinding:acquisition,githubDomain:'github.com',actor};
  record.copilotAccountAttempt={...scope,version:1,id:accountId,ownerBinding:binding,phase:'qualified'};
