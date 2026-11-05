@@ -160,4 +160,5 @@ before the complementary-strategy results, and are not used to tune that run.
 
 Pass the manifest as the third qualifier/standalone-runner argument, or as
 `taskManifest` to `runExperiment`. Qualification still requires the broken parent
-to fail and the known repair to pass. CI qualifies every bundled workload set.
+to fail and the known repair to pass. CI qualifies every bundled workload set. Missing pinned commits and their parents
+are fetched explicitly, so aging beyond the shallow checkout does not break qualification.

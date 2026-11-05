@@ -30,6 +30,24 @@ jobs:
         with:
           node-version: 24.22.1
       - run: node --test test/fusion-workloads.test.mjs
+      - name: Fetch missing pinned task history
+        run: |
+          node --input-type=module <<'JS'
+          import { readdir } from 'node:fs/promises';
+          import { loadTasks, command } from './scripts/fusion-workloads.mjs';
+          const missing = new Set();
+          for (const file of await readdir('benchmarks/fusion')) {
+            if (!file.endsWith('workloads.json')) continue;
+            for (const task of await loadTasks(`benchmarks/fusion/${file}`)) {
+              for (const ref of [task.base, task.oracle, `${task.oracle}^`]) {
+                const result = await command('git', ['cat-file', '-e', `${ref}^{commit}`], { allowFailure: true });
+                if (result.code) { missing.add(task.base); missing.add(task.oracle); }
+              }
+            }
+          }
+          if (missing.size) await command('git', ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
+            'fetch', '--no-tags', '--no-write-fetch-head', '--depth=2', 'origin', ...missing]);
+          JS
       - name: Qualify real regression tasks without model calls
         run: |
           docker pull node:24.22.1-slim
