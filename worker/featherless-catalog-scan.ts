@@ -32,7 +32,7 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
   const seen = new Set<string>(), rows: FeatherlessModelRow[] = [];
   let wireBytes = 0, resultBytes = encoder.encode(JSON.stringify({ providerId: "featherless", catalog: [] })).byteLength;
   let totals: { items: number; pages: number } | undefined;
-  let active: Response | undefined;
+  let active: Response | undefined, failed = false;
   const inputs = new WeakMap<Response, InputRetirement>();
   const registerInput: NonNullable<NativeJsonInputHooks["registerInput"]> = (owner, response) => {
     inputs.set(response, owner);
@@ -101,7 +101,8 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
       }
     }
     return invalid();
-  } finally {
-    if (active) await discard(active);
+  } catch (error) { failed = true; throw error; }
+  finally {
+    if (active) await discard(active).catch(error => { if (!failed || !input.registerInput) throw error; });
   }
 }

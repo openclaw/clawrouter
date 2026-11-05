@@ -228,3 +228,14 @@ test("Requesty never registers ownership of an already used or externally locked
   assert.equal(registered, 0); assert.equal(locked.body.locked, true);
   await reader.cancel(); reader.releaseLock();
 });
+test("Requesty preserves known rejection separately from failed registered lock retirement", async () => {
+  const response = new Response(new ReadableStream({}, { highWaterMark: 0 }), { headers: { "content-type": "text/plain" } });
+  const acquire = response.body.getReader.bind(response.body), failure = new Error("synthetic lock retirement failure"); let owner;
+  response.body.getReader = () => {
+    const reader = acquire();
+    return { read: () => reader.read(), cancel: reason => reader.cancel(reason), releaseLock() { reader.releaseLock(); throw failure; } };
+  };
+  await assert.rejects(readRequestyModels(response, signal(), all, input => { owner = input; }), invalid);
+  await assert.rejects(owner.retired, error => error === failure);
+  assert.equal(response.body.locked, false);
+});

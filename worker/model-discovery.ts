@@ -71,7 +71,9 @@ async function discardMetadata(response: Response, registerInput?: NativeJsonInp
   if (response.bodyUsed || response.body.locked) throw malformed();
   const input = inputRetirement(response.body.getReader());
   registerInput(input, response);
-  await input.retire("cancel");
+  // This helper precedes a known rejection; the registered owner separately
+  // retains any failed retirement and cannot release its charge from it.
+  await input.retire("cancel").catch(() => undefined);
 }
 async function readMetadata(response: Response, operation: HttpOperation, boundReads = false,
   registerInput?: NativeJsonInputHooks["registerInput"]): Promise<Record<string, unknown>> {
@@ -81,7 +83,7 @@ async function readMetadata(response: Response, operation: HttpOperation, boundR
   const input = registerInput ? inputRetirement(reader) : undefined;
   if (input) registerInput!(input, response);
   const chunks: Uint8Array[] = []; let size = 0, reads = 0;
-  let eof = false;
+  let eof = false, failed = false;
   try {
     while (true) {
       if (boundReads && ++reads > 8192) throw malformed();
@@ -92,11 +94,12 @@ async function readMetadata(response: Response, operation: HttpOperation, boundR
       chunks.push(value);
     }
   } catch (error) {
+    failed = true;
     if (input) void input.retire("cancel", error);
     else void reader.cancel(error).catch(() => undefined);
     throw error;
   } finally {
-    if (input) await input.retire(eof ? "eof" : "cancel", operation.signal.reason);
+    if (input) await input.retire(eof ? "eof" : "cancel", operation.signal.reason).catch(error => { if (!failed) throw error; });
     else reader.releaseLock();
   }
   const bytes = new Uint8Array(size); let offset = 0;

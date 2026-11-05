@@ -18,16 +18,21 @@ export async function readNativeJson<T>(
   const reader = response.body.getReader(), input = inputRetirement(reader);
   try { hooks?.registerInput?.(input, response); }
   catch (error) { await input.retire("cancel", error); throw error; }
+  const retire = (kind: "eof" | "cancel", reason: unknown, preserveFailure: boolean) => input.retire(kind, reason).catch(error => {
+    // Registered owners retain the separate failed retirement certificate.
+    // Cleanup must not replace an already-known parsing/header/read rejection.
+    if (!preserveFailure || !hooks?.registerInput) throw error;
+  });
   const length = response.headers.get("content-length");
   if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
     || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json"
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxBytes)) {
-    await input.retire("cancel", signal.reason); return fail("http");
+    await retire("cancel", signal.reason, true); return fail("http");
   }
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
-  let size = 0, body = "", eof = false;
+  let size = 0, body = "", eof = false, failed = false;
   try {
     signal.throwIfAborted();
     for (;;) {
@@ -39,6 +44,6 @@ export async function readNativeJson<T>(
     body += decoder.decode();
     if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
     return observe(JSON.parse(body));
-  } catch { await input.retire(eof ? "eof" : "cancel", signal.reason); return fail("response"); }
-  finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
+  } catch { failed = true; await retire(eof ? "eof" : "cancel", signal.reason, true); return fail("response"); }
+  finally { signal.removeEventListener("abort", abort); await retire(eof ? "eof" : "cancel", signal.reason, failed); }
 }
