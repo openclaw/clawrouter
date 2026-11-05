@@ -30,13 +30,34 @@ for (const [name, body, query] of [
   ["rebind", { accountId: "new-account" }], ["clear", { nativeMediaAuthorization: null }],
   ["speech switch", { nativeMediaAuthorization: "minimax-global-speech" }], ["replace", { ...initial, credential: "synthetic-new-key" }, "?mode=replace"],
 ]) for (const change of ["demote", "disable"]) test(`Music ${name}: current SQL admin ${change} after pool ACK preserves the old owner`, async t => {
-  const f = await setup(t), before = f.record(); let reached = false;
-  intercept(f, async route => {
-    if (route === "/grant-pools/admit" && !reached) { reached = true; await f.musicUser(change !== "disable", change === "demote" ? "user" : "admin"); }
+  const f = await setup(t);
+  // Resuming a paused member creates a real pending reservation. An already
+  // active member only advances the revision and has no pending work to adopt.
+  await f.musicPut({ enabled: false }); const before = f.record(); let reached = false;
+  intercept(f, async (route, _body, response) => {
+    if (route === "/grant-pools/admit" && !reached) {
+      assert.equal((await response.clone().json()).pending, true);
+      reached = true; await f.musicUser(change !== "disable", change === "demote" ? "user" : "admin");
+    }
   });
-  await denied(await f.admin(body, query)); assert.equal(reached, true); assert.deepEqual(f.record(), before);
+  await denied(await f.admin({ ...body, enabled: true }, query)); assert.equal(reached, true); assert.deepEqual(f.record(), before);
   // Even renewed HTTP authority cannot adopt the failed proposal through repair.
   await f.musicUser(); await denied(await f.admin({ label: "retry" })); assert.deepEqual(f.record(), before);
+});
+
+test("Music active attachment: a fresh authorized edit cannot adopt the discarded replacement", async t => {
+  const f = await setup(t), before = f.record(); let reached = false, checks = 0;
+  intercept(f, async (route, _body, response) => {
+    if (route === "/grant-music/authorize") checks++;
+    if (route === "/grant-pools/admit" && !reached) {
+      assert.equal((await response.clone().json()).pending, false); reached = true; await f.musicUser(true, "user");
+    }
+  });
+  await denied(await f.admin({ credential: "synthetic-new-key", accountId: "discarded-account", nativeMediaAuthorization: "minimax-global-music" }));
+  assert.equal(reached, true); assert.deepEqual(f.record(), before);
+  await f.musicUser(); await f.musicPut({ label: "fresh authorized edit" });
+  assert.equal(checks, 2); assert.equal(f.record().generation, before.generation + 1);
+  for (const field of ["credential", "lineage", "accountId", "nativeMediaBinding", "enabled"]) assert.deepEqual(f.record()[field], before[field]);
 });
 
 test("Music live admin preserves rename; rotation, account, expiry and explicit removal stay bound", async t => {

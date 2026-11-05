@@ -36,7 +36,10 @@ Demotion or disablement while the pool reply is held denies the mutation and
 preserves the old credential, generation, lineage and binding. It does not
 revoke that independently authorized grant. Pending or noncanonical Music
 records deny before migration or attachment repair; a failed proposal cannot
-be adopted by retrying a metadata edit. Revocation and already-published
+be adopted by retrying a metadata edit. Admission for an already-active member
+may advance its revision without creating pending work; a separately authorized
+new edit can then proceed, retaining the original credential rather than the
+discarded proposal. Revocation and already-published
 tombstone retries also recheck SQL authority. A private tombstone marker keeps
 the latter under that check without exposing state or advancing its generation.
 OAuth, pool and legacy imports cannot attest Music authority. Search, Speech,

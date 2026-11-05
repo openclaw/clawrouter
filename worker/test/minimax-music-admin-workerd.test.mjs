@@ -20,6 +20,7 @@ export class GrantCredentialObject extends OriginalOwner {
   super(state,{...env,ACCESS_CONTROL:{idFromName:n=>authority.idFromName(n),get:id=>{const stub=authority.get(id);return {async fetch(input,init){
    const response=await stub.fetch(input,init);
    if(held.mode&&new URL(input).pathname==='/grant-pools/admit'){
+    if(!(await response.clone().json()).pending)throw new Error('fixture must hold an actual pending reservation');
     const mode=held.mode;held.mode=null;
     const gate=await fetch('https://music-admin-gate.example/'+mode,{redirect:'manual'});
     if(!gate.ok)throw new Error('fixture gate');await gate.text();
@@ -80,13 +81,13 @@ test("Music actual isolated admin -> owner -> SQL rejects demotion/disable durin
   });
   for (const mode of ["demote", "disable"]) {
     await call("/fixture/user");
-    const created = await put(mode, { provider: "minimax", kind: "api_key", enabled: true, accountId: "synthetic-account",
+    const created = await put(mode, { provider: "minimax", kind: "api_key", enabled: false, accountId: "synthetic-account",
       credential: "synthetic-old-music-key", nativeMediaAuthorization: "minimax-global-music" });
     assert.equal(created.status, 200, await created.clone().text()); assert.doesNotMatch(await created.text(), /synthetic-old-music-key/);
-    const before = await call("/fixture/pin?mode=" + mode); assert.equal(before.binding.operation, "minimax.music");
+    const before = await call("/fixture/pin?mode=" + mode); assert.equal(before.binding.operation, "minimax.music"); assert.equal(before.enabled, false);
     await call("/fixture/arm?mode=" + mode);
     const barrier = Promise.withResolvers(); entered.set("/" + mode, barrier);
-    const changed = put(mode, { credential: "synthetic-new-music-key", accountId: "synthetic-new-account", nativeMediaAuthorization: "minimax-global-music" });
+    const changed = put(mode, { enabled: true, credential: "synthetic-new-music-key", accountId: "synthetic-new-account", nativeMediaAuthorization: "minimax-global-music" });
     await barrier.promise;
     // A separate actual HTTP request changes the SQL actor while the owner is
     // waiting on its real authority ACK. No shared-isolate role mocks.
