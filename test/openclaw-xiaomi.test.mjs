@@ -58,7 +58,8 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
       assert.equal(usage.usage.events.length, 1); const [event] = usage.usage.events;
       assert.equal(event.provider, "xiaomi"); assert.equal(event.model, `xiaomi/${cards[id]}`); assert.equal(event.credential_id, `xiaomi_${id}`);
       const rejected = ["http_error", "embedded_error"].includes(id);
-      assert.equal(event.status, rejected ? "provider_error" : "success");
+      assert.equal(event.status_code, id === "http_error" ? 401 : 200, id);
+      assert.equal(event.status, id === "http_error" ? "client_error" : id === "embedded_error" ? "provider_error" : "success", id);
       assert.equal(event.cost_basis, rejected ? "none" : "policy_fixed"); assert.equal(event.actual_cost_micros, rejected ? 0 : 7);
       assert.equal(usage.budget.spentMicros, rejected ? 0 : 7);
       assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens],
