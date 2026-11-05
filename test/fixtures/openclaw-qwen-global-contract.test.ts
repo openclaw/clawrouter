@@ -73,7 +73,7 @@ describe("actual registered Qwen global standard client through Worker", () => {
   });
   for (const [index, model] of blocked.entries()) it(`keeps unqualified global ${model} closed despite a permitting policy`, async () => {
     const result = await run(`closed${index}`, model); expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("model_capability_unsupported"); expect(result.content).toEqual([]);
+    expect(result.errorMessage).toBe(`400 model ${model} does not support chat_completions`); expect(result.content).toEqual([]);
   });
   it("preserves caller pre-abort without dispatch or fallback", async () => {
     const controller = new AbortController(); controller.abort(new DOMException("Synthetic caller cancellation", "AbortError"));

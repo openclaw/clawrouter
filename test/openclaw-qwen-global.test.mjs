@@ -37,6 +37,10 @@ test("registered Qwen global standard streams preserve original grants, selected
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-qwen-global-contract.test.ts", import.meta.url), testPath: "extensions/qwen/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, QWEN_API_KEY: "must-not-fallback", QWEN_CODING_GLOBAL_API_KEY: "must-not-fallback" } });
+    const denials = await (await fetch(origin + "/fixture/denials")).json();
+    assert.deepEqual(denials.sort((a, b) => a.id.localeCompare(b.id)), blocked.map((model, i) => ({
+      id: `closed${i}`, status: 400, code: "model_capability_unsupported", message: `model ${model} does not support chat_completions`,
+    })), "closed-row SDK errors must retain the actual Worker's structured denial");
     const upstream = await mf.getWorker("upstream"), calls = await (await upstream.fetch("https://fixture.example/state")).json();
     assert.equal(calls.length, dispatched.length, "denied and pre-aborted requests must have zero egress");
     for (const id of dispatched) {
@@ -81,7 +85,9 @@ test("registered Qwen global standard streams preserve original grants, selected
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials } from "./worker/grant-credentials.ts";
+const denials = [];
 export default { ...handler, async fetch(request, env, context) {
+  if (new URL(request.url).pathname === "/fixture/denials") return Response.json(denials);
   if (new URL(request.url).pathname === "/fixture/grants") {
     for (const id of ${JSON.stringify(ids)}) {
       for (const foreign of ["qwen-cn", "qwen-coding-global", "qwen-coding-cn", "qwen-token-plan", "qwen-token-plan-cn"]) await putGrantCredentials(env, "oauth/qwen_" + id + "/" + foreign, { provider: foreign, enabled: true, kind: "api_key", credential: "fixture-foreign-product" });
@@ -89,7 +95,13 @@ export default { ...handler, async fetch(request, env, context) {
     }
     return new Response(null, { status: 204 });
   }
-  return handler.fetch(request, { ...env, QWEN_API_KEY: "must-not-fallback", QWEN_CODING_GLOBAL_API_KEY: "must-not-fallback", QWEN_CN_API_KEY: "must-not-fallback", QWEN_CODING_CN_API_KEY: "must-not-fallback", QWEN_TOKEN_PLAN_API_KEY: "must-not-fallback", QWEN_TOKEN_PLAN_CN_API_KEY: "must-not-fallback", DASHSCOPE_API_KEY: "must-not-fallback" }, context);
+  const response = await handler.fetch(request, { ...env, QWEN_API_KEY: "must-not-fallback", QWEN_CODING_GLOBAL_API_KEY: "must-not-fallback", QWEN_CN_API_KEY: "must-not-fallback", QWEN_CODING_CN_API_KEY: "must-not-fallback", QWEN_TOKEN_PLAN_API_KEY: "must-not-fallback", QWEN_TOKEN_PLAN_CN_API_KEY: "must-not-fallback", DASHSCOPE_API_KEY: "must-not-fallback" }, context);
+  const closed = ${JSON.stringify(blocked.map((_, i) => `closed${i}`))}.find(id => request.headers.get("authorization") === "Bearer clawrouter-live-qwen_" + id + "-fixture-secret");
+  if (closed) {
+    const body = await response.clone().json();
+    denials.push({ id: closed, status: response.status, code: body.error?.code, message: body.error?.message });
+  }
+  return response;
 } };`;
 }
 function upstreamFixture() {
