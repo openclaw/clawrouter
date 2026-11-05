@@ -141,3 +141,27 @@ test("completed projections remain authoritative when UPDATE sets nullable attri
   }
   assertCoveredRows(f);
 });
+
+test("the sub-second migration alarm never counts the whole table", async t => {
+  t.mock.method(Date, "now", () => now);
+  const logs = [];
+  t.mock.method(console, "log", line => logs.push(JSON.parse(line)));
+  const f = usageFixture(); t.after(() => f.db.close());
+  f.db.exec("BEGIN");
+  for (let i = 0; i < 2_500; i++) f.insert({ ...syntheticUsage(i, now), id: `count-${i}` });
+  f.db.exec("COMMIT");
+  const ledger = f.open(), counts = () => f.queries.filter(query => /COUNT\(\*\) AS row_count/.test(query)).length;
+  let migrating = 0;
+  while (!usageRollupProgress(f.state.storage.sql).complete) {
+    await ledger.alarm();
+    if (usageRollupProgress(f.state.storage.sql).complete) break;
+    migrating++;
+    assert.equal(counts(), 0);
+    assert.equal(f.alarm(), now + 500);
+  }
+  assert.ok(migrating > 0, "the fixture must exercise at least one migrating alarm");
+  await ledger.alarm();
+  assert.ok(counts() > 0, "the idle maintenance alarm still reports table size");
+  assert.equal(f.alarm(), now + 86_400_000);
+  assert.ok(logs.every(entry => entry.event === "usage_rollup_maintenance" && !JSON.stringify(entry).includes("count-")));
+});

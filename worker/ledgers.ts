@@ -189,11 +189,18 @@ export class UsageLedgerObject implements DurableObject {
   async alarm(): Promise<void> {
     this.cleanup();
     const attributionPending = this.backfillAttribution();
+    const before = usageRollupProgress(this.sql).last_rowid;
     backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
     const progress = usageRollupProgress(this.sql);
+    if (!progress.complete || attributionPending) {
+      // COUNT(*) walks a whole index: never on this sub-second migration cadence.
+      if (Math.floor(progress.last_rowid / 100_000) !== Math.floor(before / 100_000)) console.log(JSON.stringify({ event: "usage_rollup_maintenance", databaseSize: this.sql.databaseSize, ...progress }));
+      await this.state.storage.setAlarm(Date.now() + usageRollupAlarmMs);
+      return;
+    }
     const count = first<{ row_count: number }>(this.sql.exec("SELECT COUNT(*) AS row_count FROM usage_events"))!.row_count;
     console.log(JSON.stringify({ event: "usage_rollup_maintenance", rowCount: count, databaseSize: this.sql.databaseSize, ...progress }));
-    if (!progress.complete || attributionPending || count) await this.state.storage.setAlarm(Date.now() + (!progress.complete || attributionPending ? usageRollupAlarmMs : 86_400_000));
+    if (count) await this.state.storage.setAlarm(Date.now() + 86_400_000);
   }
 
   private async scheduleUsageAlarm(now = Date.now()): Promise<void> {
