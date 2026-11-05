@@ -1,3 +1,4 @@
+import type { WanManagedOperation } from "./managed-media-json.ts";
 import { CopilotCatalogFlow } from "./copilot-catalog-flow.ts";
 import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
 import { VertexOwnerRefresh } from "./vertex-owner-refresh.ts";
@@ -362,8 +363,13 @@ export class GrantCredentialObject implements DurableObject {
         return json({ grant });
       }
       if (path === "/inspect") {
+        const input = request.body ? await readJson<{ wanOriginal?: true }>(request).catch(() => ({} as { wanOriginal?: true })) : {};
         let record = await this.state.storage.get<CredentialRecord>("credential");
         if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
+        if (input.wanOriginal) {
+          if (!canonicalRecord(record)) throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner is unavailable");
+          return json({ grant: metadataGrant(record) });
+        }
         record = await this.diagnoseUnsettled(record);
         if (canonicalRecord(record) && record.poolSyncPending) {
           // A derived-index outage must not conceal the owner's diagnosis.
@@ -548,7 +554,21 @@ export class GrantCredentialObject implements DurableObject {
     return installed;
   }
 
-  private async materialize(input: MaterializeRequest): Promise<OwnerResponse> {
+  private async materialize(input: MaterializeRequest & { wanOriginal?: true }): Promise<OwnerResponse> {
+    if (input.wanOriginal) {
+      // This private operation consumes only an already-owned exact revision.
+      // Do not migrate, diagnose/refresh, adopt a replacement, or publish caches.
+      const record = await this.state.storage.get<CredentialRecord>("credential");
+      if (!record || !canonicalRecord(record) || record.grantKey !== input.key
+        || input.providerId !== "alibaba" || record.providerId !== input.providerId
+        || record.kind !== "api_key" || record.kind !== input.grant.kind
+        || record.generation !== input.expectedGeneration || record.generation !== input.grant.credentialGeneration
+        || !record.lineage || record.lineage !== input.grant.credentialLineage
+        || record.enabled !== true || record.status !== "active" || record.refreshAttempt || input.force || input.legacy
+        || record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= Date.now()))
+        throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner revision is unavailable");
+      return { grant: materializedGrant(metadataGrant(record), record) };
+    }
     let record = await this.loadRecord(input.key);
     // Unlike generic refresh, this operation may only materialize the exact
     // already-admitted owner revision and its actual scalar API-key slot.
@@ -1151,8 +1171,8 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/inspect", {}, signal)).grant;
+export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/inspect", wan ? { wanOriginal: true } : {}, signal, wan)).grant;
 }
 
 export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"]): Promise<UpstreamGrant> {
@@ -1172,8 +1192,9 @@ export async function materializeGrantCredentials(
   force: boolean,
   signal?: AbortSignal,
   operation?: MaterializeRequest["operation"],
+  wan?: WanManagedOperation,
 ): Promise<UpstreamGrant> {
-  const legacy = hasRawCredential(grant) ? grant : null;
+  const legacy = !wan && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
     key,
     grant,
@@ -1183,7 +1204,8 @@ export async function materializeGrantCredentials(
     force,
     expectedGeneration: grant.credentialGeneration ?? null,
     operation,
-  }, signal)).grant;
+    ...(wan ? { wanOriginal: true } : {}),
+  }, signal, wan)).grant;
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata): Promise<UpstreamGrant> {
@@ -1275,8 +1297,9 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation): Promise<T> {
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
+  if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) {

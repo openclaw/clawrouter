@@ -19,6 +19,8 @@ export interface ManagedReadContext {
   action: ManagedAction;
   // The actual operation signal; newly qualified readers may require it.
   signal?: AbortSignal;
+  // Opt-in direct-reader custody; legacy adapters keep their existing contract.
+  registerInput?: (input: import("./input-retirement.ts").InputRetirement, response?: Response) => void;
   // Undefined only for create. Other reads must verify this bound identity;
   // an ID-less acknowledgement/result inherits it from the original request.
   expectedId?: string;

@@ -1,3 +1,4 @@
+import type { WanManagedOperation } from "./managed-media-json.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { resolveConnection } from "./authority.ts";
@@ -83,7 +84,7 @@ export function retainedResponseRoute(pathParams: Record<string, string>, header
 
 // The credential owner invokes fetch immediately after this preparation while
 // still holding its mutation tail. No credential leaves that owner for a poll.
-export async function prepareResponseControl(env: Env, input: ResponseControlDispatch, grant: UpstreamGrant | null): Promise<Request> {
+export async function prepareResponseControl(env: Env, input: ResponseControlDispatch, grant: UpstreamGrant | null, wan?: WanManagedOperation): Promise<Request> {
   assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
   const managed = input.protocol !== undefined;
@@ -98,7 +99,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
   if (!contract?.retained && Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
   assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed }, grant, env);
-  const connection = await resolveConnection(env, provider.id);
+  const connection = await resolveConnection(env, provider.id, wan);
   if (connection?.enabled === false) throw new HttpError(503, "provider_disabled", "response provider is disabled");
   const upstream = configuredUpstream(provider, grant, env), incoming = new Headers();
   if (input.route.organization !== null) incoming.set("openai-organization", input.route.organization);
@@ -158,24 +159,25 @@ export function assertResponseControlRetention(env: Env, input: ResponseControlD
     throw new HttpError(403, "upstream_retention_unqualified", "the original upstream retention qualification is unavailable");
 }
 
-export async function dispatchResponseControl(env: Env, input: ResponseControlDispatch, signal: AbortSignal): Promise<Response> {
+export async function dispatchResponseControl(env: Env, input: ResponseControlDispatch, signal: AbortSignal, wan?: WanManagedOperation): Promise<Response> {
   signal.throwIfAborted();
   if (input.owner.grantKey) {
     const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(input.owner.grantKey));
     // The owner returns the upstream response unchanged. Its internal transport
     // must not follow that response before the public boundary can reject it.
-    return stub.fetch("https://clawrouter.internal/responses/control", { method: "POST", body: JSON.stringify(input), signal, redirect: "manual" });
+    const start = () => stub.fetch("https://clawrouter.internal/responses/control", { method: "POST", body: JSON.stringify(input), signal, redirect: "manual" });
+    return wan ? wan.nativeResponse(start, signal) : start();
   }
   const preparation = new HttpOperation(signal, 10_000);
   try {
-    const request = await preparation.wait(prepareResponseControl(env, input, null));
-    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input)));
+    const request = await preparation.wait(prepareResponseControl(env, input, null, wan));
+    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input), wan));
     preparation.signal.throwIfAborted();
     assertControlDeadline(input);
     assertControlCallerLive(input.authorization);
     assertResponseControlRetention(env, input);
     assertManagedDispatch(input.protocol, request);
-    return fetch(request, { signal });
+    return wan ? wan.nativeResponse(() => fetch(request, { signal }), signal) : fetch(request, { signal });
   } finally { preparation.stop("complete"); }
 }
 

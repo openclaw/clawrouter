@@ -1,3 +1,4 @@
+import type { WanManagedOperation } from "./managed-media-json.ts";
 import { normalizePolicyRecord } from "./authority-policy.ts";
 import { normalizeUser, profileUpdate } from "./authority-users.ts";
 import { mutateBudgetCaps } from "./authority-budgets.ts";
@@ -796,8 +797,9 @@ function invalidAuthorityValue(message: string): never {
 }
 
 
-export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal): Promise<T> {
+export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
+  if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) throw new Error(`authority ${path} failed (${response.status}): ${text}`);
@@ -902,7 +904,13 @@ export async function listConnections(env: Env, providerIds: string[]): Promise<
   return (await authorityCall<typeof result>(env, "/connections/resolve", { providerIds: ids })).connections;
 }
 
-export async function resolveConnection(env: Env, providerId: string): Promise<ProviderConnection | null> {
+export async function resolveConnection(env: Env, providerId: string, wan?: WanManagedOperation): Promise<ProviderConnection | null> {
+  if (wan) {
+    const result = await authorityCall<{ initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
+      "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", wan.controlSignal, wan);
+    if (!result.initialized || result.missingProviderIds.length) throw new Error("Wan requires an initialized original connection");
+    return result.connections.find(connection => connection.providerId === providerId) ?? null;
+  }
   return (await resolveConnections(env, [providerId]))[0] ?? null;
 }
 
