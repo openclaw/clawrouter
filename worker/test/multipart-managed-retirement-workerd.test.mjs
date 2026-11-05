@@ -65,11 +65,23 @@ globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init),a=active;
  if(a)a.fetches++;
  const response=await rawFetch(request);
- const selected=a&&(a.mode==='response'&&request.url==='https://api.groq.com/openai/v1/audio/transcriptions'
-  ||a.mode==='metadata'&&request.url.endsWith('/v1/files/fixture-video')
-  ||a.mode==='download'&&request.url.endsWith('/v1/files/fixture-video:download'));
+ const selected=a&&a.mode==='response'&&request.url==='https://api.groq.com/openai/v1/audio/transcriptions';
  return selected?hold(response,a):response;
 };
+// File dispatch crosses the real credential-owner fetch boundary. Hold the
+// original response received by this Worker, not an unrelated owner-side tail
+// whose cancellation promise cannot be transported by a Response body.
+function fileEnvironment(env,a){
+ if(a.mode!=='metadata'&&a.mode!=='download')return env;
+ const namespace=env.GRANT_CREDENTIALS;
+ return {...env,GRANT_CREDENTIALS:{idFromName:name=>namespace.idFromName(name),get(id){
+  const stub=namespace.get(id);
+  return {fetch:async(input,init)=>{
+   const selected=String(input)==='https://clawrouter.internal/responses/control'&&JSON.parse(init.body).file?.action===a.mode;
+   const response=await stub.fetch(input,init);return selected?hold(response,a):response;
+  }};
+ }}};
+}
 const groq=structuredClone(snapshot.providers.find(p=>p.id==='groq'));
 const audio={id:'transcription',path:'/v1/audio/transcriptions',path_params:[],path_param_styles:{},
  request_format:'groq.transcription',response_format:'groq.transcription',native_proxy:true,timeout_ms:10000,method:'POST',methods:['POST'],auth:null,headers:{},request_headers:[],response_headers:[],query:{},streaming:null};
@@ -115,7 +127,7 @@ export default {async fetch(request,env,ctx){
   target=new Request('https://router.example/v1/proxy/groq/transcription',{method:'POST',headers,body:form,signal:a.abort.signal});
  }else target=new Request('https://router.example/v1/native/replicate/v1/files/fixture-video'+(mode==='download'?':download':''),{headers:{...headers,'x-clawrouter-job-id':'prediction_fixture_001'},signal:a.abort.signal});
  ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('synthetic caller cancellation'))));
- ctx.waitUntil(worker.fetch(target,env,ctx).then(async response=>{a.status=response.status;const text=await response.text();try{a.errorCode=JSON.parse(text)?.error?.code;}catch{}a.results++;a.phase='result';a.ready.resolve();})
+ ctx.waitUntil(worker.fetch(target,fileEnvironment(env,a),ctx).then(async response=>{a.status=response.status;const text=await response.text();try{a.errorCode=JSON.parse(text)?.error?.code;}catch{}a.results++;a.phase='result';a.ready.resolve();})
   .catch(error=>{a.errorClass=error?.name;a.results++;a.phase='rejected';a.ready.resolve();}));
  await a.ready.promise;return Response.json(state());
 },queue:worker.queue};
