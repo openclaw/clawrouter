@@ -623,14 +623,18 @@ export async function proxyCopilotDiscovery(request: Request, env: Env, context:
     if (identity.attestation.revision !== receipt.revision) throw unavailable();
     operation.signal.throwIfAborted();
     const response = await stub.fetch("https://clawrouter.internal/copilot-public/observe", { method: "POST", headers: privateInit, signal: operation.signal }); responses.push(response);
-    const packet = await readPublicPacket(response, operation), observation = decodeCopilotPublicObservation(packet, registry, receipt.revision, deadline);
-    const view = { registry, observation, auth, policy: identity.policy, connection };
+    const packet = await readPublicPacket(response, operation);
+    // The owner's observation can wait in transport. Recheck the ORIGINAL
+    // caller/profile after that physical reader retires, before public output.
+    const current = await currentCopilotPublicIdentity(env, authorization, operation.signal, identity.attestation);
+    const observation = decodeCopilotPublicObservation(packet, registry, receipt.revision, deadline);
+    const view = { registry, observation, auth, policy: current.policy, connection };
     let total = 0, pieces = 0;
     for (const piece of render(view)) {
       if (++pieces > 65536 || (total += boundedUtf8(piece)) > 4 * 1024 * 1024) throw unavailable();
     }
-    // No asynchronous work between the final owner observation, bounded local
-    // decoding/counting and publication. Current policy also filters the bits.
+    // No asynchronous work between this final frontend authority check,
+    // bounded local decoding/counting and publication. This is fresh-at-check.
     operation.signal.throwIfAborted(); if (Date.now() >= deadline) throw unavailable();
     iterator = render(view)[Symbol.iterator](); let sent = 0;
     const abort = () => { try { controller?.error(operation.signal.reason); } catch {} iterator?.return?.(); iterator = undefined; end(); };

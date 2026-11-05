@@ -124,12 +124,12 @@ const compiled={...source,id:'github-copilot',config_keys:[],optional_config_key
  capabilities:caps.map((id,i)=>({id,endpoint:'api_'+i,methods:['POST']})),models:[{id:'github-copilot/model-0',upstream:'model-0',capabilities:caps,pricing_ref:null,pricing:{inputPerMillion:1,outputPerMillion:1}}]};
 snapshot.providers.push(compiled);
 function configureCompiled(mode){compiled.models=Array.from({length:['discovery-max','discovery-overflow'].includes(mode)?4096:1},(_,i)=>{const upstream='model-'+i+(mode==='discovery-overflow'?'x'.repeat(240):'');return{id:'github-copilot/'+upstream,upstream,capabilities:caps,pricing_ref:null,pricing:null};});}
-let frontLease,frontReads=0,frontChargedAtRead=[];
+let frontLease,frontReads=0,frontChargedAtRead=[],frontObservation;
 export default{async fetch(request,env,ctx){
  const url=new URL(request.url),key='oauth/fixture/'+(url.searchParams.get('grant')??'copilot');
  if(url.pathname==='/fixture/front-hold'){frontLease=new BodyLease();return Response.json({admitted:frontLease.grow(48*1024*1024),charged:bodyBudgetCharged()});}
  if(url.pathname==='/fixture/front-release'){frontLease?.release();frontLease=undefined;return Response.json({charged:bodyBudgetCharged()});}
- if(url.pathname==='/fixture/front-stats')return Response.json({charged:bodyBudgetCharged(),reads:frontReads,admission:frontChargedAtRead});
+ if(url.pathname==='/fixture/front-stats')return Response.json({charged:bodyBudgetCharged(),reads:frontReads,admission:frontChargedAtRead,observation:frontObservation?{reads:frontObservation.reads,cancels:frontObservation.cancels,unlocks:frontObservation.unlocks,locked:frontObservation.body.locked}:null});
  if(url.pathname==='/fixture/setup'){
   await authorityCall(env,'/users/initialize-all',[{email:${JSON.stringify(email)},record:{role:'admin',tenantId:'default',enabled:true,groups:[],contentRetentionDisabled:false}}]);
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,requestCostMicros:9999,requestCostsMicros:{'llm.chat':700,'llm.responses':1100,'llm.messages':1300},grantRouting:{eligibleGrants:{'github-copilot':[key.split('/').at(-1)]}}}}]);
@@ -137,7 +137,7 @@ export default{async fetch(request,env,ctx){
  }
  if(url.pathname==='/fixture/policy'){await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,requestCostMicros:9999,requestCostsMicros:{'llm.chat':700,'llm.responses':1100,'llm.messages':1300},grantRouting:{eligibleGrants:{'github-copilot':[key.split('/').at(-1)]}}}});return Response.json({ok:true});}
  if(url.pathname==='/fixture/unknown'){await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,monthlyBudgetMicros:1000,grantRouting:{eligibleGrants:{'github-copilot':[key.split('/').at(-1)]}}}});return Response.json({ok:true});}
- if(url.pathname==='/fixture/mode'){mode=url.searchParams.get('mode')??'setup';configureCompiled(mode);frontReads=0;frontChargedAtRead=[];}
+ if(url.pathname==='/fixture/mode'){mode=url.searchParams.get('mode')??'setup';configureCompiled(mode);frontReads=0;frontChargedAtRead=[];frontObservation=undefined;}
  if(url.pathname==='/fixture/mode'||url.pathname==='/fixture/stats')return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch('https://clawrouter.internal'+url.pathname,{method:'POST',body:url.searchParams.get('mode')??''});
  if(url.pathname==='/fixture/owner'){const g=await inspectGrantCredentials(env,key);return Response.json({generation:g.credentialGeneration,lineage:g.credentialLineage,status:g.credentialStatus,hasAccessToken:g.hasAccessToken,hasCredential:g.hasCredential});}
  if(url.pathname==='/fixture/revoke'){await revokeGrantCredentials(env,key);return Response.json({ok:true});}
@@ -147,6 +147,20 @@ export default{async fetch(request,env,ctx){
   const abort=new AbortController();if(mode.startsWith('held-')||['cleanup-error','late','profile-revision','discovery-held','discovery-late'].includes(mode))ctx.waitUntil(gate('abort').then(()=>abort.abort()));
   request=new Request(request,{signal:abort.signal});if(request.body){const get=request.body.getReader.bind(request.body);
   request.body.getReader=options=>{const r=get(options);return{async read(view){frontReads++;if(frontReads===1){const s=await env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(keyForRequest)).fetch('https://clawrouter.internal/fixture/stats',{method:'POST'});frontChargedAtRead.push((await s.json()).charged);}return r.read(view);},cancel:reason=>r.cancel(reason),releaseLock:()=>r.releaseLock()};};}
+ }
+ if(['discovery-observation-revoke','discovery-observation-reattest'].includes(mode)){
+  const namespace=env.GRANT_CREDENTIALS;
+  env={...env,GRANT_CREDENTIALS:{idFromName:name=>namespace.idFromName(name),get(id){const stub=namespace.get(id);return{async fetch(input,init){
+   const response=await stub.fetch(input,init),url=input instanceof Request?input.url:String(input);
+   if(url.endsWith('/copilot-public/observe')&&response.status===200){
+    const a=frontObservation={reads:0,cancels:0,unlocks:0,body:response.body},get=response.body.getReader.bind(response.body);
+    response.body.getReader=options=>{const reader=get(options);return{
+     async read(view){a.reads++;try{return await reader.read(view);}finally{if(a.reads===1)await gate('compact-read');}},
+     async cancel(reason){a.cancels++;await reader.cancel(reason);},releaseLock(){reader.releaseLock();a.unlocks++;}
+    };};
+   }
+   return response;
+  }};}}};
  }
  return worker.fetch(request,env,ctx);
 },queue:worker.queue};`;
@@ -179,10 +193,10 @@ test('actual isolated public Copilot native and manifest admission, tariffs and 
  const until=async(grant,predicate)=>{let s;for(let i=0;i<150;i++){s=await control('/fixture/stats',grant);if(predicate(s))return s;await new Promise(r=>setTimeout(r,10));}assert.fail(JSON.stringify(s));};
  await control('/fixture/setup','copilot');
  const apiFormats=['openai.chat_completions','openai.responses','anthropic.messages'],apiPaths=['/chat/completions','/responses','/messages'],tariffs=[700,1100,1300];
- const cases=[...['native','manifest'].flatMap(route=>apiFormats.flatMap((format,index)=>[false,true].map(stream=>({mode:route+'-'+index+'-'+stream,route,format,index,stream})))),...['maximum','maximum-stream','reads-exact','reads-over-input','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','profile-revision','unknown-price','missing-profile','empty','destination','downstream-cancel','discovery-max','discovery-overflow','discovery-digest','discovery-tighten','discovery-reads','discovery-models','discovery-held','discovery-control','discovery-revoke','discovery-late','discovery-profile'].map(mode=>({mode,route:'native',format:apiFormats[1],index:1,stream:mode==='maximum-stream'}))];
+ const cases=[...['native','manifest'].flatMap(route=>apiFormats.flatMap((format,index)=>[false,true].map(stream=>({mode:route+'-'+index+'-'+stream,route,format,index,stream})))),...['maximum','maximum-stream','reads-exact','reads-over-input','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','profile-revision','unknown-price','missing-profile','empty','destination','downstream-cancel','discovery-max','discovery-overflow','discovery-digest','discovery-tighten','discovery-reads','discovery-models','discovery-held','discovery-control','discovery-revoke','discovery-late','discovery-profile','discovery-observation-revoke','discovery-observation-reattest'].map(mode=>({mode,route:'native',format:apiFormats[1],index:1,stream:mode==='maximum-stream'}))];
  for(const {mode,route,format,index,stream} of cases)await t.test(mode,async t=>{
   const grant='public-'+mode;
-  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
+  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream','compact-read'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
   io.setMode(['maximum','discovery-max'].includes(mode)?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');await configure();
   const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-public-'+mode,expectedGeneration:0}));
   await new Promise(r=>setTimeout(r,Math.max(0,begun.nextPollAt-Date.now())+10));
@@ -195,6 +209,19 @@ test('actual isolated public Copilot native and manifest admission, tariffs and 
   const pending=mode.startsWith('discovery-')?runtime.dispatchFetch(origin+(mode==='discovery-models'?'/v1/models':'/v1/catalog')+'?provider=github-copilot',{headers:{authorization:'Bearer clawrouter-live-catalog-abcdefgh'}}):runtime.dispatchFetch(origin+(route==='native'?'/v1/native/github-copilot'+apiPaths[index]:'/v1/proxy/github-copilot/api_'+index),{method:'POST',headers:{authorization:'Bearer clawrouter-live-catalog-abcdefgh','content-type':'application/json','x-fixture-grant':grant,'copilot-integration-id':'forged','x-initiator':'user'},body:JSON.stringify(value)});
   const held=mode.startsWith('held-')||['cleanup-error','late','revoke','replace','account-cancel'].includes(mode);
   if(mode.startsWith('discovery-')){
+   if(mode.startsWith('discovery-observation-')){
+    let published=false;void pending.then(()=>{published=true;},()=>{published=true;});
+    let front;for(let i=0;i<150;i++){front=await control('/fixture/front-stats',grant);if(front.observation?.reads===1)break;await new Promise(r=>setTimeout(r,10));}
+    assert.equal(front.observation?.reads,1);assert.equal(front.observation.locked,true);assert.equal(published,false);
+    assert.equal((await control('/fixture/stats',grant)).charged,96*MiB);
+    if(mode==='discovery-observation-revoke'){
+     const revoked=await runtime.dispatchFetch(origin+'/v1/admin/credentials/catalog/revoke',{method:'POST',headers:adminHeaders});assert.equal(revoked.status,200,await revoked.text());
+    }else await configure({...profile,userAgent:'Fixture/reattested'});
+    assert.equal(published,false);io.release(mode+'/compact-read');
+    const denied=await bounded(pending,'held observation authorization');const text=await denied.text();assert.ok(denied.status>=400,text);assert.doesNotMatch(text,/model-0|clawrouter.client-catalog/);
+    const stats=await until(grant,s=>s.charged===0);front=await control('/fixture/front-stats',grant);
+    assert.equal(front.observation.locked,false);assert.equal(front.observation.unlocks,1);assert.equal(stats.events.length,0);assert.equal(io.counts.inference-counts.inference,0);return;
+   }
    if(['discovery-held','discovery-control','discovery-revoke','discovery-late'].includes(mode)){
     await until(grant,s=>s.readers.some(r=>r.phase==='catalog'&&r.reads===(mode==='discovery-late'?0:2)));
     assert.equal((await control('/fixture/stats',grant)).charged,96*MiB);

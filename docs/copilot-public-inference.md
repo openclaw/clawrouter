@@ -112,11 +112,13 @@ never come from the public caller. The observation is not a reusable permit.
 Owner and frontend maintain one mapping each to their existing compiled registry;
 they do not copy upstream rows across RPC. The owner retains its decoded and
 discarded metadata in the original 80 MiB share until the public producer retires.
-The frontend intersects the compact bits with its admitted policy. The owner
-performs a final current-policy/profile/original-binding check before returning
-the bits. No asynchronous work follows that returned observation's complete
-read before bounded counting and public headers. A mismatch, expiry or overflow
-denies without public partial discovery.
+The owner checks current policy/profile/original binding before returning the
+bits. After the compact packet's physical reader retires, the frontend rechecks
+the original authorization and expected attestation, then intersects the bits
+with that current policy. No asynchronous work follows this final authority check
+before bounded counting and public headers. This is fresh-at-check authorization;
+it does not promise instantaneous cross-owner revocation. A mismatch, expiry or
+overflow denies without public partial discovery.
 
 Public records use closed fields and bounded scalars. Models retain registered
 identity and qualified API capabilities; price fields remain null. Offers retain
