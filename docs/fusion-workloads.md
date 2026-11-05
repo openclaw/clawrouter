@@ -194,3 +194,7 @@ against both original candidate snapshots in separate fresh sandboxes, returns
 their bounded outputs, and records only pass/fail flags. It makes differential
 behavior testing cheap enough to use during selection. The agent still owns
 probe quality: a weak assertion does not establish that either repair is correct.
+
+An isolated local execution failure records an error trial with zero score and
+continues the remaining cases. An unknown API charge still stops the campaign.
+Failure labels are allowlisted; raw errors and source are never persisted.

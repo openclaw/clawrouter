@@ -72,7 +72,8 @@ export function replaceEdits(task, files, edits) {
 
 const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
   'invalid_read_paths', 'invalid_edits', 'invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size',
-  'missing_query', 'invalid_probe', 'invalid_action', 'command_timeout', 'command_output_limit']);
+  'missing_query', 'invalid_probe', 'invalid_action', 'command_timeout', 'command_output_limit',
+  'command_failed', 'context_header_too_large', 'ensemble_deadline']);
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
 export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
 
@@ -327,12 +328,15 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
           graded = await verify(task, receipt.image, result.files, repo);
         } catch (error) {
           details.push({ trialId, outcome: 'interrupted', errorClass: ledger.blocked ? 'unknown_cost' : 'execution_failure',
+            failureCode: toolErrorCode(error),
             costIncludesReservation: ledger.attempts.some(attempt => attempt.trialId === trialId && attempt.costMicros === null) });
           records.push({ caseId: task.id, domain: 'repository-regression-development', trial, strategy,
             configurationId: hash(JSON.stringify({ strategy, config })), score: 0, costMicros: ledger.total(trialId),
             latencyMs: Math.round(performance.now() - started),
             callCount: ledger.attempts.filter(attempt => attempt.trialId === trialId).length, status: 'error' });
-          await snapshot(); throw error;
+          await snapshot();
+          if (ledger.blocked) throw error;
+          continue;
         }
         // Exact non-skipped test counts must match the qualified known repair.
         const passed = graded.passed && graded.tests === receipt.oracle.tests && graded.skipped === receipt.oracle.skipped;
