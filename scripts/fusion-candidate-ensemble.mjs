@@ -1,4 +1,4 @@
-import { sandbox, validateEdits, writeFiles, probe } from './fusion-workloads.mjs';
+import { sandbox, validateEdits, writeFiles, probe, hash } from './fusion-workloads.mjs';
 
 // Candidate source stays in memory; every phase charges the same trial ledger.
 export async function runCandidateEnsemble(task, image, trialId, config, invoke, engine, runAgent) {
@@ -48,4 +48,34 @@ export async function compareCandidates(task, image, candidates, script, timeout
     } finally { await box.close(); }
   }
   return results;
+}
+
+// Previews guide inspection; they are not patches and can omit changed source.
+export function candidateSummaries(baseline, candidates) {
+  const originals = new Map(baseline.map(file => [file.path, file.content]));
+  const count = candidates.reduce((sum, files) => sum + files.length, 0);
+  const budget = Math.floor(12000 / Math.max(1, count * 2));
+  const preview = text => {
+    const bytes = Buffer.from(text);
+    if (bytes.length <= budget) return { head: text, tail: '', omittedBytes: 0 };
+    const half = Math.floor(budget / 2);
+    return { head: bytes.subarray(0, half).toString(), tail: bytes.subarray(bytes.length - half).toString(),
+      omittedBytes: bytes.length - half * 2 };
+  };
+  let summaries = candidates.map((files, index) => ({ candidate: index + 1, files: files.map(file => {
+    const before = originals.get(file.path), after = file.content;
+    if (typeof before !== 'string') throw new Error('invalid_candidate_baseline');
+    const metadata = { path: file.path, digest: hash(after), bytes: Buffer.byteLength(after), unchanged: before === after };
+    if (metadata.unchanged) return metadata;
+    let start = 0, endBefore = before.length, endAfter = after.length;
+    while (start < endBefore && start < endAfter && before[start] === after[start]) start++;
+    while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) { endBefore--; endAfter--; }
+    const contextStart = Math.max(0, start - 120);
+    return { ...metadata, changeStartLine: before.slice(0, start).split('\n').length,
+      before: preview(before.slice(contextStart, endBefore + 120)), after: preview(after.slice(contextStart, endAfter + 120)) };
+  }) }));
+  if (Buffer.byteLength(JSON.stringify(summaries)) > 24000) summaries = summaries.map(summary => ({ ...summary,
+    files: summary.files.map(({ before, after, ...metadata }) => ({ ...metadata, previewOmitted: true })) }));
+  if (Buffer.byteLength(JSON.stringify(summaries)) > 24000) throw new Error('candidate_summary_too_large');
+  return summaries;
 }
