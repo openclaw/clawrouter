@@ -43,6 +43,75 @@ models:
     - id: volcengine/doubao-seed-2-1-pro-260915
       upstream: doubao-seed-2-1-pro-260915
       capabilities: [llm.chat]
+    - id: volcengine/doubao-seed-evolving
+      upstream: doubao-seed-evolving
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/volcengine/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: volcengine/doubao-seed-2-1-pro-260628
+      upstream: doubao-seed-2-1-pro-260628
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/volcengine/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: volcengine/doubao-seed-2-1-turbo-260628
+      upstream: doubao-seed-2-1-turbo-260628
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/volcengine/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: volcengine/glm-5-2-260617
+      upstream: glm-5-2-260617
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/volcengine/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: volcengine/deepseek-v4-pro-260425
+      upstream: deepseek-v4-pro-260425
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/volcengine/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: volcengine/deepseek-v4-flash-260425
+      upstream: deepseek-v4-flash-260425
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/volcengine/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: volcengine/kimi-k2-5-260127
+      upstream: kimi-k2-5-260127
+      capabilities: []
+    - id: volcengine/glm-4-7-251222
+      upstream: glm-4-7-251222
+      capabilities: []
+    - id: volcengine/deepseek-v3-2-251201
+      upstream: deepseek-v3-2-251201
+      capabilities: []
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
