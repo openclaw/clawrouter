@@ -36,10 +36,13 @@ import {readGoogleOmniFileState,readGoogleOmniFile} from './worker/provider-goog
 const rawFetch=globalThis.fetch.bind(globalThis),release=BodyLease.prototype.release;
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 let active,initialized=false;
-BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&bodyBudgetCharged()<before)active.releases++;};
+BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&bodyBudgetCharged()<before){
+ active.releases++;if(active.releaseEvents.length<8)active.releaseEvents.push({phase:active.phase,before,after:bodyBudgetCharged(),
+ sourceLocked:active.source?.locked??false,physicalLocked:active.physical?.locked??false,cleanup:active.cleanup,readRetired:active.readRetired});
+}};
 const state=()=>active?{mode:active.mode,phase:active.phase,errorCode:active.errorCode,errorClass:active.errorClass,
  fetches:active.fetches,reads:active.reads,cancels:active.cancels,cleanup:active.cleanup,readRetired:active.readRetired,
- results:active.results,status:active.status,releases:active.releases,charged:bodyBudgetCharged(),
+ results:active.results,status:active.status,releases:active.releases,releaseEvents:active.releaseEvents,charged:bodyBudgetCharged(),
  sourceLocked:active.source?.locked??false,physicalLocked:active.physical?.locked??false}:{};
 const gate=(a,phase)=>rawFetch('https://retirement-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async response=>{
  if(!response.ok)throw new Error('fixture gate rejected');await response.text();
@@ -102,7 +105,7 @@ export default {async fetch(request,env,ctx){
   const created=await worker.fetch(new Request('https://router.example/v1/native/replicate/v1/predictions',{method:'POST',headers:{...headers,'content-type':'application/json'},body:JSON.stringify({version:'1'.repeat(64),input:{prompt:'synthetic fixture'}})}),env,ctx);
   if(created.status!==200)throw new Error('fixture create failed '+created.status+' '+await created.text());await created.text();initialized=true;
  }
- const a={mode,phase:'setup',fetches:0,reads:0,cancels:0,cleanup:false,readRetired:false,results:0,status:0,releases:0,ready:deferred(),abort:new AbortController()};active=a;
+ const a={mode,phase:'setup',fetches:0,reads:0,cancels:0,cleanup:false,readRetired:false,results:0,status:0,releases:0,releaseEvents:[],ready:deferred(),abort:new AbortController()};active=a;
  let target;
  if(mode==='upload'){
   const source=hold(await rawFetch('https://retirement-source.example/upload',{redirect:'manual'}),a);
@@ -146,11 +149,11 @@ test("workerd multipart and original-job file aborts keep physical input and cap
     const charge=(mode==='upload'||mode==='response'?96:32)*1024*1024;
     let state=await call('/start?mode='+mode);assert.equal(state.charged,charge,JSON.stringify(state));assert.equal(state.reads,1,JSON.stringify(state));
     controls.release(mode,'abort');state=await until(s=>s.results===1&&s.cancels===1);
-    assert.equal(state.status,mode==='upload'?400:499,JSON.stringify(state));assert.equal(state.releases,0);assert.equal(state.charged,charge);
+    assert.equal(state.status,mode==='upload'?400:499,JSON.stringify(state));assert.equal(state.releases,0,JSON.stringify(state));assert.equal(state.charged,charge,JSON.stringify(state));
     assert.equal(state.sourceLocked,true);assert.equal(state.physicalLocked,true);assert.deepEqual(await call('/contend'),{allowed:false,charged:charge});
     const first=mode==='upload'||mode==='metadata'?'read':'cleanup',second=first==='read'?'cleanup':'read';
     controls.release(mode,first);state=await until(s=>first==='read'?s.readRetired:s.cleanup);
-    assert.equal(state.charged,charge);assert.equal(state.releases,0);assert.equal(state.sourceLocked,true);
+    assert.equal(state.charged,charge,JSON.stringify(state));assert.equal(state.releases,0,JSON.stringify(state));assert.equal(state.sourceLocked,true);
     controls.release(mode,second);state=await until(s=>s.releases===1);
     assert.equal(state.charged,0);assert.equal(state.sourceLocked,false);assert.equal(state.physicalLocked,false);assert.equal(state.cleanup,true);assert.equal(state.readRetired,true);
     assert.equal(state.cancels,1);assert.equal(state.results,1);assert.equal(state.fetches,mode==='upload'?0:mode==='download'?2:1);
