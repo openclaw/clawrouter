@@ -103,7 +103,7 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
       if (wan && prepared.revalidateAccount) await operation.wait(prepared.revalidateAccount(operation.signal), "upstream");
       if (adapter.prepareAdmitted) requireManagedCreateAdmission(auth.policy, env, prepared.continuation, adapter.protocol);
       operation.signal.throwIfAborted();
-      assertManagedDispatch(adapter.protocol, dispatchRequest);
+      if (wan) assertManagedDispatch(adapter.protocol, dispatchRequest);
       providerStarted = true;
       const pending = fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" });
       response = wan ? await wan.fetch(pending, operation) : await operation.wait(pending, "upstream",

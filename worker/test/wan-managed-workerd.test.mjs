@@ -170,7 +170,7 @@ test("isolated workerd Wan create/restart/poll and direct caller retirement pres
   t.after(() => rm(directory, { recursive: true, force: true }));
   const io = await external(t); let runtime = await isolated(directory, router, upstream(io.origin));
   t.after(async () => { io.releaseAll(); await runtime.dispose(); });
-  const request = (path, init) => runtime.dispatchFetch("https://router.example" + path, init);
+  const request = (path, init) => runtime.dispatchFetch("https://router.example" + path, { ...init, redirect: "manual" });
   const json = async path => { const response = await request(path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
   const call = (target, value, headers = {}) => request("/call?target=" + encodeURIComponent(target), value === null ? {} : { method: "POST", headers: { "content-type": "application/json", ...headers }, body: typeof value === "string" ? value : JSON.stringify(value) });
   const idle = async expected => { let state; for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.charged === expected) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
@@ -201,7 +201,8 @@ test("isolated workerd Wan create/restart/poll and direct caller retirement pres
   const job = await json("/job?locator=" + encodeURIComponent(locator));
   assert.equal(job.managed.terminal, "succeeded"); assert.equal(job.event.actual_cost_micros, 700); assert.equal(job.event.cost_basis, "policy_fixed");
   response = await call("/v1/proxy/alibaba/video", { body }, { "idempotency-key": "one-wan-job" });
-  assert.equal(response.status, 303, await response.clone().text()); await response.text(); await idle(0); assert.equal(io.counts.post, 1);
+  assert.equal(response.status, 303, await response.clone().text()); assert.equal(response.headers.get("location"), poll);
+  await response.text(); await idle(0); assert.equal(io.counts.post, 1);
   response = await call(native, { ...body, input: { prompt: "different" } }, { "idempotency-key": "one-wan-job" });
   assert.equal(response.status, 409, await response.text()); await idle(0); assert.equal(io.counts.post, 1);
   for (const mode of ["upload", "poll-read", "cleanup-reject"]) {

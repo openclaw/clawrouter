@@ -39,9 +39,15 @@ export async function readMediaJson(response: Response, allowed: (status: number
   text: string; body: Record<string, unknown>;
 }> {
   if (wan) {
-    const value = await readWanJson(response, managedMediaEnvelopeBytes, wan, allowed);
-    if (!mediaObject(value.body)) throw wanFailure();
-    return { text: value.text, body: value.body };
+    try {
+      const value = await readWanJson(response, managedMediaEnvelopeBytes, wan, allowed);
+      if (!mediaObject(value.body)) throw wanFailure();
+      return { text: value.text, body: value.body };
+    } catch {
+      // Provider/control rejection is an unavailable observation, not bad caller
+      // JSON. The registered physical owner still retains its cleanup boundary.
+      throw new Error("invalid_managed_media_response");
+    }
   }
   const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
   if (response.redirected || !allowed(response.status) || mime !== "application/json" || !response.body) {
