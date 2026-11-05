@@ -96,10 +96,11 @@ export function copilotPublicRelay(body: ReadableStream<Uint8Array>, operation: 
   }).finally(() => { operation.signal.removeEventListener("abort", abort); window = new Uint8Array(0); });
   void retired.catch(() => undefined);
   const stream = new ReadableStream<Uint8Array>({ type: "bytes", autoAllocateChunkSize: windowBytes,
-    start(controller: ReadableByteStreamController) { output = controller; },
-    pull(controller: ReadableByteStreamController) {
+    start(controller) { if (!("byobRequest" in controller)) throw unavailable(); output = controller; },
+    pull(controller) {
       const work = (async () => {
         try {
+          if (!("byobRequest" in controller)) throw unavailable();
           operation.signal.throwIfAborted();
           reader ??= body.getReader({ mode: "byob" });
           const offered = Math.min(windowBytes, controller.byobRequest?.view?.byteLength ?? windowBytes);
@@ -646,9 +647,10 @@ export async function proxyCopilotDiscovery(request: Request, env: Env, context:
     operation.signal.addEventListener("abort", abort, { once: true });
     const finish = () => { operation.signal.removeEventListener("abort", abort); iterator?.return?.(); iterator = undefined; controller = undefined; end(); };
     return new Response(new ReadableStream<Uint8Array>({ type: "bytes",
-      start(output: ReadableByteStreamController) { controller = output; },
-      pull(output: ReadableByteStreamController) {
+      start(output) { if (!("byobRequest" in output)) throw unavailable(); controller = output; },
+      pull(output) {
         try {
+          if (!("byobRequest" in output)) throw unavailable();
           operation.signal.throwIfAborted();
           const next = iterator!.next();
           if (next.done) { if (sent !== total) throw unavailable(); output.close(); output.byobRequest?.respond(0); finish(); return; }
