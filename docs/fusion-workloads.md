@@ -211,3 +211,19 @@ Candidate selection receives bounded change previews, hashes and change location
 not duplicate complete source files. Previews mark omitted bytes. The selector
 can install either candidate and read its complete source, and paired probes
 still execute the original candidate files in separate sandboxes.
+
+
+### Hosted workload campaign
+
+The `Benchmark Fusion workloads` workflow qualifies both corpora and runs the
+same isolated agent harness on a hosted runner. `confirm_inference` defaults to
+false. Paid execution requires the exact dispatch SHA and a complete experiment
+JSON configuration, including prior usage and the cumulative cap. All eight
+cases are preflighted together; the second corpus inherits the first corpus's
+settled and reserved spend. The workflow shares the paid-benchmark concurrency
+group and exposes provider credentials only to the inference step.
+
+Artifacts contain qualification receipts, per-corpus measurements and a campaign
+checkpoint. An interrupted corpus prevents the next corpus from starting. A
+missing pre-inference receipt and malformed accounting are distinguished; corrupt
+accounting conservatively reserves the current corpus's full allowance.
