@@ -37,6 +37,7 @@ for (const region of ["global", "cn"]) for (const manifest of [false, true]) for
     for (const request of f.sent) { assert.equal(new URL(request.url).origin, miniMaxVideoBinding(region).origin); assert.equal(request.headers.get("authorization"), "Bearer synthetic-video-key"); }
     const replay = await f.create(manifest, model, { headers: { "idempotency-key": "original-job" } }); await consume(replay, 303); await f.drain();
     assert.equal(f.sent.filter(request => request.method === "POST").length, 1);
+    await job.alarm(); await f.drain();
     const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 700); assert.equal(events[0].cost_basis, "policy_fixed");
     assert.equal(events[0].total_tokens, null); assert.equal(job.job().managed.terminal, "succeeded");
   });
@@ -117,8 +118,9 @@ for (const manifest of [false, true]) test(`Hailuo current tariff before first s
     }
     return stub.fetch(url, init);
   } }; };
-  const response = await f.create(manifest); await consume(response); await f.drain();
+  const response = await f.create(manifest), job = f.state(response); await consume(response); await f.drain();
   await consume(await f.invoke(poll, null)); await f.drain();
+  await job.alarm(); await f.drain();
   const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 900);
   assert.equal(events[0].cost_basis, "policy_fixed"); assert.equal(f.sent.filter(r => r.method === "POST").length, 1);
 });

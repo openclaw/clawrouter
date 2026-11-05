@@ -46,10 +46,14 @@ async function external(t) {
       counts.download++; const bytes = mp4(16 * MiB); response.writeHead(200, { "content-type": "application/json", "content-length": bytes.length }); response.end(bytes); return;
     } else { response.writeHead(404); response.end(); return; }
     if (mode === "maximum") {
+      // The public projection replaces this untrusted URL with the bound file
+      // link. Keep both the incoming and projected graphs at the admitted cap.
+      if (value.status === "Success") value.video_url = "https://media.example/never-fetch";
       const units = path.includes("/files/") ? 2000 : 65530;
       value.ignored = { a: "x".repeat(units), b: "x".repeat(units), c: "x".repeat(units) };
       let nodes = 0; const count = x => { nodes++; if (x && typeof x === "object") for (const v of Object.values(x)) count(v); }; count(value);
       value.discarded = Array(4095 - nodes).fill(null);
+      nodes = 0; count(value); assert.equal(nodes, 4096);
     }
     let text = JSON.stringify(value);
     if (mode === "maximum") text += " ".repeat((path.includes("/files/") ? 65536 : MiB) - Buffer.byteLength(text));
@@ -294,6 +298,7 @@ test("isolated workerd Hailuo original owner, restart/file, full charge and phys
     assert.ok(counts.exchanges[0].ordinary <= 8); assert.ok(counts.exchanges[0].mandatory <= 2);
     assert.equal(counts.exchanges[0].ordinary + counts.exchanges[0].mandatory, counts.controls.length);
     assert.equal(body.status, "Success"); filePath = body.video_url;
+    assert.equal(filePath, "/v1/native/minimax/v1/files/retrieve_content?file_id=" + task + "1");
     const f = await call(filePath, null, { "x-clawrouter-job-id": task }); if (f.status !== 200) assert.fail(await f.text());
     assert.equal(f.headers.get("content-type"), "video/mp4"); assert.equal((await f.arrayBuffer()).byteLength, 16 * MiB); counts = await idle();
     assert.equal(counts.exchanges.length, 1); assert.equal(counts.exchanges[0].kind, "file");
