@@ -57,7 +57,7 @@ test('isolated ensemble installs the second candidate and passes the fresh verif
     ...defaultExperiment, maxTurns: 9, deadlineMs: 120000,
   }, async trialId => {
     trialIds.push(trialId);
-    return { choices: [{ message: { content: JSON.stringify(queue.shift()) } }] };
+    return { choices: [{ message: { content: JSON.stringify(queue.shift()) }, finish_reason: 'stop' }] };
   }, {}, runAgent);
   const grade = await verify(task, receipt.image, result.files, process.cwd());
   assert.equal(grade.passed, true);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nativeRequest, nativeResult, nativePins } from '../scripts/fusion-native-provider.mjs';
+import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse } from '../scripts/fusion-native-provider.mjs';
 
 const body = { messages: [{ role: 'system', content: 'format instruction' }, { role: 'user', content: 'task' }], max_tokens: 4096, response_format: { type: 'json_object' } };
 const env = { OPENAI_API_KEY: 'synthetic-openai', ANTHROPIC_API_KEY: 'synthetic-anthropic' };
@@ -57,4 +57,18 @@ test('native preflight checks all identities without inference or mixed credenti
   assert.equal(pins['openai/gpt-6-luna'].costSource, 'published-tariff-estimate');
   assert.equal(pins['anthropic/claude-sonnet-5.5'].price.input, 4 / 1e6);
   await assert.rejects(nativePins(env, async () => new Response(null, { status: 401 })), /preflight_http_401/);
+});
+
+test('terminal provider states cannot masquerade as malformed action JSON', () => {
+  for (const [reason, disposition] of [['refusal', 'refused'], ['content_filter', 'refused'],
+    ['model_context_window_exceeded', 'context_limit'], ['length', 'truncated'], ['max_tokens', 'truncated'],
+    ['pause_turn', 'paused'], ['tool_use', 'paused'], ['new_unhandled_reason', 'unknown_stop']]) {
+    const response = { choices: [{ finish_reason: reason, message: { content: '{}' } }] };
+    assert.equal(responseDisposition(response), disposition);
+    assert.throws(() => requireCompleteResponse(response), new RegExp(`provider_${disposition}`));
+  }
+  assert.equal(responseDisposition({ choices: [{ finish_reason: 'stop', message: { content: '{}', refusal: 'declined' } }] }), 'refused');
+  assert.equal(responseDisposition({ choices: [{ finish_reason: 'end_turn', message: { content: '  ' } }] }), 'empty');
+  const complete = { choices: [{ finish_reason: 'end_turn', message: { content: '{}' } }] };
+  assert.equal(requireCompleteResponse(complete), complete);
 });

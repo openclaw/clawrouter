@@ -198,3 +198,11 @@ probe quality: a weak assertion does not establish that either repair is correct
 An isolated local execution failure records an error trial with zero score and
 continues the remaining cases. An unknown API charge still stops the campaign.
 Failure labels are allowlisted; raw errors and source are never persisted.
+
+
+Provider stop reasons are checked before parsing an action. Refusals, truncated
+or context-limited responses, paused tool turns, unknown stop reasons and empty
+completions stop that trial. They retain settled usage and bounded labels. A
+refused trial cannot continue through another worker or aggregator. A refusal
+stops the campaign so another strategy cannot retry the affected task. Refusal notices are reported without storing provider text.
+This benchmark does not automatically retry these states or switch providers.
