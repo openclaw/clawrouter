@@ -80,11 +80,29 @@ and count through this hook, without a counting transform. Existing page, total
 wire, empty-chunk and output bounds remain unchanged. Featherless also registers
 each physical fetch with the same idempotent disposer used by its late callback.
 
+## Multipart and original-job files
+
+`readBounded` joins its original reader and first cancellation before its promise
+settles. Multipart admission races that retained intake promise separately so a
+caller can receive cancellation while capacity remains charged. The controller
+also retains physical fetches, native decoder work and late-response disposal.
+Successful native JSON delivery releases capacity through `observeUsage.retired`,
+not the prompt accounting result. Raw-upload callers retain their existing
+limits and direct-await behavior; no new capacity charge is added.
+
+Managed files keep separate metadata and download owners. The bounded relay owns
+the original reader directly, cancels before joining adapter work and retires its
+active pull before releasing the lock. Late and header-rejected responses use
+one memoized disposer. Adapter completion remains owned even after source EOF.
+Buffered metadata and file output stay charged through downstream retirement.
+The existing request context owns background cleanup after a prompt failure.
+No pipeline-completion promise is treated as proof of an unowned source's cleanup.
+
 ## Remaining phases
 
 This change does not qualify every NativeResponse factory. The modern MiniMax
-music stream module is unchanged. Multipart-controller and managed-file
-ownership remain required follow-up work.
+music stream module is unchanged. Its operation authority and retirement
+integration remain required follow-up work.
 Public Cerebras/NVIDIA/Chutes/Venice and private Baseten/Arcee/Novita
 prepared catalog branches do not acquire response leases here; cleanup defects
 there are not represented as existing response-charge bugs or new charges.

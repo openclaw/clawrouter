@@ -368,7 +368,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
       params[name] = values[0]; query.delete(name);
     }
     return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider,
-      fileControls.map(control => ({ ...control, endpoint, pathParams: params })), query, mode, auth ?? undefined, session ?? undefined);
+      fileControls.map(control => ({ ...control, endpoint, pathParams: params })), query, mode, auth ?? undefined, session ?? undefined, context);
   }
   const controls = responsesControls(provider, endpoint), control = controls[0];
   if (control) {
@@ -452,7 +452,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
       throw new HttpError(409, "managed_file_owner_unavailable", "native file declarations do not agree on one file control");
     }
     await requireEmptyResponseControlBody(request);
-    return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider, fileControls, new URL(request.url).searchParams, "proxy_key", auth ?? undefined);
+    return (await import("./managed-files.ts")).proxyManagedFile(request, env, provider, fileControls, new URL(request.url).searchParams, "proxy_key", auth ?? undefined, undefined, context);
   }
   const controls = controlEndpoints.flatMap(candidate => responsesControls(provider, candidate).map(control => ({ ...control, endpoint: candidate })));
   const control = controls[0];

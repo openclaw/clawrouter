@@ -1,4 +1,5 @@
 import { HttpOperation } from "./http-operation.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import { HttpError } from "./utils.ts";
 
 // Router envelope, deliberately <= the vendor's 25 MB file limit. These are
@@ -60,13 +61,13 @@ export async function readBinaryUpload(request: Request, maximum: number): Promi
 export async function readBounded(body: ReadableStream<Uint8Array> | null, maximum: number, operation: HttpOperation, status = 502, maximumReads = Infinity): Promise<Uint8Array<ArrayBuffer>> {
   operation.signal.throwIfAborted();
   if (!body) return new Uint8Array();
-  const reader = body.getReader();
+  const reader = body.getReader(), input = inputRetirement(reader);
   // A bounded number of chunks even for an adversarial one-byte stream.
   let buffer = new Uint8Array(Math.min(maximum, 8192)), used = 0, complete = false, reads = 0;
   try {
     while (true) {
       if (++reads > maximumReads) throw new HttpError(status, "transcription_chunk_limit", "multipart upload exceeds its chunk limit");
-      const next = await operation.wait(reader.read());
+      const next = await operation.wait(input.read(() => reader.read()));
       if (next.done) { complete = true; return buffer.slice(0, used); }
       if (next.value.byteLength > maximum - used) throw new HttpError(status, "transcription_body_too_large", "transcription body exceeds router byte limit");
       const required = used + next.value.byteLength;
@@ -77,9 +78,7 @@ export async function readBounded(body: ReadableStream<Uint8Array> | null, maxim
       buffer.set(next.value, used); used = required;
     }
   } finally {
-    if (!complete) void reader.cancel(operation.signal.reason).catch(() => undefined);
-    // Pending reads may finish after abort; cancellation owns their disposal.
-    reader.releaseLock();
+    await input.retire(complete ? "eof" : "cancel", operation.signal.reason);
   }
 }
 
