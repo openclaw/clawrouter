@@ -1,6 +1,6 @@
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import type { InputRetirement } from "./input-retirement.ts";
-import type { SearchGrantAttestation } from "./authority-contracts.ts";
+import type { SearchGrantAttestation, MusicGrantAttestation } from "./authority-contracts.ts";
 import { searchJsonBytes, searchUnavailable, searchControlBytes, inspectSearchJson, searchControlVersion, type MiniMaxSearchOperation, searchControlHeader, readSearchJson } from "./minimax-search-operation.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { normalizePolicyRecord } from "./authority-policy.ts";
@@ -51,6 +51,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
       if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
       if (path === "/grant-search/authorize") return json(this.authorizeSearchGrant(await readJson<SearchGrantAttestation>(request, undefined, 16 * 1024)));
+      if (path === "/grant-music/authorize") return json(this.authorizeMusicGrant(await readJson<MusicGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/authorization/snapshot") {
         const bound = request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
         const result = this.authorizationSnapshot(await readJson<AuthorizationSnapshotRequest>(request), bound);
@@ -323,7 +324,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     return rows<{ policy_id: string; policy_json: string }>(this.sql.exec("SELECT policy_id, policy_json FROM access_policies ORDER BY policy_id")).map((row) => ({ policyId: row.policy_id, policy: JSON.parse(row.policy_json) }));
   }
 
-  private authorizeSearchGrant(input: SearchGrantAttestation): SearchGrantAttestation {
+  private authorizeSearchGrant(input: SearchGrantAttestation, tombstone = false): SearchGrantAttestation {
     searchJsonBytes(input);
     if (!input || Object.keys(input).sort().join(",") !== "actor,admissionRevision,digest,key,original,resultGeneration,resultLineage"
       || !input.actor || Object.keys(input.actor).sort().join(",") !== "auth,email,role"
@@ -336,7 +337,8 @@ export class PolicyBindingIndexObject implements DurableObject {
       || !Number.isSafeInteger(input.original.revision) || input.original.revision < 0
       || !Number.isSafeInteger(input.admissionRevision) || input.admissionRevision < 0
       || !Number.isSafeInteger(input.resultGeneration)
-      || input.resultGeneration !== input.original.generation + 1
+      || input.resultGeneration !== input.original.generation + (tombstone ? 0 : 1)
+      || tombstone && (!input.original.exists || input.resultLineage !== input.original.lineage)
       || !input.original.exists && (input.original.generation !== 0 || input.original.lineage !== null)
       || input.original.exists && (typeof input.original.lineage !== "string" || !input.original.lineage || input.original.lineage.length > 128)) searchUnavailable();
     return this.storage.transactionSync(() => {
@@ -348,6 +350,23 @@ export class PolicyBindingIndexObject implements DurableObject {
         || input.admissionRevision < input.original.revision) searchUnavailable();
       return input;
     });
+  }
+
+  private authorizeMusicGrant(input: MusicGrantAttestation): MusicGrantAttestation {
+    searchJsonBytes(input);
+    if (!input || Object.keys(input).sort().join(",") !== "actor,admissionRevision,digest,domain,key,mode,original,resultGeneration,resultLineage,scope"
+      || input.domain !== "clawrouter.minimax-music-mutation.v1"
+      || !["preserve", "replace", "revoke", "tombstone"].includes(input.mode)
+      || !Array.isArray(input.scope) || input.scope.length !== 3
+      || JSON.stringify(input.scope) !== JSON.stringify(grantPoolIdentity(input.key)))
+      throw new HttpError(403, "minimax_music_admin_required", "Current Music mutation authority is required");
+    const { domain: _domain, scope: _scope, mode, ...proof } = input;
+    // Same last SQL role/revision check, with only the Music tombstone's
+    // idempotent generation rule. Search's mutation contract stays unchanged.
+    this.authorizeSearchGrant(proof, mode === "tombstone");
+    if ((mode === "revoke" || mode === "tombstone") && this.grantAttachment(input.key).pending)
+      throw new HttpError(403, "minimax_music_admin_required", "Pending Music mutations require explicit recovery");
+    return input;
   }
 
   private putCredential(entry: ProxyCredentialEntry): void {
@@ -882,7 +901,7 @@ function invalidAuthorityValue(message: string): never {
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
-  if (path === "/grant-search/authorize") {
+  if (path === "/grant-search/authorize" || path === "/grant-music/authorize") {
     searchJsonBytes(body);
     const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal, redirect: "manual", headers: { "content-type": "application/json" } });
     let input: InputRetirement | undefined;

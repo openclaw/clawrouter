@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
+import { musicAccessFixture } from "./minimax-music-admin-fixture.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 async function barriers(t) {
@@ -38,6 +39,7 @@ const state=()=>active?{mode:active.mode,status:active.status,error:active.error
 const gate=(a,phase)=>original('https://music-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('fixture gate');await r.text();});
 globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init),a=active;
+ if(request.url==='https://music-admin-fixture.cloudflareaccess.com/cdn-cgi/access/certs')return original(request);
  if(request.url!=='https://api.minimax.io/v1/music_generation')throw new Error('unexpected fixture destination');
  a.fetches++;a.atFetch=bodyBudgetCharged();const response=await original(request);a.source=response.body;
  // Instrument the ACTUAL DO-returned body without replacing it or changing its
@@ -57,11 +59,12 @@ globalThis.fetch=async(input,init)=>{
  return response;
 };
 export default {async fetch(request,bindings,context){
- const env={...bindings,MINIMAX_API_KEY:'synthetic-forbidden-environment-key'};
+ const env={...bindings,...MUSIC_ACCESS_ENV,MINIMAX_API_KEY:'synthetic-forbidden-environment-key'};
  env.CLAWROUTER_ADMIN_TOKEN_SHA256=await sha256Hex('synthetic-admin');
  const policy={enabled:true,generation:'g1',providers:['minimax'],models:musicModels,tenantId:'fixture',monthlyBudgetMicros:100000,
   requestCostMicros:700,retainRequestContent:false,grantRouting:{eligibleGrants:{minimax:['music']},environmentFallback:true,failover:true}};
  initialized??=(async()=>{
+  await authorityCall(env,'/users/initialize-all',[{email:'music-admin@example.invalid',record:{role:'admin',enabled:true,tenantId:'fixture',groups:[],contentRetentionDisabled:false}}]);
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy}]);
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
   await authorityCall(env,'/connections/initialize-all',[{providerId:'minimax',enabled:true,monthlyBudgetMicros:100000}]);
@@ -74,7 +77,7 @@ export default {async fetch(request,bindings,context){
  const mode=url.searchParams.get('mode'),a=active={mode,ready:deferred(),status:null,error:null,results:0,fetches:0,reads:0,byob:0,detached:0,maxBacking:0,wire:0,eof:false,cancels:0,cleanup:false,readRetired:false,outputBytes:0};
  if(mode==='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,requestCostMicros:null}});
  const ledger=env.BUDGET_LEDGER;env.BUDGET_LEDGER={idFromName:n=>ledger.idFromName(n),get:id=>{const stub=ledger.get(id);return {async fetch(input,init){
-  const r=await stub.fetch(input,init);if(new URL(input).pathname==='/dispatch'&&mode==='revoke')await revokeGrantCredentials(env,'oauth/fixture/music');return r;
+  const r=await stub.fetch(input,init);if(new URL(input).pathname==='/dispatch'&&mode==='revoke')await revokeGrantCredentials(env,'oauth/fixture/music',undefined,undefined,{auth:'cloudflare_access',role:'admin',email:'music-admin@example.invalid'});return r;
  }}}};
  const controller=new AbortController(),stream=mode!=='unary',manifest=mode==='manifest',body=musicBody(stream,manifest?'music-2.6-free':'music-2.6');
  body.prompt=mode==='maximum'?'maximum':'Synthetic music';
@@ -93,7 +96,7 @@ export default {async fetch(request,bindings,context){
  })().catch(error=>{a.error=error.name;}).finally(()=>{a.results++;a.ready.resolve();}));
  await a.ready.promise;return Response.json(state());
 },queue:worker.queue};`;
-function upstream(origin) { return String.raw`
+function upstream(origin,jwk) { return String.raw`
 const encoder=new TextEncoder(),maxAudio=8*1024*1024,maxWire=40*1024*1024+65536;
 export class MusicSource {async fetch(request){
  const body=await request.json();
@@ -113,20 +116,22 @@ export class MusicSource {async fetch(request){
  const iterator=chunks();return new Response(new ReadableStream({type:'bytes',pull(c){const next=iterator.next();if(next.done){c.close();c.byobRequest?.respond(0);return;}const bytes=encoder.encode(next.value);wire+=bytes.length;c.enqueue(bytes);},cancel(){iterator.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream','content-encoding':'identity'}});
 }}
 export default {async fetch(request,env){const url=new URL(request.url);
+ if(url.href==='https://music-admin-fixture.cloudflareaccess.com/cdn-cgi/access/certs')return Response.json({keys:[MUSIC_JWK]});
  if(url.hostname==='music-gate.example')return fetch(BARRIER_ORIGIN+url.pathname,{redirect:'manual'});
  if(url.href!=='https://api.minimax.io/v1/music_generation')throw new Error('unexpected fixture destination');
  return env.MUSIC_SOURCE.get(env.MUSIC_SOURCE.idFromName('synthetic')).fetch(request);
-}};`.replace('BARRIER_ORIGIN',JSON.stringify(origin)); }
+}};`.replace('BARRIER_ORIGIN',JSON.stringify(origin)).replace('MUSIC_JWK',JSON.stringify(jwk)); }
 
 test("MiniMax music registered workerd DO body, both routes, exact maximum, retirement and fresh authority", { timeout: 120000 }, async t => {
   const temporary=await mkdtemp(join(tmpdir(),"minimax-music-workerd-"));t.after(()=>rm(temporary,{recursive:true,force:true}));
-  const controls=await barriers(t),runtime=await startWorkerdFixture(temporary,router,upstream(controls.origin),{
+  const access=await musicAccessFixture();
+  const controls=await barriers(t),runtime=await startWorkerdFixture(temporary,router.replace('MUSIC_ACCESS_ENV',JSON.stringify(access.env)),upstream(controls.origin,access.jwk),{
     preventEviction:true,upstreamDurableObjects:{MUSIC_SOURCE:{className:"MusicSource",useSQLite:true}}});
   t.after(async()=>{for(const mode of ['held-input','delivery-eof','delivery-cancel'])for(const phase of ['abort','read','cleanup','delivery'])controls.release(mode,phase);await runtime.dispose();});
   const call=async path=>{const r=await runtime.dispatchFetch('https://router.example'+path);assert.equal(r.status,200,await r.clone().text());return r.json();};
   const until=async predicate=>{let s;for(let i=0;i<200;i++){s=await call('/state');if(predicate(s))return s;await delay(10);}assert.fail(JSON.stringify(s));};
   const put=async(replace=false)=>{const r=await runtime.dispatchFetch('https://router.example/v1/admin/upstream-grants/policies/fixture/music'+(replace?'?mode=replace':''),{
-    method:'PUT',headers:{authorization:'Bearer synthetic-admin','content-type':'application/json'},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-music-key',nativeMediaAuthorization:'minimax-global-music'})});
+    method:'PUT',headers:{...access.headers,'content-type':'application/json'},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-music-key',nativeMediaAuthorization:'minimax-global-music'})});
     assert.equal(r.status,200,await r.clone().text());assert.doesNotMatch(await r.text(),/synthetic-music-key/);};
   await put();let events=0,abortedRequestId;
   for(const mode of ['unary','manifest','maximum','held-input','delivery-eof','delivery-cancel','revoke','unpriced']){

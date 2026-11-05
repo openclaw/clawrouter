@@ -17,6 +17,32 @@ scalar API-key credential slot. The existing speech intent is separate. Image,
 Messages OAuth, TokenPlan, bundle and access-token fallback do not supply music
 authority. No caller-supplied binding or permission boolean is accepted.
 
+Music grant mutations require a verified Access/local administrator backed by a
+currently enabled SQL administrator record. The generic administrator bearer
+token does not identify such a principal. The HTTP handler supplies private
+actor provenance; request JSON cannot supply the actor, proof or tombstone state.
+
+Within the serialized credential owner, requested **or existing** Music
+authorization triggers a domain-separated mutation digest. It binds the actor,
+policy/tenant scope, grant key, original attachment revision/generation/lineage,
+result generation/lineage, credential fingerprint, account, provider, kind,
+expiry, binding/removal and preservation/replacement mode. All preparation and
+hashing precede pool admission. The last authority call checks the current SQL
+role and exact attachment revision after that admission. The owner compares the
+complete bounded reply and invokes storage without an unrelated await. This is
+fresh-at-check authorization, not an atomic transaction across Durable Objects.
+
+Demotion or disablement while the pool reply is held denies the mutation and
+preserves the old credential, generation, lineage and binding. It does not
+revoke that independently authorized grant. Pending or noncanonical Music
+records deny before migration or attachment repair; a failed proposal cannot
+be adopted by retrying a metadata edit. Revocation and already-published
+tombstone retries also recheck SQL authority. A private tombstone marker keeps
+the latter under that check without exposing state or advancing its generation.
+OAuth, pool and legacy imports cannot attest Music authority. Search, Speech,
+device onboarding and the separate environment configuration retain their
+existing contracts.
+
 Omission preserves music authorization only for the same original owner,
 credential, account, provider, kind and lineage. Explicit removal, replacement
 or revoked authorization requires renewed intent. Private projection overwrites
