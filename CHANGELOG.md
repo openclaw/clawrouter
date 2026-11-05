@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound Wan managed input, control exchanges and lifecycle delivery under one retained operation lease; pin the original grant revision and distinguish confirmed unsent dispatch from lost acknowledgments.
+
 - Add administrator-attested Copilot proxy identity, owner-bound native and manifest inference, and scoped live discovery with bounded cross-isolate retirement; provider declarations and native-client activation remain separate.
 - Serve usage snapshots from exact, transactionally maintained rollups after a resumable historical backfill, avoiding retained-event aggregate scans.
 

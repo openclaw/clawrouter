@@ -33,6 +33,8 @@ import { nativeDispatchQuery, qualifyNativeQuery } from "./native-query.ts";
 import { assertRequestTariffDestination } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { fusionAdviserModels, fusionStrategy } from "../shared/fusion-strategy.ts";
+import { inspectGrantCredentials } from "./grant-credentials.ts";
+import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
 import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
@@ -41,6 +43,7 @@ import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
+import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
 import { identitySelectionDenied } from "./native-request-headers.ts";
@@ -80,7 +83,7 @@ import { backgroundResponse, requireEmptyResponseControlBody, responsesControls,
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
-  assertProviderAccess, capabilityForPath, modelRoute, providerById,
+  assertProviderAccess, capabilityForPath, modelRoute, providerById, configuredUpstream,
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
@@ -109,6 +112,8 @@ const expandedTooLarge = () => errorResponse("request_too_large", `JSON request 
 // still own the input body.
 class JsonAdmission implements JsonIntake {
   completion?: Promise<unknown>;
+  wan?: WanManagedOperation;
+  private wanRefusal?: Promise<void>;
   expanded = false;
   private authenticated = false;
   private lease = new BodyLease();
@@ -148,6 +153,36 @@ class JsonAdmission implements JsonIntake {
     const value = parsed.value; parsed.value = undefined;
     return value;
   }
+  wanAuth?: AuthorizedIdentity;
+  async wanCandidate(endpoint: CompiledEndpoint, empty = false): Promise<unknown> {
+    const provider = this.providerId ? providerById(this.providerId) : null;
+    // This closed create profile has one registered text model. Obtain its
+    // original selection before intake; the parsed literal must still match.
+    const model = wanCreate(endpoint) && provider?.models.length === 1 ? provider.models[0] : undefined;
+    if (wanCreate(endpoint) && (!provider || !model)) throw new HttpError(503, "prediction_owner_unavailable", "Wan model admission is unavailable");
+    const auth = this.mode === "proxy_key" && provider && model
+      ? await authenticateProxyKey(this.request.headers, this.env,
+        [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }],
+        false, correlationMetadata(this.request).sessionId, { providerId: provider.id, endpointId: endpoint.id, mode: "http",
+          model: model.upstream, catalogModelId: model.id, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id })
+      : await preauthenticate(this.request, this.env, this.mode, this.providerId);
+    if (auth instanceof Response) throw auth;
+    if (!auth) throw new HttpError(403, "prediction_owner_unavailable", "Wan caller is unavailable");
+    this.wanAuth = auth;
+    if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+    assertWanHeaders(this.request.headers);
+    try { this.wan = new WanManagedOperation(wanCreate(endpoint) ? "create" : "poll"); }
+    catch (error) {
+      this.wanRefusal = this.request.body?.cancel(error).then(() => undefined, () => undefined);
+      throw error;
+    }
+    this.intakeOperation = new HttpOperation(this.request.signal, Math.min(endpoint.timeout_ms ?? 120_000, 120_000));
+    this.wan.controlSignal = this.intakeOperation.signal;
+    if (empty && !this.request.body) return {};
+    const physical = this.wan.track(readWanJson(this.request, empty ? 0 : wanRequestBytes,
+      { signal: this.intakeOperation.signal, registerInput: this.wan.registerInput, empty }));
+    return (await this.intakeOperation.wait(physical, "upstream")).body;
+  }
   async prepareMusic(selection: ProxySelection): Promise<void> {
     if (!this.intakeOperation) return;
     // Carry elapsed intake time into the selected endpoint's deadline, without
@@ -172,6 +207,11 @@ class JsonAdmission implements JsonIntake {
     if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
   }
   finish(context: ExecutionContext): void {
+    if (this.wanRefusal) context.waitUntil(this.wanRefusal);
+    if (this.wan) {
+      context.waitUntil(this.wan.finish().finally(() => this.intakeOperation?.stop("complete")));
+      return;
+    }
     if (!this.lease.leased && !this.input) { this.intakeOperation?.stop("complete"); return; }
     context.waitUntil((async () => {
       try { await this.completion; }
@@ -183,6 +223,9 @@ class JsonAdmission implements JsonIntake {
     })());
   }
 }
+
+const wanCreate = (endpoint: CompiledEndpoint) => endpoint.lifecycle?.protocol === "dashscope.video"
+  && endpoint.request_format === "dashscope.video_create";
 
 function openRouterMusicCandidate(provider: CompiledProvider, endpoint: CompiledEndpoint): boolean {
   return provider.id === "openrouter" && endpoint.path === "/v1/chat/completions"
@@ -380,9 +423,12 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
     if (preauthenticated instanceof Response) return preauthenticated;
     if (controls.some(candidate => candidate.action !== control.action || candidate.protocol !== control.protocol)) throw new HttpError(409, "response_owner_unavailable", "control declarations do not agree on one protocol and action");
+    const wanAdmission = control.protocol === "dashscope.video" ? new JsonAdmission(request, env, mode, provider.id) : undefined;
+    try {
     if (request.method === "GET") {
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
-      await requireEmptyResponseControlBody(request);
+      if (wanAdmission) await wanAdmission.wanCandidate(endpoint, true);
+      else await requireEmptyResponseControlBody(request);
       const query = new URL(request.url).searchParams, params: Record<string, string> = {};
       for (const name of control.protocol ? endpoint.path_params : ["response_id"]) {
         const ids = query.getAll(name);
@@ -390,13 +436,14 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
         params[name] = ids[0]; query.delete(name);
       }
       const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, params, query) : params.response_id;
-      return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), preauthenticated ?? undefined, session ?? undefined, control.protocol, params);
+      return await proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), preauthenticated ?? undefined, session ?? undefined, control.protocol, params, context, wanAdmission?.wan);
     }
     if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
-    const envelope = manifestEnvelope(await readJson<unknown>(request));
+    const envelope = manifestEnvelope(wanAdmission ? await wanAdmission.wanCandidate(endpoint) : await readJson<unknown>(request));
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
     const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, envelope.pathParams, envelope.query) : envelope.pathParams.response_id;
-    return proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: envelope.pathParams })), preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams);
+    return await proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: envelope.pathParams })), preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams, context, wanAdmission?.wan);
+    } finally { wanAdmission?.finish(context); }
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
@@ -410,7 +457,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     try {
       if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
       else {
-        let value = openRouterMusicCandidate(provider, endpoint)
+        let value = wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
           ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
         if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
         envelope = manifestEnvelope(value);
@@ -426,7 +473,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     }
     const method = (envelope.method ?? endpoint.method).toUpperCase();
     if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-    if (!session) preauthenticated = await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
+    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
     if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
     if (preauthenticated instanceof Response) return preauthenticated;
     const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
@@ -472,7 +519,10 @@ export async function proxyNative(request: Request, env: Env, context: Execution
       || controls.some(candidate => candidate.action !== control.action || candidate.protocol !== control.protocol)) {
       throw new HttpError(409, "response_owner_unavailable", "native control declarations do not agree on one protocol and action");
     }
-    await requireEmptyResponseControlBody(request);
+    const wanAdmission = control.protocol === "dashscope.video" ? new JsonAdmission(request, env, "proxy_key", provider.id) : undefined;
+    try {
+    if (wanAdmission) await wanAdmission.wanCandidate(endpoint, true);
+    else await requireEmptyResponseControlBody(request);
     const query = new URL(request.url).searchParams;
     const routes = await Promise.all(controls.map(async candidate => {
       const params = nativeParams(candidate.endpoint, match[2]);
@@ -482,7 +532,8 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     if (routes.some(route => route.id !== routes[0].id)) throw new HttpError(409, "response_owner_unavailable", "native control declarations disagree on the bound identity");
     // The scoped owner selects its original create route; endpoint order never
     // chooses between text/image jobs sharing the same native control path.
-    return proxyResponseControl(request, env, control.action, routes[0].id, control.protocol ? {} : query, "proxy_key", provider.id, routes, preauthenticated ?? undefined, undefined, control.protocol);
+    return await proxyResponseControl(request, env, control.action, routes[0].id, control.protocol ? {} : query, "proxy_key", provider.id, routes, preauthenticated ?? undefined, undefined, control.protocol, {}, context, wanAdmission?.wan);
+    } finally { wanAdmission?.finish(context); }
   }
   try { endpoint = nativeModelEndpoint(provider, matching, match[2], method) ?? endpoint; }
   catch (error) {
@@ -502,7 +553,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   try {
     let prepared;
     try {
-      let body = request.method === "GET" || request.method === "HEAD" ? {} : openRouterMusicCandidate(provider, endpoint)
+      let body = request.method === "GET" || request.method === "HEAD" ? {} : wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
         ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
       endpoint = nativeModelEndpoint(provider, matching, match[2], method, body) ?? endpoint;
       prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
@@ -517,7 +568,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
     const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     prepared.body = {};
     await admission.prepareMusic(selection);
-    const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
+    const preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
     if (preauthenticated instanceof Response) return preauthenticated;
     return await proxySelected(request, env, context, "proxy_key", selection, isModelDiscovery(endpoint) ? discoveryQuery(new URL(request.url).searchParams) : new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
   } finally { admission.finish(context); }
@@ -573,7 +624,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   validateSelectedInput(selection);
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
-    return proxyManagedPrediction(request, env, context, auth, selection, queryInput);
+    return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
   const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
@@ -1029,13 +1080,13 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation): Promise<PreparedUpstream> {
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground);
+  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan);
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -1044,7 +1095,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1063,7 +1114,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   if (search && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_search_query", "search options must be in JSON, not query parameters");
   if (compact && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");
   let connection: ProviderConnection;
-  try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
+  try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection, wan); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   // Native owner materialization follows known monetary denials. Messages
   // may refresh inside the owner; images may only read the exact admitted key.
@@ -1075,7 +1126,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   }
   let upstream: UpstreamAuth;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, request.signal); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, request.signal, wan); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -1121,6 +1172,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     if (minimaxAnthropic) upstream = minimaxAnthropic.upstream;
     const vertexAnthropic = vertexAnthropicRoute(selection.provider, selection.endpoint)
       ? await prepareVertexAnthropicDispatch(request, env, auth, selection, upstream, hasProxyQuery(queryInput), transport) : undefined;
+    if (wanCreate(selection.endpoint)) { preflightWanJson(selection.body); assertWanHeaders(request.headers); assertWanHeaders(upstream.headers); }
     const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
     minimaxAnthropic?.apply(url, headers);
     const gmiCheck = selection.provider.id === "gmi"
@@ -1175,10 +1227,56 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    const wanCheck = wanCreate(selection.endpoint) && continuation
+      ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan) : undefined;
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
+}
+
+// The create keeps its selected key through durable waits. Metadata inspection
+// never materializes a replacement secret or turns another grant into a retry.
+function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: ProxySelection, upstream: UpstreamAuth,
+  url: URL, headers: Headers, owner: ContinuationOwner, wan?: WanManagedOperation): (signal: AbortSignal) => Promise<void> {
+  const caller = publicControlAuthorization(auth), selected = upstream.grant;
+  const originalGeneration = selected?.credentialGeneration, originalLineage = selected?.credentialLineage;
+  const unavailable = () => { throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner or destination is unavailable"); };
+  return async signal => {
+    const policy = await authorizeResponseControl(env, caller, owner, signal, undefined, wan);
+    if (!policy) unavailable();
+    assertPolicyModel(policy!, selection);
+    const configured = configuredUpstream(selection.provider, selected, env);
+    assertWanHeaders(configured.headers);
+    const destination = new URL(configured.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, configured));
+    configured.query.forEach((value, name) => destination.searchParams.set(name, value));
+    if (destination.href !== url.href || await responseRouteDigest(selection.provider, configured, destination, headers,
+      upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams) !== owner.routeSha256) unavailable();
+    if (upstream.grantKey) {
+      const current = await inspectGrantCredentials(env, upstream.grantKey, signal, wan);
+      if (!selected || !Number.isSafeInteger(originalGeneration) || !originalLineage
+        || current.provider !== selected.provider || current.kind !== selected.kind || current.accountId !== selected.accountId
+        || current.enabled !== true || current.revokedAt || current.credentialStatus !== "active"
+        || current.credentialGeneration !== originalGeneration || current.credentialLineage !== originalLineage
+        || current.updatedAt !== selected.updatedAt
+        || current.expiresAt && (!Number.isFinite(Date.parse(current.expiresAt)) || Date.parse(current.expiresAt) <= Date.now())) unavailable();
+      assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selection.model?.upstream, managedLifecycle: true }, current, env);
+    } else {
+      const current = configuredUpstream(selection.provider, null, env);
+      assertWanHeaders(current.headers);
+      if (current.baseUrl !== configured.baseUrl || current.query.toString() !== configured.query.toString()
+        || [...current.headers].length !== [...configured.headers].length
+        || [...current.headers].some(([name, value]) => configured.headers.get(name) !== value)) unavailable();
+    }
+    // Inspect is an await too: reject configuration movement after the earlier
+    // digest check, without constructing another request or selecting a key.
+    const final = configuredUpstream(selection.provider, selected, env);
+    assertWanHeaders(final.headers);
+    if (final.baseUrl !== configured.baseUrl || final.query.toString() !== configured.query.toString()
+      || [...final.headers].length !== [...configured.headers].length
+      || [...final.headers].some(([name, value]) => configured.headers.get(name) !== value)) unavailable();
+    signal.throwIfAborted(); assertControlCallerLive(caller);
+  };
 }
 
 export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null): void {

@@ -14,6 +14,7 @@ import { dispatchResponseControl, retainedResponseRoute } from "./responses-cont
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { AccessSession, AuthorizedIdentity, Env } from "./types.ts";
 import { errorResponse, HttpError } from "./utils.ts";
+import { WanManagedOperation } from "./managed-media-json.ts";
 
 export interface ResponseControlRoute { createId: string; pathParams: Record<string, string> }
 
@@ -22,28 +23,32 @@ type Binding = { owner: ContinuationOwner; background: Association | null; auth:
 
 export async function proxyResponseControl(request: Request, env: Env, action: ResponsesControlAction, responseId: string,
   queryInput: URLSearchParams | Record<string, unknown>, mode: "proxy_key" | "access", providerId?: string, endpointId?: string | readonly ResponseControlRoute[],
-  preauthenticated?: AuthorizedIdentity, verifiedSession?: AccessSession, protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol, pathParams: Record<string, string> = {}): Promise<Response> {
+  preauthenticated?: AuthorizedIdentity, verifiedSession?: AccessSession, protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol, pathParams: Record<string, string> = {},
+  context?: ExecutionContext, ownership?: WanManagedOperation): Promise<Response> {
   const identities = await responseControlIdentities(request, env, mode, preauthenticated, verifiedSession);
   if (identities instanceof Response) return identities;
   const identity = responseIdentity("response", responseId);
   if (!identity) throw new HttpError(400, "response_id_required", "response ID is required");
   if (protocol && (queryInput instanceof URLSearchParams ? queryInput.size : Object.keys(queryInput).length)) throw new HttpError(400, "invalid_prediction_query", "prediction controls do not accept query parameters");
   const query = protocol ? new URLSearchParams() : responsesControlQuery(action, queryInput), operation = new HttpOperation(request.signal, protocol ? 30_000 : 10_000);
+  const wan = protocol === "dashscope.video" ? ownership ?? new WanManagedOperation("poll") : undefined;
+  if (wan) wan.controlSignal = operation.signal;
   let response: Response | undefined;
   try {
     const key = protocol ? await managedJobKey(protocol, providerId ?? "", responseId) : await identityKey(identity);
-    const binding = await resolveResponseControlOwner(env, identities, key, operation, providerId, endpointId);
+    const binding = await resolveResponseControlOwner(env, identities, key, operation, providerId, endpointId, wan);
+    if (wan) wan.requireOrdinary(binding.owner.grantKey ? 3 : 5);
     const provider = providerById(binding.owner.providerId);
     const create = provider?.endpoints.find(endpoint => endpoint.id === binding.owner.endpointId);
     if (!provider || !create || !(protocol ? create.lifecycle?.protocol === protocol : create.responsesLifecycle) || !protocol && create.path_params.length) throw new HttpError(409, "response_owner_unavailable", "the original response route is unavailable");
-    await operation.wait(assertProviderAccess(provider, binding.auth, env));
+    await operation.wait(assertProviderAccess(provider, binding.auth, env, undefined, wan));
     if (protocol) {
       if (!binding.background) throw new HttpError(409, "response_owner_unavailable", "prediction has no original managed job");
-      const job = await operation.wait(backgroundCall<import("./background-store.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }));
+      const job = await operation.wait(backgroundCall<import("./background-store.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }, wan));
       if (!job?.managed || job.managed.protocol !== protocol || job.managed.upstreamId !== responseId
         || (job.managed.providerId ?? "replicate") !== provider.id) throw new HttpError(409, "response_owner_unavailable", "the original managed route is unavailable");
       const { readManagedControl, observePrediction, bindPredictionFiles, predictionResponse, managedObservationUnavailable } = await import("./managed-predictions.ts");
-      if (job.managed.observationUnavailable) { operation.stop("complete"); return managedObservationUnavailable(); }
+      if (job.managed.observationUnavailable) { operation.stop("complete"); return managedObservationUnavailable(wan, request.signal); }
       const route = job.managed.route ?? retainedResponseRoute({}, request.headers);
       const { managedRoute } = await import("./managed-routes.ts");
       const endpoint = managedRoute(provider, create, route.pathParams).controls[action];
@@ -52,12 +57,12 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
         throw new HttpError(409, "response_owner_unavailable", "control path does not match the original managed route");
       }
       const result = await readManagedControl(env, { owner: binding.owner, responseId, action, query: "", stream: false, protocol,
-        requestedVersion: job.managed.requestedVersion, route, authorization: publicControlAuthorization(binding.auth) }, operation, job.managed.fileBaseUrl);
-      if (!binding.background.closed) await observePrediction(env, binding.scope, binding.background.id, result.evidence.prediction, result.evidence.status);
+        requestedVersion: job.managed.requestedVersion, route, authorization: publicControlAuthorization(binding.auth) }, operation, job.managed.fileBaseUrl, wan);
+      if (!binding.background.closed) await observePrediction(env, binding.scope, binding.background.id, result.evidence.prediction, result.evidence.status, wan);
       else await bindPredictionFiles(env, binding.scope, binding.background.id, result.evidence.prediction);
       operation.stop("complete");
-      if (result.evidence.prediction.observationUnavailable) return predictionResponse(result.evidence.prediction, provider, create, route.pathParams, result.evidence.status);
-      return predictionResponse(result.prediction, provider, create, route.pathParams, result.status);
+      if (result.evidence.prediction.observationUnavailable) return predictionResponse(result.evidence.prediction, provider, create, route.pathParams, result.evidence.status, wan, request.signal);
+      return predictionResponse(result.prediction, provider, create, route.pathParams, result.status, wan, request.signal);
     }
     response = await operation.wait(dispatchResponseControl(env, {
       owner: binding.owner, responseId, action, query: query.toString(), stream: binding.background?.stream === true,
@@ -88,6 +93,11 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
   } catch (error) {
     operation.stop("upstream", error); void response?.body?.cancel().catch(() => undefined);
     throw error instanceof HttpError ? error : new HttpError(503, "response_owner_unavailable", "response control is unavailable; retry without creating another generation");
+  } finally {
+    if (wan && !ownership) {
+      const retired = wan.finish();
+      if (context) context.waitUntil(retired); else void retired.catch(() => undefined);
+    }
   }
 }
 
@@ -109,11 +119,14 @@ export async function responseControlIdentities(request: Request, env: Env, mode
 }
 
 export async function resolveResponseControlOwner(env: Env, identities: AuthorizedIdentity[], key: string, operation: HttpOperation,
-  providerId?: string, endpointId?: string | readonly ResponseControlRoute[]): Promise<Binding> {
+  providerId?: string, endpointId?: string | readonly ResponseControlRoute[], wan?: WanManagedOperation): Promise<Binding> {
+  // Every candidate is queried; reserve access-connection + job + native read.
+  // The owner-specific environment tail is preflighted once its binding is known.
+  if (wan) wan.requireOrdinary(identities.length + 3);
   const matches: Binding[] = [];
   for (const auth of identities) {
     const scope = await continuationScope(auth);
-    const result = await operation.wait(authorityCall<{ owners: Array<ContinuationOwner | null>; background?: Array<Association | null> }>(env, "/http-continuations", { action: "resolve", keys: [key] }, scope, operation.signal));
+    const result = await operation.wait(authorityCall<{ owners: Array<ContinuationOwner | null>; background?: Array<Association | null> }>(env, "/http-continuations", { action: "resolve", keys: [key] }, scope, operation.signal, wan));
     const owner = result.owners[0];
     if (!owner || owner.policyGeneration !== auth.policy.generation || providerId && owner.providerId !== providerId || endpointId && (typeof endpointId === "string" ? owner.endpointId !== endpointId : !endpointId.some(route => route.createId === owner.endpointId))) continue;
     if (auth.policy.providers.length && !auth.policy.providers.includes(owner.providerId)) continue;
