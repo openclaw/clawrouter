@@ -4,7 +4,7 @@ import { copilotAccountRequest, qualifyCopilotIdentity, type CopilotIdentity } f
 import { readCopilotAccountResponse } from "./copilot-account-response.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { copilotControlHeaders, qualifiedCopilotControlHeaders, type CopilotInferenceControl, type CopilotControlSlot } from "./copilot-inference-control.ts";
+import { copilotControlHeaders, assertCopilotControlHeaders, qualifiedCopilotControlHeaders, type CopilotInferenceControl, type CopilotControlSlot } from "./copilot-inference-control.ts";
 import { BodyLease } from "./body-budget.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
@@ -102,7 +102,7 @@ export class CopilotAccountFlow {
         slot = this.owner.inferenceControl?.claimLocal();
         if (!slot) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
       }
-      qualifiedCopilotControlHeaders(internal.headers);
+      assertCopilotControlHeaders(internal.headers);
       const body = await readCopilotDeviceJson(internal) as { key?: unknown; sourceUrl?: unknown; input?: unknown };
       if (!body || typeof body !== "object" || Object.keys(body).some(k => !["key", "sourceUrl", "input"].includes(k))
         || typeof body.key !== "string" || body.key.length > 512 || !/^oauth\/(?:tenants\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(body.key)
@@ -219,7 +219,7 @@ export class CopilotAccountFlow {
     const reply = (value: unknown, status = 200) => copilotDeviceReply(value, status,
       { release: () => slot?.ownerDone() }, internal.body?.locked ? Promise.reject(new Error("copilot_control_input_not_retired")) : Promise.resolve(), work => this.owner.retain(work));
     try {
-      const headers = qualifiedCopilotControlHeaders(internal.headers);
+      assertCopilotControlHeaders(internal.headers);
       const id = internal.headers.get(copilotControlHeaders.id) ?? "", key = internal.headers.get(copilotControlHeaders.key) ?? "";
       const source = internal.headers.get(copilotControlHeaders.source) ?? "";
       if (!/^[a-f0-9]{32}$/.test(id) || key.length > 512 || !/^oauth\/(?:tenants\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(key) || source.length > 2048) throw accountConflict();
@@ -231,13 +231,17 @@ export class CopilotAccountFlow {
         this.owner.inferenceControl.retireRemote(id, key);
         return new Response(null, { status: 204 }); // Never waits for allocation retirement.
       }
-      headers.delete("content-length"); headers.delete("content-encoding");
-      const request = new Request(url, { method: "POST", headers, signal: internal.signal });
+      const sourceRequest = () => {
+        const headers = qualifiedCopilotControlHeaders(internal.headers);
+        headers.delete("content-length"); headers.delete("content-encoding");
+        return new Request(url, { method: "POST", headers, signal: internal.signal });
+      };
       if (phase === "reserve") {
         if (internal.body) throw accountConflict();
         const reserved = this.owner.inferenceControl.claim(id, key, true);
         let accepted = false;
         try {
+          const request = sourceRequest();
           const actor = await copilotDeviceAdmin(request, this.env);
           await this.owner.order(() => reserved.record(async () => {
             await copilotDeviceAdmin(request, this.env, actor);
@@ -254,6 +258,7 @@ export class CopilotAccountFlow {
       }
       if (phase !== "execute") throw accountConflict();
       slot = this.owner.inferenceControl.join(id, key);
+      const request = sourceRequest();
       const actor = await copilotDeviceAdmin(request, this.env);
       const input = readCopilotAccountInput(await readCopilotDeviceJson(internal));
       if (input.operation === "qualify") throw accountConflict();

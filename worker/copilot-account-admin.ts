@@ -1,5 +1,5 @@
 import { copilotDeviceAdmin, readCopilotDeviceBytes, readCopilotDeviceJson, copilotDeviceReply } from "./copilot-device-admin.ts";
-import { copilotControlHeaders, qualifiedCopilotControlHeaders, copilotControlReply } from "./copilot-inference-control.ts";
+import { copilotControlHeaders, assertCopilotControlHeaders, qualifiedCopilotControlHeaders, copilotControlReply } from "./copilot-inference-control.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { BodyLease } from "./body-budget.ts";
 import { HttpError } from "./utils.ts";
@@ -41,7 +41,7 @@ export async function copilotAccountAuthorize(request: Request, env: Env, key: s
   try {
     const url = new URL(request.url);
     if (url.searchParams.size !== 1 || url.searchParams.get("flow") !== copilotAccountFlow) throw accountConflict();
-    qualifiedCopilotControlHeaders(request.headers);
+    assertCopilotControlHeaders(request.headers);
     const actor = await copilotDeviceAdmin(request, env);
     if (!lease.grow(1024 * 1024)) return await borrowedCopilotAccountControl(request, env, key, actor);
     const input = readCopilotAccountInput(await readCopilotDeviceJson(request));

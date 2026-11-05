@@ -258,7 +258,7 @@ async function chargedInferenceControl(t) {
  const control=f.owner().object.copilotCatalog.inferenceControl,cleanup=[],responses=[];
  const account=f.account;f.account=async(...args)=>{const response=await account(...args);responses.push(response);return response;};
  control.register({key,generation:record.generation,lineage:record.lineage,actor:record.copilotAccountBinding.actor});
- t.after(async()=>{for(const release of cleanup)release();for(const response of responses)if(response.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();await control.close();allocation.release();await f.retired();assert.equal(bodyBudgetCharged(),0);});
+ t.after(async()=>{for(const release of cleanup)await release();for(const response of responses)if(response.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();await control.close();allocation.release();await f.retired();assert.equal(bodyBudgetCharged(),0);});
  return {...f,control,allocation,cleanup};
 }
 test('full inference charge admits only current owner account status/cancel over private HTTP',async t=>{
@@ -287,8 +287,8 @@ for(const reject of [false,true])test('full-charge control joins ORIGINAL pendin
  const wire=new ReadableStream({type:'bytes',pull(){entered.resolve();},async cancel(){cancels++;await cancelling.promise;if(reject)throw Error('synthetic cleanup failure');}});
  const request=new Request(origin+path+'?flow=copilot-account.v1',{method:'POST',headers:{origin,'content-type':'application/json','cf-access-jwt-assertion':await jwt()},body:wire,duplex:'half',signal:abort.signal});
  const get=request.body.getReader.bind(request.body);request.body.getReader=options=>{const r=get(options);return{async read(view){try{return await r.read(view);}finally{await reading.promise;}},cancel:reason=>r.cancel(reason),releaseLock(){r.releaseLock();unlocks++;}};};
- f.cleanup.push(()=>{reading.resolve();cancelling.resolve();});
- const pending=adminApi(request,f.env,path);await entered.promise;abort.abort();let done=false;pending.then(()=>{done=true;});
+ let pending;f.cleanup.push(async()=>{reading.resolve();cancelling.resolve();const response=await pending;if(response?.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();});
+ pending=adminApi(request,f.env,path);let reached=false;await Promise.race([entered.promise.then(()=>{reached=true;}),pending.then(async response=>{if(reached)return;const text=await response.text();throw Error('control ended before held read: '+response.status+' '+text);})]);abort.abort();let done=false;pending.then(()=>{done=true;});
  await Promise.resolve();assert.equal(done,false);assert.equal(bodyBudgetCharged(),96*1024*1024);assert.equal(request.body.locked,true);
  cancelling.resolve();await Promise.resolve();assert.equal(done,false);assert.equal(request.body.locked,true);reading.resolve();
  const response=await pending;assert.ok(response.status>=400);await response.text();await f.control.close();assert.equal(cancels,1);assert.equal(unlocks,1);assert.equal(request.body.locked,false);

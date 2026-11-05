@@ -94,7 +94,7 @@ export class CopilotControlSlot {
 
 // Validate ALL headers before constructing a copy. Only Access/CSRF and body
 // framing required by this exact control protocol are forwarded.
-export function qualifiedCopilotControlHeaders(source: Headers, extra: Readonly<Record<string, string>> = {}): Headers {
+export function assertCopilotControlHeaders(source: Headers, extra: Readonly<Record<string, string>> = {}): void {
   let count = 0, bytes = 0;
   const inspect = (name: string, value: string) => {
     if (++count > 32 || value.length > 16 * 1024) throw conflict();
@@ -109,6 +109,10 @@ export function qualifiedCopilotControlHeaders(source: Headers, extra: Readonly<
     if (!(Object.values(copilotControlHeaders) as string[]).includes(name)) throw conflict();
     inspect(name, value);
   }
+}
+
+export function qualifiedCopilotControlHeaders(source: Headers, extra: Readonly<Record<string, string>> = {}): Headers {
+  assertCopilotControlHeaders(source, extra);
   const headers = new Headers();
   for (const name of ["cf-access-jwt-assertion", "origin", "sec-fetch-site", "x-forwarded-host", "x-forwarded-proto", "content-type", "content-length", "content-encoding"]) {
     const value = source.get(name); if (value !== null) headers.set(name, value);
