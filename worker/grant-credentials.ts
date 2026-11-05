@@ -1,3 +1,4 @@
+import { CopilotCatalogFlow } from "./copilot-catalog-flow.ts";
 import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
 import { VertexOwnerRefresh } from "./vertex-owner-refresh.ts";
 import { mutateVertexAnthropicBinding, vertexOwnerBinding } from "./vertex-anthropic-binding.ts";
@@ -57,6 +58,7 @@ export class GrantCredentialObject implements DurableObject {
   private readonly minimaxDevice: MiniMaxDeviceFlow;
   private readonly copilotDevice: CopilotDeviceFlow;
   private readonly copilotAccount: CopilotAccountFlow;
+  private readonly copilotCatalog: CopilotCatalogFlow;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -83,7 +85,13 @@ export class GrantCredentialObject implements DurableObject {
       install: (record, credential, revalidate) => this.installMiniMaxDevice(record, credential, revalidate),
       publish: async record => { await this.schedule(record); await this.publishProjection(record); },
     }, env);
+    this.copilotCatalog = new CopilotCatalogFlow({
+      order: run => this.order(run),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      retain: work => { this.state.waitUntil?.(work); void work.catch(() => undefined); },
+    }, env);
     this.copilotAccount = new CopilotAccountFlow({
+      invalidateCatalog: () => this.copilotCatalog.invalidate(),
       order: run => this.order(run),
       read: () => this.state.storage.get<CredentialRecord>("credential"),
       save: async record => { assertCopilotAccountRecord(record); await this.state.storage.put("credential", record); },
@@ -109,6 +117,11 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-catalog") {
+      const operation = this.copilotCatalog.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/copilot-account") {
       const operation = this.copilotAccount.fetch(request);
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
