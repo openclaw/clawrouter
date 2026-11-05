@@ -26,6 +26,7 @@ export interface CopilotAccountOwner {
   save(record: CredentialRecord): Promise<void>;
   publish(record: CredentialRecord): Promise<void>;
   retain(work: Promise<void>): void;
+  invalidateCatalog?(): void;
 }
 type Exchange = { attempt: CopilotAccountAttempt; operation: HttpOperation; work: Promise<void>; response?: Response; identity?: CopilotIdentity };
 
@@ -78,6 +79,7 @@ export class CopilotAccountFlow {
   // Called while the credential owner's ordering tail is held. Never wait for
   // remote work here: its own retirement continuation retains the allocation.
   async invalidate(): Promise<void> {
+    this.owner.invalidateCatalog?.();
     this.inFlight?.operation.stop("caller");
     const record = await this.owner.read();
     if (record?.copilotAccountAttempt) {
@@ -110,6 +112,7 @@ export class CopilotAccountFlow {
         if (attempt) {
           this.assertAttempt(scope, attempt);
           if (input.operation === "cancel") {
+            this.owner.invalidateCatalog?.();
             this.inFlight?.operation.stop("caller");
             attempt = record!.copilotAccountAttempt = { ...attempt, phase: "cancelled" };
             delete record!.copilotAccountBinding; await this.owner.save(record!);
