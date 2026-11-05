@@ -30,10 +30,9 @@ export function observeGrantQuota(
     return { status: "cooldown", observedAt, source: "provider_response", cooldownUntil: isoAfter(nowMs, AUTH_COOLDOWN_MS), lastSignal: "authentication", grantRevision: null, windows };
   }
   const retryAt = retryAfter(response.headers.get("retry-after"), nowMs);
-  const resetAt = earliestFutureReset(windows, nowMs);
   const exhaustedResetAt = latestFutureReset(windows.filter((window) => window.remaining === 0), nowMs);
   if (response.status === 429) {
-    return { status: "cooldown", observedAt, source: "provider_response", cooldownUntil: boundedCooldown(retryAt ?? exhaustedResetAt ?? resetAt ?? nowMs + DEFAULT_RATE_LIMIT_COOLDOWN_MS, nowMs), lastSignal: "rate_limited", grantRevision: null, windows };
+    return { status: "cooldown", observedAt, source: "provider_response", cooldownUntil: boundedCooldown(retryAt ?? exhaustedResetAt ?? nowMs + DEFAULT_RATE_LIMIT_COOLDOWN_MS, nowMs), lastSignal: "rate_limited", grantRevision: null, windows };
   }
   return windows.length ? quotaRuntime(windows, "provider_response", nowMs) : null;
 }
@@ -44,6 +43,40 @@ export function observeGrantQuotaProbe(payload: unknown, probe: CompiledQuotaPro
     Object.fromEntries(Object.entries(fields).map(([name, pointer]) => [name, jsonPointer(payload, pointer)])),
   ])));
   return windows.length || facts.account || facts.extraUsage ? { ...quotaRuntime(windows, "provider_probe", nowMs), ...facts } : null;
+}
+
+// Replacement snapshots may retire absent/null scopes, but never malformed
+// present readings. Keep permissive partial parsing separate from deletion power.
+export function validGrantQuotaSnapshot(payload: unknown, probe: CompiledQuotaProbe, nowMs = Date.now()): boolean {
+  // Use the parser's traversal/escaping rules, but distinguish absence from a
+  // present scalar/array blocking traversal anywhere along a replacement path.
+  const malformedAncestor = Symbol("malformed quota ancestor");
+  const valid = (value: unknown, definition: CompiledQuotaProbeWindow): boolean => {
+    const pointers = definition.collection ? [definition.collection.pointer] : [definition.limitPointer, definition.remainingPointer, definition.usedPointer, definition.resetPointer];
+    if (pointers.some(pointer => jsonPointer(value, pointer, malformedAncestor) === malformedAncestor)) return false;
+    if (definition.collection) {
+      const collection = definition.collection, entries = jsonPointer(value, collection.pointer);
+      if (entries === null) return true;
+      if (!Array.isArray(entries) || entries.length > 64) return false;
+      return entries.every(entry => {
+        const kind = jsonPointer(entry, collection.filter.pointer, malformedAncestor);
+        if (kind === malformedAncestor) return false;
+        if (kind !== collection.filter.equals) return true;
+        const family = collection.modelPointer ? jsonPointer(entry, collection.modelPointer) : null;
+        if (collection.modelPointer && (typeof family !== "string" || !/^[a-z0-9][a-z0-9_-]{0,31}$/i.test(family) || definition.id.length + 1 + family.length > 64)) return false;
+        const scalar = { ...definition, collection: null };
+        return valid(entry, scalar) && quotaWindowFromPayload(entry, scalar, nowMs).some(window => window.remaining !== null);
+      });
+    }
+    const metrics = [definition.limitPointer, definition.remainingPointer, definition.usedPointer].filter((pointer): pointer is string => !!pointer);
+    if (metrics.some(pointer => jsonPointer(value, pointer) !== null && pointerNumber(value, pointer) === null)) return false;
+    if (definition.resetPointer && jsonPointer(value, definition.resetPointer) !== null && !pointerReset(value, definition.resetPointer, nowMs)) return false;
+    // A present empty/scalar container is unknown, not an absent window.
+    const present = [...metrics, definition.resetPointer].some(pointer => pointer && (jsonPointer(value, pointer) !== null
+      || pointer.lastIndexOf("/") > 0 && jsonPointer(value, pointer.slice(0, pointer.lastIndexOf("/"))) !== null));
+    return !present || quotaWindowFromPayload(value, definition, nowMs).some(window => window.remaining !== null);
+  };
+  return probe.windows.every(definition => valid(payload, definition));
 }
 
 export function shouldFailoverGrant(status: number, method: string, capability: string, grantKey: string | null, enabled = true): boolean {
@@ -89,6 +122,7 @@ function quotaWindowFromPayload(payload: unknown, definition: CompiledQuotaProbe
     if (!Array.isArray(entries)) return [];
     return entries.slice(0, 64).flatMap(entry => {
       if (jsonPointer(entry, collection.filter.pointer) !== collection.filter.equals) return [];
+      if (!collection.modelPointer) return quotaWindowFromPayload(entry, { ...definition, collection: null }, nowMs);
       const name = jsonPointer(entry, collection.modelPointer);
       const family = typeof name === "string" ? name.toLowerCase() : "";
       if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(family) || `${definition.id}-${family}`.length > 64) return [];
@@ -162,11 +196,12 @@ function pointerReset(payload: unknown, pointer: string | null, nowMs: number): 
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
-function jsonPointer(value: unknown, pointer: string | null): unknown {
+function jsonPointer(value: unknown, pointer: string | null, malformedAncestor: unknown = null): unknown {
   if (!pointer || !pointer.startsWith("/")) return null;
   let current = value;
   for (const part of pointer.slice(1).split("/").map((item) => item.replaceAll("~1", "/").replaceAll("~0", "~"))) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) return null;
+    if (current === null || current === undefined) return null;
+    if (typeof current !== "object" || Array.isArray(current)) return malformedAncestor;
     current = (current as Record<string, unknown>)[part];
   }
   return current ?? null;
@@ -197,11 +232,6 @@ function retryAfter(value: string | null, nowMs: number): number | null {
   if (/^\d+(?:\.\d+)?$/.test(trimmed)) return nowMs + Number(trimmed) * 1_000;
   const date = Date.parse(trimmed);
   return Number.isFinite(date) ? date : null;
-}
-
-function earliestFutureReset(windows: GrantQuotaWindow[], nowMs: number): number | null {
-  const resets = windows.map((window) => window.resetAt ? Date.parse(window.resetAt) : NaN).filter((value) => Number.isFinite(value) && value > nowMs);
-  return resets.length ? Math.min(...resets) : null;
 }
 
 function latestFutureReset(windows: GrantQuotaWindow[], nowMs: number): number | null {

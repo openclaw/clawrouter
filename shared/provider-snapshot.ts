@@ -39,7 +39,7 @@ export interface CompiledQuotaWindow {
 }
 export interface CompiledQuotaProbeWindow {
   models?: string[] | null;
-  collection?: { pointer: string; filter: { pointer: string; equals: string }; modelPointer: string } | null;
+  collection?: { pointer: string; filter: { pointer: string; equals: string }; modelPointer?: string } | null;
   id: string;
   kind: GrantQuotaKind;
   unit: string | null;
