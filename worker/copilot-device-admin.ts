@@ -71,11 +71,16 @@ export async function readCopilotDeviceJson(request: Pick<Request, "body" | "bod
       const part = await owner.read(() => byob ? (reader as ReadableStreamBYOBReader).read(window) : (reader as ReadableStreamDefaultReader<Uint8Array>).read());
       request.signal.throwIfAborted();
       if (part.value) {
-        if (!(part.value instanceof Uint8Array) || part.value.buffer.byteLength > 8192 || part.value.length > 8192 - size) throw invalid();
+        if (!(part.value instanceof Uint8Array) || !(part.value.buffer instanceof ArrayBuffer)
+          || part.value.buffer.byteLength > 8192 || part.value.length > 8192 - size) throw invalid();
         bytes.set(part.value, size); size += part.value.length;
       }
       if (part.done) { eof = true; break; }
-      if (byob) { if (!part.value?.buffer.byteLength) throw invalid(); window = new Uint8Array(part.value.buffer); }
+      if (byob) {
+        const backing = part.value?.buffer;
+        if (!(backing instanceof ArrayBuffer) || !backing.byteLength) throw invalid();
+        window = new Uint8Array(backing);
+      }
     }
     if (length !== null && Number(length) !== size) throw invalid();
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size));
