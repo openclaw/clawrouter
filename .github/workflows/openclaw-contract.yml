@@ -119,6 +119,9 @@ jobs:
           - consumer: tencent
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-tencent.test.mjs
+          - consumer: xiaomi
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-xiaomi.test.mjs
           - consumer: gemini36
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-gemini36.test.mjs

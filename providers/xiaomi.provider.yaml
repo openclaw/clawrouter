@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-regional-providers.md.
+# Frozen PAYG inventory and dated retirements: docs/xiaomi-payg-contracts.md.
 # Endpoint/model source checked 2026-11-03: https://mimo.mi.com/docs/en-US/quick-start/summary/first-api-call
 schema: clawrouter.service-provider.v1
 id: xiaomi
@@ -43,6 +43,41 @@ models:
     - id: xiaomi/mimo-v2.6-pro
       upstream: mimo-v2.6-pro
       capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/xiaomi/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: xiaomi/mimo-v2.6-flash
+      upstream: mimo-v2.6-flash
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/xiaomi/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: xiaomi/mimo-v2.5-pro
+      upstream: mimo-v2.5-pro
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: stopped
+        effectiveAt: "2026-10-21"
+        checkedAt: "2026-11-03"
+        sources: [https://mimo.mi.com/docs/en-US/updates/deprecate]
+    - id: xiaomi/mimo-v2.5
+      upstream: mimo-v2.5
+      capabilities: []
+      availability:
+        version: clawrouter.model-availability.v1
+        status: stopped
+        effectiveAt: "2026-10-21"
+        checkedAt: "2026-11-03"
+        sources: [https://mimo.mi.com/docs/en-US/updates/deprecate]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

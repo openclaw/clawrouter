@@ -470,6 +470,8 @@
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Bind GMI's optional organization header to the original credential owner for Chat and keyed discovery, reject caller/static overrides, and recheck account identity and current policy after admission waits.
 - Preserve GMI unified Chat and model-prefix aliases by validating internal model selectors against the selected upstream model, while keeping caller path parameters and organization overrides closed.
+- Complete the four assigned Xiaomi PAYG model dispositions: expose MiMo 2.6 Pro/Flash and reject expired 2.5 identities before passthrough, preserving product credentials and unknown prices.
+- Verify the registered Xiaomi PAYG client through native streams, original-grant admission and SQLite settlement, separating stopped identities and unknown upstream prices from fixed policy charges.
 - Retain conservative generation charges for qualified Novita upstream HTTP 499 responses without treating local aborts, unsent requests, catalog reads or unrelated HTTP errors as that billing outcome.
 - Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
 - Qualify Novita native model-catalog declarations against the canonical keyed data-only contract, preserving exact caller filtering and unknown price units before runtime activation.
