@@ -218,18 +218,49 @@ export class UsageLedgerObject implements DurableObject {
   private grantUsage(policyId: string, days: number): Response {
     this.cleanup();
     const until = Date.now(), since = until - days * usageDayMs;
-    const daily = rows<GrantUsageRow>(this.sql.exec(`SELECT
-      strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS day,
-      provider, grant_key AS grantKey, grant_lane AS grantLane,
-      json_extract(event_json, '$.model') AS model,
-      COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS inputTokens,
-      COALESCE(SUM(output_tokens), 0) AS outputTokens,
-      COALESCE(SUM(json_extract(event_json, '$.cached_input_tokens')), 0) AS cacheReadTokens,
-      COALESCE(SUM(json_extract(event_json, '$.cache_write_input_tokens')), 0) AS cacheWriteTokens,
-      COALESCE(SUM(actual_cost_micros), 0) AS costMicros
-      FROM usage_events WHERE policy_id = ? AND occurred_at_ms >= ? AND occurred_at_ms <= ?
-      GROUP BY day, provider, grant_key, grant_lane, model ORDER BY day, provider, grant_key, grant_lane, model LIMIT 8193`, policyId, since, until) as unknown as Iterable<GrantUsageRow>);
-    if (daily.length > 8192) return errorResponse("usage_range_too_large", "choose a shorter range; grant usage exceeds 8192 groups", 422);
+    const grouped = new Map<string, GrantUsageRow>();
+    // Bound SQLite's grouping sorter by input rows, not output groups. Rowid
+    // seeks visit the retained table once, including gaps and out-of-range rows.
+    const batchSize = 4096;
+    let after: number | null = null;
+    while (true) {
+      const lower: string = after === null ? "" : "rowid > ? AND ";
+      const bindings: number[] = after === null ? [] : [after];
+      const page = first<{ last: number | null; count: number }>(this.sql.exec(`SELECT MAX(rowid) AS last, COUNT(*) AS count FROM (
+        SELECT rowid FROM usage_events NOT INDEXED WHERE ${lower}policy_id = ? AND occurred_at_ms >= ? AND occurred_at_ms <= ? ORDER BY rowid LIMIT ?
+      )`, ...bindings, policyId, since, until, batchSize));
+      if (page?.last == null) break;
+      const partial = this.sql.exec(`SELECT
+        strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS day,
+        provider, grant_key AS grantKey, grant_lane AS grantLane,
+        json_extract(event_json, '$.model') AS model,
+        COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS inputTokens,
+        COALESCE(SUM(output_tokens), 0) AS outputTokens,
+        COALESCE(SUM(json_extract(event_json, '$.cached_input_tokens')), 0) AS cacheReadTokens,
+        COALESCE(SUM(json_extract(event_json, '$.cache_write_input_tokens')), 0) AS cacheWriteTokens,
+        COALESCE(SUM(actual_cost_micros), 0) AS costMicros
+        FROM usage_events NOT INDEXED WHERE ${lower}rowid <= ? AND policy_id = ? AND occurred_at_ms >= ? AND occurred_at_ms <= ?
+        GROUP BY day, provider, grant_key, grant_lane, model`, ...bindings, page.last, policyId, since, until) as unknown as Iterable<GrantUsageRow>;
+      for (const row of partial) {
+        const id = JSON.stringify([row.day, row.provider, row.grantKey, row.grantLane, row.model]);
+        const group = grouped.get(id);
+        if (group) {
+          for (const key of grantUsageMetrics) group[key] += row[key];
+        } else {
+          if (grouped.size === 8192) return errorResponse("usage_range_too_large", "choose a shorter range; grant usage exceeds 8192 groups", 422);
+          grouped.set(id, row);
+        }
+      }
+      after = page.last;
+      if (page.count < batchSize) break;
+    }
+    const daily = [...grouped.values()].sort((left, right) => {
+      for (const key of ["day", "provider", "grantKey", "grantLane", "model"] as const) {
+        const order = compareSqlText(left[key], right[key]);
+        if (order) return order;
+      }
+      return 0;
+    });
     const grants = new Map<string, GrantUsageSnapshot["grants"][number]>();
     const lanes = new Map<string, GrantUsageSnapshot["lanes"][number]>();
     for (const row of daily) {
@@ -348,6 +379,20 @@ export class UsageLedgerObject implements DurableObject {
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_credential ON usage_events (policy_id, credential_id, occurred_at_ms DESC)");
   }
+}
+
+// SQLite BINARY sorts nulls first and valid UTF-8 text by code point, not locale.
+function compareSqlText(left: string | null, right: string | null): number {
+  if (left === right) return 0;
+  if (left === null) return -1;
+  if (right === null) return 1;
+  let i = 0, j = 0;
+  while (i < left.length && j < right.length) {
+    const a = left.codePointAt(i)!, b = right.codePointAt(j)!;
+    if (a !== b) return a - b;
+    i += a > 0xffff ? 2 : 1; j += b > 0xffff ? 2 : 1;
+  }
+  return left.length - right.length;
 }
 
 const grantUsageMetrics = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costMicros"] as const;
