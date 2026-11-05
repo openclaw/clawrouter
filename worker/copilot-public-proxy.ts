@@ -376,16 +376,17 @@ export async function proxyCopilotPublic(request: Request, env: Env, context: Ex
     return new Response(output.stream, { status: inferenceResponse.status, headers: responseHeaders });
   })();
   // Register the ACTUAL fetch/read continuation before prompt cancellation.
-  const retired = work.then(async () => {
+  const discard = work.then(async () => {
     if (operation.signal.aborted) await output?.discard(operation.signal.reason);
-  }, async error => { await output?.discard(error); }).then(async () => {
+  }, async error => { await output?.discard(error); });
+  const retired = Promise.allSettled([discard]).then(async initial => {
     const cleanup: Promise<unknown>[] = [];
     if (input) cleanup.push(input.discard(operation.signal.reason));
     else if (request.body && !request.bodyUsed && !request.body.locked) cleanup.push(disposeCopilotInferenceResponse(request, operation.signal.reason));
     if (output) cleanup.push(output.retired);
     else if (inferenceResponse?.body && !inferenceResponse.bodyUsed && !inferenceResponse.body.locked) cleanup.push(disposeCopilotInferenceResponse(inferenceResponse, operation.signal.reason));
     if (reserveResponse?.body && !reserveResponse.bodyUsed && !reserveResponse.body.locked) cleanup.push(disposeCopilotInferenceResponse(reserveResponse, operation.signal.reason));
-    await Promise.allSettled(cleanup);
+    const results = await Promise.allSettled(cleanup);
     await producer;
     if (request.body?.locked || inferenceResponse?.body?.locked || reserveResponse?.body?.locked) throw new Error("copilot_public_input_not_retired");
     if (reserved && stub && pin) {
@@ -398,6 +399,10 @@ export async function proxyCopilotPublic(request: Request, env: Env, context: Ex
       if (response.status === 200 && (!receipt || typeof receipt !== "object" || (receipt as { retired?: unknown }).retired !== true)) throw unavailable();
     }
     operation.stop("complete");
+    // Cleanup failure is not cleanup still running. Report it only after all
+    // owned sources unlock and the original continuation receives retirement.
+    const failed = [...initial, ...results].find(result => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   });
   context.waitUntil(retired); void retired.catch(() => undefined);
   try { return await operation.wait(work, "upstream"); }
@@ -655,7 +660,8 @@ export async function proxyCopilotDiscovery(request: Request, env: Env, context:
     }, { highWaterMark: 0 }), { headers: { "content-type": "application/json", "content-length": String(total), "cache-control": "private, no-store" } });
   })();
   const physical = work.then(() => undefined, () => undefined).then(async () => {
-    for (const response of responses) if (!response.bodyUsed && response.body && !response.body.locked) await disposeCopilotInferenceResponse(response, operation.signal.reason);
+    const cleanup = await Promise.allSettled(responses.map(response => !response.bodyUsed && response.body && !response.body.locked
+      ? disposeCopilotInferenceResponse(response, operation.signal.reason) : Promise.resolve()));
     await producer;
     if (responses.some(response => response.body?.locked)) throw new Error("copilot_discovery_input_not_retired");
     iterator?.return?.(); iterator = undefined; controller = undefined; responses.length = 0;
@@ -666,6 +672,8 @@ export async function proxyCopilotDiscovery(request: Request, env: Env, context:
       if (response.status !== 409 && (response.status !== 200 || (result as { retired?: unknown })?.retired !== true)) throw unavailable();
     }
     operation.stop("complete");
+    const failed = cleanup.find(result => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   });
   context.waitUntil(physical); void physical.catch(() => undefined);
   try { return await operation.wait(work, "upstream"); }

@@ -148,7 +148,7 @@ export default{async fetch(request,env,ctx){
   request=new Request(request,{signal:abort.signal});if(request.body){const get=request.body.getReader.bind(request.body);
   request.body.getReader=options=>{const r=get(options);return{async read(view){frontReads++;if(frontReads===1){const s=await env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(keyForRequest)).fetch('https://clawrouter.internal/fixture/stats',{method:'POST'});frontChargedAtRead.push((await s.json()).charged);}return r.read(view);},cancel:reason=>r.cancel(reason),releaseLock:()=>r.releaseLock()};};}
  }
- if(['discovery-observation-revoke','discovery-observation-reattest'].includes(mode)){
+ if(['discovery-observation-revoke','discovery-observation-reattest','front-header-cleanup-error'].includes(mode)){
   const namespace=env.GRANT_CREDENTIALS;
   env={...env,GRANT_CREDENTIALS:{idFromName:name=>namespace.idFromName(name),get(id){const stub=namespace.get(id);return{async fetch(input,init){
    const response=await stub.fetch(input,init),url=input instanceof Request?input.url:String(input);
@@ -158,6 +158,11 @@ export default{async fetch(request,env,ctx){
      async read(view){a.reads++;try{return await reader.read(view);}finally{if(a.reads===1)await gate('compact-read');}},
      async cancel(reason){a.cancels++;await reader.cancel(reason);},releaseLock(){reader.releaseLock();a.unlocks++;}
     };};
+   }
+   if(mode==='front-header-cleanup-error'&&url.endsWith('/copilot-public/execute')&&response.status===200){
+    const headers=new Headers(response.headers);headers.set('content-length','invalid');const returned=new Response(response.body,{status:response.status,headers});
+    const a=frontObservation={reads:0,cancels:0,unlocks:0,body:returned.body},cancel=returned.body.cancel.bind(returned.body);
+    returned.body.cancel=async reason=>{a.cancels++;await cancel(reason);await gate('front-cleanup');throw Error('synthetic frontend cleanup failure');};return returned;
    }
    return response;
   }};}}};
@@ -193,10 +198,10 @@ test('actual isolated public Copilot native and manifest admission, tariffs and 
  const until=async(grant,predicate)=>{let s;for(let i=0;i<150;i++){s=await control('/fixture/stats',grant);if(predicate(s))return s;await new Promise(r=>setTimeout(r,10));}assert.fail(JSON.stringify(s));};
  await control('/fixture/setup','copilot');
  const apiFormats=['openai.chat_completions','openai.responses','anthropic.messages'],apiPaths=['/chat/completions','/responses','/messages'],tariffs=[700,1100,1300];
- const cases=[...['native','manifest'].flatMap(route=>apiFormats.flatMap((format,index)=>[false,true].map(stream=>({mode:route+'-'+index+'-'+stream,route,format,index,stream})))),...['maximum','maximum-stream','reads-exact','reads-over-input','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','profile-revision','unknown-price','missing-profile','empty','destination','downstream-cancel','discovery-max','discovery-overflow','discovery-digest','discovery-tighten','discovery-reads','discovery-models','discovery-held','discovery-control','discovery-revoke','discovery-late','discovery-profile','discovery-observation-revoke','discovery-observation-reattest'].map(mode=>({mode,route:'native',format:apiFormats[1],index:1,stream:mode==='maximum-stream'}))];
+ const cases=[...['native','manifest'].flatMap(route=>apiFormats.flatMap((format,index)=>[false,true].map(stream=>({mode:route+'-'+index+'-'+stream,route,format,index,stream})))),...['maximum','maximum-stream','reads-exact','reads-over-input','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','profile-revision','unknown-price','missing-profile','empty','destination','downstream-cancel','discovery-max','discovery-overflow','discovery-digest','discovery-tighten','discovery-reads','discovery-models','discovery-held','discovery-control','discovery-revoke','discovery-late','discovery-profile','discovery-observation-revoke','discovery-observation-reattest','front-header-cleanup-error'].map(mode=>({mode,route:'native',format:apiFormats[1],index:1,stream:mode==='maximum-stream'}))];
  for(const {mode,route,format,index,stream} of cases)await t.test(mode,async t=>{
   const grant='public-'+mode;
-  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream','compact-read'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
+  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream','compact-read','front-cleanup'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
   io.setMode(['maximum','discovery-max'].includes(mode)?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');await configure();
   const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-public-'+mode,expectedGeneration:0}));
   await new Promise(r=>setTimeout(r,Math.max(0,begun.nextPollAt-Date.now())+10));
@@ -238,6 +243,14 @@ test('actual isolated public Copilot native and manifest admission, tariffs and 
    if(['discovery-overflow','discovery-digest','discovery-profile'].includes(mode)){assert.ok(response.status>=400,text);assert.doesNotMatch(text,/model-0|clawrouter.client-catalog/);}
    else{assert.equal(response.status,200,text);assert.ok(Buffer.byteLength(text)<=4*MiB);const result=JSON.parse(text);if(mode==='discovery-models')assert.equal(result.data.length,1);else{assert.equal(result.providers[0].models.length,mode==='discovery-max'?4096:mode==='discovery-tighten'?0:1);if(mode==='discovery-max')assert.equal(result.providers[0].offers.length,4096);}}
    const stats=await until(grant,s=>s.charged===0);assert.equal(stats.events.length,0);assert.equal(io.counts.inference-counts.inference,0);assert.ok(stats.readers.every(r=>!r.locked&&r.maximumBacking<=16384));if(mode==='discovery-reads')assert.equal(stats.readers.reduce((n,r)=>n+r.reads,0),16384);
+  }else if(mode==='front-header-cleanup-error'){
+   const response=await bounded(pending,'header rejection remains prompt');assert.ok(response.status>=400);await response.arrayBuffer();
+   let front;for(let i=0;i<150;i++){front=await control('/fixture/front-stats',grant);if(front.observation?.cancels===1)break;await new Promise(r=>setTimeout(r,10));}
+   assert.equal(front.observation?.cancels,1);assert.equal(front.observation.locked,false);
+   let stats=await control('/fixture/stats',grant);assert.equal(stats.charged,96*MiB);assert.equal(stats.contender,false);
+   io.release(mode+'/front-cleanup');stats=await until(grant,s=>s.charged===0);
+   assert.ok(stats.readers.every(r=>!r.locked));assert.equal((await control('/fixture/front-stats',grant)).observation.cancels,1);
+   assert.equal(io.counts.inference-counts.inference,1);assert.equal(stats.events.length,1);
   }else if(mode==='profile-revision'){
    await until(grant,s=>s.readers.some(r=>r.phase==='catalog'&&r.reads===1));await configure({...profile,editorVersion:'Fixture/2'});io.release(mode+'/read');
    const response=await bounded(pending,'profile revision denial');assert.ok(response.status>=400);await response.arrayBuffer();await until(grant,s=>s.charged===0);assert.equal(io.counts.inference-counts.inference,0);
