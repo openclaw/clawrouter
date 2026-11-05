@@ -44,14 +44,17 @@ models:
       pricingRef: xai-grok-4-3-standard-2026-06-21
       pricing:
         effectiveAt: "2026-06-21"
-        source: https://api.x.ai/v1/models/grok-4.3
+        checkedAt: "2026-11-04"
+        source: https://docs.x.ai/developers/pricing
         inputMicrosPerMillion: 1250000
         cachedInputMicrosPerMillion: 200000
         outputMicrosPerMillion: 2500000
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 131072
         longContext:
-          thresholdInputTokens: 200000
+          # The shared threshold is exclusive; xAI charges long rates at >=200k.
+          # https://docs.x.ai/developers/pricing
+          thresholdInputTokens: 199999
           inputMicrosPerMillion: 2500000
           cachedInputMicrosPerMillion: 400000
           outputMicrosPerMillion: 5000000
