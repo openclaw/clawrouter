@@ -216,6 +216,8 @@ export interface GrantRuntimeState {
   lastSignal: "quota" | "rate_limited" | "authentication";
   grantRevision: string | null;
   windows: GrantQuotaWindow[];
+  // Successful quota probes replace only their declared window scopes. A trailing * is a collection prefix.
+  windowSnapshots?: Record<string, { observedAt: string; ids: string[] }>;
   account?: GrantAccount;
   extraUsage?: GrantExtraUsage;
 }

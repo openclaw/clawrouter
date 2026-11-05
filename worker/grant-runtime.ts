@@ -24,8 +24,20 @@ export function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
     const observedAt = window.observedAt && Number.isFinite(Date.parse(window.observedAt)) ? window.observedAt : undefined;
     return { ...(observedAt ? { observedAt } : {}), id, kind: window.kind, unit, window: quotaWindow, remaining, limit, resetAt, ...(models ? { models } : {}) };
   });
-  return { status: state.status, observedAt: state.observedAt, source: state.source!, cooldownUntil, lastSignal: state.lastSignal, grantRevision, windows, ...sanitizeGrantFacts(state) };
+  let windowSnapshots: GrantRuntimeState["windowSnapshots"];
+  if (state.windowSnapshots !== undefined) {
+    if (!state.windowSnapshots || typeof state.windowSnapshots !== "object" || Array.isArray(state.windowSnapshots) || Object.keys(state.windowSnapshots).length > 128) invalidRuntime("grant window snapshots are invalid");
+    windowSnapshots = Object.fromEntries(Object.entries(state.windowSnapshots).map(([scope, snapshot]) => {
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}(?:-\*)?$/.test(scope) || !snapshot || typeof snapshot !== "object"
+        || typeof snapshot.observedAt !== "string" || !Number.isFinite(Date.parse(snapshot.observedAt)) || !Array.isArray(snapshot.ids) || snapshot.ids.length > 128
+        || !snapshot.ids.every(id => typeof id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) && snapshotApplies(scope, id))) invalidRuntime("grant window snapshot is invalid");
+      return [scope, { observedAt: snapshot.observedAt, ids: [...new Set(snapshot.ids)] }];
+    }));
+  }
+  return { status: state.status, observedAt: state.observedAt, source: state.source!, cooldownUntil, lastSignal: state.lastSignal, grantRevision, windows, ...(windowSnapshots ? { windowSnapshots } : {}), ...sanitizeGrantFacts(state) };
 }
+
+function snapshotApplies(scope: string, id: string): boolean { return scope.endsWith("*") ? id.startsWith(scope.slice(0, -1)) : id === scope; }
 
 function invalidRuntime(message: string): never { throw new HttpError(400, "invalid_authority_request", message); }
 
@@ -44,11 +56,19 @@ export function mergeGrantRuntimeState(previous: GrantRuntimeState | null, incom
     if (!retained || Date.parse(observedAt) >= Date.parse(retained.observedAt!)) windows.set(window.id, { ...window, observedAt });
   }
   if (windows.size > 128) invalidRuntime("too many merged quota windows");
-  const merged = [...windows.values()];
+  const windowSnapshots: NonNullable<GrantRuntimeState["windowSnapshots"]> = Object.create(null);
+  for (const state of [previous, incoming]) for (const [scope, snapshot] of Object.entries(state.windowSnapshots ?? {})) {
+    if (!windowSnapshots[scope] || Date.parse(snapshot.observedAt) >= Date.parse(windowSnapshots[scope].observedAt)) windowSnapshots[scope] = snapshot;
+  }
+  if (Object.keys(windowSnapshots).length > 128) invalidRuntime("too many merged quota snapshots");
+  // Persist the scope watermark, not just the deletion: late header/probe feedback
+  // must not resurrect a window absent from a newer successful usage snapshot.
+  const merged = [...windows.values()].filter(window => !Object.entries(windowSnapshots).some(([scope, snapshot]) =>
+    snapshotApplies(scope, window.id) && Date.parse(window.observedAt!) <= Date.parse(snapshot.observedAt) && !snapshot.ids.includes(window.id)));
   const quota = quotaRuntime(merged, latest.source, Date.parse(latest.observedAt));
   const signal = [previous, incoming].filter(state => state.lastSignal !== "quota" && state.cooldownUntil && Date.parse(state.cooldownUntil) > nowMs)
     .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))[0];
-  return { ...latest, windows: merged, status: signal ? "cooldown" : quota.status,
+  return { ...latest, windows: merged, ...(Object.keys(windowSnapshots).length ? { windowSnapshots } : {}), status: signal ? "cooldown" : quota.status,
     cooldownUntil: signal?.cooldownUntil ?? quota.cooldownUntil, lastSignal: signal?.lastSignal ?? "quota",
     account: incoming.account ?? previous.account, extraUsage: incoming.extraUsage ?? previous.extraUsage };
 }

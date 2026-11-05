@@ -13,14 +13,23 @@ const key = id => `oauth/fixture/${id}`;
 const router = `
   import worker from "./worker/index.ts";
   export * from "./worker/index.ts";
+  import { setCoalesceWindowMs } from "./worker/admission-cache.ts";
   import { sha256Hex } from "./worker/utils.ts";
   let clock = ${now}; Date.now = () => clock; const pending = new Set();
+  const nativeTimeout = globalThis.setTimeout, feedbackTimers = []; let holdFeedback = false;
+  globalThis.setTimeout = (callback, delay, ...args) => holdFeedback && delay === 90000
+    ? (feedbackTimers.push(() => callback(...args)), 0) : nativeTimeout(callback, delay, ...args);
   export default { ...worker, async fetch(request, env, ctx) {
     env.CLAWROUTER_LOCAL_AUTH = "enabled";
     env.CLAWROUTER_ADMIN_TOKEN_SHA256 = await sha256Hex("fixture-admin");
     env.ANTHROPIC_API_KEY = "fixture-environment";
     const path = new URL(request.url).pathname;
-    if (path === "/fixture/settle") { while (pending.size) await Promise.all([...pending]); return new Response("ok"); }
+    if (path === "/fixture/feedback") {
+      holdFeedback = (await request.json()).hold; setCoalesceWindowMs(holdFeedback ? 90000 : 250);
+      if (!holdFeedback) for (const release of feedbackTimers.splice(0)) release();
+      return new Response("ok");
+    }
+    if (path === "/fixture/settle") { if (holdFeedback) return new Response("held"); while (pending.size) await Promise.all([...pending]); return new Response("ok"); }
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
     if (path === "/fixture/provider") return fetch("https://fixture/control", request);
     if (path === "/fixture/policy") {
@@ -56,11 +65,11 @@ const upstream = `
   }};
 `;
 const routing = { strategy: "threshold", switchAtUsedPercent: 90, hysteresisPercent: 10, environmentFallback: false, failover: true };
-async function fixture(t, policy = routing) {
+async function fixture(t, policy = routing, options) {
   const directory = await mkdtemp(join(tmpdir(), "clawrouter-limit-switching-"));
   let mf;
   t.after(async () => { await mf?.dispose(); await rm(directory, { recursive: true, force: true }); });
-  mf = await startWorkerdFixture(directory, router, upstream);
+  mf = await startWorkerdFixture(directory, router, upstream, options);
   const request = async (path, method = "GET", body, headers = {}) => {
     const response = await mf.dispatchFetch("https://router.example" + path, { method, headers: { authorization: "Bearer fixture-admin", origin: "https://router.example", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     // Complete delivery, then join the real waitUntil feedback/accounting tasks.
@@ -153,6 +162,86 @@ for (const window of ["five_hour", "seven_day", "fable"]) test(`real provider ${
   if (window === "fable") await selected(await f.proxy("claude-sonnet-5"), "a");
 });
 
+test("weekly-only usage retires an omitted five-hour observation without inventing a reset", { timeout: 60000 }, async t => {
+  const policy = { ...routing, strategy: "priority", eligibleGrants: { anthropic: ["a"] }, staleState: "deny" };
+  const f = await fixture(t, policy);
+  await f.probe({ five_hour: { utilization: 100, resets_at: iso(now + 3600000) }, seven_day: { utilization: 20 } });
+  await unavailable(await f.proxy());
+  await f.clock(now + 1000);
+  await f.probe({ seven_day: { utilization: 20 } });
+  await selected(await f.proxy(), "a");
+  const row = (await f.rows()).find(g => g.tokenRef === "a");
+  assert.deepEqual(row.quotaWindows.map(window => [window.id, window.remaining, window.resetAt]), [["subscription-seven-day", 80, null]]);
+});
+
+test("malformed present five-hour readings cannot retire persisted exhaustion", { timeout: 60000 }, async t => {
+  const f = await fixture(t, { ...routing, strategy: "priority", eligibleGrants: { anthropic: ["a"] } });
+  await f.probe({ five_hour: { utilization: 100, resets_at: iso(now + 3600000) }, seven_day: { utilization: 20 } });
+  assert.equal((await f.proxy()).status, 429);
+  const before = (await f.rows()).find(g => g.tokenRef === "a").quotaWindows;
+  for (const five_hour of [{ utilization: "bad" }, { utilization: "bad", resets_at: iso(now + 3600000) }, {}, "bad"]) {
+    await f.clock(now + 1000); await f.configure({ usage: { five_hour, seven_day: { utilization: 20 } } });
+    const probe = await f.request(f.base + "a/quota-refresh", "POST");
+    assert.equal(probe.status, 502, await probe.clone().text());
+    await f.configure({});
+    assert.equal((await f.proxy()).status, 429);
+    assert.deepEqual((await f.rows()).find(g => g.tokenRef === "a").quotaWindows, before);
+  }
+  await f.probe({ five_hour: null, seven_day: { utilization: 20 } });
+  await selected(await f.proxy(), "a");
+});
+
+test("cold second client honors pending rejection before coalesced feedback reaches SQL", { timeout: 60000 }, async t => {
+  const f = await fixture(t, { ...routing, strategy: "priority", eligibleGrants: { anthropic: ["a", "b"] } }, { hotCache: true });
+  try {
+    await f.request("/fixture/feedback", "POST", { hold: true });
+    await f.configure({ a: { status: 429, headers: { "retry-after": "60" } } });
+    await selected(await f.proxy(), "b");
+    // SQL still has no rejection: the cold client authority selection names A.
+    assert.equal((await f.rows()).find(g => g.tokenRef === "a").cooldownUntil, null);
+    await f.configure({});
+    await selected(await f.proxy("claude-sonnet-5", "second-session", "other"), "b");
+    assert.deepEqual(await f.stats(), [key("a"), key("b"), key("b")]);
+  } finally { await f.request("/fixture/feedback", "POST", { hold: false }); }
+  const rows = await f.rows();
+  assert.equal(rows.find(g => g.tokenRef === "a").cooldownUntil, iso(now + 60000));
+  assert.deepEqual(rows.filter(g => ["a", "b"].includes(g.tokenRef)).map(g => [g.tokenRef, g.selectedCount]), [["a", 1], ["b", 2]]);
+});
+
+test("weekly_all usage without legacy windows enforces shared and model quotas independently", { timeout: 60000 }, async t => {
+  const f = await fixture(t, { ...routing, strategy: "priority" });
+  await f.probe({ five_hour: null, limits: [
+    { kind: "weekly_all", percent: 62 },
+    { kind: "weekly_scoped", scope: { model: { display_name: "Fable" } }, percent: 100 },
+  ] });
+  await selected(await f.proxy("claude-sonnet-5"), "a");
+  await selected(await f.proxy("claude-fable-5-1"), "b");
+  const windows = (await f.rows()).find(g => g.tokenRef === "a").quotaWindows;
+  assert.deepEqual(windows.map(window => [window.id, window.remaining, window.resetAt]), [["subscription-seven-day", 38, null], ["subscription-seven-day-fable", 0, null]]);
+  await f.probe({ five_hour: null, limits: [{ kind: "weekly_all", percent: 100 }] });
+  await selected(await f.proxy("claude-sonnet-5"), "b");
+});
+
+for (const hotCache of [false, true]) test(`weekly model-only rejection preserves other models and scoped feedback (hot cache: ${hotCache})`, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { ...routing, strategy: "priority" }, { hotCache });
+  await f.configure({ a: { status: 429, headers: {
+    "anthropic-ratelimit-unified-status": "rejected",
+    "anthropic-ratelimit-unified-7d-status": "allowed",
+    "anthropic-ratelimit-unified-7d-utilization": "0.2",
+    "anthropic-ratelimit-unified-7d-reset": iso(now + 6 * 86400000),
+    "anthropic-ratelimit-unified-7d_oi-status": "rejected",
+    "anthropic-ratelimit-unified-7d_oi-reset": iso(now + 3600000),
+    "anthropic-ratelimit-unified-representative-claim": "seven_day_overage_included",
+  } } });
+  await selected(await f.proxy("claude-fable-5-1"), "b");
+  await f.configure({ a: { headers: { "anthropic-ratelimit-unified-7d-utilization": "0.2" } } });
+  await selected(await f.proxy("claude-sonnet-5"), "a");
+  await selected(await f.proxy("claude-fable-5-1"), "b");
+  assert.equal((await f.rows()).find(g => g.tokenRef === "a").cooldownUntil, null);
+  await f.clock(now + 3600000);
+  await selected(await f.proxy("claude-fable-5-1"), "a");
+});
+
 for (const status of [401, 403, 429]) test(`real post-dispatch ${status} retries once on another setup token and avoids the cooled owner next request`, { timeout: 60000 }, async t => {
   const f = await fixture(t, { ...routing, strategy: "priority", eligibleGrants: { anthropic: ["b", "c"] } });
   await f.configure({ b: { status, headers: { "retry-after": "60" } } });
@@ -189,4 +278,57 @@ test("eligibleGrants scopes every dispatch and environment fallback remains expl
   await f.setPolicy({ ...routing, eligibleGrants: { anthropic: [] }, environmentFallback: true });
   const response = await f.proxy(); assert.equal(response.headers.get("x-clawrouter-grant-lane"), "environment"); await selected(response, null);
   assert.deepEqual(await f.stats(), [key("b"), null]);
+});
+
+
+test("OpenAI owner rejects malformed pointer ancestors without retiring SQL exhaustion", { timeout: 60000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "clawrouter-openai-quota-"));
+  let mf;
+  t.after(async () => { await mf?.dispose(); await rm(directory, { recursive: true, force: true }); });
+  // Actual credential owner and SQL authority: only provider egress and time
+  // are controlled. No quota/parser/publication methods or runtime rows mocked.
+  mf = await startWorkerdFixture(directory, `
+    export * from "./worker/index.ts";
+    import { putGrantCredentials } from "./worker/grant-credentials.ts";
+    import { grantQuotaExhausted } from "./worker/grant-quota.ts";
+    const key = "oauth/fixture/openai"; let clock = ${now}; Date.now = () => clock;
+    export default { async fetch(request, env) {
+      const path = new URL(request.url).pathname;
+      if (path === "/configure") { clock += 1000; return fetch("https://fixture/control", request); }
+      if (path === "/install") return Response.json(await putGrantCredentials(env, key, {
+        provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-openai",
+        accountId: "fixture-account", updatedAt: new Date(clock).toISOString(), maintenance: { keepWarm: false },
+      }));
+      if (path === "/refresh") return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch("https://owner/quota-refresh", { method: "POST", body: JSON.stringify({ key }) });
+      const response = await env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings")).fetch("https://authority/grant-pools/states", { method: "POST", body: JSON.stringify({ keys: [key] }) });
+      const state = (await response.json()).states[key];
+      return Response.json({ state, exhausted: grantQuotaExhausted(state, "gpt-6.1-sol", 0, true, clock) });
+    }};
+  `, upstream);
+  const request = (path, body) => mf.dispatchFetch("https://router.example" + path, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
+  const ok = async response => { assert.equal(response.status, 200, await response.clone().text()); return response; };
+  await ok(await request("/install"));
+  const refresh = async usage => { await ok(await request("/configure", { usage })); return request("/refresh"); };
+  const read = async () => (await (await ok(await request("/state"))).json());
+  const credits = { balance: 12.5 };
+  const exhausted = { rate_limit: { primary_window: { used_percent: 100, reset_at: iso(now + 3600000) } }, credits };
+  await ok(await refresh(exhausted));
+  const before = await read();
+  assert.equal(before.exhausted, true);
+  assert.equal(before.state.windows.find(window => window.id === "subscription-primary").remaining, 0);
+  for (const rate_limit of ["bad", 0, false, [], { primary_window: "bad" }, { secondary_window: [] }]) {
+    const response = await refresh({ rate_limit, credits });
+    assert.equal(response.status, 502, await response.clone().text());
+    assert.equal((await response.json()).error.code, "grant_quota_probe_invalid");
+    assert.deepEqual(await read(), before, "rejected refresh cannot change persisted windows or replacement watermarks");
+  }
+  for (const usage of [{ credits }, { rate_limit: null, credits }, { rate_limit: { primary_window: null, secondary_window: null }, credits }]) {
+    await ok(await refresh(usage));
+    const after = await read();
+    assert.equal(after.exhausted, false);
+    assert.deepEqual(after.state.windows.map(window => [window.id, window.remaining]), [["credits", 12.5]]);
+    assert.deepEqual(after.state.windowSnapshots["subscription-primary"].ids, []);
+    assert.deepEqual(after.state.windowSnapshots["subscription-secondary"].ids, []);
+    await ok(await refresh(exhausted)); assert.equal((await read()).exhausted, true);
+  }
 });

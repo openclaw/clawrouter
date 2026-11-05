@@ -66,6 +66,7 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
     // Another isolate in this location may have fetched it moments ago.
     const shared = failover ? undefined : await coloGet<AdmissionResult>("admission", key, config);
     if (shared && cacheable(shared.value, request.secretSha256)) {
+      applyPendingRuntime(shared.value);
       admissions.set(key, shared.value, config, expiryOf(shared.value), shared.fetchedAt);
       const selection = request.selection ? localSelection(env, shared.value, request.selection) : undefined;
       if (!request.selection || selection) {
@@ -90,8 +91,16 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
 const inflightMisses = new Map<string, { settled: boolean }>();
 
 async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest) {
-  const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", request);
+  // While feedback is pending, ask for an authorized snapshot rather than
+  // incrementing an authority selection that may already be locally ineligible.
+  const deferred = request.snapshot === "select" && !!request.selection && pendingRuntime.size > 0;
+  const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", deferred ? { ...request, snapshot: "only" } : request);
+  const overlaid = applyPendingRuntime(value);
   const ok = config.maxAgeMs > 0 && cacheable(value, request.secretSha256);
+  if (ok && request.selection && (deferred || overlaid && value.selection)) {
+    const selection = localSelection(env, value, request.selection, value.selection?.selected?.key);
+    if (selection) value.selection = selection;
+  }
   // Publish the secretless snapshot for other isolates in this location.
   if (ok) coloPut("admission", cacheKey(request), withoutSelection(value), hotCacheNow(), config);
   return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: ok, expiresAt: expiryOf(value) };
@@ -148,7 +157,7 @@ function withoutSelection(result: AdmissionResult): AdmissionResult {
   return rest;
 }
 
-function localSelection(env: Env, admission: AdmissionResult, request: AdmissionSelection): GrantSelectionResult | undefined {
+function localSelection(env: Env, admission: AdmissionResult, request: AdmissionSelection, alreadySelected?: string): GrantSelectionResult | undefined {
   const pool = admission.pools[request.providerId], snap = admission.snapshots?.[request.providerId], policy = admission.policy;
   if (!pool || !snap || !policy) return undefined;
   const provider = snapshot.providers.find(item => item.id === request.providerId);
@@ -157,7 +166,9 @@ function localSelection(env: Env, admission: AdmissionResult, request: Admission
   // Mirror the authority's early exits; the Worker then reports the denial itself.
   if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id) || admission.connections.find(item => item.providerId === provider.id)?.enabled === false) return undefined;
   try { assertPolicyModel(policy.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint, capability: request.capability }); } catch { return undefined; }
-  const result = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey: snap.poolKey, candidates: snap.candidates, states: pool.states, identityHash: snap.identityHash, fallbackSessionHash: snap.fallbackSessionHash }, choice => chooseLocally(env, snap, choice), key => snap.revisions[key]);
+  const result = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey: snap.poolKey, candidates: snap.candidates, states: pool.states, identityHash: snap.identityHash, fallbackSessionHash: snap.fallbackSessionHash }, choice => alreadySelected && choice.candidates.some(candidate => candidate.key === alreadySelected)
+    ? { selectedKey: alreadySelected } // Keep an eligible authority choice without counting it twice.
+    : chooseLocally(env, snap, choice), key => snap.revisions[key]);
   // The snapshot is shared by concurrent requests; hand out a private copy.
   return result.selected ? { ...result, selected: structuredClone(result.selected) } : result;
 }
@@ -218,8 +229,10 @@ export async function flushSelections(env: Env): Promise<void> {
   const records = [...pendingSelections.values()];
   pendingSelections.clear();
   const runtime = [...pendingRuntime];
-  pendingRuntime.clear();
-  const feedback = Promise.all(runtime.map(([key, state]) => recordGrantRuntime(env, key, state).catch(() => undefined)));
+  const feedback = Promise.all(runtime.map(async ([key, state]) => {
+    try { await recordGrantRuntime(env, key, state); } catch { /* Advisory feedback remains best effort. */ }
+    finally { if (pendingRuntime.get(key) === state) pendingRuntime.delete(key); }
+  }));
   for (const [poolKey, cursorKey] of pendingCursors) {
     const record = records.find(item => item.poolKey === poolKey && item.key === cursorKey) ?? records.find(item => item.poolKey === poolKey);
     if (record) record.cursorKey = cursorKey;
@@ -232,10 +245,21 @@ export async function flushSelections(env: Env): Promise<void> {
   await feedback;
 }
 
+// Failover can reload admission before its rejected attempt's feedback reaches
+// the authority. Overlay pending observations until the write has settled.
+function applyPendingRuntime(admission: AdmissionResult): boolean {
+  let applied = false;
+  for (const pool of Object.values(admission.pools)) for (const key of pool.keys) {
+    const pending = pendingRuntime.get(key);
+    if (pending) { pool.states[key] = mergeGrantRuntimeState(pool.states[key] ?? null, pending); applied = true; }
+  }
+  return applied;
+}
+
 /** Apply observed quota/cooldown state to this isolate's snapshots immediately. */
 export function applyLocalGrantRuntime(key: string, state: GrantRuntimeState): void {
   for (const admission of admissions.values()) {
-    for (const pool of Object.values(admission.pools)) if (pool.keys.includes(key)) pool.states[key] = state;
+    for (const pool of Object.values(admission.pools)) if (pool.keys.includes(key)) pool.states[key] = mergeGrantRuntimeState(pool.states[key] ?? null, state);
   }
 }
 

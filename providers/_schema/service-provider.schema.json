@@ -233,8 +233,7 @@
                 "additionalProperties": false,
                 "required": [
                   "pointer",
-                  "filter",
-                  "modelPointer"
+                  "filter"
                 ],
                 "properties": {
                   "pointer": {

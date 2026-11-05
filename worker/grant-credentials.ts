@@ -13,7 +13,8 @@ import { normalizedScopes, validTimestamp, envValue, boundedSecret, optionalSecr
 import { routingProjection } from "./grant-projection.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot, type GrantAttachmentStatus } from "./authority.ts";
-import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, quotaRuntime } from "./grant-quota.ts";
+import { observeProviderGrantQuota } from "./provider-quota.ts";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, quotaRuntime, validGrantQuotaSnapshot } from "./grant-quota.ts";
 import { grantUsable, REFRESH_MARGIN_MS } from "./grant-selection.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
@@ -900,6 +901,7 @@ async function probeQuota(env: Env, provider: CompiledProvider, record: Credenti
   const stored = states.states[record.grantKey!];
   const previous = stored?.grantRevision === record.updatedAt ? stored : undefined;
   let windows = previous?.windows ?? [];
+  const windowSnapshots: NonNullable<GrantRuntimeState["windowSnapshots"]> = {};
   let facts = previous ? { account: previous.account, extraUsage: previous.extraUsage } : {};
   let quotaUpdated = false;
   let quotaObservedAt: string | undefined;
@@ -943,18 +945,23 @@ async function probeQuota(env: Env, provider: CompiledProvider, record: Credenti
     let payload: unknown;
     try { payload = await boundedResponseJson(response, MAX_REFRESH_RESPONSE_BYTES); }
     catch (error) { if (probe.windows.length) throw error; else continue; }
+    if (!validGrantQuotaSnapshot(payload, probe, probeStartedAt)) throw new HttpError(502, "grant_quota_probe_invalid", "provider " + provider.id + " quota probe returned a malformed window");
     const state = observeGrantQuotaProbe(payload, probe, probeStartedAt);
     if (!state) { if (probe.windows.length) throw new HttpError(502, "grant_quota_probe_empty", `provider ${provider.id} quota probe returned no recognized windows`); else continue; }
     successful = true;
     delete record.quotaRetryAt?.[probe.url];
     facts = { ...facts, ...(state.account ? { account: state.account } : {}), ...(state.extraUsage ? { extraUsage: state.extraUsage } : {}) };
     if (state.windows.length) {
-      windows = [...windows.filter(window => !probe.windows.some(definition => definition.collection ? window.id.startsWith(`${definition.id}-`) : window.id === definition.id)), ...state.windows];
+      for (const definition of probe.windows) {
+        const scope = definition.collection?.modelPointer ? `${definition.id}-*` : definition.id;
+        windowSnapshots[scope] = { observedAt: state.observedAt, ids: state.windows.filter(window => definition.collection?.modelPointer ? window.id.startsWith(`${definition.id}-`) : window.id === definition.id).map(window => window.id) };
+      }
+      windows = [...windows.filter(window => !probe.windows.some(definition => definition.collection?.modelPointer ? window.id.startsWith(`${definition.id}-`) : window.id === definition.id)), ...state.windows];
       quotaUpdated = true;
       quotaObservedAt = state.observedAt;
     }
   }
-  const observed = { ...quotaRuntime(windows.slice(0, 128), "provider_probe", quotaObservedAt ? Date.parse(quotaObservedAt) : Date.now()), ...facts, grantRevision: record.updatedAt };
+  const observed = { ...quotaRuntime(windows.slice(0, 128), "provider_probe", quotaObservedAt ? Date.parse(quotaObservedAt) : Date.now()), ...facts, ...(quotaUpdated ? { windowSnapshots } : {}), grantRevision: record.updatedAt };
   if (!quotaUpdated && previous) Object.assign(observed, { observedAt: previous.observedAt, status: previous.status, cooldownUntil: previous.cooldownUntil, lastSignal: previous.lastSignal });
   if (successful) await publishRuntime(env, record, observed);
   return observed;
@@ -992,7 +999,7 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
     await response.body?.cancel().catch(() => undefined);
     throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request returned ${response.status}`);
   }
-  const state = observeGrantQuota(response, provider.quota);
+  const state = observeProviderGrantQuota(provider.id, response, provider.quota, model);
   if (state) await publishRuntime(env, record, state);
   await response.body?.cancel().catch(() => undefined);
   if (!response.ok) throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request returned ${response.status}`);

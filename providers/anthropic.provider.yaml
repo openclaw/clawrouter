@@ -161,6 +161,16 @@ quota:
         - id: subscription-seven-day
           kind: subscription
           unit: percent
+          window: seven_day
+          fixedLimit: 100
+          collection:
+            pointer: /limits
+            filter: { pointer: /kind, equals: weekly_all }
+          usedPointer: /percent
+          resetPointer: /resets_at
+        - id: subscription-seven-day
+          kind: subscription
+          unit: percent
           window: seven_day_scoped
           fixedLimit: 100
           collection:
