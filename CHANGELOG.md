@@ -284,6 +284,7 @@
 - Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
+- Declare DeepSeek native Search alongside unchanged Chat cards with the frozen 750-microUSD maximum request tariff, complete-empty zero settlement and conservative uncertain charges; preserve original credentials and explicit fixed policy pricing.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add an inactive MiniMax plan Search response leaf with trusted regional destinations, complete native JSON and validation of every result URL; preserve unknown usage and response capacity through downstream completion while operation authority remains separate.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
