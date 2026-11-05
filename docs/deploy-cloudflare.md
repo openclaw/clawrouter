@@ -173,6 +173,13 @@ any DLQ depth as an operator incident: inspect the failed message, repair the
 underlying Durable Object or Worker issue, and replay it to `USAGE_QUEUE`
 before that recovery window expires.
 
+A UsageLedger `/snapshot` CPU-limit reset can also fail queued `/ingest` calls
+before they execute; zero-CPU ingest failures can therefore exhaust retries.
+Check the shard's snapshot failures as well as the failed ingest. Exact snapshot
+rollups remove those aggregate scans only after the shard's historical migration
+completes. The `usage_rollup_maintenance` alarm log reports retained row count,
+database bytes, and migration watermarks without principal IDs or event content.
+
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 
 ```sh
