@@ -35,6 +35,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: audio.transcription
+    endpoint: transcription
+    methods: [POST]
 endpoints:
   responses:
     modelPassthrough: {}
@@ -50,12 +53,29 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  transcription:
+    method: POST
+    path: /v1/audio/transcriptions
+    requestFormat: openrouter.audio_transcription
+    responseFormat: openrouter.audio_transcription
 models:
   entries:
     - id: openrouter/auto
       upstream: openrouter/auto
       capabilities: [llm.chat]
       pricingRef: openrouter-auto
+    - id: openrouter/openai/whisper-large-v3-turbo
+      upstream: openai/whisper-large-v3-turbo
+      capabilities: [audio.transcription]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          transcription:
+            sources:
+              - https://openrouter.ai/docs/guides/overview/multimodal/stt
+              - https://openrouter.ai/openai/whisper-large-v3-turbo
+            checkedAt: "2026-11-04"
+            input: [audio]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

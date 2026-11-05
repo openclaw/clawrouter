@@ -14,8 +14,15 @@ const existing = parse(readFileSync(new URL("../../providers/openrouter.provider
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/openrouter/transcription.json", import.meta.url)));
 const format = "openrouter.audio_transcription", upstream = "openai/whisper-large-v3-turbo";
 const compile = manifest => compileProviderSnapshot([manifest]);
-function fixture() {
+function baseline() {
   const manifest = structuredClone(existing);
+  manifest.capabilities = manifest.capabilities.filter(value => value.id !== "audio.transcription" || value.endpoint !== "transcription");
+  manifest.models.entries = manifest.models.entries.filter(value => value.id !== `openrouter/${upstream}`);
+  delete manifest.endpoints.transcription;
+  return manifest;
+}
+function fixture() {
+  const manifest = baseline();
   manifest.capabilities.push({ id: "audio.transcription", endpoint: "transcription", methods: ["POST"] });
   manifest.endpoints.transcription = { method: "POST", path: "/v1/audio/transcriptions", requestFormat: format, responseFormat: format };
   manifest.models.entries.push({ id: `openrouter/${upstream}`, upstream, capabilities: ["audio.transcription"],
@@ -107,7 +114,7 @@ test("the unpriced compiled model denies both hard-dollar budgets and keeps expl
 });
 
 test("OpenRouter transcription declarations preserve existing Chat and Responses routes and attribution", () => {
-  const before = compile(existing), manifest = fixture();
+  const before = compile(baseline()), manifest = fixture();
   for (const endpoints of [manifest.endpoints, Object.fromEntries(Object.entries(manifest.endpoints).reverse())]) {
     const after = compile({ ...manifest, endpoints });
     for (const endpoint of before.providers[0].endpoints) assert.deepEqual(after.providers[0].endpoints.find(value => value.id === endpoint.id), endpoint);
