@@ -81,3 +81,71 @@ explicit local model names and bounded requests. Keep model responses in memory;
 retain only finite labels, correctness, counts, timings and hashes. Never execute
 model-generated code on the host. Repository execution still requires the
 qualified isolated runner.
+
+## Local selector smoke
+
+Start a task-owned Ollama server on a free loopback port. Load local models
+separately; the runner never pulls models or chooses a cloud model. Then run:
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-selector-smoke.mjs \
+  /path/to/fresh-results qwen3:0.6b qwen3:4b-instruct-2507-q4_K_M
+```
+
+One model is also supported to compare its first sample with a three-sample
+vote. With two models, put the smaller model first. The second model is sampled
+once per case. The fixed confidence cascade accepts the first decision only if
+it selects a candidate with confidence at least 80; otherwise it uses the second
+model. These policies replay the same recorded responses. They do not tune a
+threshold on the results or claim online latency savings.
+
+The 48 hand-authored cases cover 12 contract families with three candidate-order
+variants and one all-incorrect variant per family. Reference tests validate the
+candidate implementations independently of model responses. The smoke tests
+selection and abstention, not candidate generation, sandboxed execution, or
+production quality. One lucky run cannot qualify a learned router.
+
+Each request is bounded to 96 output tokens, 4096 context tokens and one minute.
+A full two-model run makes at most 192 requests and has a 15-minute campaign
+deadline checked before each call. There is no automatic transport retry.
+HTTP, identity or usage failures and recognized safety notices stop the run.
+Completed outputs record finite decisions, token counts, timing and hashes;
+raw prompts, responses and reasoning are not retained.
+
+## First local result: reject the naive policies
+
+A corrected run on 2026-11-05 used source
+`4cfd541b80841c9e24309ceeb95239a96d197d69` and corpus SHA-256
+`468430f851c409aa57d42cc04248b99f291b114afc1d932f18dff001d69b1a4c`.
+Each model generated three samples per case: 288 local calls total, zero paid
+API spend. The cascade reuses sample zero from each model; it is a replay.
+
+| Policy | Correct / 48 | Replay calls | Replay tokens |
+| --- | ---: | ---: | ---: |
+| Always abstain (fixed control) | 12 | 0 | 0 |
+| Qwen3 0.6B, one sample | 12 | 48 | 7,432 |
+| Qwen3 0.6B, three-sample vote | 12 | 144 | 22,310 |
+| Qwen3 4B Instruct, one sample | 33 | 48 | 6,956 |
+| Qwen3 4B Instruct, three-sample vote | 32 | 144 | 20,905 |
+| 0.6B to 4B, confidence-80 cascade | 33 | 92 | 13,836 |
+
+The 0.6B model rejected 10/12 all-incorrect cases but solved only 2/36 cases
+with a correct candidate. The 4B model solved 32/36 of those cases but rejected
+only 1/12 all-incorrect cases. Fourteen wrong 4B decisions reported confidence
+at least 80. The cascade escalated 44/48 cases and added no correct answers.
+All responses met the finite decision schema.
+
+Model pins: `qwen3:0.6b` at
+`7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435`, and
+`qwen3:4b-instruct-2507-q4_K_M` at
+`0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0`.
+Thinking was disabled; generation settings are those in the runner above.
+These are untrained prompted selectors, not trained TRINITY coordinators.
+An earlier 4B run used an incorrect fixture and was invalidated, not included.
+
+Do not promote these policies. The next experiment should select generated
+patches with executable tests in the qualified isolated runner, compare against
+one small worker, and include all-fail tasks. Freeze the policy before evaluating
+fresh task families. Require a gain over the best fixed worker at the same total
+budget, including verification and failed calls, before frontier confirmation.
+Keep production Fusion opt-in until a held-out coding comparison earns promotion.
