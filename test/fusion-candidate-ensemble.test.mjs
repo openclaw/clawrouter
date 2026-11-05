@@ -91,3 +91,20 @@ test('divergent Unicode candidates remain bounded and omissions are explicit', (
   assert.ok(result[0].files[0].after.omittedBytes > 0);
   assert.throws(() => candidateSummaries([], [[{ path: 'worker/a.ts', content: 'x' }]]), /invalid_candidate_baseline/);
 });
+
+test('a refused executor stops before handing the same task to another model', {
+  skip: !process.env.FUSION_DOCKER_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { runAgent } = await import('../scripts/fusion-agent-benchmark.mjs');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks())[0];
+  const receipt = JSON.parse(await readFile(process.env.FUSION_DOCKER_QUALIFICATION)).receipts.find(receipt => receipt.taskId === task.id);
+  let calls = 0;
+  await assert.rejects(runAgent(task, receipt.image, 'handoff', 'refusal-fixture',
+    { ...defaultExperiment, maxTurns: 9 }, async () => {
+      calls++;
+      return { choices: [{ finish_reason: 'refusal', message: { content: '' } }] };
+    }, {}), /provider_refused/);
+  assert.equal(calls, 1);
+});
