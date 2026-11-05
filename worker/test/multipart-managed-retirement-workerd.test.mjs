@@ -108,7 +108,7 @@ export default {async fetch(request,env,ctx){
   const source=hold(await rawFetch('https://retirement-source.example/upload',{redirect:'manual'}),a);
   target=new Request('https://router.example/v1/native/groq/v1/audio/transcriptions',{method:'POST',headers:{...headers,'content-type':'multipart/form-data; boundary=x'},body:source.body,signal:a.abort.signal});
  }else if(mode==='response'){
-  const form=new FormData();form.set('model','whisper-large-v3-turbo');form.set('file',new File([new Uint8Array([1,2,3,4])],'fixture.wav',{type:'audio/wav'}));
+  const form=new FormData();form.set('model','groq/whisper-large-v3-turbo');form.set('file',new File([new Uint8Array([1,2,3,4])],'fixture.wav',{type:'audio/wav'}));
   target=new Request('https://router.example/v1/proxy/groq/transcription',{method:'POST',headers,body:form,signal:a.abort.signal});
  }else target=new Request('https://router.example/v1/native/replicate/v1/files/fixture-video'+(mode==='download'?':download':''),{headers:{...headers,'x-clawrouter-job-id':'prediction_fixture_001'},signal:a.abort.signal});
  ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('synthetic caller cancellation'))));
