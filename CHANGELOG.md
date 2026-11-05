@@ -5,6 +5,7 @@
 - Retain bounded provider error categories in Fusion benchmark accounting without persisting request or response text.
 
 - Add an opt-in hosted Fusion workload campaign with exact-source verification, cumulative budget preflight and content-free checkpoints across both corpora.
+- Add optional provider-product declarations with independent commercial and authentication metadata and validated references to existing endpoint and grant-transport bindings.
 
 - Bound Fusion candidate-selection context with change previews while preserving complete source inspection and paired probes.
 

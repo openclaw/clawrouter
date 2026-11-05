@@ -2,6 +2,13 @@ schema: clawrouter.service-provider.v1
 id: example
 displayName: Example
 class: rest_json
+products:
+  - id: api
+    displayName: API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [invoke]
 service:
   platform: example
   kind: api_provider
