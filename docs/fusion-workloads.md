@@ -149,3 +149,16 @@ current files independently. Handoff occurs on Sol's submission or after two
 thirds of the shared turn allowance. The second phase receives the source and
 untrusted predecessor notes. It uses the remaining original time, turns and
 dollars; it does not reset the budget or trust visible tests as final grading.
+
+### Transfer validation corpus
+
+`benchmarks/fusion/validation-workloads.json` freezes four additional historical
+repairs: GMI internal selectors, Titan Multimodal error handling, literal
+Responses upstream paths, and unqualified native speech pricing. These are
+public development-validation tasks, not a private holdout. They were selected
+before the complementary-strategy results, and are not used to tune that run.
+
+Pass the manifest as the third qualifier/standalone-runner argument, or as
+`taskManifest` to `runExperiment`. Qualification still requires the broken parent
+to fail and the known repair to pass. CI qualifies every bundled workload set. Missing pinned commits and their parents
+are fetched explicitly, so aging beyond the shallow checkout does not break qualification.

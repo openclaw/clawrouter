@@ -246,8 +246,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   } finally { await box.close(); }
 }
 
-export async function runExperiment({ qualificationPath, out, repo, config = defaultExperiment, env = process.env }) {
-  const tasks = await loadTasks(resolve(repo, 'benchmarks/fusion/workloads.json'));
+export async function runExperiment({ qualificationPath, out, repo, config = defaultExperiment, env = process.env, taskManifest }) {
+  const tasks = await loadTasks(taskManifest ?? resolve(repo, 'benchmarks/fusion/workloads.json'));
   const budgetBound = validateExperiment(config, tasks.length);
   if (!/^[a-f0-9]{40}$/.test(env.GITHUB_SHA ?? '')) throw new Error('exact_source_required');
   const qualification = JSON.parse(await readFile(qualificationPath, 'utf8'));
@@ -327,9 +327,9 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [qualificationPath, out] = process.argv.slice(2);
+  const [qualificationPath, out, taskManifest] = process.argv.slice(2);
   if (!qualificationPath || !out) throw new Error('qualification receipt and fresh output directory required');
-  runExperiment({ qualificationPath, out, repo: process.cwd() }).catch(() => {
+  runExperiment({ qualificationPath, out, taskManifest, repo: process.cwd() }).catch(() => {
     console.error('Workload experiment incomplete; inspect content-free checkpoint.'); process.exitCode = 1;
   });
 }

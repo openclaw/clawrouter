@@ -61,3 +61,16 @@ test('behavior probes use bounded stdin in the task sandbox and retain no script
   await assert.rejects(probe(box, 'x'.repeat(16001)), /invalid_probe/);
   assert.equal(calls.length, 1);
 });
+
+
+test('transfer validation uses distinct pinned tasks without changing the original corpus', async () => {
+  const original = await loadTasks();
+  const validation = await loadTasks(new URL('../benchmarks/fusion/validation-workloads.json', import.meta.url));
+  assert.equal(validation.length, 4);
+  const known = new Set(original.flatMap(task => [task.id, task.oracle]));
+  for (const task of validation) {
+    assert.equal(validateTask(task), task);
+    assert.equal(known.has(task.id), false);
+    assert.equal(known.has(task.oracle), false);
+  }
+});
