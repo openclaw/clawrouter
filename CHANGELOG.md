@@ -534,6 +534,7 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
+- Declare Bifrost model discovery from its configured API base, preserving the original managed owner and intersecting admitted and current model policies without an environment-key fallback.
 - Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
 - Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
 - Compile the ElevenLabs offer and exercise actual OpenClaw TTS/Talk through the Worker with scoped proxy credentials, complete MP3 delivery, caller deadlines, controlled cancellation and conservative accounting; keep unattended speech smokes unresolved.
