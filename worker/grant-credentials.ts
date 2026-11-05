@@ -1,7 +1,7 @@
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import { miniMaxSearchDenied, miniMaxSearchOwnerBinding, miniMaxSearchProjection, mutateMiniMaxSearchBinding } from "./minimax-search-credential.ts";
 import { searchJsonBytes, searchControlHeader, searchControlVersion, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import type { SearchGrantAttestation } from "./authority-contracts.ts";
+import type { SearchGrantAttestation, MusicGrantAttestation } from "./authority-contracts.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { CopilotCatalogFlow } from "./copilot-catalog-flow.ts";
 import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
@@ -22,7 +22,7 @@ import snapshotJson from "./generated/provider-snapshot.json" with { type: "json
 import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot, type GrantAttachmentStatus } from "./authority.ts";
 import { observeProviderGrantQuota } from "./provider-quota.ts";
 import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, quotaRuntime, validGrantQuotaSnapshot } from "./grant-quota.ts";
-import { grantUsable, REFRESH_MARGIN_MS } from "./grant-selection.ts";
+import { grantUsable, REFRESH_MARGIN_MS, validGrantSegment } from "./grant-selection.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson, sha256Hex } from "./utils.ts";
@@ -303,14 +303,20 @@ export class GrantCredentialObject implements DurableObject {
         if (replace && !hasPrimaryCredential(input.grant) && !input.vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
         let current = await this.state.storage.get<CredentialRecord>("credential");
         if (current) nextCredentialGeneration(current.generation);
+        const musicMutation = input.nativeMediaIntent?.operation === "minimax.music" || musicMutationRecord(current);
+        if (musicMutation && (!input.musicActor || input.provenance
+          || current && (!canonicalRecord(current) || current.grantKey !== input.key || current.poolSyncPending))) musicMutationDenied();
         let attachment: GrantAttachmentSnapshot;
         let previous: UpstreamGrant | null;
-        if (input.minimaxSearchIntent !== undefined || current?.minimaxSearchBinding) {
+        if (musicMutation || input.minimaxSearchIntent !== undefined || current?.minimaxSearchBinding) {
           // Search never repairs or adopts a legacy/pending attachment on the
           // way to attestation. The original record must already be canonical.
           if (current && !canonicalRecord(current)) miniMaxSearchDenied();
           attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: input.key });
-          if (attachment.pending || attachment.generation !== (current?.generation ?? 0)) miniMaxSearchDenied();
+          if (attachment.pending || attachment.generation !== (current?.generation ?? 0)) {
+            if (musicMutation) musicMutationDenied();
+            miniMaxSearchDenied();
+          }
           previous = current ? metadataGrant(current) : null;
         } else if (replace && (!current || !canonicalRecord(current))) {
           // Recover directly into the final mutation. An incomplete old owner
@@ -343,6 +349,7 @@ export class GrantCredentialObject implements DurableObject {
         delete record.copilotDeviceAttempt;
         mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        delete record.minimaxMusicTombstone;
         mutateMiniMaxAnthropicBinding(record, current, input.minimaxAnthropicIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         await mutateVertexAnthropicBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.vertexAnthropicIntent,
@@ -379,6 +386,10 @@ export class GrantCredentialObject implements DurableObject {
           searchProof = { actor: input.searchActor, key: input.key, original: mutation.original,
             resultGeneration: record.generation, resultLineage: record.lineage!, digest };
         }
+        const musicProof = musicMutation ? await musicMutationProof(input.musicActor!, input.key, current, record, attachment,
+          replace ? "replace" : "preserve", { preserve: input.preserveUnspecifiedSecrets, intent: input.nativeMediaIntent ?? null,
+            specified: input.nativeMediaIntent !== undefined }) : undefined;
+        if (musicProof && searchProof && JSON.stringify(musicProof.actor) !== JSON.stringify(searchProof.actor)) musicMutationDenied();
         const grant = metadataGrant(record);
         // Admission reserves capacity without removing the old attachment. A
         // failed store leaves indexed pending work for this owner to reconcile.
@@ -386,7 +397,15 @@ export class GrantCredentialObject implements DurableObject {
         // Only this explicit commit may acknowledge the reservation; later
         // refreshes and legacy imports cannot complete a failed account write.
         record.poolAdmissionRevision = admitted.revision;
-        if (searchProof) {
+        if (musicProof) {
+          // This also covers an explicit switch to Search: the complete result
+          // and both intents were prepared before the SAME last SQL role check.
+          const expected: MusicGrantAttestation = { ...musicProof, admissionRevision: admitted.revision };
+          searchJsonBytes(expected);
+          const reply = await authorityCall<MusicGrantAttestation>(this.env, "/grant-music/authorize", expected);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(expected)) musicMutationDenied();
+        } else if (searchProof) {
           // LAST remote wait: role and exact mutation are checked after pool admission.
           // No hash/preparation/other await may be inserted before the storage commit.
           const expected: SearchGrantAttestation = { ...searchProof, admissionRevision: admitted.revision };
@@ -447,13 +466,15 @@ export class GrantCredentialObject implements DurableObject {
         return json(result);
       }
       if (path === "/revoke") {
-        const { key, metadata, searchActor } = await readJson<{ key: string; metadata?: GrantRevokeMetadata; searchActor?: PutRequest["searchActor"] }>(request);
+        const { key, metadata, searchActor, musicActor } = await readJson<{ key: string; metadata?: GrantRevokeMetadata; searchActor?: PutRequest["searchActor"]; musicActor?: PutRequest["musicActor"] }>(request);
         await this.minimaxDevice.invalidate();
         await this.copilotDevice.invalidate();
         await this.copilotAccount.invalidate();
         this.vertexRefresh.invalidate();
         // An unavailable index must not block deleting an owner's secrets.
         const current = await this.state.storage.get<CredentialRecord>("credential");
+        const musicMutation = musicMutationRecord(current);
+        if (musicMutation && (!musicActor || !current || !canonicalRecord(current) || current.grantKey !== key || current.poolSyncPending)) musicMutationDenied();
         const legacy = !current || !current.metadata || current.enabled === undefined ? await legacyGrantMetadata(this.env, key, true) : null;
         // Old owner identity wins over KV and hints. Prepare missing metadata
         // in memory so the first durable write already contains no secrets.
@@ -467,7 +488,18 @@ export class GrantCredentialObject implements DurableObject {
         const record = current?.revokedAt
           ? { ...current, metadata: current.metadata ?? stripLegacySecrets(previous) as UpstreamGrant, lineage: current.lineage ?? crypto.randomUUID(), poolSyncPending: true }
           : revokedRecord(key, current ? previous : { ...previous, ...metadata }, generation);
-        if (current?.minimaxSearchBinding && !current.revokedAt) {
+        if (musicMutation) {
+          record.minimaxMusicTombstone = true;
+          const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+          if (attachment.pending || attachment.generation !== current!.generation) musicMutationDenied();
+          const prepared = await musicMutationProof(musicActor!, key, current, record, attachment,
+            current!.revokedAt ? "tombstone" : "revoke", { preserve: false, intent: null, specified: true });
+          const proof: MusicGrantAttestation = { ...prepared, admissionRevision: attachment.revision };
+          searchJsonBytes(proof);
+          const reply = await authorityCall<MusicGrantAttestation>(this.env, "/grant-music/authorize", proof);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(proof)) musicMutationDenied();
+        } else if (current?.minimaxSearchBinding && !current.revokedAt) {
           if (!searchActor || !canonicalRecord(current)) miniMaxSearchDenied();
           searchJsonBytes(record);
           const fingerprint = await sha256Hex(miniMaxApiKeySecret(current) ?? "");
@@ -1039,6 +1071,40 @@ function canonicalRecord(record: CredentialRecord): boolean {
   return !!record.metadata && record.enabled !== undefined && !!record.lineage;
 }
 
+function musicMutationRecord(record: CredentialRecord | undefined): boolean {
+  return record?.nativeMediaBinding?.operation === "minimax.music" || record?.minimaxMusicTombstone === true;
+}
+
+function musicMutationDenied(): never {
+  throw new HttpError(403, "minimax_music_admin_required", "Current Music mutation authority is required");
+}
+
+async function musicMutationProof(actor: NonNullable<PutRequest["musicActor"]>, key: string,
+  current: CredentialRecord | undefined, record: CredentialRecord, attachment: GrantAttachmentSnapshot,
+  mode: MusicGrantAttestation["mode"], intent: { preserve: boolean; specified: boolean; intent: PutRequest["nativeMediaIntent"] },
+): Promise<Omit<MusicGrantAttestation, "admissionRevision">> {
+  if (!canonicalRecord(record) || record.grantKey !== key) musicMutationDenied();
+  const parts = key.split("/");
+  const scope: MusicGrantAttestation["scope"] = parts.length === 4 && parts[1] === "tenants"
+    ? ["tenants", parts[2], parts[3]] : ["policies", parts[1], parts[2]];
+  if (parts[0] !== "oauth" || parts.length !== (scope[0] === "tenants" ? 4 : 3)
+    || scope[0] === "policies" && scope[1] === "tenants" || !validGrantSegment(scope[1]) || !validGrantSegment(scope[2])) musicMutationDenied();
+  searchJsonBytes(record);
+  const secrets = { credential: record.credential ?? null, credentials: record.credentials ?? null,
+    accessToken: record.accessToken ?? null, refreshToken: record.refreshToken ?? null, vertexPrivateKey: record.vertexPrivateKey ?? null };
+  searchJsonBytes(secrets);
+  const credentialFingerprint = await sha256Hex(JSON.stringify(secrets));
+  const original = { exists: !!current, generation: current?.generation ?? 0, lineage: current?.lineage ?? null, revision: attachment.revision };
+  const domain = "clawrouter.minimax-music-mutation.v1" as const;
+  const mutation = { domain, actor, key, scope, original, resultGeneration: record.generation, resultLineage: record.lineage!, mode,
+    credentialFingerprint, account: record.accountId ?? null, provider: record.providerId ?? null, kind: record.kind ?? null,
+    expiry: record.expiresAt ?? null, enabled: record.enabled, revokedAt: record.revokedAt ?? null,
+    binding: record.nativeMediaBinding ?? null, searchBinding: record.minimaxSearchBinding ?? null, ...intent };
+  searchJsonBytes(mutation);
+  const digest = await sha256Hex(JSON.stringify(mutation));
+  return { domain, actor, key, scope, original, resultGeneration: record.generation, resultLineage: record.lineage!, mode, digest };
+}
+
 function nextCredentialGeneration(generation: number): number {
   if (!Number.isSafeInteger(generation) || generation < 0 || generation >= Number.MAX_SAFE_INTEGER - 1) throw new HttpError(409, "grant_generation_exhausted", "account generation is exhausted; operator recovery is required");
   return generation + 1;
@@ -1241,8 +1307,8 @@ export async function inspectGrantCredentials(env: Env, key: string, signal?: Ab
   return (await ownerCall<OwnerResponse>(env, key, "/inspect", search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent, minimaxSearchIntent, searchActor })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent, minimaxSearchIntent, searchActor, musicActor })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -1275,13 +1341,13 @@ export async function materializeGrantCredentials(
   }, signal, wan, search)).grant;
 }
 
-export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata, searchActor })).grant;
+export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata, searchActor, musicActor })).grant;
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  for (const name of ["minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
+  for (const name of ["musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
   return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxSearchBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
@@ -1418,7 +1484,7 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 

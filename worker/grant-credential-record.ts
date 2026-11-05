@@ -30,6 +30,8 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
   vertexPrivateKey?: string;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: NativeMediaBinding | null;
+  // Keeps repeated Music revocation under current administrator authority.
+  minimaxMusicTombstone?: true;
   minimaxSearchBinding?: MiniMaxSearchBinding | null;
   minimaxImageBinding?: MiniMaxImageBinding | null;
   version: 1;
@@ -96,6 +98,7 @@ export interface PutRequest {
   nativeMediaIntent?: NativeMediaBinding | null;
   minimaxSearchIntent?: MiniMaxSearchBinding | null;
   searchActor?: SearchGrantMutationActor;
+  musicActor?: SearchGrantMutationActor;
   minimaxImageIntent?: MiniMaxImageBinding | null;
   vertexAnthropicIntent?: VertexAnthropicBinding | null;
   vertexPrivateKey?: string;

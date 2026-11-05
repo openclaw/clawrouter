@@ -11,6 +11,7 @@ import { putGrantCredentials, materializeGrantCredentials, inspectGrantCredentia
 import { routingProjection } from "../grant-projection.ts";
 import { overrideHotCacheConfig, HOT_CACHE_DISABLED } from "../hot-cache.ts";
 import { BodyLease, bodyBudgetCharged } from "../body-budget.ts";
+import { installMusicAdmin, musicAdmin } from "./minimax-music-admin-fixture.mjs";
 const nativePath = "/v1/native/minimax/v1/music_generation", manifestPath = "/v1/proxy/minimax/music";
 const adminPath = "/v1/admin/upstream-grants/policies/fixture/replicate";
 const originalKey = "synthetic-original-music-key";
@@ -22,9 +23,10 @@ async function setup(t, options = {}) {
   snapshot.providers = originalProviders.filter(row => row.id !== "minimax").map(row => row.id === "replicate" ? structuredClone(row) : row);
   t.after(() => { snapshot.providers = originalProviders; });
   const f = await fixture(t, { providerId: "minimax", fixed: options.fixed === undefined ? 700 : options.fixed, configure(target) { Object.assign(target, provider); } });
+  await installMusicAdmin(t, f);
   f.env.MINIMAX_API_KEY = "synthetic-forbidden-environment-key";
   f.env.CLAWROUTER_ADMIN_TOKEN_SHA256 = await sha256Hex("synthetic-admin");
-  f.admin = (body, query = "", headers = {}) => f.call(adminPath + query, body, { method: "PUT", headers: { authorization: "Bearer synthetic-admin", ...headers } });
+  f.admin = (body, query = "", headers = {}) => f.call(adminPath + query, body, { method: "PUT", headers: { ...(headers.authorization ? {} : f.musicHeaders), authorization: "Bearer synthetic-admin", ...headers } });
   f.put = async (body, query = "") => { const r = await f.admin(body, query), text = await r.text(); assert.equal(r.status, 200, text); assert.doesNotMatch(text, /synthetic-(?:original-music|replacement|forbidden-environment)-key/); return JSON.parse(text); };
   if (!options.environment) await f.put({ provider: "minimax", kind: "api_key", enabled: true, accountId: "synthetic-account", credential: originalKey,
     ...(options.qualify === false ? {} : { nativeMediaAuthorization: "minimax-global-music" }) });
@@ -72,6 +74,8 @@ test("MiniMax music admin intent cannot come from caller metadata or non-admin",
   for (const body of [{ nativeMediaBinding: minimaxMusicBinding }, { nativeMediaIntent: minimaxMusicBinding }, { nativeMediaAuthorization: true }, { nativeMediaAuthorization: "minimax-global-image" }]) {
     const r = await f.admin(body); assert.equal(r.status, 400); await r.text();
   }
+  await assert.rejects(putGrantCredentials(f.env, grantKey, { provider: "minimax", kind: "api_key", credential: originalKey, nativeMediaBinding: minimaxMusicBinding }));
+  await f.put({ nativeMediaAuthorization: null });
   await putGrantCredentials(f.env, grantKey, { provider: "minimax", kind: "api_key", credential: originalKey, nativeMediaBinding: minimaxMusicBinding });
   assert.equal((await inspectGrantCredentials(f.env, grantKey)).nativeMediaBinding, null);
   assert.equal(secretlessGrant({ provider: "minimax", nativeMediaBinding: minimaxMusicBinding }).nativeMediaBinding, null);
@@ -96,7 +100,7 @@ for (const mode of ["legacy", "speech", "oauth", "subscription", "bundle", "acce
     const state = f.env.GRANT_CREDENTIALS.objects.get(grantKey), record = state.values.get("credential");
     record.nativeMediaBinding = { ...minimaxMusicBinding, ...(mode === "cn" ? { region: "cn", origin: "https://api.minimaxi.com" }
       : mode === "extra" ? { allow: true } : mode === "version" ? { version: "future" } : { model: "foreign" }) }; state.values.set("credential", record);
-  } else if (mode === "revoked") { await f.put({ nativeMediaAuthorization: "minimax-global-music" }); await revokeGrantCredentials(f.env, grantKey); }
+  } else if (mode === "revoked") { await f.put({ nativeMediaAuthorization: "minimax-global-music" }); await revokeGrantCredentials(f.env, grantKey, undefined, undefined, musicAdmin); }
   else if (mode !== "legacy") {
     const value = mode === "oauth" || mode === "subscription" ? { kind: mode, accessToken: "synthetic-portal-token" }
       : mode === "bundle" ? { kind: "api_key", credentials: { key: originalKey } }
@@ -123,13 +127,13 @@ for (const mutate of ["model", "format", "response", "capability", "origin", "pa
 for (const mutate of ["remove", "rotate", "disable", "revoke", "policy", "model", "caller", "owner-unavailable", "failed-publication"]) test(`MiniMax music fresh final check denies ${mutate} after budget awaits`, async t => {
   const f = await setup(t);
   f.afterBudget(async () => {
-    if (mutate === "revoke") return revokeGrantCredentials(f.env, grantKey);
+    if (mutate === "revoke") return revokeGrantCredentials(f.env, grantKey, undefined, undefined, musicAdmin);
     if (mutate === "policy" || mutate === "model") return f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, ...(mutate === "policy" ? { generation: "g2" } : { models: [] }) } });
     if (mutate === "caller") return f.authority("/credentials/put", { credentialId: "fixture", credential: { ...f.credential, enabled: false } });
     if (mutate === "owner-unavailable") { const get = f.env.GRANT_CREDENTIALS.get; f.env.GRANT_CREDENTIALS.get = id => { const stub = get(id); return { fetch(url, init) { return new URL(url).pathname === "/inspect" ? new Response(null, { status: 503 }) : stub.fetch(url, init); } }; }; return; }
     if (mutate === "failed-publication") {
       const get = f.env.ACCESS_CONTROL.get; f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { fetch(url, init) { return new URL(url).pathname === "/grant-pools/publish" && JSON.parse(init.body).status === "paused" ? new Response(null, { status: 503 }) : stub.fetch(url, init); } }; };
-      await assert.rejects(() => putGrantCredentials(f.env, grantKey, { enabled: false }, true)); return;
+      await assert.rejects(() => putGrantCredentials(f.env, grantKey, { enabled: false }, true, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, musicAdmin)); return;
     }
     return f.put(mutate === "remove" ? { nativeMediaAuthorization: null } : mutate === "disable" ? { enabled: false }
       : { credential: "synthetic-replacement-key", nativeMediaAuthorization: "minimax-global-music" });
@@ -162,7 +166,7 @@ test("MiniMax music discovery requires exact model and independent music authori
   assert.deepEqual(offered.routes.map(row => [row.endpoint, row.requestFormat, row.responseFormat]), [["music", "minimax.music", "minimax.music"]]);
   assert.equal(offered.offers.find(row => row.modelId === musicModel).eligible, true);
   assert.doesNotMatch(catalog, /nativeMediaBinding|credentialSource|synthetic-original-music-key/);
-  await revokeGrantCredentials(f.env, grantKey);
+  await revokeGrantCredentials(f.env, grantKey, undefined, undefined, musicAdmin);
   const revoked = await (await f.call("/v1/catalog", null)).json();
   assert.equal(revoked.providers.find(row => row.id === "minimax").offers.some(row => row.eligible), false);
 });
@@ -242,7 +246,7 @@ for (const renewal of [false, true]) test(`MiniMax music explicit environment fi
 test("MiniMax music selected grant cannot borrow a valid environment binding after revocation", async t => {
   const f = await setup(t);
   f.env.CLAWROUTER_MINIMAX_NATIVE_MEDIA_BINDING = JSON.stringify({ ...minimaxMusicBinding, credentialSource: "MINIMAX_API_KEY", credentialSha256: await sha256Hex(f.env.MINIMAX_API_KEY) });
-  f.afterBudget(() => revokeGrantCredentials(f.env, grantKey));
+  f.afterBudget(() => revokeGrantCredentials(f.env, grantKey, undefined, undefined, musicAdmin));
   await denied(f, await f.request());
 });
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };

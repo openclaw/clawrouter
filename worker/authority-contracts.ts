@@ -35,3 +35,10 @@ export interface SearchGrantAttestation {
   admissionRevision: number;
   digest: string;
 }
+
+// Private owner-to-authority proof, never an HTTP-supplied permission.
+export interface MusicGrantAttestation extends SearchGrantAttestation {
+  domain: "clawrouter.minimax-music-mutation.v1";
+  scope: ["policies" | "tenants", string, string];
+  mode: "preserve" | "replace" | "revoke" | "tombstone";
+}

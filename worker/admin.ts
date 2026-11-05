@@ -437,7 +437,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request, {}), "invalid_upstream_grant", "revocation metadata");
-    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body), { auth: actor.auth, email: actor.email, role: actor.role });
+    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body), { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else if (!action && request.method === "PUT") {
     const mode = new URL(request.url).searchParams.get("mode");
@@ -447,7 +447,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
       throw new HttpError(400, "invalid_minimax_device_request", "Device attempt state is owner-managed");
     if (["copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding"].some(field => Object.hasOwn(body, field)))
       throw new HttpError(400, "invalid_copilot_device_request", "Device attempt state is owner-managed");
-    if (Object.hasOwn(body, "nativeMediaBinding") || Object.hasOwn(body, "nativeMediaIntent"))
+    if (["nativeMediaBinding", "nativeMediaIntent", "musicActor", "musicAttestation", "minimaxMusicTombstone"].some(field => Object.hasOwn(body, field)))
       throw new HttpError(400, "invalid_native_media_authorization", "Use the explicit native media product authorization");
     if (Object.hasOwn(body, "minimaxAnthropicBinding") || Object.hasOwn(body, "minimaxAnthropicIntent"))
       throw new HttpError(400, "invalid_minimax_anthropic_authorization", "Use explicit MiniMax regional credential authorization");
@@ -486,7 +486,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant) && !vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     grant = await putGrantCredentials(env, key, normalizeGrant(body, existing, !!vertexPrivateKey), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage, minimaxSearch, { auth: actor.auth, email: actor.email, role: actor.role });
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage, minimaxSearch, { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));
