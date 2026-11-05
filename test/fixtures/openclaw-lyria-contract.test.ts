@@ -54,7 +54,7 @@ beforeAll(async () => {
     CLAWROUTER_API_KEY: undefined, GOOGLE_API_KEY: "must-not-fallback", GEMINI_API_KEY: undefined } });
   alternate = writePlugin({ id: "music-alternate-fixture", dir: state.statePath("alternate"),
     registration: `api.registerMusicGenerationProvider({ id: "music-alternate-fixture", defaultModel: "fixture", capabilities: {}, async generateMusic() {
-      await fetch(${JSON.stringify(origin + "/fixture/alternate")}); return { tracks: [{ buffer: Buffer.from(${JSON.stringify(audio.mp3)}, "base64"), mimeType: "audio/mpeg" }] } });` });
+      await fetch(${JSON.stringify(origin + "/fixture/alternate")}); return { tracks: [{ buffer: Buffer.from(${JSON.stringify(audio.mp3)}, "base64"), mimeType: "audio/mpeg" }] }; } });` });
   await state.writeJson("alternate/openclaw.plugin.json", { id: alternate.id, contracts: { musicGenerationProviders: [alternate.id] }, configSchema: { type: "object", additionalProperties: false, properties: {} } });
   await state.writeAuthProfiles({ version: 1, profiles: { "google:native": { type: "api_key", provider: "google", key: "must-not-fallback" } } });
   await fs.writeFile(`${state.workspaceDir}/lyria-reference.png`, Buffer.from(png, "base64"));
