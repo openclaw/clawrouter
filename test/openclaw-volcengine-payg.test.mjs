@@ -72,9 +72,11 @@ test("registered ClawRouter catalog routes Volcengine PAYG turns with original g
         const [first, second] = matching;
         assert.ok(!first.body.messages.some(m => m.role === "tool"));
         assert.equal(first.body.tools[0].function.name, "lookup");
-        assert.ok(second.body.messages.some(m => m.role === "tool" && m.tool_call_id === "call_fixture" && m.content === "synthetic-tool-result"));
+        // The registered generic replay policy normalizes both paired IDs.
+        assert.ok(second.body.messages.some(m => m.role === "tool" && m.tool_call_id === "callfixture" && m.content === "synthetic-tool-result"));
         assert.ok(second.body.messages.some(m => m.reasoning_content === "synthetic-reasoning"));
-        assert.ok(second.body.messages.some(m => m.tool_calls?.[0]?.function?.name === "lookup"));
+        const replayCall = second.body.messages.flatMap(m => m.tool_calls ?? []);
+        assert.deepEqual(replayCall, [{ id: "callfixture", type: "function", function: { name: "lookup", arguments: '{"value":"fixture"}' } }]);
       }
       let usage;
       for (let n = 0; n < 150; n++) {

@@ -94,9 +94,13 @@ describe("actual registered ClawRouter Volcengine PAYG catalog and Chat", () => 
       const { provider, model } = selection;
       const policy = resolveTranscriptPolicy({ provider: "clawrouter", modelId: model.id, modelApi: model.api, model, runtimeHandle: { provider: "clawrouter", plugin: provider } });
       expect(policy.dropReasoningFromHistory).toBe(false);
+      expect(policy.sanitizeToolCallIds).toBe(true); expect(policy.toolCallIdMode).toBe("strict");
+      expect(policy.duplicateToolCallIdStyle).toBeUndefined();
       return sanitizeSessionHistory({ provider: "clawrouter", modelId: model.id, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: "volcengine-roundtrip",
         sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: "clawrouter", modelApi: model.api, modelId: model.id })]), messages: history });
     });
+    expect(messages).toContainEqual(expect.objectContaining({ role: "toolResult", toolCallId: "callfixture", toolName: "lookup", content: [{ type: "text", text: "synthetic-tool-result" }] }));
+    expect(messages.some(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "callfixture" && part.name === "lookup"))).toBe(true);
     const second = await (await start(selection, id, false, { ...firstContext, messages: convertToLlm(messages) })).result();
     expect(second.stopReason, second.errorMessage).toBe("stop"); expect(second.content).toContainEqual({ type: "text", text: "synthetic-answer" });
   });
