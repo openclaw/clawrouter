@@ -24,6 +24,8 @@ import type { ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { MiniMaxDeviceFlow } from "./minimax-device-flow.ts";
 import type { MiniMaxDeviceInput } from "./minimax-device-admin.ts";
+import { CopilotDeviceFlow, type CopilotDeviceCredential } from "./copilot-device-flow.ts";
+import type { CopilotDeviceInput } from "./copilot-device-admin.ts";
 
 const MAX_LEGACY_GRANT_BYTES = 3 * 1024 * 1024;
 const MIN_ALARM_DELAY_MS = 1_000;
@@ -52,6 +54,7 @@ export class GrantCredentialObject implements DurableObject {
   private tail: Promise<void> = Promise.resolve();
   private readonly vertexRefresh: VertexOwnerRefresh;
   private readonly minimaxDevice: MiniMaxDeviceFlow;
+  private readonly copilotDevice: CopilotDeviceFlow;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -78,6 +81,15 @@ export class GrantCredentialObject implements DurableObject {
       install: (record, credential, revalidate) => this.installMiniMaxDevice(record, credential, revalidate),
       publish: async record => { await this.schedule(record); await this.publishProjection(record); },
     }, env);
+    this.copilotDevice = new CopilotDeviceFlow({
+      order: run => this.order(run),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: record => this.saveCopilotDevice(record),
+      begin: (key, input) => this.beginCopilotDevice(key, input),
+      install: (record, token, revalidate) => this.installCopilotDevice(record, token, revalidate),
+      publish: record => this.publishProjection(record),
+      retain: work => { this.state.waitUntil?.(work); void work.catch(() => undefined); },
+    }, env);
   }
 
   private order<T>(run: () => Promise<T>): Promise<T> {
@@ -88,6 +100,11 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-device") {
+      const operation = this.copilotDevice.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/materialize") {
       const operation = (async () => {
         try {
@@ -236,6 +253,7 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/put") {
         const input = await readJson<PutRequest>(request);
         await this.minimaxDevice.invalidate();
+        await this.copilotDevice.invalidate();
         this.vertexRefresh.invalidate();
         const replace = input.intent === "replace";
         if (replace && !hasPrimaryCredential(input.grant) && !input.vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
@@ -266,6 +284,10 @@ export class GrantCredentialObject implements DurableObject {
           ? updatedCredentialRecord(current, input.grant, !!input.vertexPrivateKey || vertexOwnerBinding(current)?.source === "service_account")
           : credentialRecord(input.grant, generation, !!input.vertexPrivateKey);
         record = ownerMetadata(record, input.grant, input.key);
+        // Generic mutations never carry an acquired GitHub token or its device
+        // attempt into another generation, provider, domain or credential kind.
+        delete record.copilotDeviceCredential;
+        delete record.copilotDeviceAttempt;
         mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         mutateMiniMaxAnthropicBinding(record, current, input.minimaxAnthropicIntent,
@@ -338,6 +360,7 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/revoke") {
         const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
         await this.minimaxDevice.invalidate();
+        await this.copilotDevice.invalidate();
         this.vertexRefresh.invalidate();
         // An unavailable index must not block deleting an owner's secrets.
         const current = await this.state.storage.get<CredentialRecord>("credential");
@@ -428,6 +451,57 @@ export class GrantCredentialObject implements DurableObject {
     // One owner row atomically records the credential AND terminal attempt.
     // Failed publication can retry this projection, never the token exchange.
     await this.state.storage.put("credential", installed);
+    return installed;
+  }
+
+  private async saveCopilotDevice(record: CredentialRecord): Promise<void> {
+    if (new TextEncoder().encode(JSON.stringify(record)).byteLength > 32 * 1024)
+      throw new HttpError(503, "copilot_device_unavailable", "Device owner state exceeds its bound");
+    await this.state.storage.put("credential", record);
+  }
+
+  private async beginCopilotDevice(key: string, input: Extract<CopilotDeviceInput, { operation: "begin" }>): Promise<CredentialRecord> {
+    const current = await this.state.storage.get<CredentialRecord>("credential");
+    if (current && (!canonicalRecord(current) || current.grantKey !== key || current.providerId !== "github-copilot" || current.refreshAttempt)
+      || !current && await legacyGrantMetadata(this.env, key, true))
+      throw new HttpError(409, "copilot_device_owner_unavailable", "Original credential owner is unavailable");
+    if ((current?.generation ?? 0) !== input.expectedGeneration)
+      throw new HttpError(409, "copilot_device_conflict", "Credential generation changed");
+    const { result: attachment } = await this.reconcileAttachment(key);
+    if (attachment.generation !== (current?.generation ?? 0)) throw new HttpError(409, "copilot_device_conflict", "Credential attachment changed");
+    const now = new Date().toISOString();
+    const record: CredentialRecord = {
+      version: 1, generation: nextCredentialGeneration(current?.generation ?? 0), lineage: crypto.randomUUID(),
+      grantKey: key, providerId: "github-copilot", kind: "oauth", enabled: true, status: "reauth_required",
+      updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
+      metadata: { provider: "github-copilot", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight, createdAt: now, updatedAt: now },
+    };
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "github-copilot", status: "reauth_required",
+    });
+    record.poolAdmissionRevision = admitted.revision;
+    return record;
+  }
+
+  private async installCopilotDevice(current: CredentialRecord, token: CopilotDeviceCredential, revalidate: () => Promise<void>): Promise<CredentialRecord> {
+    const attempt = current.copilotDeviceAttempt!;
+    if (token.version !== 1 || token.githubDomain !== attempt.githubDomain || token.ownerBinding !== attempt.ownerBinding
+      || !token.accessToken || token.accessToken.length > 8192 || attempt.phase !== "poll_unknown")
+      throw new HttpError(409, "copilot_device_conflict", "Device credential binding changed");
+    // Token acquisition supplies neither account nor inference authority. Keep
+    // the original token solely in the private row, outside generic key slots.
+    const generation = nextCredentialGeneration(current.generation);
+    const installed: CredentialRecord = { ...current, generation, copilotDeviceCredential: { ...token },
+      status: "reauth_required", updatedAt: new Date().toISOString(), poolSyncPending: true,
+      copilotDeviceAttempt: { ...attempt, phase: "committed", generation, authorization: undefined } };
+    const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: current.grantKey });
+    const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
+      key: current.grantKey, generation: current.generation, revision: attachment.revision, provider: "github-copilot", status: "reauth_required",
+    });
+    installed.poolAdmissionRevision = admitted.revision;
+    await revalidate();
+    if (Date.now() >= attempt.expiresAt) throw new HttpError(409, "copilot_device_expired", "Device attempt expired");
+    await this.saveCopilotDevice(installed); // token AND terminal fence, one write
     return installed;
   }
 
@@ -1075,7 +1149,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  for (const name of ["minimaxDeviceAttempt", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
+  for (const name of ["minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
   return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
@@ -1210,7 +1284,7 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["copilotDeviceAttempt", "copilotDeviceCredential", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 
