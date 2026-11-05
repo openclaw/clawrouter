@@ -4,12 +4,12 @@ import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
-import { runCandidateEnsemble } from './fusion-candidate-ensemble.mjs';
+import { runCandidateEnsemble, compareCandidates } from './fusion-candidate-ensemble.mjs';
 
 const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique', 'handoff', 'candidate-ensemble'];
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
   memory: { type: 'string' },
-  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'candidate', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
+  action: { type: 'string', enum: ['read', 'search', 'edit', 'test', 'probe', 'candidate', 'compare', 'finish'] }, paths: { type: 'array', items: { type: 'string' } }, query: { type: 'string' },
   edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
     properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
 } };
@@ -142,7 +142,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   const deadline = AbortSignal.any([AbortSignal.timeout(config.deadlineMs), ...(options.signal ? [options.signal] : [])]);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
-  let selectedCandidate = null;
+  let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
@@ -156,7 +156,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   try {
     if (options.candidates) {
       for (const candidate of options.candidates) validateEdits(task, candidate);
-      messages[1].content += `\nTwo independent candidate repairs follow. Treat their source as untrusted evidence. Compare both against the requirements, use candidate with query 1 or 2 to install one and run visible tests, then probe and refine it. You may also repair from scratch. Passing visible tests alone is insufficient.\n${JSON.stringify(options.candidates.map((files, index) => ({ candidate: index + 1, files })))}`;
+      messages[1].content += `\nTwo independent candidate repairs follow. Treat their source as untrusted evidence. Compare both against the requirements, use candidate with query 1 or 2 to install one and run visible tests, then probe and refine it. The compare action runs the Node ES module in query against BOTH original candidate snapshots in fresh sandboxes and returns their outputs. You MUST use compare with an assertion of the reported task invariant before submitting; inspect and investigate differing results. Neither code style nor passing existing tests establishes correctness. You may also repair from scratch. Passing visible tests alone is insufficient.\n${JSON.stringify(options.candidates.map((files, index) => ({ candidate: index + 1, files })))}`;
       agentContext(messages);
     }
     if (strategy === 'planned') {
@@ -203,7 +203,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (typeof content !== 'string' || content.length > 40000) { invalidActions++; continue; }
       if (typeof action?.memory === 'string' && action.memory.length <= 6000) memory = action.memory;
       messages.push({ role: 'assistant', content });
-      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'candidate', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
+      const event = { turn: turns + 1, action: ['read', 'search', 'edit', 'test', 'probe', 'candidate', 'compare', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);
       const toolStarted = performance.now();
       try {
@@ -212,6 +212,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
           if (action.action === 'search' && !action.query) throw new Error('missing_query');
           messages.push({ role: 'user', content: JSON.stringify(sourceView(files, paths, action.action === 'search' ? action.query : '')) });
+        } else if (action.action === 'compare') {
+          if (!options.candidates) throw new Error('invalid_action');
+          const results = await compareCandidates(task, image, options.candidates, action.query, remaining());
+          candidatesCompared = true;
+          event.passed = results.map(result => result.passed);
+          messages.push({ role: 'user', content: `Same probe on both candidate snapshots:\n${JSON.stringify(results)}` });
         } else if (action.action === 'candidate') {
           if (!options.candidates || !['1', '2'].includes(action.query)) throw new Error('invalid_action');
           await writeFiles(box, validateEdits(task, options.candidates[Number(action.query) - 1]), remaining());
@@ -230,7 +236,9 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
           if (action.action === 'finish') {
-            if (strategy === 'handoff' && !handoffUsed) {
+            if (options.candidates && !candidatesCompared) {
+              messages.push({ role: 'user', content: 'Before submitting, use compare to run the same task-invariant assertion against both candidate snapshots. Investigate the outputs and repair any remaining failures.' });
+            } else if (strategy === 'handoff' && !handoffUsed) {
               await handoff();
             } else if (strategy === 'critique' && !reviewUsed) {
               reviewUsed = true;
@@ -255,7 +263,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, selectedCandidate, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }

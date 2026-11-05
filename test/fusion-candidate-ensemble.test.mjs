@@ -50,6 +50,7 @@ test('isolated ensemble installs the second candidate and passes the fresh verif
   const action = (name, values = {}) => ({ action: name, paths: [], edits: [], query: '', memory: '', ...values });
   const queue = [action('finish'), action('edit', { edits: [{ path: task.editPaths[0],
     search: await source(task.base), replace: await source(task.oracle) }] }), action('finish'),
+  action('finish'), action('compare', { query: `import {readFileSync} from 'node:fs'; import {createHash} from 'node:crypto'; import assert from 'node:assert/strict'; assert.equal(createHash('sha256').update(readFileSync(${JSON.stringify(task.editPaths[0])})).digest('hex'), ${JSON.stringify((await import('../scripts/fusion-workloads.mjs')).hash(await source(task.oracle)))});` }),
   action('candidate', { query: '2' }), action('finish')];
   const trialIds = [];
   const result = await runCandidateEnsemble(task, receipt.image, 'fixture', {
@@ -62,7 +63,9 @@ test('isolated ensemble installs the second candidate and passes the fresh verif
   assert.equal(grade.passed, true);
   assert.equal(grade.tests, receipt.oracle.tests);
   assert.equal(result.selectedCandidate, 2);
-  assert.equal(result.turns, 5);
+  assert.equal(result.turns, 7);
+  assert.equal(result.candidatesCompared, true);
+  assert.deepEqual(result.actions.find(action => action.action === 'compare').passed, [false, true]);
   assert.equal(queue.length, 0);
   assert.equal(new Set(trialIds).size, 1);
 });

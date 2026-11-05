@@ -188,3 +188,9 @@ FUSION_DOCKER_QUALIFICATION=/path/to/qualification.json node --test test/fusion-
 
 The fixture uses the pinned historical repair, two independent sandboxes and a
 fresh verifier. Ordinary unit-test runs skip this Docker-dependent fixture.
+
+The final agent must run `compare` before submission. This executes one probe
+against both original candidate snapshots in separate fresh sandboxes, returns
+their bounded outputs, and records only pass/fail flags. It makes differential
+behavior testing cheap enough to use during selection. The agent still owns
+probe quality: a weak assertion does not establish that either repair is correct.

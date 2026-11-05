@@ -6,7 +6,7 @@
 
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
 - Add a separate pinned Fusion transfer-validation corpus and qualify every bundled workload set, fetching missing pinned history in shallow CI checkouts.
-- Add an experimental independent-candidate Fusion comparison with shared inference, turn and time budgets.
+- Add an experimental independent-candidate Fusion comparison with shared inference, turn and time budgets and paired candidate behavior probes.
 
 
 - Add a development-only, shared-budget multi-turn Fusion agent comparison with isolated source edits, test-feedback repair, and measured cascade acceptance.

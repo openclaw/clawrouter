@@ -1,3 +1,5 @@
+import { sandbox, validateEdits, writeFiles, probe } from './fusion-workloads.mjs';
+
 // Candidate source stays in memory; every phase charges the same trial ledger.
 export async function runCandidateEnsemble(task, image, trialId, config, invoke, engine, runAgent) {
   const started = performance.now();
@@ -25,4 +27,25 @@ export async function runCandidateEnsemble(task, image, trialId, config, invoke,
     agentMs: Math.round(performance.now() - started),
     candidates: results.map((result, index) => ({ strategy: ['strong', 'claude'][index],
       outcome: result.outcome, turns: result.turns, patchDigest: result.patchDigest, publicPassed: result.publicPassed })) };
+}
+
+// Each probe starts from a fresh candidate snapshot, never the final agent's edits.
+export async function compareCandidates(task, image, candidates, script, timeout) {
+  const started = performance.now(), results = [];
+  for (const [index, files] of candidates.entries()) {
+    validateEdits(task, files);
+    const remaining = () => {
+      const ms = timeout - Math.ceil(performance.now() - started);
+      if (ms <= 0) throw new Error('command_timeout');
+      return ms;
+    };
+    remaining();
+    const box = await sandbox(image);
+    try {
+      await writeFiles(box, files, remaining());
+      const result = await probe(box, script, remaining());
+      results.push({ candidate: index + 1, passed: result.passed, feedback: result.feedback });
+    } finally { await box.close(); }
+  }
+  return results;
 }
