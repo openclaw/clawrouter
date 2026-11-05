@@ -1,4 +1,5 @@
 import { BodyLease } from "./body-budget.ts";
+import { correlateIngressRequest } from "./correlation.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { readCopilotInferenceInput, copilotInferenceResponse, disposeCopilotInferenceResponse } from "./copilot-inference-response.ts";
 import { copilotAccountingIdentity, copilotAccountingSelection, copilotInferenceUnavailable, type CopilotInferenceInput } from "./copilot-inference-dispatch.ts";
@@ -35,6 +36,10 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
     // One synchronous all-or-nothing 96 MiB reservation. No release/reacquire,
     // nested catalog charge, caller allocation or zero-charge qualification.
     if (!allocation.grow(48 * 1024 * 1024)) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
+    // This private owner RPC bypasses public ingress. Initialize the existing
+    // accounting correlation on the ORIGINAL Request, without cloning its body.
+    const correlation = correlateIngressRequest(request);
+    if (correlation.error) throw new HttpError(correlation.error.status, correlation.error.code, correlation.error.message);
     const raw = request.headers.get("x-clawrouter-copilot-deadline"), deadline = Number(raw);
     if (!raw || !/^\d{1,16}$/.test(raw) || !Number.isSafeInteger(deadline) || deadline <= Date.now() || deadline - Date.now() > 2_147_483_647) throw copilotInferenceUnavailable();
     const current = operation = new HttpOperation(request.signal, deadline - Date.now());

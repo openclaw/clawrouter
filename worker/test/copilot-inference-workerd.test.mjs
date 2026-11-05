@@ -147,7 +147,7 @@ test('actual workerd private Copilot inference three APIs, composite limits and 
  const cases=[...['openai.chat_completions','anthropic.messages','openai.responses'].flatMap(format=>[false,true].map(stream=>({mode:format+'-'+stream,format,stream}))),...['maximum','maximum-stream','incremental','reads-exact','reads-over-input','reads-over-account','reads-over-catalog','reads-over-inference','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','tighten','destination','empty','unknown','unknown-price','bad-frame','downstream-cancel'].map(mode=>({mode,format:'openai.responses',stream:['maximum-stream','incremental','bad-frame'].includes(mode)}))];
  for(const {mode,format,stream} of cases)await t.test(mode,async()=>{
   const grant='inference-'+mode.replaceAll('.','-');io.setMode(mode==='maximum'?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');
-  const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-'+mode,expectedGeneration:0}));
+  const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-inference-'+mode.replaceAll('.','-'),expectedGeneration:0}));
   await new Promise(r=>setTimeout(r,Math.max(0,begun.nextPollAt-Date.now())+10));
   assert.equal((await body(await run(grant,'copilot-device.v1',{operation:'poll',attemptId:begun.attemptId}))).status,'committed');
   const original=await control('/fixture/owner',grant),account=operation=>run(grant,'copilot-account.v1',{operation,attemptId:begun.attemptId,expectedGeneration:original.generation,expectedLineage:original.lineage});

@@ -40,11 +40,11 @@ async function fixture(t){
  await inspectGrantCredentials(env,key);assert.equal(owner.values.get('credential').poolSyncPending,false);
  const input={key,expectedGeneration:record.generation,expectedLineage:record.lineage,deviceAttemptId:deviceId,accountAttemptId:accountId,authorization:publicControlAuthorization(auth),runtimeIdentity:{ownerBinding:binding,integrationId:'fixture',editorVersion:'Fixture/1',editorPluginVersion:'Fixture/1',userAgent:'Fixture/1'},deadline:Date.now()+30000,selection:{modelId:'github-copilot/'+model,format:'openai.responses'}};
  const f={env,owner,input,sent,events,ledger,policy,call,record:()=>structuredClone(owner.values.get('credential')),reply:(url)=>vendor(url,url.endsWith('/models')?{data:[row()]}:url.endsWith('/user')?{endpoints:{api:base}}:{id:'reply',model,usage:{prompt_tokens:2,completion_tokens:3,total_tokens:5}}),
- run(patch={},signal){const selected={...input,deadline:Date.now()+30000,...patch};
+ run(patch={},signal,headers={}){const selected={...input,deadline:Date.now()+30000,...patch};
   const format=selected.selection.format;const requestBody=patch.body??{model,stream:false,...(format==='openai.responses'?{input:'hello'}:{messages:[{role:'user',content:'hello'}]})};
   const bytes=new TextEncoder().encode(JSON.stringify({...selected,initiator:patch.initiator??'user',body:requestBody}));let offset=0;
   const stream=new ReadableStream({type:'bytes',pull(c){if(offset<bytes.length){const end=Math.min(bytes.length,offset+16384);c.enqueue(bytes.slice(offset,end));offset=end;}else{c.close();c.byobRequest?.respond(0);}}});
-  const request=new Request('https://clawrouter.internal/copilot-inference',{method:'POST',headers:{'content-type':'application/json','x-clawrouter-copilot-deadline':String(selected.deadline)},body:stream,signal,duplex:'half'});
+  const request=new Request('https://clawrouter.internal/copilot-inference',{method:'POST',headers:{'content-type':'application/json','x-clawrouter-copilot-deadline':String(selected.deadline),...headers},body:stream,signal,duplex:'half'});
   f.inputRequest=request;return owner.object.fetch(request);},
  async retired(){while(retained.size)await Promise.all([...retained]);},
  async policyChange(patch){Object.assign(policy,patch);await call('/policies/put',{policyId:'policy',policy});},
@@ -62,7 +62,7 @@ for(const format of formats)for(const stream of [false,true])test('original owne
  f.reply=(url,...args)=>url.endsWith('/user')||url.endsWith('/models')?original(url,...args):vendor(url,stream?wire:value,{headers:{'content-type':stream?'text/event-stream':'application/json'}});
  const r=await f.run({selection:{modelId:'github-copilot/'+model,format},body:{model,stream,...(format==='anthropic.messages'?{max_tokens:128}:{}),...(format==='openai.responses'?{input:'hello'}:{messages:[{role:'user',content:'hello'}]})}});
  if(r.status!==200)await body(r,200);assert.equal(r.status,200);assert.equal(bodyBudgetCharged(),96*MiB);const text=await r.text();assert.ok(text.includes('fixture-model'));await f.retired();assert.equal(bodyBudgetCharged(),0);
- assert.equal(f.sent.length,3);assert.equal(f.sent.filter(x=>x.method==='POST').length,1);assert.ok(f.sent.every(x=>x.signal===f.sent[0].signal));assert.equal(f.sent[2].body.model,model);assert.equal(f.sent[2].headers.get('x-initiator'),'user');assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,700);assert.equal(f.events[0].cost_basis,'policy_fixed');assert.equal(f.events[0].input_tokens,2);assert.equal(f.events[0].output_tokens,3);assert.deepEqual(f.record(),before);
+ assert.equal(f.sent.length,3);assert.equal(f.sent.filter(x=>x.method==='POST').length,1);assert.ok(f.sent.every(x=>x.signal===f.sent[0].signal));assert.equal(f.sent[2].body.model,model);assert.equal(f.sent[2].headers.get('x-initiator'),'user');assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,700);assert.equal(f.events[0].cost_basis,'policy_fixed');assert.equal(f.events[0].input_tokens,2);assert.equal(f.events[0].output_tokens,3);assert.match(f.events[0].request_id,/^[A-Za-z0-9._~:/+@=-]+$/);assert.deepEqual(f.record(),before);
  await assert.rejects(materializeGrantCredentials(f.env,key,await inspectGrantCredentials(f.env,key),'github-copilot',null,false));
 });
 for(const change of [{monthlyBudgetMicros:1000,requestCostMicros:null},{dailyBudgetMicros:1000,requestCostMicros:null},{weeklyBudgetMicros:1000,requestCostMicros:null}])test('unknown USD denies ALL authenticated egress '+JSON.stringify(change), {timeout:30000}, async t=>{
@@ -104,4 +104,8 @@ test('Copilot price guard cannot borrow a misleading LLM card and preserves fixe
  const card={id:'github-copilot/fixture-model',upstream:'fixture-model',capabilities:['llm.chat'],pricing_ref:'misleading',pricing:{inputPerMillion:1000000,outputPerMillion:1000000}};
  assert.deepEqual(estimateCost(card,{model,stream:false,input:'hello'},null,'llm.chat',endpoint,undefined,undefined,'github-copilot'),{reserveMicros:0,basis:'unpriced_request',pricingGap:'opaque_input_bound',inputTokens:null,outputTokens:null});
  assert.deepEqual(estimateCost(card,{model,stream:false,input:'hello'},700,'llm.chat',endpoint,undefined,undefined,'github-copilot'),{reserveMicros:700,basis:'policy_fixed',inputTokens:null,outputTokens:null});
+});
+
+test('private ingress rejects invalid correlation before authenticated egress', {timeout:30000}, async t=>{
+ const f=await fixture(t);await body(await f.run({},undefined,{'x-request-id':'invalid request id'}),400);await f.retired();assert.equal(f.sent.length,0);assert.equal(f.events.length,0);assert.equal(f.inputRequest.body.locked,false);assert.equal(bodyBudgetCharged(),0);
 });
