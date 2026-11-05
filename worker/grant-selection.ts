@@ -90,12 +90,25 @@ export async function resolveGrantCandidates(
   const defaultKeys = [
     `oauth/${policyId}/${defaultTokenRef}`,
     `oauth/tenants/${tenantId}/${defaultTokenRef}`,
+    // Private Copilot tokens intentionally remain reauth_required for generic
+    // materialization, so the active generic pool cannot enumerate them. The
+    // CURRENT policy's explicit references may nominate original scoped owners;
+    // only the private owner can qualify their device/account authority.
+    ...(privateCopilot ? (routing.eligibleGrants[providerId] ?? []).flatMap(ref => [
+      `oauth/${policyId}/${ref}`, `oauth/tenants/${tenantId}/${ref}`,
+    ]) : []),
   ];
   const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
   if (admittedPool?.unavailable) throw new Error("admission pool resolution failed");
   if (privateCopilot && (providerId !== "github-copilot" || pool.keys.length > 128)) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
-  const grants = keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
+  if (privateCopilot && keys.length > 128) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
+  const grants = !privateCopilot && keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
+  if (privateCopilot) {
+    for (let offset = 0; offset < keys.length; offset += 64) {
+      for (const [key, value] of await env.POLICY_KV.get<UpstreamGrant>(keys.slice(offset, offset + 64), "json")) grants.set(key, value);
+    }
+  }
   const nowMs = Date.now();
   const candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }> = keys
     .map((key) => {

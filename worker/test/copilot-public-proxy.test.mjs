@@ -7,6 +7,7 @@ const { snapshot } = await import("../providers.ts");
 const { HttpOperation } = await import("../http-operation.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const { validateSelectedInput } = await import("../proxy-selection.ts");
+const { operationAffordability } = await import("../operation-budget.ts");
 const MiB = 1024 * 1024;
 const formats = ["openai.chat_completions", "openai.responses", "anthropic.messages"];
 const paths = ["/chat/completions", "/responses", "/messages"], capabilities = ["llm.chat", "llm.responses", "llm.messages"];
@@ -69,7 +70,25 @@ test("inactive Copilot candidate never becomes a generic credential or borrowed 
     { accessToken: "foreign" }, { hasAccessToken: true }, { refreshToken: "foreign" }]) assert.equal(copilotPrivateCandidate({ ...grant, ...patch }), false);
 });
 
-test("frontend relay keeps original read and FIRST cancel ownership independently", async () => {
+test("private owner selection nominates only explicit current policy references without generic materialization", async () => {
+  const { resolveGrantCandidates } = await import("../grant-selection.ts");
+  const grant = { provider: "github-copilot", enabled: true, kind: "oauth", credentialStore: "durable_object",
+    credentialStatus: "reauth_required", credentialGeneration: 3, credentialLineage: "original-lineage-fixture" };
+  const records = new Map([["oauth/fixture/explicit", grant], ["oauth/foreign/explicit", grant]]), requested = [];
+  const env = { ACCESS_CONTROL: { idFromName: name => name, get: () => ({ async fetch(url, init) {
+    assert.equal(new URL(url).pathname, "/grant-pools/resolve"); const body = JSON.parse(init.body);
+    assert.ok(body.defaultKeys.every(key => key.startsWith("oauth/fixture/") || key.startsWith("oauth/tenants/default/")));
+    return Response.json({ keys: [], states: {} });
+  } }) }, POLICY_KV: { async get(keys) { assert.ok(keys.length <= 64); requested.push(...keys); return new Map(keys.map(key => [key, records.get(key) ?? null])); } } };
+  const routing = { eligibleGrants: { "github-copilot": ["explicit", "../foreign"] } };
+  const privateRows = await resolveGrantCandidates("github-copilot", "fixture", "default", "copilot", env, new Set(), routing, undefined, undefined, undefined, true);
+  assert.deepEqual(privateRows.available.map(row => row.key), ["oauth/fixture/explicit"]);
+  assert.ok(!requested.includes("oauth/foreign/explicit")); assert.ok(!requested.some(key => key.includes("..")));
+  const generic = await resolveGrantCandidates("github-copilot", "fixture", "default", "copilot", env, new Set(), routing);
+  assert.deepEqual(generic.available, []); assert.equal(grantCredentialPresent(grant), false);
+});
+
+test("frontend relay keeps original read and FIRST cancel ownership independently", async t => {
   const read = Promise.withResolvers(), cancel = Promise.withResolvers(), entered = Promise.withResolvers();
   let cancels = 0, unlocks = 0, locked = false, retired = false;
   const original = { get locked() { return locked; }, getReader(options) {
@@ -79,11 +98,12 @@ test("frontend relay keeps original read and FIRST cancel ownership independentl
   const operation = new HttpOperation(), relay = copilotPublicRelay(original, operation, 256 * 1024), allocation = new BodyLease();
   assert.ok(allocation.grow(48 * MiB));
   const reader = relay.stream.getReader(), pending = reader.read(); void pending.catch(() => undefined);
+  t.after(async () => { cancel.resolve(); read.reject(new Error("fixture cleanup")); await relay.discard().catch(() => undefined); reader.releaseLock(); allocation.release(); });
   await entered.promise;
   const physical = relay.retired.finally(() => { retired = true; allocation.release(); }); void physical.catch(() => undefined);
   await reader.cancel(); await reader.cancel();
   assert.equal(cancels, 1); assert.equal(retired, false); assert.equal(bodyBudgetCharged(), 96 * MiB);
-  const other = new BodyLease(); assert.equal(other.grow(1), false); other.release();
+  const other = new BodyLease(); assert.equal(other.grow(MiB), false); other.release();
   cancel.resolve(); await Promise.resolve(); assert.equal(unlocks, 0);
   read.reject(new Error("original read aborted")); await physical.catch(() => undefined);
   reader.releaseLock(); assert.equal(unlocks, 1); assert.equal(locked, false); assert.equal(bodyBudgetCharged(), 0);
@@ -136,7 +156,7 @@ test("compact discovery binds exact compiled tariff/route identity and current p
   selected.selected.authorization.binding = { policyId: "fixture", credentialId: "fixture", principalId: null, proof: {} };
   const policy = { enabled: true, generation: "g1", providers: [p.id], models: null, requestCostsMicros: { "llm.chat": 700, "llm.responses": 1100, "llm.messages": 1300 } };
   const connection = { providerId: p.id, enabled: true }, rows = [{ id: "fixture-model", policy: { state: "enabled" }, model_picker_enabled: true, supported_endpoints: paths }];
-  const packet = copilotPublicObservation(registry, selected, rows, policy, connection, Date.now());
+  const packet = copilotPublicObservation(registry, selected, rows, policy, connection, Date.now(), operationAffordability);
   assert.ok(packet.buffer.byteLength <= 2048);
   const observation = decodeCopilotPublicObservation(packet, registry, selected.attestation.revision, selected.selected.deadline);
   assert.ok([0, 1, 2].every(api => observation.permits(0, api)));
@@ -154,7 +174,7 @@ test("compact discovery binds exact compiled tariff/route identity and current p
   assert.notEqual((await copilotPublicRegistry(changed)).digest, registry.digest);
   assert.throws(() => decodeCopilotPublicObservation(packet, { ...registry, digest: "0".repeat(64) }, selected.attestation.revision, selected.selected.deadline));
   assert.throws(() => decodeCopilotPublicObservation(packet, registry, crypto.randomUUID(), selected.selected.deadline));
-  const denied = copilotPublicObservation(registry, selected, rows, { ...policy, requestCostsMicros: null, monthlyBudgetMicros: 1 }, connection, Date.now());
+  const denied = copilotPublicObservation(registry, selected, rows, { ...policy, requestCostsMicros: null, monthlyBudgetMicros: 1 }, connection, Date.now(), operationAffordability);
   assert.ok([0, 1, 2].every(api => !decodeCopilotPublicObservation(denied, registry, selected.attestation.revision, selected.selected.deadline).permits(0, api)));
 });
 
@@ -164,7 +184,7 @@ test("maximum compact discovery remains finite and output overflow is detectable
   const registry = await copilotPublicRegistry(p), selected = seed(p, 0);
   selected.selected.authorization.binding = { policyId: "fixture", credentialId: "fixture", principalId: null, proof: {} };
   const policy = { enabled: true, generation: "g1", providers: [p.id], models: null, requestCostMicros: 700 }, connection = { providerId: p.id, enabled: true };
-  const packet = copilotPublicObservation(registry, selected, p.models.map(model => ({ id: model.upstream, policy: { state: "enabled" }, model_picker_enabled: true, supported_endpoints: paths })), policy, connection, Date.now());
+  const packet = copilotPublicObservation(registry, selected, p.models.map(model => ({ id: model.upstream, policy: { state: "enabled" }, model_picker_enabled: true, supported_endpoints: paths })), policy, connection, Date.now(), operationAffordability);
   assert.equal(packet.byteLength, 1611);
   const observation = decodeCopilotPublicObservation(packet, registry, selected.attestation.revision, selected.selected.deadline);
   assert.equal(observation.permits(4095, 2), true);

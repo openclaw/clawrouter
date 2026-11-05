@@ -124,12 +124,12 @@ const compiled={...source,id:'github-copilot',config_keys:[],optional_config_key
  capabilities:caps.map((id,i)=>({id,endpoint:'api_'+i,methods:['POST']})),models:[{id:'github-copilot/model-0',upstream:'model-0',capabilities:caps,pricing_ref:null,pricing:{inputPerMillion:1,outputPerMillion:1}}]};
 snapshot.providers.push(compiled);
 function configureCompiled(mode){compiled.models=Array.from({length:['discovery-max','discovery-overflow'].includes(mode)?4096:1},(_,i)=>{const upstream='model-'+i+(mode==='discovery-overflow'?'x'.repeat(240):'');return{id:'github-copilot/'+upstream,upstream,capabilities:caps,pricing_ref:null,pricing:null};});}
-let frontLease,frontReads=0,frontChargedAtRead=[],frontObservation;
+let frontLease,frontReads=0,frontChargedAtRead=[],frontObservation,frontErrorReady=false;
 export default{async fetch(request,env,ctx){
  const url=new URL(request.url),key='oauth/fixture/'+(url.searchParams.get('grant')??'copilot');
  if(url.pathname==='/fixture/front-hold'){frontLease=new BodyLease();return Response.json({admitted:frontLease.grow(48*1024*1024),charged:bodyBudgetCharged()});}
  if(url.pathname==='/fixture/front-release'){frontLease?.release();frontLease=undefined;return Response.json({charged:bodyBudgetCharged()});}
- if(url.pathname==='/fixture/front-stats')return Response.json({charged:bodyBudgetCharged(),reads:frontReads,admission:frontChargedAtRead,observation:frontObservation?{reads:frontObservation.reads,cancels:frontObservation.cancels,unlocks:frontObservation.unlocks,locked:frontObservation.body.locked}:null});
+ if(url.pathname==='/fixture/front-stats')return Response.json({charged:bodyBudgetCharged(),reads:frontReads,admission:frontChargedAtRead,errorReady:frontErrorReady,observation:frontObservation?{reads:frontObservation.reads,cancels:frontObservation.cancels,unlocks:frontObservation.unlocks,cleanup:frontObservation.cleanup===true,locked:frontObservation.body.locked}:null});
  if(url.pathname==='/fixture/setup'){
   await authorityCall(env,'/users/initialize-all',[{email:${JSON.stringify(email)},record:{role:'admin',tenantId:'default',enabled:true,groups:[],contentRetentionDisabled:false}}]);
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,requestCostMicros:9999,requestCostsMicros:{'llm.chat':700,'llm.responses':1100,'llm.messages':1300},grantRouting:{eligibleGrants:{'github-copilot':[key.split('/').at(-1)]}}}}]);
@@ -137,7 +137,7 @@ export default{async fetch(request,env,ctx){
  }
  if(url.pathname==='/fixture/policy'){await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,requestCostMicros:9999,requestCostsMicros:{'llm.chat':700,'llm.responses':1100,'llm.messages':1300},grantRouting:{eligibleGrants:{'github-copilot':[key.split('/').at(-1)]}}}});return Response.json({ok:true});}
  if(url.pathname==='/fixture/unknown'){await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,monthlyBudgetMicros:1000,grantRouting:{eligibleGrants:{'github-copilot':[key.split('/').at(-1)]}}}});return Response.json({ok:true});}
- if(url.pathname==='/fixture/mode'){mode=url.searchParams.get('mode')??'setup';configureCompiled(mode);frontReads=0;frontChargedAtRead=[];frontObservation=undefined;}
+ if(url.pathname==='/fixture/mode'){mode=url.searchParams.get('mode')??'setup';configureCompiled(mode);frontReads=0;frontChargedAtRead=[];frontObservation=undefined;frontErrorReady=false;}
  if(url.pathname==='/fixture/mode'||url.pathname==='/fixture/stats')return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch('https://clawrouter.internal'+url.pathname,{method:'POST',body:url.searchParams.get('mode')??''});
  if(url.pathname==='/fixture/owner'){const g=await inspectGrantCredentials(env,key);return Response.json({generation:g.credentialGeneration,lineage:g.credentialLineage,status:g.credentialStatus,hasAccessToken:g.hasAccessToken,hasCredential:g.hasCredential});}
  if(url.pathname==='/fixture/revoke'){await revokeGrantCredentials(env,key);return Response.json({ok:true});}
@@ -160,14 +160,14 @@ export default{async fetch(request,env,ctx){
     };};
    }
    if(mode==='front-header-cleanup-error'&&url.endsWith('/copilot-public/execute')&&response.status===200){
-    const headers=new Headers(response.headers);headers.set('content-length','invalid');const returned=new Response(response.body,{status:response.status,headers});
+    const headers=new Headers(response.headers);headers.set('content-length','33554433');const returned=new Response(response.body,{status:response.status,headers});
     const a=frontObservation={reads:0,cancels:0,unlocks:0,body:returned.body},cancel=returned.body.cancel.bind(returned.body);
-    returned.body.cancel=async reason=>{a.cancels++;await cancel(reason);await gate('front-cleanup');throw Error('synthetic frontend cleanup failure');};return returned;
+    returned.body.cancel=async reason=>{a.cancels++;await cancel(reason);await gate('front-cleanup');a.cleanup=true;throw Error('synthetic frontend cleanup failure');};return returned;
    }
    return response;
   }};}}};
  }
- return worker.fetch(request,env,ctx);
+ const response=await worker.fetch(request,env,ctx);if(mode==='front-header-cleanup-error'&&url.pathname.startsWith('/v1/native/github-copilot/')){frontErrorReady=true;await gate('error-response');}return response;
 },queue:worker.queue};`;
 function upstream(io,signed){return `export default{async fetch(request){
  if(request.url===${JSON.stringify(issuer+'/cdn-cgi/access/certs')})return Response.json({keys:[${JSON.stringify(signed.jwk)}]});
@@ -201,7 +201,7 @@ test('actual isolated public Copilot native and manifest admission, tariffs and 
  const cases=[...['native','manifest'].flatMap(route=>apiFormats.flatMap((format,index)=>[false,true].map(stream=>({mode:route+'-'+index+'-'+stream,route,format,index,stream})))),...['maximum','maximum-stream','reads-exact','reads-over-input','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','profile-revision','unknown-price','missing-profile','empty','destination','downstream-cancel','discovery-max','discovery-overflow','discovery-digest','discovery-tighten','discovery-reads','discovery-models','discovery-held','discovery-control','discovery-revoke','discovery-late','discovery-profile','discovery-observation-revoke','discovery-observation-reattest','front-header-cleanup-error'].map(mode=>({mode,route:'native',format:apiFormats[1],index:1,stream:mode==='maximum-stream'}))];
  for(const {mode,route,format,index,stream} of cases)await t.test(mode,async t=>{
   const grant='public-'+mode;
-  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream','compact-read','front-cleanup'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
+  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream','compact-read','front-cleanup','error-response'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
   io.setMode(['maximum','discovery-max'].includes(mode)?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');await configure();
   const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-public-'+mode,expectedGeneration:0}));
   await new Promise(r=>setTimeout(r,Math.max(0,begun.nextPollAt-Date.now())+10));
@@ -244,11 +244,16 @@ test('actual isolated public Copilot native and manifest admission, tariffs and 
    else{assert.equal(response.status,200,text);assert.ok(Buffer.byteLength(text)<=4*MiB);const result=JSON.parse(text);if(mode==='discovery-models')assert.equal(result.data.length,1);else{assert.equal(result.providers[0].models.length,mode==='discovery-max'?4096:mode==='discovery-tighten'?0:1);if(mode==='discovery-max')assert.equal(result.providers[0].offers.length,4096);}}
    const stats=await until(grant,s=>s.charged===0);assert.equal(stats.events.length,0);assert.equal(io.counts.inference-counts.inference,0);assert.ok(stats.readers.every(r=>!r.locked&&r.maximumBacking<=16384));if(mode==='discovery-reads')assert.equal(stats.readers.reduce((n,r)=>n+r.reads,0),16384);
   }else if(mode==='front-header-cleanup-error'){
-   const response=await bounded(pending,'header rejection remains prompt');assert.ok(response.status>=400);await response.arrayBuffer();
-   let front;for(let i=0;i<150;i++){front=await control('/fixture/front-stats',grant);if(front.observation?.cancels===1)break;await new Promise(r=>setTimeout(r,10));}
-   assert.equal(front.observation?.cancels,1);assert.equal(front.observation.locked,false);
+   let front;for(let i=0;i<150;i++){front=await control('/fixture/front-stats',grant);if(front.errorReady&&front.observation?.cancels===1)break;await new Promise(r=>setTimeout(r,10));}
+   assert.equal(front.errorReady,true);assert.equal(front.observation?.cancels,1);assert.equal(front.observation.locked,false);
    let stats=await control('/fixture/stats',grant);assert.equal(stats.charged,96*MiB);assert.equal(stats.contender,false);
-   io.release(mode+'/front-cleanup');stats=await until(grant,s=>s.charged===0);
+   io.release(mode+'/front-cleanup');
+   for(let i=0;i<150;i++){front=await control('/fixture/front-stats',grant);if(front.observation?.cleanup)break;await new Promise(r=>setTimeout(r,10));}
+   assert.equal(front.observation.cleanup,true);assert.equal((await control('/fixture/stats',grant)).charged,96*MiB);
+   // The ORIGINAL error producer has not been returned or read yet. Client
+   // unread bytes alone would not establish this producer-retirement boundary.
+   io.release(mode+'/error-response');const response=await bounded(pending,'held error publication');assert.ok(response.status>=400);await response.arrayBuffer();
+   stats=await until(grant,s=>s.charged===0);
    assert.ok(stats.readers.every(r=>!r.locked));assert.equal((await control('/fixture/front-stats',grant)).observation.cancels,1);
    assert.equal(io.counts.inference-counts.inference,1);assert.equal(stats.events.length,1);
   }else if(mode==='profile-revision'){

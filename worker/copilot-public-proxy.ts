@@ -367,14 +367,17 @@ export async function proxyCopilotPublic(request: Request, env: Env, context: Ex
     await currentCopilotPublicIdentity(env, authorization, operation.signal, identity.attestation);
     if (!inferenceResponse.body || inferenceResponse.redirected) throw unavailable();
     output = copilotPublicRelay(inferenceResponse.body, operation, 32 * 1024 * 1024, true);
-    void output.retired.then(published, published);
     const responseHeaders = new Headers({ "content-type": inferenceResponse.headers.get("content-type") ?? "application/json", "cache-control": "private, no-store" });
     const length = inferenceResponse.headers.get("content-length");
     if (length !== null) {
       if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > 32 * 1024 * 1024) throw unavailable();
       responseHeaders.set("content-length", length);
     }
-    return new Response(output.stream, { status: inferenceResponse.status, headers: responseHeaders });
+    const response = new Response(output.stream, { status: inferenceResponse.status, headers: responseHeaders });
+    // Only the response actually returned owns publication. Header rejection
+    // instead retains the separate public error producer through its EOF.
+    void output.retired.then(published, published);
+    return response;
   })();
   // Register the ACTUAL fetch/read continuation before prompt cancellation.
   const discard = work.then(async () => {
@@ -511,7 +514,8 @@ function fromHex(value: string): Uint8Array { return Uint8Array.from(value.match
 function toHex(value: Uint8Array): string { let result = ""; for (const byte of value) result += byte.toString(16).padStart(2, "0"); return result; }
 export function copilotPublicObservation(registry: CopilotPublicRegistry, seed: CopilotPublicSeed,
   rows: readonly import("./provider-copilot-catalog.ts").CopilotModelRow[], policy: import("./types.ts").AccessPolicy,
-  connection: import("./types.ts").ProviderConnection, now: number): Uint8Array {
+  connection: import("./types.ts").ProviderConnection, now: number,
+  operationAffordability: typeof import("./operation-budget.ts").operationAffordability): Uint8Array {
   const packet = new Uint8Array(compactHeader + Math.ceil(registry.provider.models.length * 3 / 8)), view = new DataView(packet.buffer);
   packet[0] = 1; view.setUint16(1, registry.provider.models.length); packet.set(fromHex(registry.digest), 3);
   packet.set(fromHex(seed.attestation.revision.replaceAll("-", "")), 35); view.setBigUint64(51, BigInt(now));
@@ -536,7 +540,6 @@ export function copilotPublicObservation(registry: CopilotPublicRegistry, seed: 
 import { copilotModelFormats as advertisedFormats } from "./provider-copilot.ts";
 import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { policyAllowsModel } from "./policy-models.ts";
-import { operationAffordability } from "./operation-budget.ts";
 function advertisedPublicFormat(row: import("./provider-copilot-catalog.ts").CopilotModelRow, format: CopilotWireFormat): boolean { return advertisedFormats(row).includes(format); }
 export function qualifiedPublicModel(registry: CopilotPublicRegistry, model: import("./types.ts").CompiledModel, api: number, policy: import("./types.ts").AccessPolicy): boolean {
   return policy.enabled && (!policy.providers.length || policy.providers.includes(providerId))

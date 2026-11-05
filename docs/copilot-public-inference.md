@@ -23,6 +23,12 @@ that read. Candidate metadata is not execution authority and never enables gener
 credential materialization. A subsequent model or account mismatch denies without
 switching owners or replaying the input.
 
+Nondefault private owners are nominated by the current policy's existing
+`grantRouting.eligibleGrants` references within that policy or tenant scope.
+Their `reauth_required` status remains excluded from generic active-pool
+materialization. Metadata selection still requires private owner qualification;
+it is not an account or inference permit.
+
 The owner derives acquisition/account IDs and runtime owner binding from private
 state. It rechecks the original key, current generation/lineage, current caller
 policy and profile revision. Account and model requests use the original GitHub

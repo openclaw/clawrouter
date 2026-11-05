@@ -175,6 +175,7 @@ export class CopilotCatalogFlow {
     if (registry.digest !== seed.registryDigest) throw unavailable();
     const control = await import("./response-control-authorization.ts");
     const { resolveConnection } = await import("./authority.ts");
+    const { operationAffordability } = await import("./operation-budget.ts");
     const connection = await resolveConnection(this.env, provider) ?? { providerId: provider, enabled: true };
     await this.policy(seed.selected, operation, control);
     return this.owner.order(async () => {
@@ -182,7 +183,7 @@ export class CopilotCatalogFlow {
       const { policy } = await currentCopilotPublicIdentity(this.env, seed.selected.authorization, operation.signal, seed.attestation);
       operation.signal.throwIfAborted(); control.assertControlCallerLive(seed.selected.authorization);
       if (Date.now() >= seed.selected.deadline) throw unavailable();
-      return copilotPublicObservation(registry, seed, acquired.view.data, policy, connection, Date.now());
+      return copilotPublicObservation(registry, seed, acquired.view.data, policy, connection, Date.now(), operationAffordability);
     });
   }
 
