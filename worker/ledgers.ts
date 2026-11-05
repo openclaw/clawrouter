@@ -5,6 +5,7 @@ import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, En
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
 import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
+import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
 export interface UsageIngestReceipt {
@@ -16,7 +17,7 @@ const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
 const usageWindowDays = 30;
 const usageRetentionMs = usageWindowDays * usageDayMs;
-const usageAttributionBatchSize = 2_000;
+const usageAttributionBatchSize = 250;
 
 export class BudgetLedgerObject implements DurableObject {
   private sql: SqlStorage;
@@ -153,8 +154,8 @@ export class UsageLedgerObject implements DurableObject {
     if (request.method === "POST" && url.pathname === "/ingest") {
       const event = await request.json<UsageEvent>();
       if (typeof event?.id !== "string" || !event.id.length || !Number.isSafeInteger(event.occurred_at_ms) || event.occurred_at_ms < 0) return errorResponse("invalid_usage_event", "id must be a nonempty string and occurred_at_ms must be a nonnegative safe integer", 400);
-      const receipt = this.ingest(event);
-      if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
+      const now = Date.now(), receipt = this.ingest(event, now);
+      await this.scheduleUsageAlarm(now);
       return json(receipt);
     }
     // Internal DO transport only; never forwarded from a public mutation route.
@@ -179,10 +180,7 @@ export class UsageLedgerObject implements DurableObject {
       if (kind !== "admin" && !(kind === "principal" && id !== null) && !(kind === "credential" && id)) return errorResponse("invalid_usage_scope", "an explicit usage event scope is required", 400);
       const pending = this.backfillAttribution();
       const snapshot = this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100), pending);
-      if (pending) {
-        const next = Date.now() + 60_000, alarm = await this.state.storage.getAlarm();
-        if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
-      }
+      await this.scheduleUsageAlarm();
       return json(snapshot);
     }
     return errorResponse("route_not_found", "route not found", 404);
@@ -190,12 +188,31 @@ export class UsageLedgerObject implements DurableObject {
 
   async alarm(): Promise<void> {
     this.cleanup();
-    const pending = this.backfillAttribution();
-    if (pending || first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + (pending ? 60_000 : 86_400_000));
+    const attributionPending = this.backfillAttribution();
+    const before = usageRollupProgress(this.sql).last_rowid;
+    backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
+    const progress = usageRollupProgress(this.sql);
+    if (!progress.complete || attributionPending) {
+      // COUNT(*) walks a whole index: never on this sub-second migration cadence.
+      if (Math.floor(progress.last_rowid / 100_000) !== Math.floor(before / 100_000)) console.log(JSON.stringify({ event: "usage_rollup_maintenance", databaseSize: this.sql.databaseSize, ...progress }));
+      await this.state.storage.setAlarm(Date.now() + usageRollupAlarmMs);
+      return;
+    }
+    const count = first<{ row_count: number }>(this.sql.exec("SELECT COUNT(*) AS row_count FROM usage_events"))!.row_count;
+    console.log(JSON.stringify({ event: "usage_rollup_maintenance", rowCount: count, databaseSize: this.sql.databaseSize, ...progress }));
+    if (count) await this.state.storage.setAlarm(Date.now() + 86_400_000);
   }
 
-  private ingest(event: UsageEvent): UsageIngestReceipt {
-    const cutoff = Date.now() - usageRetentionMs;
+  private async scheduleUsageAlarm(now = Date.now()): Promise<void> {
+    const progress = usageRollupProgress(this.sql);
+    const attribution = first<{ complete: number }>(this.sql.exec("SELECT complete FROM usage_attribution_migration WHERE id = 1"))!;
+    const next = now + (!progress.complete || !attribution.complete ? usageRollupAlarmMs : 86_400_000);
+    const alarm = await this.state.storage.getAlarm();
+    if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
+  }
+
+  private ingest(event: UsageEvent, now: number): UsageIngestReceipt {
+    const cutoff = now - usageRetentionMs;
     this.cleanup(cutoff);
     // A retained ID owns its first payload and time, even if a replay carries an
     // expired timestamp. Cleanup and admission use the same retention boundary.
@@ -278,8 +295,9 @@ export class UsageLedgerObject implements DurableObject {
   // requested policies; recent events and personal totals are limited to the
   // caller's own rows; the admin scope instead gets a per-principal breakdown.
   private snapshot(policyIds: string[], scope: UsageEventScope, limit: number, pending: string | null): UsageSnapshot {
-    this.cleanup();
-    const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
+    const now = Date.now();
+    this.cleanup(now - usageRetentionMs);
+    const cutoffs = usageCutoffs(now, usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
     const range = { where, params: [...uniquePolicyIds, cutoffs.rolling] };
@@ -288,6 +306,16 @@ export class UsageLedgerObject implements DurableObject {
     // Ownership is filtered in SQL before LIMIT so other principals' rows never displace the caller's.
     const eventRange = owner ? restrict(range, owner) : range;
     const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventRange.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventRange.params, limit)).map((row) => JSON.parse(row.event_json));
+    if (usageRollupProgress(this.sql).complete) {
+      const rollupRange = { where: uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")})` : "1", params: uniquePolicyIds };
+      const daily = restrict(rollupRange, { where: "day_start_ms >= ?", params: [cutoffs.daily] });
+      const columns = { total: rollupTotalColumns, summary: rollupSummaryColumns };
+      const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(rollupRange, daily, columns, true), events };
+      const rollupOwner = rollupOwnerCondition(this.sql, scope);
+      if (rollupOwner) snapshot.personal = this.totals(restrict(rollupRange, rollupOwner), restrict(daily, rollupOwner), columns, true);
+      else snapshot.principals = this.rollupPrincipalTotals(rollupRange);
+      return snapshot;
+    }
     const columns = usageSummaryColumns(pending ? `CASE WHEN ${pending} THEN json_extract(event_json, '$.cost_basis') ELSE cost_basis END` : "cost_basis");
     const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(range, dailyRange, columns), events };
     if (owner) snapshot.personal = this.totals(restrict(range, owner), restrict(dailyRange, owner), columns);
@@ -296,11 +324,24 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   // Aggregates request, token, and spend totals overall, per provider, and per UTC day.
-  private totals(range: SqlRange, dailyRange: SqlRange, columns: { total: string; summary: string }): UsageTotals {
-    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${columns.summary} FROM usage_events WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
-    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${columns.total} FROM usage_events WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
-    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, ${columns.total} FROM usage_events WHERE ${dailyRange.where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
+  private totals(range: SqlRange, dailyRange: SqlRange, columns: { total: string; summary: string }, rollups = false): UsageTotals {
+    const table = rollups ? "usage_rollups" : "usage_events";
+    const day = rollups ? "day_start_ms" : "CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000";
+    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${columns.summary} FROM ${table} WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
+    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${columns.total} FROM ${table} WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
+    const daily = rows<DailyRow>(this.sql.exec(`SELECT ${day} AS day_start_ms, ${columns.total} FROM ${table} WHERE ${dailyRange.where} GROUP BY ${day} ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
     return { summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily) };
+  }
+
+  private rollupPrincipalTotals(range: SqlRange): PrincipalUsage[] {
+    const grouped = rows<PrincipalRow>(this.sql.exec(`SELECT json_extract(principal_key, '$') AS principal_id,
+      CASE WHEN principal_key = 'null' THEN json_extract(credential_key, '$') END AS credential_id,
+      ${rollupSummaryColumns} FROM usage_rollups WHERE ${range.where} GROUP BY 1, 2`, ...range.params) as unknown as Iterable<PrincipalRow>);
+    return mergePrincipalUsage(grouped.map(({ principal_id, credential_id, ...summary }) => ({
+      principalId: principal_id === null ? null : normalizeEmail(principal_id) ?? principal_id,
+      credentialId: principal_id === null ? credential_id : null,
+      summary: camelSummary(summary),
+    })));
   }
 
   // Groups totals by attributed principal, or by credential for events without one.
@@ -374,6 +415,7 @@ export class UsageLedgerObject implements DurableObject {
       }
     });
     this.state.storage.transactionSync(() => ensureUsageReportSchema(this.sql));
+    this.state.storage.transactionSync(() => ensureUsageRollups(this.sql));
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");

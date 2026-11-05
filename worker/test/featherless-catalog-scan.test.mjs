@@ -209,7 +209,7 @@ test("Featherless HTTP, MIME, redirect, truncated JSON and UTF-8 failures never 
 
 test("Featherless scan helper has qualified native Node runtime import suffixes", () => {
   const url = new URL("../featherless-catalog-scan.ts", import.meta.url).href;
-  assert.equal(execFileSync(process.execPath, ["--experimental-transform-types", "--input-type=module", "-e",
+  assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e",
     `const m = await import(${JSON.stringify(url)}); if (typeof m.fetchFeatherlessModelCatalog !== "function") throw new Error("missing scan");`], { encoding: "utf8" }), "");
 });
 test("Featherless exposes every original page owner before reads and preserves registered physical fetches", async t => {
