@@ -9,6 +9,15 @@ const { bodyBudgetCharged, BodyLease } = await import("../body-budget.ts");
 const MiB = 1024 * 1024;
 async function consume(response, status = 200) { const text = await response.text(); assert.equal(response.status, status, text); return JSON.parse(text); }
 async function denied(f, response) { assert.ok(response.status >= 400, await response.clone().text()); await response.text(); await f.drain(); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0); }
+for (const manifest of [false, true]) test(`Hailuo exact ${manifest ? "manifest" : "native"} model selection rejects foreign, undeclared and ambiguous identities`, async t => {
+  const f = await setup(t), upstream = hailuoModels[0], target = manifest ? "/v1/proxy/minimax/video" : native;
+  const invoke = model => f.invoke(target, manifest ? { body: { ...videoInput(), model } } : { ...videoInput(), model });
+  for (const model of ["foreign/" + upstream, upstream + "-unknown", " " + upstream, manifest ? upstream : "minimax/" + upstream])
+    await denied(f, await invoke(model));
+  f.provider.models.push({ ...f.provider.models[0], id: manifest ? f.provider.models[0].id : "minimax/ambiguous" });
+  await denied(f, await invoke(manifest ? "minimax/" + upstream : upstream));
+  assert.equal(f.materializations, 0);
+});
 for (const region of ["global", "cn"]) for (const manifest of [false, true]) for (const model of hailuoModels)
   test(`Hailuo ${region}/${model}/${manifest ? "manifest" : "native"}: create/restart/poll/original file, one POST and receipt`, async t => {
     const f = await setup(t, { region });

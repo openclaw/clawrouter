@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add explicitly attested regional MiniMax Hailuo text-to-video execution and original-job file retrieval, with current SQL mutation authority, generation-bound job routes, bounded per-invocation ownership and conservative dispatch-acknowledgment handling. Public declarations and native-client activation remain separate. Pin current fixed tariffs into durable admission and preserve readable known-unsent denials after confirmed dispatch admission.
+- Add explicitly attested regional MiniMax Hailuo text-to-video execution and original-job file retrieval, with current SQL mutation authority, generation-bound job routes, bounded per-invocation ownership and conservative dispatch-acknowledgment handling. Public declarations and native-client activation remain separate. Resolve exact declared native and manifest model identities, pin current fixed tariffs into durable admission and preserve readable known-unsent denials after confirmed dispatch admission.
 
 - Recheck current SQL administrator authority after MiniMax Music grant preparation and pool admission, fencing exact mutations and revocation retries while preserving the old owner on denial.
 

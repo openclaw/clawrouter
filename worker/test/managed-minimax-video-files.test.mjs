@@ -13,7 +13,10 @@ const endpoint = action => ({ method: "GET", path: `/v1/files/${action === "meta
 const observed = body => observeMiniMaxVideo(body, "retrieve", wire.submitted.task_id);
 // Existing synthetic ftyp header: structural validation ONLY, not playable video.
 const mp4 = () => Uint8Array.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
-const content = (bytes = mp4(), headers = {}) => new Response(bytes instanceof ReadableStream ? bytes : byteBody(bytes), { headers: { "content-type": "video/mp4", ...headers } });
+// Normalize Buffer to a view so the producer's bounded slice copies each chunk.
+// Buffer.slice otherwise shares and enqueue detaches the still-owned source.
+const boundedBody = bytes => byteBody(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+const content = (bytes = mp4(), headers = {}) => new Response(bytes instanceof ReadableStream ? bytes : boundedBody(bytes), { headers: { "content-type": "video/mp4", ...headers } });
 const paths = [{ id: file.id, metadata: `/v1/native/minimax/v1/files/retrieve?file_id=${file.id}`,
   download: `/v1/native/minimax/v1/files/retrieve_content?file_id=${file.id}` }];
 
@@ -123,7 +126,7 @@ test("MiniMax full file envelope is 16MiB and bounded views preserve original by
   for (const backing of [new Uint8Array(4096), Buffer.alloc(4096)]) {
     backing.set(mp4(), 128);
     assert.deepEqual(await files.readFile(content(backing.subarray(128, 144)), file, 1024), mp4());
-    const source = byteBody(backing.subarray(128, 144));
+    const source = boundedBody(backing.subarray(128, 144));
     const result = await files.readFile(content(source), file, 1024);
     assert.equal(result.byteOffset, 0); assert.equal(result.buffer.byteLength, 1024);
     assert.deepEqual(result, mp4()); assert.equal(source.locked, false);

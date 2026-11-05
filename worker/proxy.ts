@@ -1,5 +1,6 @@
 import { MiniMaxVideoOperation, readVideoJson, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
+import { miniMaxT2VModels } from "../shared/minimax-video-binding.ts";
 import { prepareMiniMaxVideoDispatch } from "./minimax-video-dispatch.ts";
 import { MiniMaxSearchOperation, readSearchJson, assertSearchHeaders } from "./minimax-search-operation.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
@@ -90,7 +91,7 @@ import { backgroundResponse, requireEmptyResponseControlBody, responsesControls,
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
-  assertProviderAccess, capabilityForPath, modelRoute, providerById, configuredUpstream,
+  assertProviderAccess, capabilityForPath, modelRoute, modelSupportsEndpoint, providerById, configuredUpstream,
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
@@ -660,10 +661,21 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env); envelope.body = undefined;
     } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env);
     body = undefined;
-    const selection: ProxySelection = { provider, endpoint, model: prepared.model, capability: "media.predict", body: prepared.body,
+    // Generic managed preparation leaves model selection to the protocol owner.
+    // Native wire IDs and manifest router IDs each require one exact declared card.
+    const input = requestObject(prepared.body);
+    let model: CompiledProvider["models"][number] | undefined;
+    for (const candidate of provider.models) {
+      if ((route === "native" ? candidate.upstream : candidate.id) !== input.model) continue;
+      if (model) miniMaxVideoDenied();
+      model = candidate;
+    }
+    if (!model || !(miniMaxT2VModels as readonly string[]).includes(model.upstream)
+      || !model.capabilities.includes("media.predict") || !modelSupportsEndpoint(provider, model, endpoint)) miniMaxVideoDenied();
+    input.model = model.upstream;
+    const selection: ProxySelection = { provider, endpoint, model, capability: "media.predict", body: input,
       pathParams: prepared.pathParams, method: "POST" };
     prepared.body = {};
-    if (!selection.model || !selection.model.capabilities.includes("media.predict")) miniMaxVideoDenied();
     const auth = await operation.wait(owner.track(authenticate(selection)));
     if (auth instanceof Response) return auth;
     if (auth.credentialId !== original.credentialId || auth.principalId !== original.principalId || auth.policyId !== original.policyId
