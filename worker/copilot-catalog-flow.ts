@@ -1,6 +1,9 @@
 import { assertCopilotAccountRecord, type CopilotAccountBinding } from "./copilot-account-flow.ts";
 import { readCopilotDeviceJson } from "./copilot-device-admin.ts";
-import { copilotAccountRequest, copilotCatalogRequest, copilotModelFormats, qualifyCopilotIdentity, type CopilotRuntimeIdentity, type CopilotWireFormat } from "./provider-copilot.ts";
+import { copilotAccountRequest, copilotCatalogRequest, copilotModelFormats, qualifyCopilotIdentity, prepareCopilotRequest, type CopilotRuntimeIdentity, type CopilotWireFormat } from "./provider-copilot.ts";
+import { runCopilotInference } from "./copilot-inference-flow.ts";
+import { copilotInferenceInput, copilotInferenceUnavailable } from "./copilot-inference-dispatch.ts";
+import { disposeCopilotInferenceResponse } from "./copilot-inference-response.ts";
 import { readCopilotAccountResponse } from "./copilot-account-response.ts";
 import { readCopilotResponseText } from "./copilot-response-body.ts";
 import { decodeCopilotModelCatalog, type CopilotModelCatalog } from "./provider-copilot-catalog.ts";
@@ -11,6 +14,7 @@ import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyTransport } from "./json-body.ts";
 import { BodyLease } from "./body-budget.ts";
+import { hotCacheConfig } from "./hot-cache.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { AccessPolicy, Env } from "./types.ts";
@@ -50,7 +54,7 @@ type CatalogView = {
   selection: { eligible: false } | { eligible: true; modelId: string; upstreamId: string; format: CopilotWireFormat };
 };
 
-function input(value: unknown): CopilotCatalogInput {
+function input(value: unknown, inference = false): CopilotCatalogInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw unavailable();
   const v = value as Record<string, unknown>;
   const fields = ["key", "expectedGeneration", "expectedLineage", "deviceAttemptId", "accountAttemptId", "authorization", "runtimeIdentity", "deadline", "selection"];
@@ -59,7 +63,8 @@ function input(value: unknown): CopilotCatalogInput {
     || !/^oauth\/(?:tenants\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(v.key)
     || !Number.isSafeInteger(v.expectedGeneration) || (v.expectedGeneration as number) < 1
     || !id(v.expectedLineage) || !id(v.deviceAttemptId) || !id(v.accountAttemptId)
-    || !Number.isSafeInteger(v.deadline) || (v.deadline as number) <= Date.now() || (v.deadline as number) - Date.now() > 30_000) throw unavailable();
+    || !Number.isSafeInteger(v.deadline) || (v.deadline as number) <= Date.now()
+    || (v.deadline as number) - Date.now() > (inference ? 2_147_483_647 : 30_000)) throw unavailable();
   const a = v.authorization as ResponseControlAuthorization | undefined;
   if (a?.kind !== "public" || !a.binding?.proof || !v.runtimeIdentity) throw unavailable();
   if (v.selection !== undefined) {
@@ -79,6 +84,90 @@ export class CopilotCatalogFlow {
 
   // Called under credential ordering; do not join remote cleanup on this tail.
   invalidate(): void { this.active?.operation.stop("caller"); }
+
+  // Private owner entry. The inference runner allocates the entire composite
+  // reservation before intake; no allocation or reusable permit crosses RPC.
+  inference(request: Request): Promise<Response> {
+    let active: Active | undefined, qualified: Awaited<ReturnType<CopilotCatalogFlow["acquire"]>> | undefined;
+    let selected: CopilotCatalogInput | undefined, posted = false, checkedAt = 0;
+    return runCopilotInference(request, this.env, {
+      retain: work => this.owner.retain(work),
+      begin: operation => this.owner.order(async () => {
+        if (this.active) throw unavailable();
+        operation.signal.throwIfAborted(); active = { operation, responses: [] }; this.active = active;
+      }),
+      qualify: async (value, deadline, preflight) => {
+        if (!active) throw unavailable();
+        const inference = copilotInferenceInput(value, deadline);
+        selected = input(inference.selected, true);
+        qualified = await this.acquire(selected, active, policy => preflight(inference, policy));
+        if (!qualified.view.selection.eligible) throw copilotInferenceUnavailable();
+        return { input: inference, policy: qualified.policy };
+      },
+      post: async (inference, beforePost, dispatched) => {
+        if (!active || !qualified || !selected || posted || !qualified.view.selection.eligible) throw unavailable();
+        const current = active, original = qualified.scope;
+        const control = await import("./response-control-authorization.ts");
+        const policy = await this.policy(selected, current.operation, control);
+        if (!policyAllowsModel(policy, provider, inference.selected.selection.modelId)) throw unavailable();
+        const checkPolicy = await beforePost(policy);
+        // Revalidate after reservation/dispatch ACK awaits. The owner read below
+        // is still the final await before the sole physical paid POST.
+        const finalPolicy = await this.policy(selected, current.operation, control);
+        checkPolicy(finalPolicy);
+        if (!policyAllowsModel(finalPolicy, provider, inference.selected.selection.modelId)) throw unavailable();
+        const model = qualified.view.data.find(row => provider + "/" + row.id === inference.selected.selection.modelId);
+        if (!model || model.policy?.state !== "enabled" || model.model_picker_enabled !== true || !copilotModelFormats(model).includes(inference.selected.selection.format)) throw unavailable();
+        const sent = await this.owner.order(async () => {
+          const scope = this.scope(await this.owner.read(), selected!, original);
+          const upstream = prepareCopilotRequest(inference.body, scope.binding, scope.binding.ownerBinding, scope.token, model,
+            inference.selected.selection.format, selected!.runtimeIdentity, inference.context);
+          current.operation.signal.throwIfAborted(); control.assertControlCallerLive(selected!.authorization);
+          if (Date.now() >= selected!.deadline || posted) throw unavailable();
+          posted = true; dispatched();
+          let response: Promise<Response>;
+          try { response = fetch(upstream, { signal: current.operation.signal, redirect: "manual" }); }
+          catch (error) { response = Promise.reject(error); }
+          return { response, url: upstream.url, upload: upstream };
+        });
+        let response: Response | undefined;
+        try {
+          response = await this.response(sent.response, current);
+          await this.policy(selected, current.operation, control);
+          await this.owner.order(async () => { this.scope(await this.owner.read(), selected!, original); current.operation.signal.throwIfAborted(); control.assertControlCallerLive(selected!.authorization); });
+          return { response, url: sent.url };
+        } catch (error) {
+          if (response && !response.bodyUsed && !response.body?.locked) await disposeCopilotInferenceResponse(response, error);
+          throw error;
+        } finally {
+          // fetch owns upload consumption; a rejected/pre-header exchange may
+          // leave an unclaimed request body. Never retain it as a retry buffer.
+          if (sent.upload.body && !sent.upload.bodyUsed && !sent.upload.body.locked) await sent.upload.body.cancel();
+        }
+      },
+      revalidate: async (force = false) => {
+        if (!active || !qualified || !selected) throw unavailable();
+        const control = await import("./response-control-authorization.ts");
+        active.operation.signal.throwIfAborted(); control.assertControlCallerLive(selected.authorization);
+        if (Date.now() >= selected.deadline) throw unavailable();
+        if (!force && checkedAt && Date.now() - checkedAt < hotCacheConfig(this.env).maxAgeMs) return;
+        const policy = await this.policy(selected, active.operation, control);
+        if (!selected.selection || !policyAllowsModel(policy, provider, selected.selection.modelId)) throw unavailable();
+        const current = active, original = qualified.scope;
+        await this.owner.order(async () => {
+          this.scope(await this.owner.read(), selected!, original);
+          current.operation.signal.throwIfAborted(); control.assertControlCallerLive(selected!.authorization);
+          if (Date.now() >= selected!.deadline) throw unavailable();
+        });
+        checkedAt = Date.now();
+      },
+      end: async () => {
+        if (active?.responses.some(response => response.body?.locked)) throw new Error("copilot_inference_input_not_retired");
+        active?.responses.splice(0); qualified = undefined; selected = undefined;
+        if (this.active === active) this.active = undefined;
+      },
+    });
+  }
 
   async fetch(request: Request): Promise<Response> {
     const control = new BodyLease(), allocation = new BodyLease();
@@ -105,7 +194,7 @@ export class CopilotCatalogFlow {
         current.responses.length = 0;
       });
       void physical.catch(() => undefined);
-      const view = await operation.wait(work, "upstream");
+      const { view } = await operation.wait(work, "upstream");
       operation.signal.throwIfAborted();
       return this.reply(view, 200, physical, release, operation);
     } catch (error) {
@@ -190,10 +279,11 @@ export class CopilotCatalogFlow {
     return response;
   }
 
-  private async acquire(selected: CopilotCatalogInput, active: Active): Promise<CatalogView> {
+  private async acquire(selected: CopilotCatalogInput, active: Active, preflight?: (policy: AccessPolicy) => Promise<void>): Promise<{ view: CatalogView; scope: Scope; policy: AccessPolicy }> {
     const { operation } = active;
     // Keep owner construction independent of the public authorization loader.
     const control = await import("./response-control-authorization.ts");
+    if (preflight) await preflight(await this.policy(selected, operation, control));
     const account = await this.dispatch(selected, active, undefined, false, control);
     const accountResponse = await this.response(account.response, active);
     const projection = await readCopilotAccountResponse(accountResponse, { operation, expectedUrl: account.url });
@@ -216,9 +306,10 @@ export class CopilotCatalogFlow {
       const verdict: CatalogView["selection"] = selection && row?.policy?.state === "enabled" && row.model_picker_enabled === true
         && copilotModelFormats(row).includes(selection.format)
         ? { eligible: true, modelId: selection.modelId, upstreamId: row.id, format: selection.format } : { eligible: false };
-      return { version: "clawrouter.copilot-catalog.v1", observationId: crypto.randomUUID(), observedAt: Date.now(),
+      const view = { version: "clawrouter.copilot-catalog.v1", observationId: crypto.randomUUID(), observedAt: Date.now(),
         generation: selected.expectedGeneration, lineage: selected.expectedLineage, accountAttemptId: selected.accountAttemptId,
         data, selection: verdict } satisfies CatalogView;
+      return { view, scope: account.scope, policy };
     });
   }
 
