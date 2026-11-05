@@ -972,8 +972,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
     response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
-    // Retire only the timer; caller cancellation remains connected through EOF.
-    operation.retireDeadline();
+    // Search retains its original deadline through delivery; other native paths
+    // retire only the timer and keep caller cancellation connected through EOF.
+    if (!searchOwner) operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
       priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
@@ -1043,9 +1044,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
-  // Endpoint timeouts cover fetch and first-event normalization, not delivery.
-  // Retire only the timer; the caller and first cause still own delivery through EOF.
-  operation.retireDeadline();
+  // Existing endpoint timers cover fetch and normalization. Search instead
+  // keeps its operation deadline through downstream EOF or cancellation.
+  if (!searchOwner) operation.retireDeadline();
   if (continuation && response.ok && !operation.receivedRejection && selection.capability !== "llm.responses.compact") {
     try { await operation.wait(continuation.headers(response), "publication"); }
     catch (error) {

@@ -2,6 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { byteResponse, jsonResponse } from "./minimax-search-byte-fixture.mjs";
 const { prepareNativeMiniMaxSearch } = await import("../native-minimax-search.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
@@ -19,7 +20,7 @@ function selection(body = structuredClone(wire.request)) {
     model: null, capability: "search.web", method: "POST", pathParams: {}, body };
 }
 const native = (selected = selection(), input = { origin: globalOrigin }) => prepareNativeMiniMaxSearch(selected, input);
-const response = (body = wire.response, headers = {}, status = 200) => Response.json(body, { headers, status });
+const response = (body = wire.response, headers = {}, status = 200) => jsonResponse(body, { headers, status });
 
 // Compose the existing delivery observer and the same lease handoff as proxy.ts.
 // This tests lifecycle compatibility, not production selector/authority wiring.
@@ -135,16 +136,16 @@ test("MiniMax search requires complete HTTP200 JSON and validates identity Conte
   }
   const text = JSON.stringify(wire.response), length = encoder.encode(text).length;
   const headers = { "content-type": 'application/json; charset="UTF-8"', "content-encoding": "identity", "content-length": String(length) };
-  assert.deepEqual((await read(new Response(text, { headers }))).body, wire.response);
-  for (const declared of [length - 1, length + 1]) await assert.rejects(read(new Response(text, { headers: { ...headers, "content-length": String(declared) } })));
+  assert.deepEqual((await read(byteResponse(text, { headers }))).body, wire.response);
+  for (const declared of [length - 1, length + 1]) await assert.rejects(read(byteResponse(text, { headers: { ...headers, "content-length": String(declared) } })));
   assert.equal(bodyBudgetCharged(), 0);
 });
 
 test("MiniMax search enforces one MiB of full response bytes with and without a length header", async () => {
   const text = JSON.stringify(wire.empty), exact = text + " ".repeat(MiB - encoder.encode(text).length);
   for (const headers of [{ "content-type": "application/json" }, { "content-type": "application/json", "content-length": String(MiB) }])
-    assert.deepEqual((await read(new Response(exact, { headers }))).body, wire.empty);
-  await assert.rejects(read(new Response(exact + " ", { headers: { "content-type": "application/json" } })));
+    assert.deepEqual((await read(byteResponse(exact, { headers }))).body, wire.empty);
+  await assert.rejects(read(byteResponse(exact + " ", { headers: { "content-type": "application/json" } })));
   await assert.rejects(read(response(wire.empty, { "content-length": String(MiB + 1) })));
   assert.equal(bodyBudgetCharged(), 0);
 });
@@ -152,18 +153,18 @@ test("MiniMax search enforces one MiB of full response bytes with and without a 
 test("MiniMax search waits for actual EOF and accepts fragmented UTF-8 without partial delivery", async () => {
   const body = { ...wire.response, related_searches: [{ query: "🦊 synthetic" }] }, bytes = encoder.encode(JSON.stringify(body));
   let controller, finished = false;
-  const upstream = new ReadableStream({ start(value) { controller = value; } });
+  const upstream = new ReadableStream({ type: "bytes", start(value) { controller = value; } });
   const pending = read(new Response(upstream, { headers: { "content-type": "application/json" } })).then(value => { finished = true; return value; });
   for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
   await new Promise(setImmediate); assert.equal(finished, false); assert.equal(bodyBudgetCharged(), 16 * MiB);
-  controller.close(); assert.deepEqual((await pending).body, body); assert.equal(bodyBudgetCharged(), 0);
+  controller.close(); controller.byobRequest?.respond(0); assert.deepEqual((await pending).body, body); assert.equal(bodyBudgetCharged(), 0);
   for (const bad of [bytes.subarray(0, -1), Uint8Array.of(255), Uint8Array.of(0xf0, 0x9f)])
-    await assert.rejects(read(new Response(bad, { headers: { "content-type": "application/json" } })));
+    await assert.rejects(read(byteResponse(bad, { headers: { "content-type": "application/json" } })));
 });
 
 test("MiniMax search cancels a pending upstream read on the original caller signal with no output", async () => {
   const controller = new AbortController(), reached = Promise.withResolvers(); let canceled = false, delivered = false;
-  const upstream = new ReadableStream({ pull(c) { c.enqueue(encoder.encode('{"organic":')); reached.resolve(); return new Promise(() => {}); }, cancel() { canceled = true; } });
+  const upstream = new ReadableStream({ type: "bytes", pull(c) { c.enqueue(encoder.encode('{"organic":')); reached.resolve(); return new Promise(() => {}); }, cancel() { canceled = true; } });
   const pending = delivery(new Response(upstream, { headers: { "content-type": "application/json" } }), { signal: controller.signal });
   pending.then(() => { delivered = true; }, () => {});
   await reached.promise; assert.equal(bodyBudgetCharged(), 16 * MiB);
@@ -174,7 +175,7 @@ test("MiniMax search cancels a pending upstream read on the original caller sign
 
 test("MiniMax search releases capacity after upstream failure or pre-aborted reads without inventing cancellation", async () => {
   let canceled = false;
-  const bad = new ReadableStream({ pull(c) { c.error(new Error("synthetic-private-upstream")); }, cancel() { canceled = true; } });
+  const bad = new ReadableStream({ type: "bytes", pull(c) { c.error(new Error("synthetic-private-upstream")); }, cancel() { canceled = true; } });
   await assert.rejects(delivery(new Response(bad, { headers: { "content-type": "application/json" } })), /invalid_native_minimax_search_response/);
   assert.equal(canceled, false); assert.equal(bodyBudgetCharged(), 0);
   const caller = new AbortController(); caller.abort();

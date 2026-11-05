@@ -130,16 +130,20 @@ export async function readSearchJson(source: Request | Response, signal: AbortSi
   signal.addEventListener("abort", abort, { once: true });
   let eof = false;
   try {
-    signal.throwIfAborted(); assertSearchHeaders(source.headers, profile === "control");
+    signal.throwIfAborted();
+    // A default reader cannot bound the backing before acquisition. Own its
+    // cancellation, but refuse BEFORE read; only a byte-stream BYOB is admitted.
+    if (!byob) searchUnavailable();
+    assertSearchHeaders(source.headers, profile === "control");
     const type = source.headers.get("content-type"), length = source.headers.get("content-length");
-    if (source instanceof Response && (source.redirected || profile === "native" && source.status !== 200) || !type || !/^application\/json(?:\s*;\s*charset\s*=\s*"?utf-8"?)?$/i.test(type.trim())
+    if (source instanceof Response && (source.redirected || profile === "native" && source.status !== 200) || !type || !/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(type.trim())
       || source.headers.has("content-range") || ![null, "identity"].includes(source.headers.get("content-encoding"))
       || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limits[profile].bytes)) searchUnavailable();
     const raw = new Uint8Array(limits[profile].bytes), decoder = new TextDecoder("utf-8", { fatal: true }), inspect = searchJsonInspector(profile);
     let window = new Uint8Array(searchWindowBytes), bytes = 0, reads = 0;
     for (;;) {
       signal.throwIfAborted(); if (++reads > searchReadLimit) searchUnavailable();
-      const chunk = await input.read(() => byob ? (reader as ReadableStreamBYOBReader).read(window) : (reader as ReadableStreamDefaultReader<Uint8Array>).read());
+      const chunk = await input.read(() => (reader as ReadableStreamBYOBReader).read(window));
       signal.throwIfAborted();
       if (chunk.value && (!(chunk.value instanceof Uint8Array) || !(chunk.value.buffer instanceof ArrayBuffer)
         || chunk.value.buffer.byteLength > searchWindowBytes || chunk.value.byteLength > searchWindowBytes)) searchUnavailable();
@@ -171,6 +175,7 @@ export class MiniMaxSearchOperation {
   private work: Promise<unknown>[] = [];
   private inputs: InputRetirement[] = [];
   private responses = new Map<Response, () => void>();
+  private ownershipFailed = false;
   private inputClaimed = false;
   private readonly inputRequest: Request;
   private readonly owners = new WeakMap<Response, InputRetirement>();
@@ -186,7 +191,7 @@ export class MiniMaxSearchOperation {
     this.operation = new HttpOperation(request.signal, Math.min(timeoutMs, 120_000));
     this.operation.signal.addEventListener("abort", () => {
       for (const input of this.inputs) void input.retire("cancel", this.operation.signal.reason).catch(() => undefined);
-      for (const response of this.responses.keys()) void this.discard(response);
+      for (const response of this.responses.keys()) void this.discard(response).catch(() => undefined);
     }, { once: true });
   }
   pin(value: string): void { if (value.length > 4096 || this.pinValue !== undefined && this.pinValue !== value) searchUnavailable(); this.pinValue = value; }
@@ -214,7 +219,11 @@ export class MiniMaxSearchOperation {
       if (owned) { await owned.retire("cancel", this.operation.signal.reason); return; }
       const release = this.responses.get(response); this.responses.delete(response);
       if (!response.body) { release?.(); return; }
-      if (response.bodyUsed || response.body.locked) searchUnavailable();
+      if (response.bodyUsed || response.body.locked) {
+        this.ownershipFailed = true;
+        for (const queue of this.queues) for (const wake of queue.splice(0)) wake();
+        searchUnavailable();
+      }
       const reader = response.body.getReader();
       let cancellation: Promise<void> | undefined;
       const base = inputRetirement({ cancel: reason => {
@@ -233,9 +242,11 @@ export class MiniMaxSearchOperation {
     return pending;
   }
   private async slot(mandatory: boolean): Promise<() => void> {
+    if (this.ownershipFailed) searchUnavailable();
     const lane = mandatory ? 1 : 0, cap = mandatory ? 1 : 4;
     if (this.active[lane] >= cap) await new Promise<void>(resolve => this.queues[lane].push(resolve));
     else this.active[lane]++;
+    if (this.ownershipFailed) searchUnavailable();
     let released = false;
     return () => {
       if (released) return; released = true;
@@ -266,7 +277,7 @@ export class MiniMaxSearchOperation {
         this.responses.set(response, release);
         if (this.operation.signal.aborted) { await this.discard(response); this.operation.signal.throwIfAborted(); }
         return response;
-      } catch (error) { release(); throw error; }
+      } catch (error) { if (!this.ownershipFailed) release(); throw error; }
     })());
   }
   fetch(start: (signal: AbortSignal) => Promise<Response>, mandatory = false, signal = this.operation.signal): Promise<Response> {
@@ -279,33 +290,51 @@ export class MiniMaxSearchOperation {
         this.responses.set(response, release);
         if (signal.aborted) { await this.discard(response); signal.throwIfAborted(); }
         return response;
-      } catch (error) { release(); throw error; }
+      } catch (error) { if (!this.ownershipFailed) release(); throw error; }
     })());
   }
   controlJson<T>(body: unknown, start: (text: string, signal: AbortSignal) => Promise<Response>, mandatory = false,
-    signal = mandatory ? new AbortController().signal : this.operation.signal): Promise<T> {
+    signal?: AbortSignal): Promise<T> {
     searchJsonBytes(body);
     return this.track((async () => {
-      const response = await this.fetch(active => start(JSON.stringify(body), active), mandatory, signal);
-      let input: InputRetirement | undefined;
+      // Accounting survives caller cancellation, but each physical HTTP attempt
+      // has a finite 30s execution window. At most ten nonrefundable attempts
+      // exist; a fallback starts only AFTER its predecessor physically retires.
+      const completion = mandatory ? new HttpOperation(undefined, 30_000) : undefined;
+      const activeSignal = completion?.signal ?? signal ?? this.operation.signal;
+      let response: Response | undefined, input: InputRetirement | undefined;
       try {
-        const result = await readSearchJson(response, signal, "control", (owner, source) => { input = owner; this.registerInput(owner, source); });
+        response = await this.fetch(active => start(JSON.stringify(body), active), mandatory, activeSignal);
+        const result = await readSearchJson(response, activeSignal, "control", (owner, source) => { input = owner; this.registerInput(owner, source); });
         if (!response.ok) throw new HttpError(response.status, "minimax_search_control_unavailable", "MiniMax search control was not acknowledged");
         return result as T;
       } catch (error) {
         // A mandatory fallback cannot enter while its predecessor still owns
         // the sole mandatory slot. Public failure has its separate operation race.
-        if (mandatory && input) await input.retired.catch(() => undefined);
+        if (input) {
+          if (mandatory) await input.retired.catch(() => undefined);
+        } else if (response) {
+          // Includes bodyless replies: release their slot before the existing
+          // fallback. A locked unowned body poisons scheduling, never self-joins.
+          await this.discard(response).catch(() => undefined);
+        }
         throw error;
-      }
+      } finally { completion?.stop("complete"); }
     })());
   }
   task<T>(start: () => Promise<T>, mandatory = false): Promise<T> {
     this.ticket(mandatory);
     return this.track((async () => {
       const release = await this.slot(mandatory);
-      try { if (!mandatory) this.operation.signal.throwIfAborted(); return await start(); }
-      finally { release(); }
+      const completion = mandatory ? new HttpOperation(undefined, 30_000) : undefined;
+      try {
+        const signal = completion?.signal ?? this.operation.signal;
+        signal.throwIfAborted();
+        // R2/Queue expose no cancellation ACK: keep this slot until their actual
+        // promise settles, even after the execution window closes. Never race-release.
+        const result = await start(); signal.throwIfAborted(); return result;
+      }
+      finally { completion?.stop("complete"); release(); }
     })());
   }
   finish(): Promise<void> {
@@ -321,7 +350,7 @@ export class MiniMaxSearchOperation {
       }
       if (this.responses.size) await Promise.allSettled([...this.responses.keys()].map(response => this.discard(response)));
       await Promise.allSettled(this.inputs.map(input => input.retired));
-      if (this.physicalBodies.some(body => body.locked)) searchUnavailable();
+      if (this.ownershipFailed || this.physicalBodies.some(body => body.locked)) searchUnavailable();
       this.physicalBodies.length = 0;
       this.providerRelease?.(); this.providerRelease = undefined;
       this.work.length = 0; this.inputs.length = 0; this.pinValue = undefined;

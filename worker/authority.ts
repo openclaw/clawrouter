@@ -1,3 +1,4 @@
+import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import type { InputRetirement } from "./input-retirement.ts";
 import type { SearchGrantAttestation } from "./authority-contracts.ts";
 import { searchJsonBytes, searchUnavailable, searchControlBytes, inspectSearchJson, searchControlVersion, type MiniMaxSearchOperation, searchControlHeader, readSearchJson } from "./minimax-search-operation.ts";
@@ -410,7 +411,9 @@ export class PolicyBindingIndexObject implements DurableObject {
     // queued control's preparation, using current stored groups and bindings.
     const credential = input.credentialId ? this.getCredential(input.credentialId, bound)?.credential ?? null : null;
     const policy = this.getPolicy(input.policyId, bound), user = input.principalId ? this.getUser(input.principalId, bound) : null;
-    return { credential, policy, principalEnabled: user ? user.record.enabled !== false : null, policyHeld: bound && input.credentialId ? false : this.holdsPolicy(user, policy) };
+    if (bound && input.principalId && !user) searchUnavailable();
+    const currentPolicy = bound && policy ? { ...policy, policy: effectiveBudgetPolicy(policy.policyId, policy.policy, user?.record.budgetOverrides) } : policy;
+    return { credential, policy: currentPolicy, principalEnabled: user ? user.record.enabled !== false : null, policyHeld: bound && input.credentialId ? false : this.holdsPolicy(user, policy) };
   }
   private holdsPolicy(user: AccessControlUser | null, policy: AccessPolicyEntry | null): boolean {
     if (!user || user.record.enabled === false || !policy?.policy.enabled) return false;

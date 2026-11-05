@@ -171,7 +171,15 @@ async function publishUsage(env: Env, event: UsageEvent, search?: MiniMaxSearchO
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
-  if (search) { for (const item of reservation.reservations) await settleReservation(env, item, actualCostMicros, search); return; }
+  if (search) {
+    let failure: unknown, failed = false;
+    for (const item of reservation.reservations) {
+      try { await settleReservation(env, item, actualCostMicros, search); }
+      catch (error) { if (!failed) failure = error; failed = true; }
+    }
+    if (failed) throw failure;
+    return;
+  }
   const results = await Promise.allSettled(reservation.reservations.map((reservation) => settleReservation(env, reservation, actualCostMicros)));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw failed.reason;
@@ -193,11 +201,15 @@ export function emptyReservation(): BudgetReservation { return { reservations: [
 
 async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
   if (search) {
+    let failure: unknown, failed = false;
     for (const item of reservation.charges ?? []) {
       const request = { ...item.request, amountMicros };
-      try { await chargeLedger(env, item.objectName, request, search); }
-      catch { await search.task(() => env.USAGE_QUEUE.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }), true); }
+      try {
+        try { await chargeLedger(env, item.objectName, request, search); }
+        catch { await search.task(() => env.USAGE_QUEUE.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }), true); }
+      } catch (error) { if (!failed) failure = error; failed = true; }
     }
+    if (failed) throw failure;
     return;
   }
   const results = await Promise.allSettled((reservation.charges ?? []).map(async item => {

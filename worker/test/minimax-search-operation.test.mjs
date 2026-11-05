@@ -1,23 +1,18 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { byteResponse, jsonResponse } from "./minimax-search-byte-fixture.mjs";
 const { MiniMaxSearchOperation, readSearchJson, searchJsonBytes, inspectSearchJson, assertSearchHeaders } = await import("../minimax-search-operation.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const MiB = 1024 * 1024, headers = { "content-type": "application/json" };
 const owner = signal => new MiniMaxSearchOperation(new Request("https://router.example.invalid/search", { signal }), 10000);
-function response(text, size = 16384) {
-  const wire = new TextEncoder().encode(text); let at = 0;
-  return new Response(new ReadableStream({ pull(c) { if (at === wire.length) { c.close(); return; }
-    const end = Math.min(at + size, wire.length); c.enqueue(wire.slice(at, end)); at = end;
-  } }, { highWaterMark: 0 }), { headers });
-}
+const response = (text, size = 16384) => byteResponse(text, { headers });
 function held(invalid = false, reject = false) {
   const read = Promise.withResolvers(), readAck = Promise.withResolvers(), cancel = Promise.withResolvers(), cancelAck = Promise.withResolvers();
   let cancels = 0, unlocks = 0;
-  const body = new ReadableStream({ pull() { read.resolve(); }, cancel() { cancels++; cancel.resolve(); return cancelAck.promise.then(() => { if (reject) throw new Error("synthetic cleanup rejection"); }); } }, { highWaterMark: 0 });
+  const body = new ReadableStream({ type: "bytes", pull() { read.resolve(); }, cancel() { cancels++; cancel.resolve(); return cancelAck.promise.then(() => { if (reject) throw new Error("synthetic cleanup rejection"); }); } }, { highWaterMark: 0 });
   const get = body.getReader.bind(body); body.getReader = options => {
-    if (options?.mode === "byob") throw new TypeError("default fixture");
-    const reader = get(); return { async read() { try { return await reader.read(); } finally { await readAck.promise; } },
+    const reader = get(options); return { async read(...args) { try { return await reader.read(...args); } finally { await readAck.promise; } },
       cancel: reason => reader.cancel(reason), releaseLock() { unlocks++; reader.releaseLock(); } };
   };
   return { response: new Response(body, { headers: invalid ? { "content-type": "text/plain" } : headers }), body, read, readAck, cancel, cancelAck,
@@ -46,7 +41,13 @@ for (const profile of ["control", "input", "native"]) test(`Search complete ${pr
 });
 for (const empty of [8190, 8191]) test(`Search ${empty + 2} reads INCLUDING empty and EOF`, async () => {
   let reads = 0; const operation = owner();
-  const source = new Response(new ReadableStream({ pull(c) { const n = reads++; if (n < empty) c.enqueue(new Uint8Array()); else if (n === empty) c.enqueue(new TextEncoder().encode("{}")); else c.close(); } }, { highWaterMark: 0 }), { headers });
+  const source = response("{}");
+  const get = source.body.getReader.bind(source.body);
+  source.body.getReader = options => {
+    const reader = get(options);
+    return { read(view) { reads++; return reads <= empty ? Promise.resolve({ value: new Uint8Array(view.buffer, 0, 0), done: false }) : reader.read(view); },
+      cancel: reason => reader.cancel(reason), releaseLock: () => reader.releaseLock() };
+  };
   const pending = operation.track(readSearchJson(source, operation.operation.signal, "control", operation.registerInput));
   if (empty === 8190) assert.deepEqual(await pending, {}); else await assert.rejects(pending);
   await operation.finish(); assert.equal(bodyBudgetCharged(), 0);
@@ -71,10 +72,11 @@ test("Search header rejection keeps FIRST cleanup and lock after prompt public f
   const finished = operation.finish(); h.cancelAck.resolve(); h.readAck.resolve(); await finished;
   assert.equal(h.cancels(), 1); assert.equal(h.unlocks(), 1); assert.equal(bodyBudgetCharged(), 0);
 });
-test("Search backing size is enforced even for a tiny view", async () => {
-  const operation = owner(); const source = new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(new ArrayBuffer(16385), 0, 2)); c.close(); } }), { headers });
-  await assert.rejects(operation.track(readSearchJson(source, operation.operation.signal, "native", operation.registerInput)));
-  await operation.finish(); assert.equal(bodyBudgetCharged(), 0);
+test("Search unqualified default reader denies BEFORE acquiring any returned backing", async () => {
+  const operation = owner(); let reads = 0, cancels = 0;
+  const body = new ReadableStream({ pull() { reads++; throw new Error("must not read"); }, cancel() { cancels++; } }, { highWaterMark: 0 });
+  await assert.rejects(operation.track(readSearchJson(new Response(body, { headers }), operation.operation.signal, "native", operation.registerInput)));
+  await operation.finish(); assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(body.locked, false); assert.equal(bodyBudgetCharged(), 0);
 });
 test("Search late response disposal joins FIRST cancel; no second attempt", async () => {
   const abort = new AbortController(), operation = owner(abort.signal), arrival = Promise.withResolvers(), h = held(true);
@@ -87,16 +89,18 @@ test("Search late response disposal joins FIRST cancel; no second attempt", asyn
 test("Search four ordinary slots gate construction; mandatory slot progresses independently", async () => {
   const operation = owner(), releases = Array.from({ length: 4 }, () => Promise.withResolvers()), started = Promise.withResolvers();
   let calls = 0;
-  const tasks = releases.map(release => operation.controlJson({ op: "ordinary" }, async () => { calls++; if (calls === 4) started.resolve(); await release.promise; return Response.json({ ok: true }); }));
-  await started.promise; const fifth = operation.controlJson({ op: "queued" }, async () => { calls++; return Response.json({ ok: true }); });
+  const tasks = releases.map(release => operation.controlJson({ op: "ordinary" }, async () => { calls++; if (calls === 4) started.resolve(); await release.promise; return jsonResponse({ ok: true }); }));
+  await started.promise; const fifth = operation.controlJson({ op: "queued" }, async () => { calls++; return jsonResponse({ ok: true }); });
   assert.equal(calls, 4);
-  assert.deepEqual(await operation.controlJson({ op: "mandatory" }, async () => Response.json({ ok: true }), true), { ok: true });
+  assert.deepEqual(await operation.controlJson({ op: "mandatory" }, async () => jsonResponse({ ok: true }), true), { ok: true });
   releases[0].resolve(); await fifth; assert.equal(calls, 5); for (const release of releases) release.resolve();
   await Promise.all(tasks); await operation.finish(); assert.equal(bodyBudgetCharged(), 0);
 });
 test("Search nonrefundable22 ordinary and10 mandatory caps deny BEFORE fetch construction", async () => {
   const operation = owner(); let calls = 0;
-  const run = mandatory => operation.controlJson({}, async () => { calls++; return Response.json({}); }, mandatory);
+  const maximum = { first: "x".repeat(4096), second: "y".repeat(4070), values: Array(124).fill(null) };
+  const wire = JSON.stringify(maximum);
+  const run = mandatory => operation.controlJson(maximum, async () => { calls++; return response(wire + " ".repeat(16384 - wire.length)); }, mandatory);
   for (let i = 0; i < 22; i++) await run(false);
   await assert.rejects(run(false)); assert.equal(calls, 22);
   for (let i = 0; i < 10; i++) await run(true);
@@ -106,7 +110,50 @@ test("Search failed mandatory predecessor keeps its slot through cleanup before 
   const operation = owner(), h = held(true), started = Promise.withResolvers(); let fallback = false;
   const first = operation.controlJson({}, async () => { started.resolve(); return h.response; }, true);
   const failed = assert.rejects(first); await started.promise; await h.cancel.promise;
-  const next = operation.controlJson({}, async () => { fallback = true; return Response.json({}); }, true);
+  const next = operation.controlJson({}, async () => { fallback = true; return jsonResponse({}); }, true);
   assert.equal(fallback, false); assert.equal(bodyBudgetCharged(), 72 * MiB);
   h.cancelAck.resolve(); h.readAck.resolve(); await failed; await next; await operation.finish(); assert.equal(bodyBudgetCharged(), 0);
+});
+test("Search serial finalization attempts all four original legs even when the first fallback fails", async () => {
+  const { settleBudget } = await import("../accounting.ts");
+  const operation = owner(), seen = [];
+  const env = { BUDGET_LEDGER: { idFromName: n => n, get: name => ({ async fetch() { seen.push(name); return jsonResponse({ error: "synthetic" }, { status: 503 }); } }) },
+    USAGE_QUEUE: { async send(message) { seen.push("queue:" + message.ledger.objectName); if (message.ledger.objectName === "leg0") throw new Error("synthetic queue refusal"); } } };
+  const reservation = { reservedMicros: 700, reservations: Array.from({ length: 4 }, (_, i) => ({ objectName: "leg" + i, reservationId: "reserve" + i })) };
+  await assert.rejects(operation.track(settleBudget(env, reservation, 700, operation)), /synthetic queue refusal/);
+  assert.deepEqual(seen, ["leg0", "queue:leg0", "leg1", "queue:leg1", "leg2", "queue:leg2", "leg3", "queue:leg3"]);
+  await operation.finish(); assert.equal(bodyBudgetCharged(), 0);
+});
+test("Search bodyless mandatory reply retires its slot BEFORE existing fallback", async () => {
+  const { settleBudget } = await import("../accounting.ts");
+  const operation = owner(); let calls = 0, queued = 0;
+  const env = { BUDGET_LEDGER: { idFromName: n => n, get: () => ({ async fetch() { calls++; return new Response(null, { status: 503 }); } }) },
+    USAGE_QUEUE: { async send() { queued++; } } };
+  await operation.track(settleBudget(env, { reservedMicros: 700, reservations: [{ objectName: "leg", reservationId: "r" }] }, 700, operation));
+  assert.equal(calls, 1); assert.equal(queued, 1); await operation.finish(); assert.equal(bodyBudgetCharged(), 0);
+});
+test("Search original deadline remains live through unclaimed downstream retirement", async t => {
+  const { observeUsage } = await import("../proxy-response.ts");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const operation = new MiniMaxSearchOperation(new Request("https://router.example.invalid/search"), 100);
+  const observed = observeUsage(response("{}"), operation.operation, undefined, "minimax.search", undefined, { tokens: null, outcome: "success" });
+  operation.track(observed.retired); const finished = operation.finish();
+  assert.equal(bodyBudgetCharged(), 72 * MiB); t.mock.timers.tick(100);
+  assert.equal((await observed.result).delivery, "failed"); await finished; assert.equal(bodyBudgetCharged(), 0);
+});
+for (const reject of [false, true]) test(`Search post-abort mandatory late reader has a bounded execution signal and separate cleanup (${reject})`, async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const controller = new AbortController(), operation = owner(controller.signal), arrival = Promise.withResolvers(), h = held(false, reject);
+  controller.abort(); let physicalSignal, input;
+  const register = operation.registerInput;
+  operation.registerInput = (i, r) => { input = i; register(i, r); };
+  const pending = operation.controlJson({}, async (_body, signal) => { physicalSignal = signal; return arrival.promise; }, true);
+  const rejected = assert.rejects(pending);
+  await Promise.resolve(); await Promise.resolve(); arrival.resolve(h.response); await h.read.promise;
+  assert.equal(physicalSignal.aborted, false); t.mock.timers.tick(30000); await h.cancel.promise;
+  assert.equal(physicalSignal.aborted, true); assert.equal(bodyBudgetCharged(), 72 * MiB); assert.equal(h.body.locked, true);
+  h.cancelAck.resolve(); await Promise.resolve(); assert.equal(h.body.locked, true);
+  h.readAck.resolve(); await rejected;
+  if (reject) await assert.rejects(input.retired, /synthetic cleanup/); else await input.retired;
+  await operation.finish(); assert.equal(h.cancels(), 1); assert.equal(h.unlocks(), 1); assert.equal(bodyBudgetCharged(), 0);
 });

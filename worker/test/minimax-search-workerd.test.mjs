@@ -35,14 +35,28 @@ import {inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-cre
 import {sha256Hex} from './worker/utils.ts';
 import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
 import {usageStub} from './worker/ledgers.ts';
+import {searchControlHeader} from './worker/minimax-search-operation.ts';
 import {configureSearch} from './worker/test/minimax-search-declaration-fixture.mjs';
 const region=REGION,actor={auth:'cloudflare_access',role:'admin',email:'search-admin@example.invalid'},key='oauth/fixture/search';
 configureSearch(snapshot.providers.find(p=>p.id==='minimax'),region);
 const original=globalThis.fetch.bind(globalThis),deferred=()=>Promise.withResolvers();
 let initialized,active,pending=new Set();
+async function controlResponse(response,a) {
+ if(!response.body)return response;
+ const value=await response.json();let values=0,units=0,members=0;
+ const scan=x=>{values++;if(typeof x==='string')units+=x.length;else if(x&&typeof x==='object'){if(Array.isArray(x))x.forEach(scan);else for(const [k,v]of Object.entries(x)){members++;units+=k.length;scan(v);}}};scan(value);
+ if(values+3<=128&&members+3<=128){
+  const room=Math.max(0,8192-units-24),first=Math.min(4096,room),second=Math.min(4096,room-first);
+  value.fixtureA='a'.repeat(first);value.fixtureB='b'.repeat(second);value.fixtureC=Array(128-values-3).fill(null);
+ }
+ const text=JSON.stringify(value);if(text.length>16384)throw new Error('fixture control overflow');
+ a.controlMaxValues=Math.max(a.controlMaxValues??0,values+3+(value.fixtureC?.length??0));
+ let at=0,wire=text+' '.repeat(16384-text.length);
+ return new Response(new ReadableStream({type:'bytes',pull(c){if(at===wire.length){c.close();c.byobRequest?.respond(0);return;}const end=Math.min(at+16384,wire.length);c.enqueue(new TextEncoder().encode(wire.slice(at,end)));at=end;},cancel(){wire='';}},{highWaterMark:0}),{status:response.status,headers:{'content-type':'application/json','content-length':'16384'}});
+}
 const state=()=>active?{mode:active.mode,status:active.status,error:active.error,results:active.results,fetches:active.fetches,materializations:active.materializations,
  reads:active.reads,byob:active.byob,maxBacking:active.maxBacking,wire:active.wire,eof:active.eof,cancels:active.cancels,
- cleanup:active.cleanup,readRetired:active.readRetired,locked:active.source?.locked??false,charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size}:{};
+ cleanup:active.cleanup,mandatoryRead:active.mandatoryRead,mandatoryCanceled:active.mandatoryCanceled,mandatoryLocked:active.mandatorySource?.locked??false,cleanupRejected:active.cleanupRejected,control:active.control,controlMaxValues:active.controlMaxValues,settlements:active.settlements,fallbacks:active.fallbacks,archiveWrites:active.archiveWrites,candidates:active.candidates,readRetired:active.readRetired,locked:active.source?.locked??false,charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size}:{};
 const gate=(a,phase)=>original('https://search-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('fixture gate');await r.text();});
 globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init);
@@ -52,7 +66,7 @@ globalThis.fetch=async(input,init)=>{
  const get=response.body.getReader.bind(response.body);
  response.body.getReader=options=>{
   const reader=get(options);if(options?.mode==='byob')a.byob++;let first=true,cancel;
-  return {async read(...args){a.reads++;try{const part=await reader.read(...args);if(part.value){a.wire+=part.value.byteLength;a.maxBacking=Math.max(a.maxBacking,part.value.buffer.byteLength);}if(part.done)a.eof=true;return part;}
+  return {async read(...args){a.reads++;if(['read-limit','over-read'].includes(a.mode)&&args[0])args[0]=args[0].subarray(0,1);try{const part=await reader.read(...args);if(part.value){a.wire+=part.value.byteLength;a.maxBacking=Math.max(a.maxBacking,part.value.buffer.byteLength);}if(part.done)a.eof=true;return part;}
    finally{if(first&&['held-input','cleanup-reject'].includes(a.mode)){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}},
    cancel(reason){return cancel??=(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{if(['held-input','cleanup-reject','late'].includes(a.mode))await gate(a,'cleanup');a.cleanup=true;if(a.mode==='cleanup-reject')throw new Error('synthetic cleanup rejection');}})();},
    releaseLock(){reader.releaseLock();}};
@@ -88,19 +102,53 @@ export default {async fetch(request,bindings,context){
  if(u.pathname==='/contend'){const l=new BodyLease(),allowed=l.grow(12*1024*1024),full=bodyBudgetCharged(),next=new BodyLease(),extra=next.grow(1024*1024);next.release();l.release();return Response.json({allowed,full,extra,charged:bodyBudgetCharged()});}
  if(u.pathname==='/demote-next')return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch('https://owner/fixture/arm');
  if(u.pathname==='/demote'){await authorityCall(env,'/users/put',{email:actor.email,record:{role:'user',enabled:true,tenantId:'fixture',groups:[],contentRetentionDisabled:false}});return Response.json({demoted:true});}
+ if(u.pathname==='/revoke-current'){await revokeGrantCredentials(env,key,undefined,actor);return Response.json({revoked:true});}
  if(u.pathname==='/owner'){const g=await inspectGrantCredentials(env,key);return Response.json({generation:g.credentialGeneration,lineage:g.credentialLineage,binding:g.minimaxSearchBinding});}
+ if(u.pathname==='/candidate-maximum'){
+ for(let i=0;i<31;i++){
+  const name='oauth/fixture/unused'+i;
+  const admission=await authorityCall(env,'/grant-pools/admit',{key:name,provider:'minimax',generation:0,revision:0,status:'active'});
+  await authorityCall(env,'/grant-pools/publish',{key:name,provider:'minimax',generation:1,revision:admission.revision,admissionRevision:admission.revision,status:'active',
+   projection:{provider:'minimax',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic-unused'+i}});
+ }
+ return Response.json({candidates:32});
+}
  if(u.pathname!=='/start')return worker.fetch(request,env,context);
- const mode=u.searchParams.get('mode'),manifest=u.searchParams.has('manifest'),a=active={mode,ready:deferred(),status:null,error:null,results:0,fetches:0,materializations:0,reads:0,byob:0,maxBacking:0,wire:0,eof:false,cancels:0,cleanup:false,readRetired:false,outputBytes:0};
+ const mode=u.searchParams.get('mode'),manifest=u.searchParams.has('manifest'),a=active={mode,ready:deferred(),status:null,error:null,results:0,fetches:0,materializations:0,reads:0,byob:0,maxBacking:0,wire:0,eof:false,cancels:0,cleanup:false,control:[],settlements:0,fallbacks:0,archiveWrites:0,candidates:0,readRetired:false,outputBytes:0};
+ if(mode==='combined'){
+  await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,dailyBudgetMicros:100000,weeklyBudgetMicros:100000,retainRequestContent:true}});
+  const authority=env.ACCESS_CONTROL;
+  env.ACCESS_CONTROL={idFromName:n=>authority.idFromName(n),get:id=>{const stub=authority.get(id);return {async fetch(input,init){
+   const path=new URL(input).pathname,response=await stub.fetch(input,init);
+   if(new Headers(init?.headers).get(searchControlHeader)){a.control.push(path);if(path==='/admission/resolve'){const copy=await response.clone().json();a.candidates=copy.pools.minimax.keys.length;}return controlResponse(response,a);}
+   return response;
+  }}}};
+  env.CONTENT_ARCHIVE={put(){a.archiveWrites++;throw new Error('search retention must remain excluded');}};
+  const queue=env.USAGE_QUEUE;env.USAGE_QUEUE={async send(message){
+   if(message.kind==='budget_settlement'){a.fallbacks++;return queue.send(message);}
+   throw new Error('synthetic direct usage fallback');
+  }};
+  const usage=env.USAGE_LEDGER;env.USAGE_LEDGER={idFromName:n=>usage.idFromName(n),get:id=>{const stub=usage.get(id);return {async fetch(input,init){a.control.push(new URL(input).pathname);return controlResponse(await stub.fetch(input,init),a);}}}};
+ } else if(mode!=='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy});
+ snapshot.providers.find(p=>p.id==='minimax').endpoints[0].timeout_ms=mode==='deadline-output'?2000:10000;
  if(mode==='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,requestCostMicros:null}});
  const grants=env.GRANT_CREDENTIALS;env.GRANT_CREDENTIALS={idFromName:n=>grants.idFromName(n),get:id=>{const stub=grants.get(id);return {fetch(input,init){if(new URL(input).pathname==='/materialize')a.materializations++;return stub.fetch(input,init);}}}};
- const ledger=env.BUDGET_LEDGER;env.BUDGET_LEDGER={idFromName:n=>ledger.idFromName(n),get:id=>{const stub=ledger.get(id);let once=false;return {async fetch(input,init){const r=await stub.fetch(input,init);if(new URL(input).pathname==='/dispatch'&&mode==='revoke'&&!once){once=true;await revokeGrantCredentials(env,key,undefined,actor);}return r;}}}};
+ const ledger=env.BUDGET_LEDGER;env.BUDGET_LEDGER={idFromName:n=>ledger.idFromName(n),get:id=>{const stub=ledger.get(id);let once=false;return {async fetch(input,init){const path=new URL(input).pathname;const r=await stub.fetch(input,init);
+ if(mode==='mandatory-late'&&path==='/settle'&&!a.mandatorySource){
+  a.ready.resolve();await gate(a,'arrival');a.mandatorySource=r.body;
+  const get=r.body.getReader.bind(r.body);r.body.getReader=options=>{const reader=get(options);let first=true,cancel;
+   return {async read(...args){try{return await reader.read(...args);}finally{if(first){first=false;a.mandatoryRead=true;await gate(a,'mandatory-read');}}},
+    cancel(reason){return cancel??=(async()=>{a.mandatoryCanceled=true;try{await reader.cancel(reason);}finally{await gate(a,'mandatory-cleanup');a.cleanupRejected=true;throw new Error('synthetic mandatory cleanup rejection');}})();},releaseLock(){reader.releaseLock();}};};
+ }
+ if(mode==='combined'){a.control.push(path);if(path==='/settle'){a.settlements++;await r.body?.cancel();if(a.settlements===1){a.ready.resolve();await gate(a,'settle');}return new Response(null,{status:503});}return controlResponse(r,a);}if(new URL(input).pathname==='/dispatch'&&mode==='revoke'&&!once){once=true;await revokeGrantCredentials(env,key,undefined,actor);}return r;}}}};
  const controller=new AbortController();const track=p=>{const held=Promise.resolve(p).finally(()=>pending.delete(held));pending.add(held);context.waitUntil(held);};
  if(['held-input','cleanup-reject','late'].includes(mode))track(a.ready.promise.then(()=>gate(a,'abort')).then(()=>controller.abort(new DOMException('controlled fixture abort','AbortError'))));
  track((async()=>{
   const response=await worker.fetch(new Request('https://router.example'+(manifest?'/v1/proxy/minimax/search':'/v1/native/minimax/v1/coding_plan/search'),{
    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},body:request.body,signal:controller.signal}),env,{waitUntil:track});
   a.status=response.status;if(!response.ok){const text=await response.text();try{a.error=JSON.parse(text).error?.code??null;}catch{}return;}
-  if(['unclaimed','delivery-cancel'].includes(mode)){a.ready.resolve();await gate(a,'delivery');}
+  if(mode==='mandatory-late'){controller.abort(new DOMException('original caller abort before mandatory response','AbortError'));await response.body.cancel();return;}
+  if(['unclaimed','delivery-cancel','combined','deadline-output'].includes(mode)){a.ready.resolve();await gate(a,'delivery');}
   const reader=response.body.getReader();try{if(mode==='delivery-cancel')await reader.cancel();else for(;;){const part=await reader.read();if(part.done)break;a.outputBytes+=part.value.byteLength;}}finally{reader.releaseLock();}
  })().catch(error=>{a.error=error.name;}).finally(()=>{a.results++;a.ready.resolve();}));
  await a.ready.promise;return Response.json(state());
@@ -112,8 +160,9 @@ export class SearchSource {async fetch(request){
  const body=await request.json();if(Object.keys(body).join(',')!=='q')return new Response(null,{status:400});
  const maximum=body.q.length===4096;
  const value={base_resp:{status_code:0},organic:Array.from({length:maximum?100:1},(_,i)=>({title:'Synthetic '+i,link:'https://example.invalid/'+i,snippet:'x'.repeat(maximum?4096:8)})),related_searches:Array.from({length:maximum?50:0},()=>({query:'synthetic'}))};
- if(maximum){value.discarded=Array(6000).fill(null);value.padding=Array(8).fill('x'.repeat(65536));}
- let text=JSON.stringify(value);if(maximum)text+=' '.repeat(1048576-text.length);let at=0;
+ if(maximum){value.discarded=Array(7677).fill(null);value.padding=Array(8).fill('x'.repeat(65536));}
+ let text=JSON.stringify(value);if(maximum)text+=' '.repeat(1048576-text.length);
+ if(['read-limit','over-read'].includes(body.q))text+=' '.repeat((body.q==='read-limit'?8191:8192)-text.length);let at=0;
  return new Response(new ReadableStream({type:'bytes',pull(c){if(at===text.length){c.close();c.byobRequest?.respond(0);return;}const end=Math.min(at+16384,text.length);c.enqueue(encoder.encode(text.slice(at,end)));at=end;},cancel(){text='';}},{highWaterMark:0}),{headers:{'content-type':'application/json','content-length':String(text.length),'content-encoding':'identity'}});
 }}
 export default {async fetch(request,env){const url=new URL(request.url);
@@ -126,25 +175,42 @@ for (const region of ["global", "cn"]) test(`Search actual isolated workerd ${re
   const temporary=await mkdtemp(join(tmpdir(),"minimax-search-workerd-"));t.after(()=>rm(temporary,{recursive:true,force:true}));
   const gates=await barriers(t),signed=await access(),runtime=await startWorkerdFixture(temporary,router.replace('REGION',JSON.stringify(region)),upstream(gates.origin,signed.jwk),{
     preventEviction:true,bindings:{CLAWROUTER_ACCESS_TEAM_DOMAIN:issuer,CLAWROUTER_ACCESS_AUD:'search-fixture',CLAWROUTER_ACCESS_ADMIN_EMAILS:email},upstreamDurableObjects:{SEARCH_SOURCE:{className:'SearchSource',useSQLite:true}}});
-  t.after(async()=>{for(const mode of ['held-input','cleanup-reject','late','unclaimed','delivery-cancel','admin-pool'])for(const phase of ['abort','read','cleanup','delivery','fetch','ack'])gates.release(mode,phase);await runtime.dispose();});
+  t.after(async()=>{for(const mode of ['held-input','cleanup-reject','late','unclaimed','delivery-cancel','combined','deadline-output','mandatory-late','admin-pool'])for(const phase of ['abort','read','cleanup','delivery','fetch','ack','settle','arrival','mandatory-read','mandatory-cleanup'])gates.release(mode,phase);await runtime.dispose();});
   const call=async path=>{const r=await runtime.dispatchFetch(origin+path);assert.equal(r.status,200,await r.clone().text());return r.json();};
   const until=async predicate=>{let s;for(let i=0;i<300;i++){s=await call('/state');if(predicate(s))return s;await delay(10);}assert.fail(JSON.stringify(s));};
   const put=async()=>runtime.dispatchFetch(origin+'/v1/admin/upstream-grants/policies/fixture/search',{method:'PUT',headers:{origin,'content-type':'application/json','cf-access-jwt-assertion':signed.jwt},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-search-key',accountId:'synthetic-account',minimaxSearchAuthorization:region==='global'?'minimax-global-tokenplan-search':'minimax-cn-tokenplan-search'})});
   let r=await put();assert.equal(r.status,200,await r.clone().text());assert.doesNotMatch(await r.text(),/synthetic-search-key/);
-  for(const mode of ['native','manifest','maximum','held-input','cleanup-reject','late','unclaimed','delivery-cancel','unpriced']){
-    const body={q:mode==='maximum'?'x'.repeat(4096):mode};let wire=JSON.stringify(mode==='manifest'?{body}:body);if(mode==='maximum')wire+=' '.repeat(65536-wire.length);
+  assert.deepEqual(await call('/candidate-maximum'),{candidates:32});
+  for(const mode of ['native','manifest','maximum','combined','read-limit','over-read','held-input','cleanup-reject','late','unclaimed','delivery-cancel','deadline-output','mandatory-late','unpriced']){
+    const body={q:['maximum','combined'].includes(mode)?'x'.repeat(4096):mode};let wire=JSON.stringify(mode==='manifest'?{body}:body);if(['maximum','combined'].includes(mode))wire+=' '.repeat(65536-wire.length);
     r=await runtime.dispatchFetch(origin+'/start?mode='+mode+(mode==='manifest'?'&manifest=1':''),{method:'POST',body:wire});let s=await r.json();assert.equal(r.status,200,JSON.stringify(s));
     if(['held-input','cleanup-reject','late'].includes(mode)){
       gates.release(mode,'abort');s=await until(s=>s.results===1);assert.notEqual(s.status,200,JSON.stringify(s));assert.equal(s.charged,72*1048576);
       if(mode==='late')gates.release(mode,'fetch');s=await until(s=>s.cancels===1);assert.equal(s.locked,true);
       assert.deepEqual(await call('/contend'),{allowed:true,full:96*1048576,extra:false,charged:72*1048576});
       gates.release(mode,'cleanup');s=await until(s=>s.cleanup);if(mode!=='late'){assert.equal(s.locked,true);assert.equal(s.charged,72*1048576);gates.release(mode,'read');}
-    }else if(['unclaimed','delivery-cancel'].includes(mode)){assert.equal(s.status,200,JSON.stringify(s));assert.equal(s.charged,72*1048576);gates.release(mode,'delivery');}
+    }else if(['unclaimed','delivery-cancel','combined','deadline-output'].includes(mode)){assert.equal(s.status,200,JSON.stringify(s));assert.equal(s.charged,72*1048576);
+      if(mode==='combined'){assert.equal(s.candidates,32);assert.equal(s.wire,1048576);assert.equal(s.archiveWrites,0);assert.deepEqual(await call('/contend'),{allowed:true,full:96*1048576,extra:false,charged:72*1048576});}
+      if(mode==='deadline-output'){s=await until(s=>s.charged===0);assert.equal(s.fetches,1);assert.equal(s.results,0);}
+      gates.release(mode,'delivery');
+      if(mode==='combined'){await gates.entered(mode,'settle');s=await call('/state');assert.equal(s.charged,72*1048576);assert.equal(s.settlements,1);assert.equal(s.fallbacks,0);assert.deepEqual(await call('/contend'),{allowed:true,full:96*1048576,extra:false,charged:72*1048576});gates.release(mode,'settle');}
+    }
+    if(mode==='mandatory-late'){
+      await gates.entered(mode,'arrival');assert.equal(s.charged,72*1048576);gates.release(mode,'arrival');
+      await gates.entered(mode,'mandatory-read');s=await call('/state');assert.equal(s.mandatoryLocked,true);assert.equal(s.charged,72*1048576);
+      // The real 30-second completion window cancels a reader registered after
+      // the original abort. Neither a second cancel nor a synthetic clock does it.
+      await gates.entered(mode,'mandatory-cleanup');s=await call('/state');assert.equal(s.mandatoryCanceled,true);assert.equal(s.mandatoryLocked,true);assert.equal(s.charged,72*1048576);
+      gates.release(mode,'mandatory-cleanup');s=await until(s=>s.cleanupRejected);assert.equal(s.mandatoryLocked,true);assert.equal(s.charged,72*1048576);gates.release(mode,'mandatory-read');
+    }
     s=await until(s=>s.results===1&&s.pending===0);assert.equal(s.charged,0,JSON.stringify(s));assert.equal(s.locked,false);
     assert.equal(s.fetches,mode==='unpriced'?0:1,JSON.stringify(s));assert.equal(s.materializations,mode==='unpriced'?0:1);
-    if(mode==='maximum'){assert.equal(s.wire,1048576,JSON.stringify(s));assert.ok(s.outputBytes>900000);assert.ok(s.byob>0);assert.ok(s.maxBacking<=16384);}
-    if(mode==='unpriced')assert.equal(s.error,'pricing_required',JSON.stringify(s));
+    if(['maximum','combined'].includes(mode)){assert.equal(s.wire,1048576,JSON.stringify(s));assert.ok(s.outputBytes>900000);assert.ok(s.byob>0);assert.ok(s.maxBacking<=16384);}
+    if(mode==='combined'){assert.equal(s.controlMaxValues,128);assert.equal(s.settlements,4);assert.equal(s.fallbacks,4);assert.equal(s.control.filter(p=>p==='/reserve').length,4);assert.equal(s.control.filter(p=>p==='/dispatch').length,4);assert.equal(s.control.filter(p=>p==='/ingest').length,1);assert.equal(s.archiveWrites,0);}
+    if(mode==='read-limit'){assert.equal(s.reads,8192);assert.equal(s.eof,true);assert.equal(s.status,200);}
+    if(mode==='over-read'){assert.equal(s.reads,8192);assert.equal(s.eof,false);assert.notEqual(s.status,200);assert.equal(s.cancels,1);}
+ if(mode==='unpriced')assert.equal(s.error,'pricing_required',JSON.stringify(s));
   }
   const before=await call('/owner');await call('/demote-next');const mutation=put();await gates.entered('admin-pool','ack');await call('/demote');gates.release('admin-pool','ack');r=await mutation;assert.equal(r.status,403,await r.clone().text());await r.text();assert.deepEqual(await call('/owner'),before);
-  const events=(await call('/events')).events;assert.equal(events.length,9);assert.ok(events.every(e=>e.total_tokens===null));assert.equal(events.filter(e=>e.actual_cost_micros===700).length,8);
+  const events=(await call('/events')).events;assert.equal(events.length,14);assert.ok(events.every(e=>e.total_tokens===null));assert.equal(events.filter(e=>e.actual_cost_micros===700).length,13);
 });

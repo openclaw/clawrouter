@@ -1,3 +1,4 @@
+import { policyRequestCost } from "../shared/request-pricing.ts";
 import { readMiniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
 import { resolveConnection } from "./authority.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
@@ -16,15 +17,19 @@ export async function revalidateMiniMaxSearchOwner(env: Env, auth: AuthorizedIde
   key: string, grant: UpstreamGrant, operation: MiniMaxSearchOperation): Promise<UpstreamGrant> {
   if (!miniMaxSearchRequirement(requirement)) miniMaxSearchDenied();
   const original = miniMaxSearchIdentity(grant), caller = publicControlAuthorization(auth), signal = operation.operation.signal;
-  operation.pin(JSON.stringify([key, original, requirement.endpoint.id, requirement.provider.base_urls.default]));
   const owner = { providerId: "minimax", endpointId: requirement.endpoint.id, grantKey: key,
     lineage: grant.credentialLineage!, routeSha256: "minimax.search:token-plan", policyGeneration: auth.policy.generation };
   const connection = await resolveConnection(env, "minimax", undefined, operation);
   if (!connection?.enabled) miniMaxSearchDenied();
-  const current = await inspectGrantCredentials(env, key, signal, undefined, operation);
   const policy = await authorizeResponseControl(env, caller, owner, signal, undefined, undefined, operation);
   if (!policy) miniMaxSearchDenied();
   assertPolicyModel(policy, { endpoint: requirement.endpoint, capability: "search.web", model: null });
+  operation.pin(JSON.stringify([key, original, requirement.endpoint.id, requirement.provider.base_urls.default,
+    policy.budgetMode ?? "reserve", policy.budgetScope ?? null, policy.dailyBudgetMicros ?? null,
+    policy.weeklyBudgetMicros ?? null, policy.monthlyBudgetMicros ?? null, policyRequestCost(policy, "search.web"), connection.monthlyBudgetMicros ?? null]));
+  // Caller/policy work completes first. This is the final awaited owner read;
+  // only synchronous identity/deadline checks remain before POST construction.
+  const current = await inspectGrantCredentials(env, key, signal, undefined, operation);
   signal.throwIfAborted(); assertControlCallerLive(caller);
   if (miniMaxSearchIdentity(current) !== original || !filterGrantCandidates("minimax", [{ key, grant: current, runtimeState: null }],
     new Set(), grantRoutingPolicy(policy.grantRouting), key, requirement, Date.now()).available.length) miniMaxSearchDenied();

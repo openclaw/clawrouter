@@ -39,7 +39,7 @@ test("Search rename preserves; explicit clear, replacement and revoke never resu
   assert.deepEqual(kept.minimaxSearchBinding, miniMaxSearchBinding("global")); assert.equal(kept.credentialLineage, before.credentialLineage);
   await f.put({}, null); await f.put({ label: "still cleared" }); assert.equal((await inspectGrantCredentials(f.env, grantKey)).minimaxSearchBinding, null);
   await f.put({}, miniMaxSearchBinding("global"));
-  await revokeGrantCredentials(f.env, grantKey, undefined, actor); await f.put({ label: "revoked" });
+  await revokeGrantCredentials(f.env, grantKey, undefined, actor); await assert.rejects(f.put({ label: "revoked" }), /primary credential/);
   assert.equal((await inspectGrantCredentials(f.env, grantKey)).minimaxSearchBinding, null); await denied(f, await f.request());
 });
 test("Search materialization rejects old generation before repair, adoption or secret return", async t => {
@@ -63,7 +63,11 @@ test("Search current SQL role checked after pool ACK; denial cannot install or r
   assert.ok(changed); assert.equal(proof.original.generation, before.generation); assert.equal(proof.original.lineage, before.lineage);
   assert.deepEqual(f.record(), before);
   await assert.rejects(f.put({}, miniMaxSearchBinding("global"))); assert.deepEqual(f.record(), before);
-  await denied(f, await f.request());
+  // Denying this mutation preserves the original valid grant; admin demotion
+  // is not a revoke command for an independently authorized proxy principal.
+  const response = await f.request(); assert.equal(response.status, 200, await response.clone().text());
+  await response.text(); await f.drain(); assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].headers.get("authorization"), `Bearer ${originalKey}`);
 });
 test("Search authoritative NULL defeats forged metadata and legacy imports", async t => {
   const f = await setup(t, { environment: true });
@@ -109,3 +113,41 @@ test("Search downstream remains charged before first pull and retires on cancel"
   const f = await setup(t); const r = await f.request(); assert.equal(r.status, 200); assert.equal(bodyBudgetCharged(), 72 * MiB);
   await r.body.cancel(); await f.drain(); assert.equal(bodyBudgetCharged(), 0); assert.equal(f.sent.length, 1);
 });
+
+for (const manifest of [false, true]) for (const field of ["dailyBudgetMicros", "weeklyBudgetMicros", "monthlyBudgetMicros"])
+  for (const duringPreparation of [false, true]) test(`Search current principal ${field}/${manifest ? "manifest" : "native"}/during preparation=${duringPreparation} denies700 against500`, async t => {
+    const f = await setup(t);
+    Object.assign(f.policy, { budgetScope: "principal", monthlyBudgetMicros: 100000 });
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+    const principal = "principal@example.invalid";
+    const setLimit = limit => f.authority("/users/put", { email: principal, record: { role: "user", enabled: true,
+      tenantId: "tenant", groups: [], budgetOverrides: { fixture: { [field]: limit } } } });
+    await setLimit(duringPreparation ? 100000 : 500);
+    f.env.ACCESS_CONTROL.objects.get("policy-bindings").db.prepare("UPDATE proxy_credentials SET credential_json = ? WHERE credential_id = ?")
+      .run(JSON.stringify({ ...f.credential, principalId: principal }), "fixture");
+    if (duringPreparation) {
+      const get = f.env.GRANT_CREDENTIALS.get; let changed = false;
+      f.env.GRANT_CREDENTIALS.get = id => { const stub = get(id); return { async fetch(url, init) {
+        if (new URL(url).pathname === "/materialize" && !changed) { changed = true; await setLimit(500); }
+        return stub.fetch(url, init);
+      } }; };
+    }
+    await denied(f, await f.request(manifest)); assert.equal(f.sent.length, 0);
+  });
+for (const manifest of [false, true]) for (const change of ["revoke", "rotate", "region"])
+  test(`Search final policy await then ${change}/${manifest ? "manifest" : "native"} cannot dispatch the old owner`, async t => {
+    const f = await setup(t), entered = Promise.withResolvers(), release = Promise.withResolvers();
+    let armed = false, held = false;
+    f.afterBudget(async () => { armed = true; });
+    const get = f.env.ACCESS_CONTROL.get;
+    f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+      const response = await stub.fetch(url, init);
+      if (armed && !held && new URL(url).pathname === "/authorization/snapshot") { held = true; entered.resolve(); await release.promise; }
+      return response;
+    } }; };
+    const pending = f.request(manifest); await entered.promise;
+    if (change === "revoke") await revokeGrantCredentials(f.env, grantKey, undefined, actor);
+    if (change === "rotate") await f.put({ credential: "synthetic-replacement-key" }, miniMaxSearchBinding("global"));
+    if (change === "region") await f.put({}, miniMaxSearchBinding("cn"));
+    release.resolve(); await denied(f, await pending); assert.equal(held, true);
+  });
