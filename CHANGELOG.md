@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry one eligible same-provider grant before delivery, preserving healthy session stickiness and scoped quota state.
+
 - Add a local small-model selector smoke test with counterbalanced candidates, abstention checks and content-free replay metrics.
 
 - Add an offline Fusion opportunity analyzer and small-model research plan to screen experiments before paid inference.

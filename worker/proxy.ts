@@ -68,7 +68,7 @@ import {
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import { shouldFailoverGrant } from "./grant-quota";
-import { observeProviderGrantQuota } from "./provider-quota.ts";
+import { observeProviderGrantQuota, providerCreditExhausted } from "./provider-quota.ts";
 import { grantRoutingPolicy, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
@@ -84,7 +84,7 @@ import {
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
-import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
+import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
@@ -791,10 +791,21 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       await music.completeUpload();
       prepared.requestBody = undefined;
     }
+    let creditExhausted = false;
+    const captureResponse = async (upstream: Response) => {
+      creditExhausted = false;
+      if (selection.provider.id === "anthropic" && upstream.status === 400 && prepared.grantKey) {
+        const inspected = await inspectJsonError(upstream, operation);
+        upstream = inspected.response;
+        creditExhausted = providerCreditExhausted(selection.provider.id, upstream.status, inspected.body);
+      }
+      if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, upstream, selection.provider.id, selectionUpstreamModel(selection), creditExhausted);
+      return upstream;
+    };
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
-    if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
-    if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    response = await captureResponse(response);
+    if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
@@ -814,7 +825,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
         response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }), "upstream", discard);
         accounting.observeUpstreamResponse(response, prepared.url);
-        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
+        response = await captureResponse(response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
         grantFailover = true;
@@ -1173,11 +1184,11 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   }
 }
 
-export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null): void {
+export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null, creditExhausted = false): void {
   if (!key) return;
   // A rejected credential must not keep serving from this isolate's cache.
   if (response.status === 401 || response.status === 403) evictGrantCredentials(key);
-  const state = observeProviderGrantQuota(providerId, response, quota, model);
+  const state = observeProviderGrantQuota(providerId, response, quota, model, Date.now(), creditExhausted);
   if (!state) return;
   const direct = queueGrantRuntime(env, key, { ...state, grantRevision: revision });
   if (direct) context.waitUntil(direct);
