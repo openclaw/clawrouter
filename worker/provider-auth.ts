@@ -2,7 +2,7 @@ import { miniMaxImageProjection, miniMaxImageRequirement } from "./minimax-image
 import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { isQualifiedVertexModelLocation } from "./vertex-model-eligibility.ts";
 import { miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
-import { miniMaxEnvironmentBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
+import { miniMaxEnvironmentBinding, miniMaxMediaProjection, miniMaxMusicRequirement } from "./native-media-credential.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
@@ -27,6 +27,9 @@ export function openRouterPcmRequirement(requirement: Pick<GrantRequirement, "pr
 }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.endpoint.request_format === "minimax.music" && (!miniMaxMusicRequirement(requirement)
+    || grant && (!miniMaxMediaProjection(grant, "minimax.music") || !Number.isSafeInteger(grant.credentialGeneration)
+      || !grant.credentialLineage || transportForGrant(requirement.provider, grant) !== null))) return false;
   if (requirement.endpoint.request_format === "minimax.images" && (!miniMaxImageRequirement(requirement)
     || !miniMaxImageProjection(grant) || transportForGrant(requirement.provider, grant) !== null)) return false;
   if (requirement.provider.id === "anthropic-vertex") {
@@ -99,6 +102,8 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
   }
   if (endpoint.request_format === "minimax.speech" && !grant && !miniMaxEnvironmentBinding(provider, env))
     throw new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires explicit original credential authorization");
+  if (endpoint.request_format === "minimax.music" && !grant && !miniMaxEnvironmentBinding(provider, env, "minimax.music"))
+    throw new HttpError(403, "minimax_music_authorization_required", "Global MiniMax music requires explicit original credential authorization");
   assertProviderCredential(provider, grant, env);
   const transport = transportForGrant(provider, grant);
   try {

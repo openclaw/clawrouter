@@ -2,6 +2,7 @@ import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
 import { prepareVeniceChatResponse } from "./venice-chat-runtime.ts";
 import { prepareNativeMiniMaxImage } from "./native-minimax-images.ts";
 import { prepareNativeMiniMaxSpeech } from "./native-minimax-speech.ts";
+import { prepareNativeMiniMaxMusic } from "./native-minimax-music.ts";
 import { miniMaxSpeechModels } from "./minimax-speech.ts";
 import { isBedrockEmbeddingModel } from "./provider-bedrock-embeddings.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -54,6 +55,10 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.provider.id === "minimax"
+    && ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"].includes(selection.model?.upstream ?? (!Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : ""))
+    && (selection.endpoint.request_format !== "minimax.music" || selection.capability !== "music.generate"))
+    throw new HttpError(400, "native_music_route_required", "MiniMax music requires its qualified native music route");
   if (selection.provider.id === "minimax" && (selection.model?.upstream === "image-01"
     || !Array.isArray(selection.body) && selection.body.model === "image-01")
     && (selection.endpoint.request_format !== "minimax.images" || selection.capability !== "image.generate"))
@@ -70,7 +75,7 @@ export function validateSelectedInput(selection: ProxySelection): void {
     ?? prepareNativeGradiumSpeech(selection)
     ?? prepareNativeGoogleImage(selection) ?? prepareNativeGoogleMusic(selection) ?? prepareNativeGoogleSpeech(selection)
     ?? prepareNativeOpenRouterTranscription(selection) ?? prepareNativeOpenRouterMusic(selection) ?? prepareNativeOpenRouterPcmSpeech(selection) ?? prepareNativeOpenRouterSpeech(selection)
-    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection) ?? prepareNativeMiniMaxImage(selection)
+    ?? prepareNativeDeepSeekSearch(selection) ?? prepareNativeMiniMaxSpeech(selection) ?? prepareNativeMiniMaxImage(selection) ?? prepareNativeMiniMaxMusic(selection)
     ?? prepareNativeElevenLabsSpeech(selection) ?? prepareVeniceChatResponse(selection);
   if (googleImageRequest(selection.model?.upstream ?? selection.pathParams?.model, selection.body, selection.endpoint.request_format)
     && (selection.endpoint.request_format !== "google.image_generate" || !selection.nativeResponse))

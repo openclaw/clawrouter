@@ -1,5 +1,6 @@
-import { minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
+import { minimaxMusicBinding, minimaxSpeechBinding, readNativeMediaBinding, type NativeMediaBinding } from "../shared/native-media-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
+import type { GrantRequirement } from "./provider-auth.ts";
 import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
@@ -14,34 +15,51 @@ export function miniMaxApiKeySecret(value: Pick<UpstreamGrant, "kind" | "credent
 export function mutateNativeMediaBinding(record: CredentialRecord, previous: CredentialRecord | undefined, intent: unknown, preserve: boolean): void {
   const old = readNativeMediaBinding(previous?.nativeMediaBinding);
   const same = preserve && previous && previous.providerId === record.providerId && previous.kind === record.kind
-    && previous.accountId === record.accountId && miniMaxApiKeySecret(previous) === miniMaxApiKeySecret(record);
+    && previous.accountId === record.accountId && miniMaxApiKeySecret(previous) === miniMaxApiKeySecret(record)
+    && (old?.operation !== "minimax.music" || !previous.revokedAt && previous.grantKey === record.grantKey && previous.lineage === record.lineage);
   let binding = same ? old : null;
   if (intent !== undefined) {
     binding = intent === null ? null : readNativeMediaBinding(intent);
     if (intent !== null && (!binding || record.providerId !== "minimax" || !miniMaxApiKeySecret(record)))
-      throw new HttpError(400, "invalid_native_media_authorization", "Global MiniMax speech requires the original scalar native API key");
+      throw new HttpError(400, "invalid_native_media_authorization", "Global MiniMax media requires explicit operation authorization for the original scalar API key");
   }
   if (record.providerId !== "minimax" || !miniMaxApiKeySecret(record)) binding = null;
   record.nativeMediaBinding = binding;
   if (previous && JSON.stringify(old) !== JSON.stringify(binding)) record.lineage = crypto.randomUUID();
 }
 
-export function miniMaxMediaProjection(grant: UpstreamGrant): boolean {
+export function miniMaxMediaProjection(grant: UpstreamGrant, operation: NativeMediaBinding["operation"] = "minimax.speech"): boolean {
   return grant.provider === "minimax" && grant.kind === "api_key" && grant.credentialStore === "durable_object"
     && grant.enabled === true && !grant.revokedAt && grant.credentialStatus === "active"
     && !!grant.hasCredential && !grant.hasAccessToken && !grant.hasRefreshToken && !grant.subscription
     && Array.isArray(grant.credentialFields) && grant.credentialFields.length === 0
-    && !!readNativeMediaBinding(grant.nativeMediaBinding);
+    && readNativeMediaBinding(grant.nativeMediaBinding)?.operation === operation;
 }
 
-export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env): { binding: string; secret: string; fingerprint: string } | null {
+export function miniMaxMusicRequirement({ provider, endpoint, model, mode }: GrantRequirement): boolean {
+  const models = provider.models.filter(row => row.id === model || row.upstream === model);
+  const scheme = provider.auth.schemes.find(row => row.type !== "oauth");
+  return provider.id === "minimax" && provider.base_urls.default === "https://api.minimax.io" && mode === "http"
+    && models.length === 1 && ["music-2.6", "music-2.6-free"].includes(models[0].upstream)
+    && models[0].capabilities.includes("music.generate")
+    && provider.capabilities.some(row => row.id === "music.generate" && row.endpoint === endpoint.id)
+    && endpoint.request_format === "minimax.music" && endpoint.response_format === "minimax.music"
+    && endpoint.method === "POST" && endpoint.path === "/v1/music_generation" && endpoint.upstreamPath === undefined
+    && !endpoint.auth && (endpoint.streaming == null || endpoint.streaming === "sse") && !endpoint.websocket
+    && !endpoint.lifecycle && !endpoint.responsesLifecycle && !endpoint.modelPassthrough && !endpoint.inputProfile && !endpoint.requestPricing
+    && !endpoint.path_params.length && !Object.keys(endpoint.query).length && !Object.keys(provider.adapter.injectQuery).length
+    && scheme?.type === "bearer" && scheme.header.toLowerCase() === "authorization"
+    && scheme.format === "Bearer ${secret}" && scheme.secretKind === "api_key";
+}
+
+export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, operation: NativeMediaBinding["operation"] = "minimax.speech"): { binding: string; secret: string; fingerprint: string } | null {
   const raw = env.CLAWROUTER_MINIMAX_NATIVE_MEDIA_BINDING;
   if (typeof raw !== "string" || raw.length > 2048) return null;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
-  const expected = { ...minimaxSpeechBinding, credentialSource: "MINIMAX_API_KEY" };
+  const expected = { ...(operation === "minimax.music" ? minimaxMusicBinding : minimaxSpeechBinding), credentialSource: "MINIMAX_API_KEY" };
   if (Object.keys(row).length !== Object.keys(expected).length + 1
     || !Object.entries(expected).every(([key, item]) => row[key] === item)
     || typeof row.credentialSha256 !== "string" || row.credentialSha256.length !== 64 || !/^[a-f0-9]+$/.test(row.credentialSha256)) return null;
@@ -57,9 +75,9 @@ export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env):
 
 // Both public eligibility and dispatch use the same actual fingerprint check.
 // The second read closes rotation during the asynchronous digest operation.
-export async function qualifyMiniMaxEnvironmentBinding(provider: CompiledProvider, env: Env) {
-  const selected = miniMaxEnvironmentBinding(provider, env);
+export async function qualifyMiniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, operation: NativeMediaBinding["operation"] = "minimax.speech") {
+  const selected = miniMaxEnvironmentBinding(provider, env, operation);
   if (!selected || await sha256Hex(selected.secret) !== selected.fingerprint) return null;
-  const current = miniMaxEnvironmentBinding(provider, env);
+  const current = miniMaxEnvironmentBinding(provider, env, operation);
   return current && current.secret === selected.secret && current.binding === selected.binding ? current : null;
 }

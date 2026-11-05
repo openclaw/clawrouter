@@ -369,6 +369,10 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
       const { revalidateMiniMaxImageOwner } = await import("./minimax-image-dispatch.ts");
       const current = await revalidateMiniMaxImageOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal);
       materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, signal, "minimax.images");
+    } else if (requirement?.endpoint.request_format === "minimax.music") {
+      const { revalidateMiniMaxMusicOwner } = await import("./minimax-media-dispatch.ts");
+      const current = await revalidateMiniMaxMusicOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, signal, "minimax.music");
     } else materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
       ? await refreshGrant(key, grant, provider, env, false, signal)
       : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));

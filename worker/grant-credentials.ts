@@ -6,7 +6,7 @@ import { readMiniMaxTokenBody } from "./minimax-token-body.ts";
 import { authorizationTimestamp, refreshExpiryFromSeconds } from "../shared/refresh-expiry.ts";
 import { credentialProjection, materializedGrant, hasFreshPrimaryCredentials, type CredentialRecord, type CredentialProjection, type OwnerResponse, type MaterializeRequest, type PutRequest } from "./grant-credential-record.ts";
 import { mutateMiniMaxImageBinding, miniMaxImageOwnerBinding, miniMaxImageDenied } from "./minimax-image-credential.ts";
-import { mutateNativeMediaBinding } from "./native-media-credential.ts";
+import { mutateNativeMediaBinding, miniMaxMediaProjection } from "./native-media-credential.ts";
 export type { CredentialProjection } from "./grant-credential-record.ts";
 import { claimRefreshOwnership, reserveRefreshOwnership, OWNERSHIP_CLAIM, OWNERSHIP_CURRENT } from "./refresh-ownership.ts";
 import { normalizedScopes, validTimestamp, envValue, boundedSecret, optionalSecret, boundedRefreshJson, boundedResponseJson, MAX_REFRESH_RESPONSE_BYTES, permanentRefreshFailure, safeOAuthError, refreshRetryAt } from "./grant-refresh-diagnosis.ts";
@@ -438,6 +438,10 @@ export class GrantCredentialObject implements DurableObject {
     if (input.operation === "minimax.images" && (!record || input.providerId !== "minimax"
       || !miniMaxImageOwnerBinding(record) || record.grantKey !== input.key
       || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage)) miniMaxImageDenied();
+    if (input.operation === "minimax.music" && (!record || input.providerId !== "minimax"
+      || !miniMaxMediaProjection(metadataGrant(record), "minimax.music") || record.grantKey !== input.key
+      || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage))
+      throw new HttpError(403, "minimax_music_authorization_required", "MiniMax music requires the exact original authorized owner revision");
     let migrated = false;
     if (!record && input.legacy && hasPrimaryCredential(input.legacy)) {
       const metadata = await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");

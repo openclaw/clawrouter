@@ -69,7 +69,7 @@ export interface OwnerResponse {
 }
 
 export interface MaterializeRequest {
-  operation?: "minimax.images";
+  operation?: "minimax.images" | "minimax.music";
   key: string;
   grant: UpstreamGrant;
   legacy?: UpstreamGrant | null;
