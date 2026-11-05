@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Validator } from "@cfworker/json-schema";
 import { loadProviderManifestInputs, parseProviderCompilerArgs } from "./provider-manifest-inputs.mjs";
+import { compileProviderProducts } from "./provider-products.mjs";
 
 const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
 const decisionContracts = new Map([
@@ -156,8 +157,10 @@ function compileProvider(manifest, ids) {
     counters: manifest.billing?.counters ?? [],
   };
   const quota = normalizeQuota(manifest.quota);
+  const products = compileProviderProducts(manifest);
   return {
     id: manifest.id,
+    ...(products ? { products } : {}),
     display_name: manifest.displayName,
     status: manifest.status ?? "stable",
     class: manifest.class ?? "openai_compatible",

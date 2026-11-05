@@ -1,4 +1,5 @@
 import type { ClientCatalogModel, ModelPricing, GrantAccount, GrantExtraUsage } from "./contracts";
+import type { ProviderProduct } from "./provider-products.ts";
 
 // Compiled v1 declarations shared by build tools and runtime consumers.
 // Credential state and adapter implementations remain outside this contract.
@@ -15,6 +16,7 @@ export interface ProviderSnapshot {
 }
 
 export interface CompiledProvider {
+  products?: ProviderProduct[];
   id: string; display_name: string; status: string; class: string; service_platform: string; service_kind: string;
   config_keys: string[]; optional_config_keys: string[]; auth: { schemes: AuthScheme[]; authorization: AuthorizationConfig | null; refresh: RefreshConfig | null; grantTransports: Record<string, CompiledGrantTransport> };
   auth_schemes: string[]; base_urls: Record<string, string>; routing: { nativePrefixes: string[]; modelPrefixes: string[]; baseUrlParam: string | null; serviceParam: string | null };

@@ -113,6 +113,43 @@ model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
 
+### Explicit products
+
+A service-provider v1 manifest can optionally declare `products`. A product ID
+is local to its provider. Keep it stable across display-name changes. Commercial
+model, authentication method, and execution binding are separate declarations:
+
+```yaml
+products:
+  - id: platform-api
+    displayName: Platform API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [invoke]
+```
+
+`provider-default` references the existing provider execution configuration; it
+does not require environment credentials or exclude scoped grants. To describe
+an already declared grant transport, use
+`binding: { type: grant-transport, grantKind: subscription }`. The transport must
+exist in `auth.grantTransports`, and every product endpoint must exist and be
+allowed by that transport. Product declarations cannot supply endpoints, secret
+bindings, adapters, or authorization URLs.
+
+Commercial models are `metered`, `subscription`, `prepaid`, `unbilled`, and
+`unknown`. Authentication methods are `api-key`, `oauth2`, `aws-sigv4`, `binding`,
+`none`, and `unknown`. These are authored metadata: the compiler does not infer
+commerce from grant kind or certify upstream terms, credentials, or onboarding.
+
+The compiler rejects duplicate product IDs and invalid references, then sorts
+products and endpoint references. Manifests without products retain the same
+snapshot output. This first slice only preserves declarations in the compiled
+snapshot. Discovery, routing, authorization, pricing, and budgets still use
+their existing checks; products do not yet restrict or enable routes. A later
+offer compiler must qualify model, protocol, lifecycle, and account compatibility
+before these declarations can become execution authority.
+
 ## Descriptor v1
 
 | Field | Requirement |
