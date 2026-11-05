@@ -92,6 +92,7 @@ export class GrantCredentialObject implements DurableObject {
     }, env);
     this.copilotAccount = new CopilotAccountFlow({
       invalidateCatalog: () => this.copilotCatalog.invalidate(),
+      inferenceControl: this.copilotCatalog.inferenceControl,
       order: run => this.order(run),
       read: () => this.state.storage.get<CredentialRecord>("credential"),
       save: async record => { assertCopilotAccountRecord(record); await this.state.storage.put("credential", record); },
@@ -117,6 +118,11 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-inference") {
+      const operation = this.copilotCatalog.inference(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/copilot-catalog") {
       const operation = this.copilotCatalog.fetch(request);
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
