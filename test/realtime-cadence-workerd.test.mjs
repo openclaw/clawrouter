@@ -11,9 +11,38 @@ import { startWorkerdFixture } from './helpers/workerd.mjs';
 const router = String.raw`
 import handler, { BudgetLedgerObject as RealBudgetLedger } from './worker/index.ts';
 import { putGrantCredentials } from './worker/grant-credentials.ts';
+import { RealtimeSession } from './worker/realtime-session.ts';
 export * from './worker/index.ts';
 let delay = { authority: 15, ledger: 30 }, calls = { authority: 0, ledger: 0, held: 0 };
-let holdPath = '', releases = [], observations = [], observing = false;
+let holdPath = '', releases = [], observations = [], observing = false, droppedObservations = 0;
+const socketRoles = new WeakMap(), realSocketClose = WebSocket.prototype.close, realSessionClose = RealtimeSession.prototype.close;
+function record(value) {
+  if (!observing) return;
+  if (observations.length < 32) observations.push(value); else droppedObservations++;
+}
+// This isolated fixture delegates the real synchronous methods unchanged. The
+// socket identities come from the actual session, never inferred close order.
+RealtimeSession.prototype.close = function (...args) {
+  if (observing) for (const [socket, role] of [[this.client, 'client'], [this.upstream, 'upstream']]) {
+    if (!socketRoles.has(socket)) {
+      socketRoles.set(socket, role);
+      socket.addEventListener('close', () => record({ kind: 'socket-close-event', role, isolateMs: performance.now() }));
+    }
+  }
+  return Reflect.apply(realSessionClose, this, args);
+};
+WebSocket.prototype.close = function (...args) {
+  const role = socketRoles.get(this);
+  if (role) record({ kind: 'close-invoke', role, isolateMs: performance.now() });
+  try {
+    const result = Reflect.apply(realSocketClose, this, args);
+    if (role) record({ kind: 'close-return', role, isolateMs: performance.now() });
+    return result;
+  } catch (error) {
+    if (role) record({ kind: 'close-throw', role, isolateMs: performance.now(), category: ['Error', 'TypeError', 'RangeError', 'InvalidStateError', 'DOMException'].includes(error?.name) ? error.name : 'other' });
+    throw error;
+  }
+};
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(r) { if (new URL(r.url).pathname === '/fixture-rows') return Response.json([...this.fixtureSql.exec('SELECT settled, dispatch_started, reserved_micros FROM budget_reservations')]); return super.fetch(r); }
@@ -25,10 +54,13 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
     const url = new URL(typeof input[0] === 'string' || input[0] instanceof URL ? input[0] : input[0].url);
     if (key === 'ledger' && url.pathname === holdPath) { calls.held++; await new Promise(resolve => releases.push(resolve)); }
     const observed = key === 'authority' || url.pathname === '/status';
-    const started = Date.now();
+    const started = Date.now(), startedMono = performance.now();
     if (observed) { calls[key]++; await pause(delay[key]); }
-    const dispatched = Date.now(), response = await stub.fetch(...input);
-    if (observing && observed && observations.length < 64) observations.push({ key, started, dispatched, completed: Date.now(), status: response.status });
+    const dispatched = Date.now(), dispatchedMono = performance.now(), response = await stub.fetch(...input);
+    const completed = Date.now(), completedMono = performance.now();
+    if (observed) record({ kind: 'rpc', key, started, dispatched, completed, status: response.status,
+      isolate: { clock: 'performance.now', started: startedMono, dispatched: dispatchedMono, completed: completedMono,
+        injectedDelayMs: delay[key], preDispatchWaitMs: dispatchedMono - startedMono, fetchMs: completedMono - dispatchedMono } });
     return response;
   } }; };
 } }); }
@@ -37,7 +69,7 @@ export default { async fetch(r, env, ctx) {
   if (path === '/fixture-grant') { await putGrantCredentials(env, 'oauth/fixture/openai', { enabled: true, provider: 'openai', kind: 'api_key', credential: 'fixture-upstream-key' }); return new Response('ok'); }
   if (path === '/fixture-delay') { delay = await r.json(); return new Response('ok'); }
   if (path === '/fixture-observe') { observing = true; return new Response('ok'); }
-  if (path === '/fixture-calls') return Response.json({ ...calls, observations });
+  if (path === '/fixture-calls') return Response.json({ ...calls, observations, droppedObservations });
   if (path === '/fixture-hold') { const mode = await r.text(); holdPath = mode === 'on' ? '/status' : mode === 'dispatch' ? '/dispatch' : ''; if (!holdPath) { for (const release of releases) release(); releases = []; } return new Response('ok'); }
   return handler.fetch(r, { ...env, ACCESS_CONTROL: delayed(env.ACCESS_CONTROL, 'authority'), BUDGET_LEDGER: delayed(env.BUDGET_LEDGER, 'ledger') }, ctx);
 }, queue: handler.queue };
@@ -166,7 +198,7 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
       const calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
       // A failed deadline must retain authority/RPC, sender and both socket
       // observations; diagnostics after the assertion lose the failing state.
-      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls }));
+      t.diagnostic(JSON.stringify({ kind, asr, clocks: { host: 'Date.now wall-clock; mutation ACK to client event', router: 'performance.now isolate-local; do not subtract from host clock', legacyRpc: 'Date.now wall-clock' }, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls }));
     }
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));
     assert.ok(elapsed <= 250, '100ms freshness plus observed RPC envelope: ' + elapsed);
