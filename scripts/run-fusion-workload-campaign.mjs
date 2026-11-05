@@ -5,7 +5,7 @@ import { loadTasks } from './fusion-workloads.mjs';
 import { runExperiment, validateExperiment } from './fusion-agent-benchmark.mjs';
 
 // Settled usage and unresolved reservations from the preceding experiments.
-export const minimumPriorCostMicros = 34_030_327;
+export const minimumPriorCostMicros = 34_697_983;
 export function validateCampaign(config, taskCount) {
   if (!Number.isSafeInteger(config.priorCostMicros) || config.priorCostMicros < minimumPriorCostMicros) throw new Error('prior_spend_below_known_ledger');
   return validateExperiment(config, taskCount);

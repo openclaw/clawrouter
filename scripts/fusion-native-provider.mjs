@@ -102,3 +102,21 @@ export async function nativePins(env, fetcher = fetch) {
   }
   return pins;
 }
+
+// Error messages may echo request content. Persist only finite diagnostic labels.
+export function nativeErrorMetadata(body) {
+  const types = new Set(['invalid_request_error', 'authentication_error', 'billing_error',
+    'permission_error', 'not_found_error', 'conflict_error', 'request_too_large',
+    'rate_limit_error', 'api_error', 'timeout_error', 'overloaded_error']);
+  const message = typeof body?.error?.message === 'string' ? body.error.message.toLowerCase() : '';
+  const hints = [
+    ['safety_notice', /this content can[’']t be shown|safety refusal/],
+    ['credit_balance', /credit balance/], ['spend_limit', /spend(?:ing)? (?:limit|cap)/],
+    ['structured_output', /output_config|response_format|json schema|structured output/],
+    ['thinking_parameters', /thinking|reasoning_effort/], ['message_format', /prefill|messages\./],
+    ['token_limit', /max_tokens|maximum.*tokens|context (?:window|length)/],
+    ['service_tier', /service_tier|service tier/],
+  ];
+  return { errorType: types.has(body?.error?.type) ? body.error.type : 'unknown',
+    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown' };
+}
