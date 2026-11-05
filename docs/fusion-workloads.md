@@ -227,3 +227,8 @@ Artifacts contain qualification receipts, per-corpus measurements and a campaign
 checkpoint. An interrupted corpus prevents the next corpus from starting. A
 missing pre-inference receipt and malformed accounting are distinguished; corrupt
 accounting conservatively reserves the current corpus's full allowance.
+
+The hosted campaign enforces a starting ledger floor of $34.030327 from the
+preceding experiments. Supply any later incurred costs as a higher
+`priorCostMicros`; never reuse the floor after a paid run. The floor is not a
+shared billing ledger or protection against separate concurrent operators.

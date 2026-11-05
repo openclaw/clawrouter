@@ -4,6 +4,13 @@ import { pathToFileURL } from 'node:url';
 import { loadTasks } from './fusion-workloads.mjs';
 import { runExperiment, validateExperiment } from './fusion-agent-benchmark.mjs';
 
+// Settled usage and unresolved reservations from the preceding experiments.
+export const minimumPriorCostMicros = 34_030_327;
+export function validateCampaign(config, taskCount) {
+  if (!Number.isSafeInteger(config.priorCostMicros) || config.priorCostMicros < minimumPriorCostMicros) throw new Error('prior_spend_below_known_ledger');
+  return validateExperiment(config, taskCount);
+}
+
 export const workloadSets = [
   { name: 'original', manifest: 'workloads' },
   { name: 'transfer', manifest: 'validation-workloads' },
@@ -16,7 +23,7 @@ export async function runWorkloadCampaign({ repo, qualificationDir, out, config,
     count: (await loadTasks(resolve(repo, `benchmarks/fusion/${set.manifest}.json`))).length,
   })));
   // Preflight the entire campaign before the first paid request, not each set alone.
-  const budgetBound = validateExperiment(config, sets.reduce((sum, set) => sum + set.count, 0));
+  const budgetBound = validateCampaign(config, sets.reduce((sum, set) => sum + set.count, 0));
   await mkdir(out, { recursive: false, mode: 0o700 });
   const state = { sourceSha: env.GITHUB_SHA, config, budgetBound, complete: false,
     spentOrReservedMicros: config.priorCostMicros, sets: [] };

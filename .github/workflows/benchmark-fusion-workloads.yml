@@ -15,7 +15,7 @@ on:
         description: Explicit experiment JSON including prior spend and cumulative cap
         required: true
         type: string
-        default: '{"strategies":["strong"],"trials":1,"maxTurns":10,"outputTokens":2048,"deadlineMs":180000,"trialBudgetMicros":200000,"campaignBudgetMicros":5000000,"priorCostMicros":0}'
+        default: '{"strategies":["strong"],"trials":1,"maxTurns":10,"outputTokens":2048,"deadlineMs":180000,"trialBudgetMicros":200000,"campaignBudgetMicros":100000000,"priorCostMicros":34030327}'
 
 permissions:
   contents: read
@@ -46,11 +46,10 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { loadTasks } from './scripts/fusion-workloads.mjs';
-          import { validateExperiment } from './scripts/fusion-agent-benchmark.mjs';
-          import { workloadSets } from './scripts/run-fusion-workload-campaign.mjs';
+                    import { workloadSets, validateCampaign } from './scripts/run-fusion-workload-campaign.mjs';
           const counts = await Promise.all(workloadSets.map(async set =>
             (await loadTasks(`benchmarks/fusion/${set.manifest}.json`)).length));
-          validateExperiment(JSON.parse(process.env.FUSION_WORKLOAD_CONFIG), counts.reduce((a, b) => a + b, 0));
+          validateCampaign(JSON.parse(process.env.FUSION_WORKLOAD_CONFIG), counts.reduce((a, b) => a + b, 0));
           JS
       - name: Fetch missing pinned task history
         run: |
