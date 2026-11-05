@@ -344,7 +344,7 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
             callCount: ledger.attempts.filter(attempt => attempt.trialId === trialId).length, status: 'error' });
           await snapshot();
           if (error.message === 'provider_refused') console.log(JSON.stringify({ trialId, notice: 'Provider refused the request; this trial stopped without retry or fallback.' }));
-          if (ledger.blocked) throw error;
+          if (ledger.blocked || error.message === 'provider_refused') throw error;
           continue;
         }
         // Exact non-skipped test counts must match the qualified known repair.
