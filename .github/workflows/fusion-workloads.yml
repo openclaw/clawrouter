@@ -1,0 +1,43 @@
+name: Fusion workload qualification
+
+on:
+  pull_request:
+    paths:
+      - benchmarks/fusion/**
+      - scripts/fusion-workloads.mjs
+      - test/fusion-workloads.test.mjs
+      - .github/workflows/fusion-workloads.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fusion-workloads-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 100
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - run: node --test test/fusion-workloads.test.mjs
+      - name: Qualify real regression tasks without model calls
+        run: |
+          docker pull node:24.22.1-slim
+          image=$(docker image inspect node:24.22.1-slim --format '{{index .RepoDigests 0}}')
+          node scripts/fusion-workloads.mjs qualify "$image" "$RUNNER_TEMP/fusion-qualification.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: fusion-workload-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/fusion-qualification.json
+          if-no-files-found: ignore
+          retention-days: 7

@@ -5,6 +5,8 @@
 - Allow administrators to share existing subscription owners across policy pools while preserving one credential/refresh owner, shared quota, consumer billing and scoped pool visibility.
 
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
+- Add a development Fusion workload corpus with pinned repository regressions, isolated Docker verification, and broken/known-repair qualification.
+
 - Allow the opt-in Fusion benchmark to use explicit native OpenAI/Anthropic credentials, report token-based tariff estimates, and carry uncertain prior spend within its existing $5 cap.
 - Add a provider-plugin scaffold command that creates a complete local package with a provider-specific manifest, docs, branding, license placeholder, and synthetic fixture.
 
