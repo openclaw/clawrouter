@@ -151,3 +151,25 @@ for (const manifest of [false, true]) for (const change of ["revoke", "rotate", 
     if (change === "region") await f.put({}, miniMaxSearchBinding("cn"));
     release.resolve(); await denied(f, await pending); assert.equal(held, true);
   });
+for (const manifest of [false, true]) for (const field of ["dailyBudgetMicros", "weeklyBudgetMicros", "monthlyBudgetMicros"])
+  test(`Search unknown-price ${field} introduced BEFORE first snapshot/${manifest ? "manifest" : "native"} denies BEFORE materialization`, async t => {
+    const f = await setup(t, { fixed: null }), principal = "principal@example.invalid";
+    delete f.policy.monthlyBudgetMicros; f.policy.budgetScope = "principal";
+    await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+    await f.authority("/connections/put", { providerId: "minimax", enabled: true, monthlyBudgetMicros: null });
+    const user = { role: "user", enabled: true, tenantId: "tenant", groups: [] };
+    await f.authority("/users/put", { email: principal, record: user });
+    f.env.ACCESS_CONTROL.objects.get("policy-bindings").db.prepare("UPDATE proxy_credentials SET credential_json = ? WHERE credential_id = ?")
+      .run(JSON.stringify({ ...f.credential, principalId: principal }), "fixture");
+    const get = f.env.ACCESS_CONTROL.get; let changed = false;
+    f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+      if (!changed && new URL(url).pathname === "/authorization/snapshot") {
+        changed = true;
+        await f.authority("/users/put", { email: principal, record: { ...user, budgetOverrides: { fixture: { [field]: 500 } } } });
+      }
+      return stub.fetch(url, init);
+    } }; };
+    const response = await f.request(manifest);
+    assert.equal((await response.json()).error.code, "pricing_required"); assert.equal(changed, true);
+    await f.drain(); assert.equal(f.materializations, 0); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+  });

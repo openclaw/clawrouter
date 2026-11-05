@@ -56,7 +56,7 @@ async function controlResponse(response,a) {
 }
 const state=()=>active?{mode:active.mode,status:active.status,error:active.error,results:active.results,fetches:active.fetches,materializations:active.materializations,
  reads:active.reads,byob:active.byob,maxBacking:active.maxBacking,wire:active.wire,eof:active.eof,cancels:active.cancels,
- cleanup:active.cleanup,mandatoryRead:active.mandatoryRead,mandatoryCanceled:active.mandatoryCanceled,mandatoryLocked:active.mandatorySource?.locked??false,cleanupRejected:active.cleanupRejected,control:active.control,controlMaxValues:active.controlMaxValues,settlements:active.settlements,fallbacks:active.fallbacks,archiveWrites:active.archiveWrites,candidates:active.candidates,readRetired:active.readRetired,locked:active.source?.locked??false,charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size}:{};
+ cleanup:active.cleanup,mandatoryRead:active.mandatoryRead,mandatoryCanceled:active.mandatoryCanceled,mandatoryLocked:active.mandatorySource?.locked??false,cleanupRejected:active.cleanupRejected,errorRetired:active.errorRetired,errorLocked:active.errorSource?.locked??false,control:active.control,controlMaxValues:active.controlMaxValues,settlements:active.settlements,fallbacks:active.fallbacks,archiveWrites:active.archiveWrites,candidates:active.candidates,readRetired:active.readRetired,locked:active.source?.locked??false,charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size}:{};
 const gate=(a,phase)=>original('https://search-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('fixture gate');await r.text();});
 globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init);
@@ -114,7 +114,7 @@ export default {async fetch(request,bindings,context){
  return Response.json({candidates:32});
 }
  if(u.pathname!=='/start')return worker.fetch(request,env,context);
- const mode=u.searchParams.get('mode'),manifest=u.searchParams.has('manifest'),a=active={mode,ready:deferred(),status:null,error:null,results:0,fetches:0,materializations:0,reads:0,byob:0,maxBacking:0,wire:0,eof:false,cancels:0,cleanup:false,control:[],settlements:0,fallbacks:0,archiveWrites:0,candidates:0,readRetired:false,outputBytes:0};
+ const mode=u.searchParams.get('mode'),manifest=u.searchParams.has('manifest'),a=active={mode,ready:deferred(),status:null,error:null,results:0,fetches:0,materializations:0,reads:0,byob:0,maxBacking:0,wire:0,eof:false,cancels:0,cleanup:false,control:[],errorRetired:0,settlements:0,fallbacks:0,archiveWrites:0,candidates:0,readRetired:false,outputBytes:0};
  if(mode==='combined'){
   await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,dailyBudgetMicros:100000,weeklyBudgetMicros:100000,retainRequestContent:true}});
   const authority=env.ACCESS_CONTROL;
@@ -125,11 +125,12 @@ export default {async fetch(request,bindings,context){
   }}}};
   env.CONTENT_ARCHIVE={put(){a.archiveWrites++;throw new Error('search retention must remain excluded');}};
   const queue=env.USAGE_QUEUE;env.USAGE_QUEUE={async send(message){
-   if(message.kind==='budget_settlement'){a.fallbacks++;return queue.send(message);}
+   if(message.kind==='budget_settlement'){if(a.errorSource?.locked||a.errorRetired!==a.settlements)throw new Error('fallback before original error retirement');a.fallbacks++;return queue.send(message);}
    throw new Error('synthetic direct usage fallback');
   }};
   const usage=env.USAGE_LEDGER;env.USAGE_LEDGER={idFromName:n=>usage.idFromName(n),get:id=>{const stub=usage.get(id);return {async fetch(input,init){a.control.push(new URL(input).pathname);return controlResponse(await stub.fetch(input,init),a);}}}};
  } else if(mode!=='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy});
+ if(mode==='bodyless-settle'){const queue=env.USAGE_QUEUE;env.USAGE_QUEUE={async send(message){if(message.kind==='budget_settlement')a.fallbacks++;return queue.send(message);}};}
  snapshot.providers.find(p=>p.id==='minimax').endpoints[0].timeout_ms=mode==='deadline-output'?2000:10000;
  if(mode==='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,requestCostMicros:null}});
  const grants=env.GRANT_CREDENTIALS;env.GRANT_CREDENTIALS={idFromName:n=>grants.idFromName(n),get:id=>{const stub=grants.get(id);return {fetch(input,init){if(new URL(input).pathname==='/materialize')a.materializations++;return stub.fetch(input,init);}}}};
@@ -140,7 +141,13 @@ export default {async fetch(request,bindings,context){
    return {async read(...args){try{return await reader.read(...args);}finally{if(first){first=false;a.mandatoryRead=true;await gate(a,'mandatory-read');}}},
     cancel(reason){return cancel??=(async()=>{a.mandatoryCanceled=true;try{await reader.cancel(reason);}finally{await gate(a,'mandatory-cleanup');a.cleanupRejected=true;throw new Error('synthetic mandatory cleanup rejection');}})();},releaseLock(){reader.releaseLock();}};};
  }
- if(mode==='combined'){a.control.push(path);if(path==='/settle'){a.settlements++;await r.body?.cancel();if(a.settlements===1){a.ready.resolve();await gate(a,'settle');}return new Response(null,{status:503});}return controlResponse(r,a);}if(new URL(input).pathname==='/dispatch'&&mode==='revoke'&&!once){once=true;await revokeGrantCredentials(env,key,undefined,actor);}return r;}}}};
+ if(mode==='bodyless-settle'&&path==='/settle'){a.settlements++;await r.body?.cancel();return new Response(null,{status:503});}
+ if(mode==='combined'){a.control.push(path);if(path==='/settle'){
+  a.settlements++;await r.body?.cancel();if(a.settlements===1){a.ready.resolve();await gate(a,'settle');}
+  const error=await controlResponse(Response.json({error:'synthetic settlement refusal'},{status:503}),a);a.errorSource=error.body;
+  const get=error.body.getReader.bind(error.body);error.body.getReader=options=>{const reader=get(options);return {read:(...args)=>reader.read(...args),cancel:reason=>reader.cancel(reason),releaseLock(){reader.releaseLock();a.errorRetired++;}};};
+  return error;
+ }return controlResponse(r,a);}if(new URL(input).pathname==='/dispatch'&&mode==='revoke'&&!once){once=true;await revokeGrantCredentials(env,key,undefined,actor);}return r;}}}};
  const controller=new AbortController();const track=p=>{const held=Promise.resolve(p).finally(()=>pending.delete(held));pending.add(held);context.waitUntil(held);};
  if(['held-input','cleanup-reject','late'].includes(mode))track(a.ready.promise.then(()=>gate(a,'abort')).then(()=>controller.abort(new DOMException('controlled fixture abort','AbortError'))));
  track((async()=>{
@@ -181,7 +188,7 @@ for (const region of ["global", "cn"]) test(`Search actual isolated workerd ${re
   const put=async()=>runtime.dispatchFetch(origin+'/v1/admin/upstream-grants/policies/fixture/search',{method:'PUT',headers:{origin,'content-type':'application/json','cf-access-jwt-assertion':signed.jwt},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-search-key',accountId:'synthetic-account',minimaxSearchAuthorization:region==='global'?'minimax-global-tokenplan-search':'minimax-cn-tokenplan-search'})});
   let r=await put();assert.equal(r.status,200,await r.clone().text());assert.doesNotMatch(await r.text(),/synthetic-search-key/);
   assert.deepEqual(await call('/candidate-maximum'),{candidates:32});
-  for(const mode of ['native','manifest','maximum','combined','read-limit','over-read','held-input','cleanup-reject','late','unclaimed','delivery-cancel','deadline-output','mandatory-late','unpriced']){
+  for(const mode of ['native','manifest','maximum','combined','bodyless-settle','read-limit','over-read','held-input','cleanup-reject','late','unclaimed','delivery-cancel','deadline-output','mandatory-late','unpriced']){
     const body={q:['maximum','combined'].includes(mode)?'x'.repeat(4096):mode};let wire=JSON.stringify(mode==='manifest'?{body}:body);if(['maximum','combined'].includes(mode))wire+=' '.repeat(65536-wire.length);
     r=await runtime.dispatchFetch(origin+'/start?mode='+mode+(mode==='manifest'?'&manifest=1':''),{method:'POST',body:wire});let s=await r.json();assert.equal(r.status,200,JSON.stringify(s));
     if(['held-input','cleanup-reject','late'].includes(mode)){
@@ -206,11 +213,12 @@ for (const region of ["global", "cn"]) test(`Search actual isolated workerd ${re
     s=await until(s=>s.results===1&&s.pending===0);assert.equal(s.charged,0,JSON.stringify(s));assert.equal(s.locked,false);
     assert.equal(s.fetches,mode==='unpriced'?0:1,JSON.stringify(s));assert.equal(s.materializations,mode==='unpriced'?0:1);
     if(['maximum','combined'].includes(mode)){assert.equal(s.wire,1048576,JSON.stringify(s));assert.ok(s.outputBytes>900000);assert.ok(s.byob>0);assert.ok(s.maxBacking<=16384);}
-    if(mode==='combined'){assert.equal(s.controlMaxValues,128);assert.equal(s.settlements,4);assert.equal(s.fallbacks,4);assert.equal(s.control.filter(p=>p==='/reserve').length,4);assert.equal(s.control.filter(p=>p==='/dispatch').length,4);assert.equal(s.control.filter(p=>p==='/ingest').length,1);assert.equal(s.archiveWrites,0);}
+    if(mode==='bodyless-settle'){assert.equal(s.settlements,2);assert.equal(s.fallbacks,2);}
+    if(mode==='combined'){assert.equal(s.errorRetired,4);assert.equal(s.errorLocked,false);assert.equal(s.controlMaxValues,128);assert.equal(s.settlements,4);assert.equal(s.fallbacks,4);assert.equal(s.control.filter(p=>p==='/reserve').length,4);assert.equal(s.control.filter(p=>p==='/dispatch').length,4);assert.equal(s.control.filter(p=>p==='/ingest').length,1);assert.equal(s.archiveWrites,0);}
     if(mode==='read-limit'){assert.equal(s.reads,8192);assert.equal(s.eof,true);assert.equal(s.status,200);}
     if(mode==='over-read'){assert.equal(s.reads,8192);assert.equal(s.eof,false);assert.notEqual(s.status,200);assert.equal(s.cancels,1);}
  if(mode==='unpriced')assert.equal(s.error,'pricing_required',JSON.stringify(s));
   }
   const before=await call('/owner');await call('/demote-next');const mutation=put();await gates.entered('admin-pool','ack');await call('/demote');gates.release('admin-pool','ack');r=await mutation;assert.equal(r.status,403,await r.clone().text());await r.text();assert.deepEqual(await call('/owner'),before);
-  const events=(await call('/events')).events;assert.equal(events.length,14);assert.ok(events.every(e=>e.total_tokens===null));assert.equal(events.filter(e=>e.actual_cost_micros===700).length,13);
+  const events=(await call('/events')).events;assert.equal(events.length,15);assert.ok(events.every(e=>e.total_tokens===null));assert.equal(events.filter(e=>e.actual_cost_micros===700).length,14);
 });

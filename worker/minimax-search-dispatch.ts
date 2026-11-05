@@ -1,5 +1,8 @@
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { readMiniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
+import { validateBudgetReservation } from "./accounting.ts";
+import { estimateCost } from "./proxy-accounting.ts";
+import { softBudgetPolicy } from "./soft-budget.ts";
 import { resolveConnection } from "./authority.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
@@ -24,6 +27,12 @@ export async function revalidateMiniMaxSearchOwner(env: Env, auth: AuthorizedIde
   const policy = await authorizeResponseControl(env, caller, owner, signal, undefined, undefined, operation);
   if (!policy) miniMaxSearchDenied();
   assertPolicyModel(policy, { endpoint: requirement.endpoint, capability: "search.web", model: null });
+  // A principal override can become enforced without changing policy generation.
+  // Repeat the existing model-less price guard on this fresh policy/connection,
+  // before any credential materialization. Query text cannot qualify Search USD.
+  if (!softBudgetPolicy(policy)) validateBudgetReservation("search.web",
+    estimateCost(null, {}, policyRequestCost(policy, "search.web"), "search.web", requirement.endpoint, undefined, undefined, "minimax"),
+    policy.monthlyBudgetMicros, connection, policy.dailyBudgetMicros, policy.limitHint, policy.weeklyBudgetMicros);
   operation.pin(JSON.stringify([key, original, requirement.endpoint.id, requirement.provider.base_urls.default,
     policy.budgetMode ?? "reserve", policy.budgetScope ?? null, policy.dailyBudgetMicros ?? null,
     policy.weeklyBudgetMicros ?? null, policy.monthlyBudgetMicros ?? null, policyRequestCost(policy, "search.web"), connection.monthlyBudgetMicros ?? null]));
