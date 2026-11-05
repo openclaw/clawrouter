@@ -34,7 +34,7 @@ let initialized,active,pending=new Set();
 const state=()=>active?{mode:active.mode,status:active.status,error:active.error,results:active.results,fetches:active.fetches,
  reads:active.reads,byob:active.byob,detached:active.detached,maxBacking:active.maxBacking,wire:active.wire,eof:active.eof,
  cancels:active.cancels,cleanup:active.cleanup,readRetired:active.readRetired,locked:active.source?.locked??false,
- charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size}:{};
+ charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size,callerAborted:active.callerAborted,requestId:active.requestId}:{};
 const gate=(a,phase)=>original('https://music-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('fixture gate');await r.text();});
 globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init),a=active;
@@ -79,12 +79,12 @@ export default {async fetch(request,bindings,context){
  const controller=new AbortController(),stream=mode!=='unary',manifest=mode==='manifest',body=musicBody(stream,manifest?'music-2.6-free':'music-2.6');
  body.prompt=mode==='maximum'?'maximum':'Synthetic music';
  const track=p=>{const held=Promise.resolve(p).finally(()=>pending.delete(held));pending.add(held);context.waitUntil(held);};
- if(mode==='held-input')track(a.ready.promise.then(()=>gate(a,'abort')).then(()=>controller.abort(new DOMException('controlled fixture abort','AbortError'))));
+ if(mode==='held-input')track(a.ready.promise.then(()=>gate(a,'abort')).then(()=>{controller.abort(new DOMException('controlled fixture abort','AbortError'));a.callerAborted=controller.signal.aborted;}));
  track((async()=>{
   const response=await worker.fetch(new Request('https://router.example'+(manifest?'/v1/proxy/minimax/music':'/v1/native/minimax/v1/music_generation'),{
    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},
    body:JSON.stringify(manifest?{body:{...body,model:'minimax/music-2.6-free'}}:body),signal:controller.signal}),env,{waitUntil:track});
-  a.status=response.status;
+  a.status=response.status;a.requestId=response.headers.get('x-clawrouter-request-id');
   if(!response.ok){const text=await response.text();try{a.error=JSON.parse(text).error?.code??null;}catch{}return;}
   const reader=response.body.getReader();let first=true;
   try{for(;;){const part=await reader.read();if(part.done)break;a.outputBytes+=part.value.byteLength;
@@ -128,13 +128,16 @@ test("MiniMax music registered workerd DO body, both routes, exact maximum, reti
   const put=async()=>{const r=await runtime.dispatchFetch('https://router.example/v1/admin/upstream-grants/policies/fixture/music',{
     method:'PUT',headers:{authorization:'Bearer synthetic-admin','content-type':'application/json'},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-music-key',nativeMediaAuthorization:'minimax-global-music'})});
     assert.equal(r.status,200,await r.clone().text());assert.doesNotMatch(await r.text(),/synthetic-music-key/);};
-  await put();let events=0;
+  await put();let events=0,abortedRequestId;
   for(const mode of ['unary','manifest','maximum','held-input','delivery-eof','delivery-cancel','revoke','unpriced']){
     if(mode==='unpriced')await put();
     let s=await call('/start?mode='+mode);
     if(mode==='held-input'){
       assert.equal(s.reads,1,JSON.stringify(s));controls.release(mode,'abort');s=await until(s=>s.results===1&&s.cancels===1);
-      assert.equal(s.status,499,JSON.stringify(s));assert.equal(s.locked,true);assert.equal(s.charged,64*1024*1024);
+      // A dispatched native-body failure keeps the existing HTTP 502 envelope;
+      // the original caller cause is independently preserved in accounting.
+      assert.equal(s.status,502,JSON.stringify(s));assert.equal(s.error,'provider_unavailable');assert.equal(s.callerAborted,true);
+      abortedRequestId=s.requestId;assert.ok(abortedRequestId);assert.equal(s.locked,true);assert.equal(s.charged,64*1024*1024);
       assert.deepEqual(await call('/contend'),{allowed:false,charged:64*1024*1024});
       controls.release(mode,'cleanup');s=await until(s=>s.cleanup);assert.equal(s.charged,64*1024*1024);assert.equal(s.locked,true);
       controls.release(mode,'read');
@@ -152,4 +155,6 @@ test("MiniMax music registered workerd DO body, both routes, exact maximum, reti
   }
   const rows=(await call('/events')).events;assert.equal(rows.length,events);assert.equal(rows.filter(e=>e.actual_cost_micros===700).length,6);
   assert.equal(rows.filter(e=>e.actual_cost_micros===0).length,2);assert.ok(rows.every(e=>e.total_tokens===null));
+  const canceled=rows.filter(e=>e.request_id===abortedRequestId);assert.equal(canceled.length,1);
+  assert.equal(canceled[0].status,'client_error');assert.equal(canceled[0].actual_cost_micros,700);
 });

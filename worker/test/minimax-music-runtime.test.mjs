@@ -280,3 +280,25 @@ for (const fixed of [0, 17]) test(`MiniMax music explicit fixed policy ${fixed} 
   const [event] = await f.events(); assert.equal(f.sent.length, 1); assert.equal(event.cost_basis, "policy_fixed");
   assert.equal(event.actual_cost_micros, fixed); assert.equal(event.total_tokens, null);
 });
+
+test("MiniMax music unmetered success stays unknown despite a token price card", async t => {
+  const f = await setup(t, { fixed: null });
+  f.policy.monthlyBudgetMicros = null;
+  await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  await f.authority("/connections/put", { providerId: "minimax", monthlyBudgetMicros: null });
+  f.provider.models[0].pricing = { ...f.provider.models[0].pricing,
+    inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 9_000_000 };
+  const response = await f.request();
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(await response.json(), musicResult()); await f.drain();
+  const events = await f.events(); assert.equal(events.length, 1);
+  const [event] = events;
+  assert.equal(event.cost_basis, "unpriced_usage");
+  // The debit is zero; no provider cost was established by this receipt.
+  assert.equal(event.actual_cost_micros, 0); assert.equal(event.reserved_cost_micros, 0);
+  assert.equal(event.reporting_known_cost_micros, null);
+  assert.equal(Object.hasOwn(event, "reporting_estimated_cost_micros"), false);
+  assert.equal(Object.hasOwn(event, "reporting_estimate_reason"), false);
+  for (const name of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(event[name], null);
+  assert.equal(f.sent.length, 1); assert.equal(f.materializations, 1); assert.equal(bodyBudgetCharged(), 0);
+});
