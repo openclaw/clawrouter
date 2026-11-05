@@ -5,10 +5,11 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
+import { models, priceBound } from './fusion-benchmark-accounting.mjs';
+export { models, priceBound } from './fusion-benchmark-accounting.mjs';
 
 export const datasetCommit = '9ee07bd481feebf959a6b59d61ea57bdcf30964d';
 export const domains = ['logical_deduction_seven_objects', 'multistep_arithmetic_two', 'tracking_shuffled_objects_seven_objects'];
-export const models = { cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol', critic: 'anthropic/claude-sonnet-5.5' };
 const digest = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const limit = 4096;
 const instructions = 'Solve the task. Return only a JSON object with one string field "answer" containing the answer: a letter for multiple choice, or a number for arithmetic. No explanation in the final answer.';
@@ -25,15 +26,6 @@ export function selectCases(examples, domain, count = 8) {
   if (!Array.isArray(examples) || examples.length < count) throw new Error('dataset incomplete');
   return examples.map((item, index) => ({ ...item, caseId: `${domain}:${index}`, domain, rank: digest(`fusion-pilot-v1:${domain}:${index}`) }))
     .sort((a, b) => a.rank.localeCompare(b.rank)).slice(0, count);
-}
-
-export function priceBound(body, price) {
-  // UTF-8 bytes bound text tokens conservatively; no tools, images or web search.
-  const inputBytes = Buffer.byteLength(JSON.stringify(body)) + 1024;
-  const applicable = (price.tiers ?? []).filter(t => t.minimum <= inputBytes);
-  const input = Math.max(price.input, ...applicable.map(t => t.input));
-  const output = Math.max(price.output, ...applicable.map(t => t.output));
-  return Math.ceil((inputBytes * input + limit * output + price.request) * 1e6);
 }
 
 export function parsePrice(row) {

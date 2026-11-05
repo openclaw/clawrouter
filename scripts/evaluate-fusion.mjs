@@ -13,9 +13,10 @@ function fields(value, names, location) {
 }
 
 /** Analyze already graded, held-out runs. Never invokes a model or reads prompt content. */
-export function evaluateFusion(input, baseline) {
+export function evaluateFusion(input, baseline, expectedSplit = 'test') {
   fields(input, ["version", "evaluationId", "datasetRevision", "graderRevision", "split", "records"], "evaluation");
-  if (input.version !== 1 || input.split !== "test") fail("Expected version 1 and held-out test split");
+  if (!['test', 'development'].includes(expectedSplit) || input.version !== 1 || input.split !== expectedSplit)
+    fail(expectedSplit === 'test' ? "Expected version 1 and held-out test split" : "Expected version 1 and explicit development split");
   if (![input.evaluationId, input.datasetRevision, input.graderRevision].every(identifier)) fail("Invalid evaluation provenance");
   if (!Array.isArray(input.records) || input.records.length < 2 || input.records.length > 50_000) fail("Expected 2 to 50000 run records");
   const strategies = new Map(), pairs = new Map(), caseDomains = new Map();
@@ -107,10 +108,10 @@ function bootstrapInterval(deltas) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const [file, flag, baseline, ...extra] = process.argv.slice(2);
-    if (!file || flag !== "--baseline" || !baseline || extra.length) fail("Usage: node scripts/evaluate-fusion.mjs <runs.json> --baseline <strategy>");
+    if (!file || flag !== "--baseline" || !baseline || (extra.length && (extra.length !== 1 || extra[0] !== '--development'))) fail("Usage: node scripts/evaluate-fusion.mjs <runs.json> --baseline <strategy> [--development]");
     if (statSync(file).size > 16 * 1024 * 1024) fail("Evaluation file exceeds 16 MiB");
     const input = JSON.parse(readFileSync(file, "utf8"));
-    process.stdout.write(JSON.stringify(evaluateFusion(input, baseline), null, 2) + "\n");
+    process.stdout.write(JSON.stringify(evaluateFusion(input, baseline, extra.length ? 'development' : 'test'), null, 2) + "\n");
   } catch (error) {
     // JSON parser and filesystem errors can echo private content or paths.
     process.stderr.write(error instanceof SyntaxError ? "Invalid evaluation JSON\n" : error?.code ? "Cannot read evaluation file\n" : `${error.message}\n`);

@@ -33,7 +33,8 @@ export function nativeRequest(model, body, env) {
     body: { model: entry.upstream, max_tokens: body.max_tokens, system,
       messages: body.messages.filter(m => m.role !== 'system' && m.role !== 'developer'),
       thinking: { type: 'adaptive' }, service_tier: 'standard_only',
-      output_config: { effort: 'medium', ...(body.response_format ? { format: { type: 'json_schema', schema: answerSchema } } : {}) } },
+      output_config: { effort: 'medium', ...(body.response_format ? { format: { type: 'json_schema',
+        schema: body.response_format.type === 'json_schema' ? body.response_format.json_schema.schema : answerSchema } } : {}) } },
   };
 }
 
