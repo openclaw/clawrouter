@@ -7,6 +7,7 @@ import { accessIdentity } from "./access.ts";
 import { emptyReservation, markBudgetDispatched, reserveBudget, settleBudget, type BudgetReservation } from "./accounting.ts";
 import { correlationMetadata } from "./correlation.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
@@ -63,7 +64,19 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
   }
   const deadline = Date.now() + (endpoint.timeout_ms ?? 120_000);
   const capacity = protocol ? nativeResponseLease(48 * 1024 * 1024) : undefined;
-  let transferred = false;
+  let deliveryRetired: Promise<void> | undefined;
+  const inputWork: Promise<unknown>[] = [], fetchWork: Promise<void>[] = [];
+  const discarded = new WeakMap<Response, Promise<void>>();
+  let responseInput: Response | undefined, responseClaimed = false, intakeStarted = false;
+  const discard = (response: Response): Promise<void> => {
+    const existing = discarded.get(response); if (existing) return existing;
+    const pending = (async () => {
+      if (!response.body) return;
+      if (response.body.locked) throw new Error("transcription response still has an active reader");
+      await inputRetirement(response.body.getReader()).retire("cancel", request.signal.reason);
+    })();
+    discarded.set(response, pending); void pending.catch(() => undefined); return pending;
+  };
   try {
   let upload: Awaited<ReturnType<typeof readTranscriptionUpload>> | undefined;
   let raw: { bytes: Uint8Array<ArrayBuffer>; contentType: string; query: URLSearchParams } | undefined;
@@ -83,7 +96,18 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
     raw = { bytes, contentType: prepared.contentType, query: prepared.query };
     selection = { provider, endpoint, model, capability: "audio.transcription", body: { model: model.upstream }, pathParams: {}, method: "POST" };
   } else {
-    upload = await readTranscriptionUpload(request, protocol ? { maximumReads: 8192, exactLength: true, timeoutMs: Math.max(1, Math.min(transcriptionLimits.readMs, deadline - Date.now())) } : undefined);
+    if (protocol) {
+      const timeoutMs = Math.max(1, Math.min(transcriptionLimits.readMs, deadline - Date.now()));
+      const intake = new HttpOperation(request.signal, timeoutMs);
+      const pending = readTranscriptionUpload(request, { maximumReads: 8192, exactLength: true, timeoutMs });
+      intakeStarted = true; inputWork.push(pending.then(() => undefined, () => undefined));
+      try { upload = await intake.wait(pending); }
+      catch (error) {
+        if (intake.status === "timeout") throw new HttpError(408, "transcription_read_timeout", "multipart upload deadline exceeded");
+        if (intake.status === "client_error") throw new HttpError(400, "transcription_canceled", "multipart upload was canceled");
+        throw error;
+      } finally { intake.stop("complete"); }
+    } else upload = await readTranscriptionUpload(request);
     if (protocol) { const multipart = prepareMultipart(protocol, selection, upload); form = multipart.body; nativeHeaders = multipart.headers; }
     else {
       const model = selection.model!, native = path.includes("/native/");
@@ -179,15 +203,22 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       if (nativeHeaders) prepared.headers.set("accept", nativeHeaders.get("accept")!);
       dispatched = true;
       const pending = fetch(prepared.url, { method: "POST", headers: prepared.headers, body, signal: operation.signal, redirect: "manual" });
+      const fetched = pending.then(async late => {
+        responseInput = late;
+        if (operation.signal.aborted) await discard(late);
+      }, () => undefined);
+      fetchWork.push(fetched); void fetched.catch(() => undefined);
       if (useSoft) {
         soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
         reservation = soft.reservation; context.waitUntil(soft.check);
       }
-      response = await operation.wait(pending, "upstream", late => { void late.body?.cancel().catch(() => undefined); });
+      response = await operation.wait(pending, "upstream", late => { void discard(late).catch(() => undefined); });
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, provider.quota, response);
       if (soft) { await soft.beforeDelivery(); if (soft.denial) throw soft.denial; }
       if (protocol) {
-        const validated = await operation.wait(readMultipartResponse(protocol, response, operation.signal), "upstream");
+        const reading = readMultipartResponse(protocol, response, operation.signal);
+        responseClaimed = true; inputWork.push(reading.then(() => undefined, () => undefined));
+        const validated = await operation.wait(reading, "upstream");
         operation.signal.throwIfAborted(); operation.stop("complete");
         if (!await settle(200, true, null, "success")) return errorResponse("accounting_unavailable", "transcription accounting could not be durably completed", 503);
         const headers = proxyResponseHeaders(response, provider.id);
@@ -197,12 +228,15 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
         const result = nativeJsonResponse(validated.body, new Response(null, { headers }));
         const delivery = observeUsage(result, new HttpOperation(request.signal, Math.max(1, deadline - Date.now())), undefined,
           endpoint.response_format, undefined, { tokens: null, outcome: "success" });
-        transferred = true; void delivery.result.then(() => capacity!.release());
+        deliveryRetired = delivery.retired;
         return delivery.response;
       }
       // No provider failover or HTTP redirect replay, including 401/429/3xx.
       if (!response.ok) operation.acceptRejection(response.status);
-      const bytes = await readBounded(response.body, transcriptionLimits.response, operation);
+      responseClaimed = true;
+      const reading = readBounded(response.body, transcriptionLimits.response, operation);
+      inputWork.push(reading.then(() => undefined, () => undefined));
+      const bytes = await reading;
       const declaredLength = response.headers.get("content-length");
       if (!response.headers.has("content-encoding") && declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== bytes.length)) throw new HttpError(502, "transcription_response_invalid", "upstream transcription body was truncated");
       if (response.status >= 300 && response.status < 400) throw new HttpError(502, "transcription_redirect_unsupported", "upstream transcription redirects are not replayed");
@@ -237,7 +271,6 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       return new Response(bytes, { status: response.status, headers });
     } catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(operation.status === "timeout" ? 504 : request.signal.aborted ? 499 : 502, "transcription_unavailable", "transcription request failed");
-      void response?.body?.cancel().catch(() => undefined);
       if (soft?.denial) {
         // Match the shared soft-budget owner: an observed denial is not a
         // monetary charge, even when a fixed fee exists and egress has begun.
@@ -255,7 +288,21 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
   // including an actual client disconnect, not just a simulated AbortSignal.
   context.waitUntil(pendingOperation.then(() => undefined, () => undefined));
   return await pendingOperation;
-  } finally { if (!transferred) capacity?.release(); }
+  } finally {
+    const retirement = (async () => {
+      // The public operation may lose its abort race while intake, a native
+      // decoder or a late physical fetch still owns the charged allocation.
+      const fetched = await Promise.allSettled(fetchWork);
+      await Promise.allSettled(inputWork);
+      if (responseInput && !responseClaimed) await discard(responseInput);
+      if (fetched.some(result => result.status === "rejected")
+        || intakeStarted && request.body?.locked || responseClaimed && responseInput?.body?.locked)
+        throw new Error("transcription input retirement failed");
+      await deliveryRetired;
+      capacity?.release();
+    })();
+    context.waitUntil(retirement);
+  }
 }
 
 function sameCaller(a: AuthorizedIdentity, b: AuthorizedIdentity): boolean {

@@ -71,6 +71,7 @@
 - Retain native JSON and generic delivery capacity through pending reads, first cancellation cleanup and reader-lock retirement, separately from prompt cancellation and usage settlement.
 - Join native speech, ConverseStream, Venice and OpenRouter music reader cleanup before releasing capacity; retain original counting-transform pipelines and the first Groq/Mistral response cancellation without changing delivery or accounting contracts.
 - Keep existing keyed-catalog capacity charged through original-reader cleanup, late fetch disposal and publication retirement; remove Featherless/Requesty counting transforms while preserving fresh authority, scan bounds and prompt cancellation.
+- Keep multipart and original-job file capacity charged through physical reads, first cancellation cleanup, late-response disposal and downstream retirement, preserving original authority and conservative settlement.
 - Bind preprovisioned MiniMax Messages credentials to an explicit regional issuer and resource, reusing durable refresh fencing and fresh original-owner checks without environment or cross-region fallback.
 - Add Access-admin-only MiniMax device onboarding with same-origin controls, durable single-attempt exchange fences, cancellable owner-bound polling and atomic credential installation; uncertain exchanges are never replayed.
 - Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.

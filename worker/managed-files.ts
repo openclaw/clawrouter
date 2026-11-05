@@ -2,11 +2,13 @@ import type { BackgroundRecord } from "./background-store.ts";
 import { BodyLease } from "./body-budget.ts";
 import { backgroundCall } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import { managedJobKey } from "./managed-prediction-identity.ts";
 import { managedRoute } from "./managed-routes.ts";
 import type { ManagedFileAction, ManagedFileAdapter, ManagedFileDescriptor, ManagedFileState, ManagedObservation } from "./managed-lifecycle-types.ts";
 import { applyProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { assertProviderAccess } from "./providers.ts";
+import { observeUsage } from "./proxy-response.ts";
 import { publicControlAuthorization } from "./response-control-authorization.ts";
 import { responseControlIdentities, resolveResponseControlOwner } from "./response-controls.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
@@ -84,11 +86,28 @@ export function managedFilePublicBody(provider: CompiledProvider, create: Compil
 }
 
 export async function proxyManagedFile(request: Request, env: Env, provider: CompiledProvider, matches: ManagedFileMatch[], queryInput: ProxyQuery,
-  mode: "proxy_key" | "access", preauthenticated?: AuthorizedIdentity, session?: AccessSession): Promise<Response> {
+  mode: "proxy_key" | "access", preauthenticated?: AuthorizedIdentity, session?: AccessSession, context?: ExecutionContext): Promise<Response> {
   const identities = await responseControlIdentities(request, env, mode, preauthenticated, session);
   if (identities instanceof Response) return identities;
   const operation = new HttpOperation(request.signal, 30_000), deadline = Date.now() + 30_000, lease = new BodyLease();
-  let response: Response | undefined, handedOff = false;
+  const fetching: Promise<void>[] = [], reading: Promise<void>[] = [];
+  const inputs: ReturnType<typeof boundedFileResponse>[] = [];
+  const unclaimed = new Set<Response>(), discarded = new WeakMap<Response, Promise<void>>();
+  let delivery: Promise<void> | undefined;
+  const discard = (response: Response): Promise<void> => {
+    const existing = discarded.get(response); if (existing) return existing;
+    const pending = (async () => {
+      if (!response.body) return;
+      if (response.body.locked || response.bodyUsed) throw new Error("managed file response is already owned");
+      await inputRetirement(response.body.getReader()).retire("cancel", operation.signal.reason);
+    })();
+    discarded.set(response, pending); unclaimed.delete(response); void pending.catch(() => undefined); return pending;
+  };
+  const deliver = (response: Response): Response => {
+    operation.stop("complete");
+    const observed = observeUsage(response, new HttpOperation(request.signal));
+    delivery = observed.retired; return observed.response;
+  };
   try {
     const query = new URLSearchParams(); applyProxyQuery(query, queryInput);
     // A broad /files/${id} template also matches /files/${id}:download.
@@ -125,73 +144,97 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
       protocol, requestedVersion: managed.requestedVersion, deadline: Math.min(deadline, job.replayUntil), authorization: publicControlAuthorization(binding.auth) };
     const fetchFile = async (action: ManagedFileAction, state?: ManagedFileState) => {
       operation.signal.throwIfAborted();
-      response = await operation.wait(dispatchResponseControl(env, { ...input, file: { action, descriptor: file, state } }, operation.signal), "upstream",
-        late => { void late.body?.cancel().catch(() => undefined); });
+      const pending = dispatchResponseControl(env, { ...input, file: { action, descriptor: file, state } }, operation.signal);
+      const settled = pending.then(async response => {
+        unclaimed.add(response);
+        if (operation.signal.aborted) await discard(response);
+      }, () => undefined);
+      fetching.push(settled); void settled.catch(() => undefined);
+      const response = await operation.wait(pending, "upstream", late => { void discard(late).catch(() => undefined); });
       if (response.status !== 200 || response.redirected) throw new HttpError(502, "managed_file_unavailable", "original file delivery failed; do not resubmit generation");
       const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
       if (action === "download" && ![file.mimeType, "application/octet-stream", "binary/octet-stream"].includes(mime ?? "")) {
         throw new HttpError(502, "managed_file_unavailable", "file content type does not match its original descriptor");
       }
-      response = boundedFileResponse(response, action === "metadata" ? 64 * 1024 : managedFileLimit, operation.signal);
-      return response;
+      const bounded = boundedFileResponse(response, action === "metadata" ? 64 * 1024 : managedFileLimit, operation.signal);
+      unclaimed.delete(response); inputs.push(bounded);
+      return bounded.response;
     };
     const headers = { "cache-control": "no-store", "x-clawrouter-content-retention": "off", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-job-id": jobId };
     let state: ManagedFileState | undefined;
     if (adapter.mode !== "download_only") {
-      state = await operation.wait(adapter.readState(await fetchFile("metadata"), file), "upstream");
+      const pending = adapter.readState(await fetchFile("metadata"), file);
+      reading.push(pending.then(() => undefined, () => undefined));
+      state = await operation.wait(pending, "upstream");
       if (state.id !== file.id || !["processing", "active", "failed"].includes(state.status) || JSON.stringify(state.body).length > 16 * 1024) unavailable();
-      if (match.action === "metadata") return json(state.body, 200, headers);
+      if (match.action === "metadata") return deliver(json(state.body, 200, headers));
       if (state.status !== "active") return errorResponse(state.status === "processing" ? "managed_file_processing" : "managed_file_failed",
         state.status === "processing" ? "file is still processing; retry this file request" : "file processing failed; generation settlement is unchanged", 409, undefined,
         { ...headers, ...(state.status === "processing" ? { "retry-after": "5" } : {}) });
     } else if (match.action !== "download") unavailable();
-    const bytes = await operation.wait(adapter.readFile(await fetchFile("download", state), file, managedFileLimit), "upstream");
+    const pending = adapter.readFile(await fetchFile("download", state), file, managedFileLimit);
+    reading.push(pending.then(() => undefined, () => undefined));
+    const bytes = await operation.wait(pending, "upstream");
     if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > managedFileLimit) unavailable();
-    operation.stop("complete");
-    let sent = false, closed = false;
-    let output: ReadableStreamDefaultController<Uint8Array>;
-    const release = () => { closed = true; request.signal.removeEventListener("abort", canceled); lease.release(); };
-    const canceled = () => { if (!closed) { release(); output.error(request.signal.reason); } };
+    let output: Uint8Array | undefined = bytes;
     const body = new ReadableStream<Uint8Array>({
-      start(controller) { output = controller; request.signal.addEventListener("abort", canceled, { once: true }); if (request.signal.aborted) canceled(); },
       pull(controller) {
-        if (!sent) { sent = true; controller.enqueue(bytes); }
-        else { controller.close(); release(); }
-      }, cancel() { release(); },
-    });
-    handedOff = true;
-    return new Response(body, { headers: { ...headers, "content-type": file.mimeType, "content-length": String(bytes.byteLength), "x-content-type-options": "nosniff" } });
+        if (output) { const chunk = output; output = undefined; controller.enqueue(chunk); }
+        else controller.close();
+      }, cancel() { output = undefined; },
+    }, { highWaterMark: 0 });
+    return deliver(new Response(body, { headers: { ...headers, "content-type": file.mimeType, "content-length": String(bytes.byteLength), "x-content-type-options": "nosniff" } }));
   } catch (error) {
     operation.stop("upstream", error);
     throw error instanceof HttpError ? error : new HttpError(request.signal.aborted ? 499 : 502, "managed_file_unavailable", "original file delivery failed; retry file retrieval without resubmitting generation");
   } finally {
-    operation.stop("complete"); void response?.body?.cancel().catch(() => undefined);
-    if (!handedOff) lease.release();
+    operation.stop("complete");
+    const retirement = (async () => {
+      // Start source cancellation before joining adapter work: the adapter can
+      // be waiting on that very reader. Each metadata/download owner survives.
+      const retiring = inputs.map(input => input.retire(operation.signal.reason));
+      const fetched = await Promise.allSettled(fetching);
+      const disposed = await Promise.allSettled([...unclaimed].map(discard));
+      await Promise.allSettled(reading);
+      const retired = await Promise.allSettled(retiring);
+      if ([...fetched, ...disposed, ...retired].some(result => result.status === "rejected")
+        || inputs.some(input => input.response.body?.locked)) throw new Error("managed file input retirement failed");
+      await delivery;
+      lease.release();
+    })();
+    if (context) context.waitUntil(retirement);
+    else if (!delivery) await retirement;
+    else void retirement.catch(() => undefined);
   }
 }
 
 // Cancel the actual source reader even while a codec holds its outer reader.
 // The common runtime enforces its envelope independently of a wrapper's parser.
-function boundedFileResponse(response: Response, limit: number, signal: AbortSignal): Response {
+function boundedFileResponse(response: Response, limit: number, signal: AbortSignal): { response: Response; retire(reason?: unknown): Promise<void> } {
   if (!response.body) unavailable();
-  const reader = response.body.getReader(); let size = 0, done = false;
+  const reader = response.body.getReader(), input = inputRetirement(reader); let size = 0, done = false;
+  let pulling: Promise<void> | undefined;
   let controller: ReadableStreamDefaultController<Uint8Array>;
   const cleanup = () => { done = true; signal.removeEventListener("abort", abort); };
-  const abort = () => { if (!done) { cleanup(); void reader.cancel(signal.reason).catch(() => undefined); controller.error(signal.reason); } };
+  const abort = () => { if (!done) { cleanup(); void input.retire("cancel", signal.reason).catch(() => undefined); controller.error(signal.reason); } };
   const body = new ReadableStream<Uint8Array>({
     start(value) { controller = value; signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort(); },
-    async pull(value) {
+    pull(value) { return pulling = (async () => {
       try {
-        const chunk = await reader.read(); if (done) return;
-        if (chunk.done) { cleanup(); reader.releaseLock(); value.close(); return; }
+        const chunk = await input.read(() => reader.read()); if (done) return;
+        if (chunk.done) { cleanup(); await input.retire("eof"); value.close(); return; }
         size += chunk.value.byteLength;
         if (size > limit) throw new HttpError(502, "managed_file_too_large", "file delivery exceeds its bounded envelope");
         value.enqueue(chunk.value);
-      } catch (error) { if (!done) { cleanup(); void reader.cancel(error).catch(() => undefined); value.error(error); } }
-    },
-    cancel(reason) { cleanup(); return reader.cancel(reason); },
-  });
-  return new Response(body, { status: response.status, headers: response.headers });
+      } catch (error) { if (!done) { cleanup(); void input.retire("cancel", error).catch(() => undefined); value.error(error); } }
+    })(); },
+    cancel(reason) { cleanup(); return input.retire("cancel", reason); },
+  }, { highWaterMark: 0 });
+  return { response: new Response(body, { status: response.status, headers: response.headers }),
+    async retire(reason) {
+      cleanup(); const retiring = input.retire("cancel", reason);
+      await Promise.allSettled([pulling, retiring]); await retiring;
+    } };
 }
 
 function unavailable(): never { throw new HttpError(409, "managed_file_owner_unavailable", "file delivery requires the original authorized job, descriptor and qualified route"); }

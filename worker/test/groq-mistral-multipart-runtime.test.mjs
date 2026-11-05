@@ -112,7 +112,7 @@ for (const id of ["groq", "mistral"]) {
     assert.equal((await f.request(form(id), { suffix: "?model=foreign" })).status, 400);
     const encoded = new Request("https://fixture.example", { method: "POST", body: form(id) }), bytes = new Uint8Array(await encoded.arrayBuffer());
     assert.equal((await f.request(bytes, { headers: { "content-type": encoded.headers.get("content-type"), "content-length": String(bytes.length + 1) } })).status, 400);
-    assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(f.sent.length, 0); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 
   for (const failure of ["http", "redirect", "partial", "invalid", "compressed"]) test(`${id} ${failure} after dispatch retains conservative charge and never retries`, async t => {
@@ -127,7 +127,7 @@ for (const id of ["groq", "mistral"]) {
     const f = await setup(t, id); let reads = 0, canceled = false;
     const body = new ReadableStream({ pull(controller) { reads++; controller.enqueue(new Uint8Array()); }, cancel() { canceled = true; } }, { highWaterMark: 0 });
     const response = await f.request(body, { headers: { "content-type": "multipart/form-data; boundary=x" } });
-    assert.equal(response.status, 413); assert.equal(reads, 8192); assert.equal(canceled, true); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(response.status, 413); assert.equal(reads, 8192); assert.equal(canceled, true); assert.equal(f.sent.length, 0); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 
   test(`${id} pending provider read cancellation has one dispatched settlement`, async t => {
@@ -149,7 +149,7 @@ for (const id of ["groq", "mistral"]) {
     const f = await setup(t, id), caller = new AbortController(); let canceled = false;
     const body = new ReadableStream({ pull() { assert.equal(bodyBudgetCharged(), capacity); caller.abort(); }, cancel() { canceled = true; } }, { highWaterMark: 0 });
     const response = await f.request(body, { signal: caller.signal, headers: { "content-type": "multipart/form-data; boundary=x" } });
-    assert.equal(response.status, 400); assert.equal(canceled, true); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(response.status, 400); assert.equal(canceled, true); assert.equal(f.sent.length, 0); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 
   test(`${id} delivery EOF or cancellation releases only the request capacity`, async t => {
@@ -179,3 +179,51 @@ for (const id of ["groq", "mistral"]) for (const mode of ["headers", "abort", "o
     assert.equal(source.locked, false); assert.equal(cancels, 1);
   });
 }
+
+for (const id of ["groq", "mistral"]) for (const phase of ["upload", "response"]) for (const first of ["read", "cancel"]) {
+  test(`${id} ${phase} public abort keeps physical read, first cleanup and capacity (${first})`, { timeout: 5000 }, async t => {
+    const f = await setup(t, id), caller = new AbortController();
+    const started = Promise.withResolvers(), readAck = Promise.withResolvers(), cancelAck = Promise.withResolvers(), cancelStarted = Promise.withResolvers();
+    let cancels = 0, unlocks = 0, drained = false;
+    const source = new ReadableStream({ pull() { started.resolve(); }, async cancel() { cancels++; cancelStarted.resolve(); await cancelAck.promise; } }, { highWaterMark: 0 });
+    const acquire = source.getReader.bind(source);
+    source.getReader = () => { const reader = acquire(); return {
+      async read() { try { return await reader.read(); } finally { await readAck.promise; } },
+      cancel: reason => reader.cancel(reason), releaseLock() { unlocks++; reader.releaseLock(); },
+    }; };
+    if (phase === "response") f.upstream = () => new Response(source, { headers: { "content-type": "application/json" } });
+    try {
+      const pending = phase === "upload" ? f.request(source, { signal: caller.signal, headers: { "content-type": "multipart/form-data; boundary=x" } })
+        : f.request(form(id), { signal: caller.signal });
+      await started.promise; caller.abort(new Error("synthetic caller stop"));
+      const response = await pending; assert.equal(response.status, phase === "upload" ? 400 : 499); await response.text(); await cancelStarted.promise;
+      const retirement = f.drain().then(() => { drained = true; });
+      assert.equal(bodyBudgetCharged(), capacity); assert.equal(source.locked, true); assert.equal(cancels, 1);
+      const contender = new BodyLease(); assert.equal(contender.grow(1024 * 1024), false); contender.release();
+      (first === "read" ? readAck : cancelAck).resolve(); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(drained, false); assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), capacity);
+      (first === "read" ? cancelAck : readAck).resolve(); await retirement;
+      assert.equal(bodyBudgetCharged(), 0); assert.equal(source.locked, false); assert.equal(unlocks, 1); assert.equal(cancels, 1);
+      assert.equal(f.sent.length, phase === "upload" ? 0 : 1);
+      const events = await f.events(); assert.equal(events.length, phase === "upload" ? 0 : 1);
+      if (events.length) assert.equal(events[0].actual_cost_micros, 700);
+    } finally { readAck.resolve(); cancelAck.resolve(); }
+  });
+}
+
+for (const id of ["groq", "mistral"]) test(`${id} late dispatched response stays charged through its first cleanup`, { timeout: 5000 }, async t => {
+  const f = await setup(t, id), caller = new AbortController(), started = Promise.withResolvers(), reply = Promise.withResolvers();
+  const cancelStarted = Promise.withResolvers(), cleanup = Promise.withResolvers(); let cancels = 0, drained = false;
+  f.upstream = () => { started.resolve(); return reply.promise; };
+  const source = new ReadableStream({ async cancel() { cancels++; cancelStarted.resolve(); await cleanup.promise; } }, { highWaterMark: 0 });
+  try {
+    const pending = f.request(form(id), { signal: caller.signal }); await started.promise; caller.abort();
+    const response = await pending; assert.equal(response.status, 499); await response.text();
+    const retirement = f.drain().then(() => { drained = true; }); assert.equal(bodyBudgetCharged(), capacity);
+    reply.resolve(new Response(source, { headers: { "content-type": "application/json" } })); await cancelStarted.promise;
+    assert.equal(drained, false); assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), capacity);
+    cleanup.resolve(); await retirement;
+    assert.equal(source.locked, false); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 0); assert.equal(f.sent.length, 1);
+    const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 700);
+  } finally { reply.resolve(new Response(null)); cleanup.resolve(); }
+});
