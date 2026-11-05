@@ -9,7 +9,7 @@ import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { policyAllowsModel } from "./policy-models.ts";
-import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
+import type { CatalogOffer, ClientCatalog, ClientCatalogModel, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
 import { resolveTemplate } from "./provider-templates.ts";
@@ -459,8 +459,8 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       const readiness = providerReadinessForState(provider, env, [], connection, undefined, {
         executableEndpoints: [], executable: false, status: "unavailable", reasons: ["copilot_public_discovery_required"],
       });
-      return [provider.id, { configured: false, endpoints: [], websockets: [], models: [], offers: [], readiness,
-        operation: (_selection: ProxySelection) => null }] as const;
+      return [provider.id, { configured: false, endpoints: [] as string[], websockets: [] as string[], models: [] as ClientCatalogModel[], offers: [] as CatalogOffer[], readiness,
+        operation: (_selection: ProxySelection): null => null }] as const;
     }
     const keyScope = pools[0]?.entry.authType === "proxy_key";
     let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)

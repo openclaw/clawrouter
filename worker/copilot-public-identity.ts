@@ -52,7 +52,7 @@ export async function readCopilotPublicJson(source: Pick<Response, "body" | "bod
         bytes.set(next.value, size); size += next.value.byteLength;
       }
       if (next.done) { eof = true; break; }
-      if (byob) { if (!next.value?.buffer.byteLength) throw denied(); window = new Uint8Array(next.value.buffer); }
+      if (byob) { if (!(next.value?.buffer instanceof ArrayBuffer) || !next.value.buffer.byteLength) throw denied(); window = new Uint8Array(next.value.buffer); }
     }
     if (!size || length !== null && Number(length) !== size) throw denied();
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size));

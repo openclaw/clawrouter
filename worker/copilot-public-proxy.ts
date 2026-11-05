@@ -96,8 +96,8 @@ export function copilotPublicRelay(body: ReadableStream<Uint8Array>, operation: 
   }).finally(() => { operation.signal.removeEventListener("abort", abort); window = new Uint8Array(0); });
   void retired.catch(() => undefined);
   const stream = new ReadableStream<Uint8Array>({ type: "bytes", autoAllocateChunkSize: windowBytes,
-    start(controller) { output = controller; },
-    pull(controller) {
+    start(controller: ReadableByteStreamController) { output = controller; },
+    pull(controller: ReadableByteStreamController) {
       const work = (async () => {
         try {
           operation.signal.throwIfAborted();
@@ -115,7 +115,7 @@ export function copilotPublicRelay(body: ReadableStream<Uint8Array>, operation: 
             }
             if (next.done) { eof = true; await retire("eof"); }
             else {
-              if (!next.value?.buffer.byteLength) throw unavailable();
+              if (!(next.value?.buffer instanceof ArrayBuffer) || !next.value.buffer.byteLength) throw unavailable();
               window = new Uint8Array(next.value.buffer);
             }
           } while (!eof && !next.value?.byteLength);
@@ -637,8 +637,8 @@ export async function proxyCopilotDiscovery(request: Request, env: Env, context:
     operation.signal.addEventListener("abort", abort, { once: true });
     const finish = () => { operation.signal.removeEventListener("abort", abort); iterator?.return?.(); iterator = undefined; controller = undefined; end(); };
     return new Response(new ReadableStream<Uint8Array>({ type: "bytes",
-      start(output) { controller = output; },
-      pull(output) {
+      start(output: ReadableByteStreamController) { controller = output; },
+      pull(output: ReadableByteStreamController) {
         try {
           operation.signal.throwIfAborted();
           const next = iterator!.next();
