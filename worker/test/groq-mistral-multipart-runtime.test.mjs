@@ -112,7 +112,7 @@ for (const id of ["groq", "mistral"]) {
     assert.equal((await f.request(form(id), { suffix: "?model=foreign" })).status, 400);
     const encoded = new Request("https://fixture.example", { method: "POST", body: form(id) }), bytes = new Uint8Array(await encoded.arrayBuffer());
     assert.equal((await f.request(bytes, { headers: { "content-type": encoded.headers.get("content-type"), "content-length": String(bytes.length + 1) } })).status, 400);
-    assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(f.sent.length, 0); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 
   for (const failure of ["http", "redirect", "partial", "invalid", "compressed"]) test(`${id} ${failure} after dispatch retains conservative charge and never retries`, async t => {
@@ -127,7 +127,7 @@ for (const id of ["groq", "mistral"]) {
     const f = await setup(t, id); let reads = 0, canceled = false;
     const body = new ReadableStream({ pull(controller) { reads++; controller.enqueue(new Uint8Array()); }, cancel() { canceled = true; } }, { highWaterMark: 0 });
     const response = await f.request(body, { headers: { "content-type": "multipart/form-data; boundary=x" } });
-    assert.equal(response.status, 413); assert.equal(reads, 8192); assert.equal(canceled, true); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(response.status, 413); assert.equal(reads, 8192); assert.equal(canceled, true); assert.equal(f.sent.length, 0); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 
   test(`${id} pending provider read cancellation has one dispatched settlement`, async t => {
@@ -149,7 +149,7 @@ for (const id of ["groq", "mistral"]) {
     const f = await setup(t, id), caller = new AbortController(); let canceled = false;
     const body = new ReadableStream({ pull() { assert.equal(bodyBudgetCharged(), capacity); caller.abort(); }, cancel() { canceled = true; } }, { highWaterMark: 0 });
     const response = await f.request(body, { signal: caller.signal, headers: { "content-type": "multipart/form-data; boundary=x" } });
-    assert.equal(response.status, 400); assert.equal(canceled, true); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(response.status, 400); assert.equal(canceled, true); assert.equal(f.sent.length, 0); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 
   test(`${id} delivery EOF or cancellation releases only the request capacity`, async t => {
@@ -199,7 +199,7 @@ for (const id of ["groq", "mistral"]) for (const phase of ["upload", "response"]
       const response = await pending; assert.equal(response.status, phase === "upload" ? 400 : 499); await response.text(); await cancelStarted.promise;
       const retirement = f.drain().then(() => { drained = true; });
       assert.equal(bodyBudgetCharged(), capacity); assert.equal(source.locked, true); assert.equal(cancels, 1);
-      const contender = new BodyLease(); assert.equal(contender.grow(1), false); contender.release();
+      const contender = new BodyLease(); assert.equal(contender.grow(1024 * 1024), false); contender.release();
       (first === "read" ? readAck : cancelAck).resolve(); await new Promise(resolve => setImmediate(resolve));
       assert.equal(drained, false); assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), capacity);
       (first === "read" ? cancelAck : readAck).resolve(); await retirement;

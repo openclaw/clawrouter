@@ -68,7 +68,7 @@ globalThis.fetch=async(input,init)=>{
  return selected?hold(response,a):response;
 };
 const groq=structuredClone(snapshot.providers.find(p=>p.id==='groq'));
-const audio={...groq.endpoints.find(e=>e.id==='chat_completions'),id:'transcription',path:'/v1/audio/transcriptions',path_params:[],path_param_styles:{},
+const audio={id:'transcription',path:'/v1/audio/transcriptions',path_params:[],path_param_styles:{},
  request_format:'groq.transcription',response_format:'groq.transcription',native_proxy:true,timeout_ms:10000,method:'POST',methods:['POST'],headers:{},query:{},streaming:undefined};
 groq.capabilities=groq.capabilities.filter(c=>c.endpoint!=='transcription');groq.capabilities.push({id:'audio.transcription',endpoint:'transcription',methods:['POST']});
 groq.endpoints=groq.endpoints.filter(e=>e.id!=='transcription');groq.endpoints.push(audio);
