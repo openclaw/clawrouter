@@ -13,7 +13,10 @@ const manifests = paths.map(path => parse(readFileSync(path, "utf8")));
 test("imported compiler matches CLI stdout and output-file snapshots", t => {
   const expected = compileProviderSnapshot(manifests);
   // The CLI sorts paths even when its caller supplies them in reverse.
-  const stdout = spawnSync(process.execPath, ["scripts/compile-providers.mjs", ...paths.toReversed()], { encoding: "utf8" });
+  // Bound capture to this inventory plus diagnostics; pretty JSON exceeds Node's 1 MiB default.
+  const maxBuffer = Buffer.byteLength(JSON.stringify(expected, null, 2)) + 64 * 1024;
+  const stdout = spawnSync(process.execPath, ["scripts/compile-providers.mjs", ...paths.toReversed()], { encoding: "utf8", maxBuffer });
+  assert.ifError(stdout.error);
   assert.equal(stdout.status, 0, stdout.stderr);
   assert.deepEqual(JSON.parse(stdout.stdout), expected);
   const directory = mkdtempSync(join(tmpdir(), "provider-compiler-"));
