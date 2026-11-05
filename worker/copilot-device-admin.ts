@@ -48,7 +48,7 @@ export async function copilotDeviceAdmin(request: Request, env: Env, expected?: 
 
 // Bounded from the first byte. The fixed URL discriminator selects this reader
 // before the ordinary admin JSON parser; it grants no authority.
-export async function readCopilotDeviceJson(request: Pick<Request, "body" | "bodyUsed" | "headers" | "signal">): Promise<unknown> {
+export async function readCopilotDeviceBytes(request: Pick<Request, "body" | "bodyUsed" | "headers" | "signal">): Promise<Uint8Array<ArrayBuffer>> {
   const body = request.body;
   if (!body || body.locked || request.bodyUsed) throw invalid();
   let reader: ReadableStreamDefaultReader<Uint8Array> | ReadableStreamBYOBReader;
@@ -59,7 +59,7 @@ export async function readCopilotDeviceJson(request: Pick<Request, "body" | "bod
     async cancel(reason) { try { await reader.cancel(reason); } catch (error) { cleanupFailed = true; throw error; } },
     releaseLock() { reader.releaseLock(); if (body.locked) throw invalid(); },
   }), abort = () => { void owner.retire("cancel", request.signal.reason).catch(() => undefined); };
-  let eof = false, bytes: Uint8Array | undefined = new Uint8Array(8192);
+  let eof = false, bytes: Uint8Array<ArrayBuffer> | undefined = new Uint8Array(8192);
   try {
     const length = request.headers.get("content-length");
     if (request.headers.has("content-encoding") || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get("content-type") ?? "")
@@ -83,20 +83,24 @@ export async function readCopilotDeviceJson(request: Pick<Request, "body" | "bod
       }
     }
     if (length !== null && Number(length) !== size) throw invalid();
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, size));
-    inspectCopilotJsonText(text, "device");
-    const value: unknown = JSON.parse(text);
     if (cleanupFailed) throw invalid();
-    return value;
+    return bytes.subarray(0, size);
   } finally {
     request.signal.removeEventListener("abort", abort);
     await owner.retire(eof ? "eof" : "cancel", request.signal.reason); bytes = undefined;
   }
 }
 
+export async function readCopilotDeviceJson(request: Pick<Request, "body" | "bodyUsed" | "headers" | "signal">): Promise<unknown> {
+  const bytes = await readCopilotDeviceBytes(request);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  inspectCopilotJsonText(text, "device");
+  return JSON.parse(text);
+}
+
 // The lease has two independent ends: physical work and this bounded producer.
 // Producer EOF is not a claim about the remote client's or another DO's buffers.
-export function copilotDeviceReply(value: unknown, status: number, lease: BodyLease, retired: Promise<void>, retain: (work: Promise<void>) => void): Response {
+export function copilotDeviceReply(value: unknown, status: number, lease: Pick<BodyLease, "release">, retired: Promise<void>, retain: (work: Promise<void>) => void): Response {
   let bytes: Uint8Array | undefined = new TextEncoder().encode(JSON.stringify(value));
   if (bytes.length > 2048) { bytes = undefined; retain(retired.then(() => lease.release())); throw invalid(); }
   let done!: () => void;

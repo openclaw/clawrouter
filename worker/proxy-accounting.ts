@@ -255,7 +255,7 @@ export function createProxyAccounting(options: AccountingContext) {
 
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff, providerId?: string): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
-  if (["minimax.speech", "minimax.images", "minimax.music"].includes(endpoint.request_format) && fixed == null)
+  if ((providerId === "github-copilot" || ["minimax.speech", "minimax.images", "minimax.music"].includes(endpoint.request_format)) && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   // Raw audio bytes and response duration cannot bound the whole upload price.

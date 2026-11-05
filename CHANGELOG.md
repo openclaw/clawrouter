@@ -25,6 +25,8 @@
 
 - Acquire Copilot catalogs privately with fresh original-token account and model checks, bounded two-response retirement and current-policy selection; keep public discovery and inference activation closed.
 
+- Add private original-owner Copilot inference for advertised Chat, Messages and Responses APIs with atomic composite capacity, fresh model authority and conservative settlement; public and native-client activation remain closed, with owner-scoped cancel/status control that remains admissible at full inference capacity.
+
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
 - Add a separate pinned Fusion transfer-validation corpus and qualify every bundled workload set, fetching missing pinned history in shallow CI checkouts.
 - Add an experimental independent-candidate Fusion comparison with shared inference, turn and time budgets and paired candidate behavior probes.
