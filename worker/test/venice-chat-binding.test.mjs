@@ -108,5 +108,5 @@ test("Venice validation errors never echo request, model, content or billing dat
 test("Venice binding helper loads through native Node runtime imports", () => {
   const url = new URL("../venice-chat-binding.ts", import.meta.url).href;
   const code = `const m = await import(${JSON.stringify(url)}); const b = m.prepareVeniceChatBinding({model: "claude-fable-5"}, "claude-fable-5"); if (m.validateVeniceReturnedModel(b, {model: "claude-fable-5"}) !== "claude-fable-5") throw new Error("binding failed");`;
-  assert.equal(execFileSync(process.execPath, ["--experimental-transform-types", "--input-type=module", "-e", code], { encoding: "utf8" }), "");
+  assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e", code], { encoding: "utf8" }), "");
 });
