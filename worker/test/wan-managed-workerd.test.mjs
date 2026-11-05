@@ -127,9 +127,10 @@ export default {async fetch(request,env,ctx){
  if(url.pathname==='/setup'){
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['alibaba'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
-  await authorityCall(env,'/connections/initialize-all',[{providerId:'alibaba',enabled:true,monthlyBudgetMicros:10000}]);
+  await authorityCall(env,'/connections/initialize',[{providerId:'alibaba',enabled:true,monthlyBudgetMicros:10000}]);
   await putGrantCredentials(env,'oauth/fixture/alibaba',{provider:'alibaba',kind:'api_key',enabled:true,credential:'synthetic-original-key'});
-  return Response.json({ready:true});
+  const connections=await authorityCall(env,'/connections/resolve',{providerIds:['alibaba']});
+  return Response.json({ready:true,globalInitialized:connections.initialized,missing:connections.missingProviderIds});
  }
  if(url.pathname==='/rotate'){await putGrantCredentials(env,'oauth/fixture/alibaba',{provider:'alibaba',kind:'api_key',enabled:true,credential:'synthetic-rotated-key'});return Response.json({rotated:true});}
  if(url.pathname==='/events')return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
@@ -174,7 +175,7 @@ test("isolated workerd Wan create/restart/poll and direct caller retirement pres
   const json = async path => { const response = await request(path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
   const call = (target, value, headers = {}) => request("/call?target=" + encodeURIComponent(target), value === null ? {} : { method: "POST", headers: { "content-type": "application/json", ...headers }, body: typeof value === "string" ? value : JSON.stringify(value) });
   const idle = async expected => { let state; for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.charged === expected) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
-  await json("/setup");
+  assert.deepEqual(await json("/setup"), { ready: true, globalInitialized: false, missing: [] });
   for (const [empty, ok] of [[8190, true], [8191, false]]) {
     const response = await request("/bounded-reader?empty=" + empty, { method: "POST", headers: { "content-type": "application/json" }, body: '{"a":1}' });
     const result = await response.json(); assert.equal(result.ok, ok, JSON.stringify(result));

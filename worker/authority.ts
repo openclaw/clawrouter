@@ -908,7 +908,9 @@ export async function resolveConnection(env: Env, providerId: string, wan?: WanM
   if (wan) {
     const result = await authorityCall<{ initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
       "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", wan.controlSignal, wan);
-    if (!result.initialized || result.missingProviderIds.length) throw new Error("Wan requires an initialized original connection");
+    // Admission may initialize only this provider, without marking every
+    // connection initialized. A present row is authoritative; never seed a miss.
+    if (result.missingProviderIds.length) throw new Error("Wan requires an initialized original connection");
     return result.connections.find(connection => connection.providerId === providerId) ?? null;
   }
   return (await resolveConnections(env, [providerId]))[0] ?? null;

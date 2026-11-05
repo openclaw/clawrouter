@@ -195,8 +195,14 @@ test("Wan scope resolution counts every candidate and denies the whole over-budg
   } finally { operation.stop("complete"); await owner.finish(); }
 });
 
-test("Wan environment poll counts both fresh connections, authority, native GET and one observation", async t => {
+for (const globalInitialization of [true, false]) test(`Wan environment poll counts both fresh connections with global initialization ${globalInitialization}`, async t => {
   const f = await setup(t); await json(await f.create());
+  if (!globalInitialization) {
+    f.env.ACCESS_CONTROL.objects.get("policy-bindings").db.prepare("DELETE FROM policy_binding_meta WHERE meta_key = ?").run("connections_global_initialized");
+    const state = await json(await f.authority("/connections/resolve", { providerIds: ["alibaba"] }));
+    assert.equal(state.initialized, false); assert.deepEqual(state.missingProviderIds, []);
+    assert.equal(state.connections[0].providerId, "alibaba");
+  }
   const calls = [], before = f.sent.length;
   f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
     const path = new URL(request.url).pathname;
@@ -210,4 +216,24 @@ test("Wan environment poll counts both fresh connections, authority, native GET 
   assert.equal(calls.filter(value => value === "get").length, 1);
   assert.equal(calls.filter(value => value === "managed_observe").length, 1);
   assert.equal(f.sent.length - before, 1); assert.equal(f.sent.at(-1).method, "GET");
+});
+
+
+test("Wan missing original connection denies without cold initialization or provider GET", async t => {
+  const f = await setup(t); await json(await f.create());
+  const database = f.env.ACCESS_CONTROL.objects.get("policy-bindings").db;
+  database.prepare("DELETE FROM policy_binding_meta WHERE meta_key = ?").run("connections_global_initialized");
+  database.prepare("DELETE FROM provider_connections WHERE provider_id = ?").run("alibaba");
+  const calls = [], before = f.sent.length;
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => { calls.push(new URL(request.url).pathname); };
+  f.env.POLICY_KV.get = async () => { assert.fail("Wan controls must not initialize from legacy KV"); };
+  const { resolveConnection } = await import("../authority.ts");
+  const { WanManagedOperation } = await import("../managed-media-json.ts");
+  const owner = new WanManagedOperation("poll");
+  try {
+    await assert.rejects(resolveConnection(f.env, "alibaba", owner), /requires an initialized original connection/);
+    assert.equal(calls.filter(path => path === "/connections/resolve").length, 1);
+    assert.equal(calls.some(path => path.startsWith("/connections/initialize")), false);
+    assert.equal(f.sent.length, before);
+  } finally { await owner.finish(); }
 });
