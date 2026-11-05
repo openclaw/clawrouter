@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in hosted Fusion workload campaign with exact-source verification, cumulative budget preflight and content-free checkpoints across both corpora.
+
 - Bound Fusion candidate-selection context with change previews while preserving complete source inspection and paired probes.
 
 - Stop Fusion benchmark trials on provider refusals, incomplete responses and empty turns; retain bounded stop diagnostics and known usage costs.
