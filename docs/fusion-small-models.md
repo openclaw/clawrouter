@@ -111,3 +111,41 @@ deadline checked before each call. There is no automatic transport retry.
 HTTP, identity or usage failures and recognized safety notices stop the run.
 Completed outputs record finite decisions, token counts, timing and hashes;
 raw prompts, responses and reasoning are not retained.
+
+## First local result: reject the naive policies
+
+A corrected run on 2026-11-05 used source
+`4cfd541b80841c9e24309ceeb95239a96d197d69` and corpus SHA-256
+`468430f851c409aa57d42cc04248b99f291b114afc1d932f18dff001d69b1a4c`.
+Each model generated three samples per case: 288 local calls total, zero paid
+API spend. The cascade reuses sample zero from each model; it is a replay.
+
+| Policy | Correct / 48 | Replay calls | Replay tokens |
+| --- | ---: | ---: | ---: |
+| Always abstain (fixed control) | 12 | 0 | 0 |
+| Qwen3 0.6B, one sample | 12 | 48 | 7,432 |
+| Qwen3 0.6B, three-sample vote | 12 | 144 | 22,310 |
+| Qwen3 4B Instruct, one sample | 33 | 48 | 6,956 |
+| Qwen3 4B Instruct, three-sample vote | 32 | 144 | 20,905 |
+| 0.6B to 4B, confidence-80 cascade | 33 | 92 | 13,836 |
+
+The 0.6B model rejected 10/12 all-incorrect cases but solved only 2/36 cases
+with a correct candidate. The 4B model solved 32/36 of those cases but rejected
+only 1/12 all-incorrect cases. Fourteen wrong 4B decisions reported confidence
+at least 80. The cascade escalated 44/48 cases and added no correct answers.
+All responses met the finite decision schema.
+
+Model pins: `qwen3:0.6b` at
+`7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435`, and
+`qwen3:4b-instruct-2507-q4_K_M` at
+`0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0`.
+Thinking was disabled; generation settings are those in the runner above.
+These are untrained prompted selectors, not trained TRINITY coordinators.
+An earlier 4B run used an incorrect fixture and was invalidated, not included.
+
+Do not promote these policies. The next experiment should select generated
+patches with executable tests in the qualified isolated runner, compare against
+one small worker, and include all-fail tasks. Freeze the policy before evaluating
+fresh task families. Require a gain over the best fixed worker at the same total
+budget, including verification and failed calls, before frontier confirmation.
+Keep production Fusion opt-in until a held-out coding comparison earns promotion.
