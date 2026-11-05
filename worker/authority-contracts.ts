@@ -23,3 +23,15 @@ export interface AuthorizationSnapshot {
   principalEnabled: boolean | null;
   policyHeld: boolean;
 }
+
+// This provenance is produced by verified admin HTTP code, never grant JSON.
+export type SearchGrantMutationActor = Pick<AccessSession, "auth" | "email" | "role">;
+export interface SearchGrantAttestation {
+  actor: SearchGrantMutationActor;
+  key: string;
+  original: { exists: boolean; generation: number; lineage: string | null; revision: number };
+  resultGeneration: number;
+  resultLineage: string;
+  admissionRevision: number;
+  digest: string;
+}

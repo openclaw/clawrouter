@@ -1,3 +1,7 @@
+import { MiniMaxSearchOperation, readSearchJson, assertSearchHeaders } from "./minimax-search-operation.ts";
+import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
+import { prepareNativeMiniMaxSearch } from "./native-minimax-search.ts";
+import { prepareMiniMaxSearchDispatch } from "./minimax-search-dispatch.ts";
 import { vertexAnthropicRoute, prepareVertexAnthropicDispatch } from "./vertex-anthropic-dispatch.ts";
 import { miniMaxAnthropicRoute, prepareMiniMaxAnthropicDispatch } from "./minimax-anthropic-dispatch.ts";
 import { prepareOpenRouterPcmOwner } from "./openrouter-pcm-owner.ts";
@@ -112,6 +116,7 @@ const expandedTooLarge = () => errorResponse("request_too_large", `JSON request 
 // still own the input body.
 class JsonAdmission implements JsonIntake {
   completion?: Promise<unknown>;
+  search?: MiniMaxSearchOperation;
   wan?: WanManagedOperation;
   private wanRefusal?: Promise<void>;
   expanded = false;
@@ -207,6 +212,7 @@ class JsonAdmission implements JsonIntake {
     if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
   }
   finish(context: ExecutionContext): void {
+    if (this.search) { context.waitUntil(this.search.finish()); return; }
     if (this.wanRefusal) context.waitUntil(this.wanRefusal);
     if (this.wan) {
       context.waitUntil(this.wan.finish().finally(() => this.intakeOperation?.stop("complete")));
@@ -395,6 +401,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const provider = providerById(decodePathSegment(match[1]));
   const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodePathSegment(match[2]));
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
+  if (endpoint.request_format === "minimax.search") return proxyMiniMaxSearch(request, env, context, provider, endpoint, mode, "manifest");
   if (provider.id === "github-copilot") {
     if (mode !== "proxy_key") return errorResponse("copilot_public_unauthorized", "Current proxy credential required", 403);
     return (await import("./copilot-public-proxy.ts")).proxyCopilotPublic(request, env, context, provider, endpoint, "manifest");
@@ -491,6 +498,10 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
   let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
+  if (matching.some(candidate => candidate.request_format === "minimax.search")) {
+    if (matching.length !== 1 || !endpoint?.native_proxy) miniMaxSearchDenied();
+    return proxyMiniMaxSearch(request, env, context, provider, endpoint, "proxy_key", "native", match[2]);
+  }
   if (provider.id === "github-copilot" && endpoint) {
     if (matching.length !== 1) return errorResponse("copilot_public_unavailable", "One exact Copilot endpoint required", 409);
     return (await import("./copilot-public-proxy.ts")).proxyCopilotPublic(request, env, context, provider, endpoint, "native");
@@ -597,7 +608,37 @@ async function proxyNativeRaw(request: Request, env: Env, context: ExecutionCont
   return proxySelected(request, env, context, mode, selection, {}, fresh);
 }
 
+async function proxyMiniMaxSearch(request: Request, env: Env, context: ExecutionContext, provider: CompiledProvider,
+  endpoint: CompiledEndpoint, mode: AuthMode, route: "native" | "manifest", nativePath?: string): Promise<Response> {
+  if (mode !== "proxy_key") return errorResponse("minimax_search_proxy_key_required", "Search requires a proxy key", 403);
+  const admission = new JsonAdmission(request, env, mode, provider.id);
+  const owner = admission.search = new MiniMaxSearchOperation(request, endpoint.timeout_ms ?? 120_000);
+  try {
+    assertSearchHeaders(request.headers);
+    if (request.method !== "POST" || new URL(request.url).search || !miniMaxSearchRequirement({ provider, endpoint, mode: "http", model: null })) miniMaxSearchDenied();
+    const auth = await owner.operation.wait(owner.track(authenticateProxyKey(request.headers, env,
+      [{ id: provider.id, tokenRef: provider.id }], false, undefined,
+      { providerId: provider.id, endpointId: endpoint.id, mode: "http", model: null, catalogModelId: null, capability: "search.web" }, "authoritative", owner)));
+    if (auth instanceof Response) return auth;
+    let body = await owner.operation.wait(owner.track(readSearchJson(request, owner.operation.signal, "input", owner.registerInput)));
+    await owner.operation.wait(owner.reserveProvider());
+    let prepared;
+    if (route === "manifest") {
+      const envelope = manifestEnvelope(body);
+      if (envelope.method && envelope.method !== "POST" || Object.keys(envelope.pathParams).length || hasProxyQuery(envelope.query)) miniMaxSearchDenied();
+      prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env);
+      envelope.body = undefined;
+    } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env);
+    body = undefined;
+    const selection: ProxySelection = { provider, endpoint, model: prepared.model, capability: "search.web", body: prepared.body, pathParams: prepared.pathParams, method: "POST" };
+    prepared.body = {};
+    const trackedContext = { ...context, waitUntil(promise: Promise<unknown>) { context.waitUntil(owner.track(promise)); }, passThroughOnException: () => context.passThroughOnException() } as ExecutionContext;
+    return await owner.operation.wait(owner.track(proxySelected(request, env, trackedContext, mode, selection, {}, auth, undefined, undefined, undefined, admission)), "upstream", response => owner.discard(response));
+  } finally { admission.finish(context); }
+}
+
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
+  const searchOwner = admission?.search;
   const published = publishedMusicInput(selection);
   const music = inlineMusicInput(selection) ?? published;
   const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
@@ -626,7 +667,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
-  const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
+  const accountingContext = { context, env, auth, selection, request, compound, search: searchOwner, startedAtMs: Date.now() };
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
@@ -643,7 +684,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner);
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
@@ -683,7 +724,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       const pending = prepareInlineMusicRetention(env, auth, published?.retentionSelection() ?? selection, requestId, music.operation.signal);
       if (pending) music.retain(() => pending.discard());
       retention = pending;
-    } else retention = prepareContentRetention(env, auth, selection, requestId);
+    } else if (searchOwner) retention = await searchOwner.task(async () => {
+      const pending = prepareContentRetention(env, auth, selection, requestId);
+      await pending?.write(); return pending;
+    });
+    else retention = prepareContentRetention(env, auth, selection, requestId);
   }
   catch {
     accounting.fail(503, "provider_error", reservation);
@@ -707,7 +752,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection, undefined, {
       // Fail-closed retention and stateful revalidation must finish before the
       // separate dispatch transition. Durable owners keep their own protocol.
-      dispatched: !retention?.large && !prepared.revalidateAccount,
+      dispatched: !retention?.large && !prepared.revalidateAccount, search: searchOwner,
     }); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
@@ -726,14 +771,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // Durable background owners read the stored bytes, and expanded bodies must
     // not overlap transport memory: both keep the write ahead of dispatch.
-    if (retention && (background || retention.large)) await retention.write();
+    if (retention && !searchOwner && (background || retention.large)) await retention.write();
   }
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", null));
     else accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
-  if (retention && !background && !retention.large) {
+  if (retention && !searchOwner && !background && !retention.large) {
     // Best-effort and off the critical path: the timer lets dispatch start first,
     // so serialization and the R2 put overlap the upstream request.
     const pendingRetention = retention;
@@ -742,7 +787,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     const dispatchStart = performance.now();
     if (background) await background.dispatch(content);
-    else if (!useSoft) await markBudgetDispatched(env, reservation!);
+    else if (!useSoft) await markBudgetDispatched(env, reservation!, undefined, searchOwner);
     if (background || reservation?.reservations.length) budgetMs += performance.now() - dispatchStart;
   }
   catch {
@@ -751,11 +796,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
-  const operation = music?.operation ?? new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const operation = searchOwner?.operation ?? music?.operation ?? new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
-  if (prepared.revalidateAccount) {
+  if (prepared.revalidateAccount && !searchOwner) {
     try { signal.throwIfAborted(); await operation.wait(prepared.revalidateAccount(signal)); }
     catch (error) {
       const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
@@ -782,6 +827,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   };
   let discarded: WeakMap<Response, Promise<void>> | undefined;
   const discard = (response: Response): Promise<void> => {
+    if (searchOwner) return searchOwner.discard(response);
     let pending = discarded?.get(response);
     if (!pending) {
       pending = (async () => {
@@ -825,9 +871,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    nativeLease = music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
+    nativeLease = searchOwner ? undefined : music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
-    dispatched = true;
+    dispatched = !searchOwner;
     const upstreamStart = performance.now();
     const pending = published ? published.dispatch(env, prepared.requestBody, { requestId, eventId: accounting.facts.event.id,
       reservedMicros: cost.reserveMicros, reservations: (reservation?.reservations ?? []).map(({ objectName, reservationId }) => ({ objectName, reservationId })) }) : prepared.featherlessCatalog
@@ -836,12 +882,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       ? fetchPublicModelDiscovery({ ...prepared.publicCatalog, operation }).then(result => Response.json(
         manifestOnlyPublicCatalog(selection.endpoint.request_format) ? result : result.catalog,
         { headers: { "cache-control": "private, no-store" } }))
-      : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+      : searchOwner ? searchOwner.providerFetch(async active => {
+        await prepared.revalidateAccount?.(active);
+        active.throwIfAborted();
+        dispatched = true;
+        return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: active, redirect: "manual" });
+      }) : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
     if (selection.nativeResponse) nativeFetch = pending;
     if (prepared.featherlessCatalog) catalogWork = pending;
     else if (catalogInputs) registerCatalogFetch(pending);
     if (useSoft) {
-      soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
+      soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error), searchOwner);
       reservation = soft.reservation;
       context.waitUntil(soft.check);
     }
@@ -852,7 +903,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
-    if (!isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
+    if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
     if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
@@ -899,7 +950,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (selection.nativeResponse) {
       if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
       const reading = selection.nativeResponse.read(imageInput?.response ?? response, signal);
-      nativeRead = reading;
+      nativeRead = searchOwner ? searchOwner.track(reading) : reading;
       if (imageInput) imageRead = reading;
       if (music) musicRead = reading;
       const validated = await operation.wait(reading, "upstream", discardNative);
@@ -921,8 +972,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
     response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
-    // Retire only the timer; caller cancellation remains connected through EOF.
-    operation.retireDeadline();
+    // Search retains its original deadline through delivery; other native paths
+    // retire only the timer and keep caller cancellation connected through EOF.
+    if (!searchOwner) operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
       priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
@@ -992,9 +1044,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
-  // Endpoint timeouts cover fetch and first-event normalization, not delivery.
-  // Retire only the timer; the caller and first cause still own delivery through EOF.
-  operation.retireDeadline();
+  // Existing endpoint timers cover fetch and normalization. Search instead
+  // keeps its operation deadline through downstream EOF or cancellation.
+  if (!searchOwner) operation.retireDeadline();
   if (continuation && response.ok && !operation.receivedRejection && selection.capability !== "llm.responses.compact") {
     try { await operation.wait(continuation.headers(response), "publication"); }
     catch (error) {
@@ -1016,6 +1068,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     context.waitUntil(observed.retired.then(() => deliveryLease.release()));
   }
   if (admission) admission.completion = observed.result;
+  if (searchOwner) searchOwner.track(observed.retired);
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
     else if (operation.receivedRejection) {
@@ -1080,13 +1133,13 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation): Promise<PreparedUpstream> {
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan);
+  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner);
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -1095,7 +1148,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1118,7 +1171,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   // Native owner materialization follows known monetary denials. Messages
   // may refresh inside the owner; images may only read the exact admitted key.
-  if ((["minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
+  if ((["minimax.images", "minimax.music", "minimax.search"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
     const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
       selection.capability, selection.endpoint, undefined, undefined, selection.provider.id);
     validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, connection,
@@ -1126,7 +1179,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   }
   let upstream: UpstreamAuth;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, request.signal, wan); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, searchOwner?.operation.signal ?? request.signal, wan, searchOwner); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -1227,9 +1280,17 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         policyGeneration: auth.policy.generation,
       };
     }
+    const tokenPlanCheck = searchOwner ? prepareMiniMaxSearchDispatch(env, auth, selection, upstream, url, headers, searchOwner) : undefined;
+    if (searchOwner) {
+      const origin = upstream.grant?.minimaxSearchBinding?.origin;
+      if (!origin) miniMaxSearchDenied();
+      selection.nativeResponse = prepareNativeMiniMaxSearch(selection, { origin, operation: searchOwner });
+      if (!selection.nativeResponse) miniMaxSearchDenied();
+      assertNativeResponseDestination(selection.nativeResponse, url);
+    }
     const wanCheck = wanCreate(selection.endpoint) && continuation
       ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan) : undefined;
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

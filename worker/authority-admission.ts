@@ -1,3 +1,4 @@
+import { searchControlVersion, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant } from "./types";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
@@ -13,7 +14,7 @@ export interface AdmissionSelection {
 }
 // "select" also returns the pool snapshot after selecting; "only" returns the
 // snapshot without selecting or touching counters (stale-cache refresh).
-export interface AdmissionRequest { selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
+export interface AdmissionRequest { search?: typeof searchControlVersion; selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
 export interface AdmissionPool { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; unavailable?: true }
 export interface AdmissionPoolCandidate { key: string; grant: UpstreamGrant | null }
 // Secretless routing state for isolate-local selection: projections, counters,
@@ -58,8 +59,10 @@ interface AdmissionStore {
 export async function resolveAdmission(env: Env, input: AdmissionRequest, store: AdmissionStore): Promise<AdmissionResult> {
   // Use the same import fences as the single-purpose resolvers. Every KV
   // await is followed by guarded initialization and a canonical reread.
+  const search = input.search === searchControlVersion;
+  if (search) { searchJsonBytes(input); if (input.allConnections || input.snapshot || input.providers?.length !== 1 || input.selection?.providerId !== "minimax" || input.selection.model != null || input.selection.capability !== "search.web") searchUnavailable(); }
   let credential = store.getCredential(input.credentialId);
-  if (!credential && !store.hasMeta("credentials_global_initialized")) {
+  if (!search && !credential && !store.hasMeta("credentials_global_initialized")) {
     const value = await env.POLICY_KV.get<Record<string, unknown>>(`credentials/${input.credentialId}`, "json") ?? await genuineLegacyKey(env, input.credentialId);
     if (value) store.seedCredential(input.credentialId, value);
     credential = store.getCredential(input.credentialId);
@@ -73,7 +76,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   let policy: AccessPolicyEntry | null;
   try {
     policy = store.getPolicy(policyId);
-    if (!policy && !store.hasMeta("policies_global_initialized")) {
+    if (!search && !policy && !store.hasMeta("policies_global_initialized")) {
       const value = await env.POLICY_KV.get<Record<string, unknown>>(`policies/${policyId}`, "json") ?? await genuineLegacyKey(env, policyId);
       if (value) store.seedPolicy(policyId, value);
       policy = store.getPolicy(policyId);
@@ -90,7 +93,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
       let owner: AccessControlUser | null;
       try {
         owner = store.getUser(email);
-        if (!owner && !store.hasMeta("users_global_initialized")) {
+        if (!search && !owner && !store.hasMeta("users_global_initialized")) {
           const record = await env.POLICY_KV.get<AccessUserRecord>(`access/users/${email}`, "json");
           if (record) store.initializeUsers([{ email, record }]);
           owner = store.getUser(email);
@@ -106,7 +109,8 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   const ids = [...new Set(providers.filter(provider => input.allConnections || !policy.policy.providers.length || policy.policy.providers.includes(provider.id)).map(provider => provider.id))];
   try {
     let connections = store.resolveConnections(ids);
-    if (!connections.initialized && (input.allConnections || connections.missingProviderIds.length)) {
+    if (search && connections.missingProviderIds.length) searchUnavailable();
+    if (!search && !connections.initialized && (input.allConnections || connections.missingProviderIds.length)) {
       const seeded = (await Promise.all(connections.missingProviderIds.map(id => env.POLICY_KV.get<ProviderConnection>(`connections/${id}`, "json")))).filter(Boolean) as ProviderConnection[];
       store.initializeConnections(seeded);
       if (input.allConnections) store.putMeta("connections_global_initialized");

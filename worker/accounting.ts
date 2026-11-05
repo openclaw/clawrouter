@@ -1,3 +1,4 @@
+import { searchJsonBytes, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy-limits.ts";
 import type { AuthorizedIdentity, BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
@@ -81,7 +82,7 @@ export function planBudgetReservation(auth: AuthorizedIdentity, capability: stri
   return { reservedMicros: cost.reserveMicros, legs };
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean } = {}): Promise<BudgetReservation> {
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean; search?: MiniMaxSearchOperation } = {}): Promise<BudgetReservation> {
   const plan = planBudgetReservation(auth, capability, cost, connection);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
   const results = await Promise.allSettled(plan.legs.map(async leg => {
@@ -90,7 +91,7 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
     // I/O; a committed reservation can lose its acknowledgement.
     observe?.(leg, "attempted");
     try {
-      return await reserveLedgerIntent(env, leg);
+      return await reserveLedgerIntent(env, leg, options.search?.operation.signal, options.search);
     } catch (error) {
       if (error instanceof HttpError && error.status === 402) observe?.(leg, "denied");
       throw error;
@@ -100,7 +101,7 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) {
     if (reservation.reservations.length) {
-      try { await settleBudget(env, reservation, 0); }
+      try { await settleBudget(env, reservation, 0, options.search); }
       catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
     }
     throw failed.reason;
@@ -108,18 +109,31 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   return reservation;
 }
 
-export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal): Promise<LedgerBudgetReservation> {
+export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal, search?: MiniMaxSearchOperation): Promise<LedgerBudgetReservation> {
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(intent.objectName));
-  const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(intent.request), signal });
-  if (!response.ok) throw new Error(`budget reserve returned ${response.status}`);
-  const result = await response.json<{ allowed: boolean; chargedMicros: number; dispatched?: boolean }>();
+  const result = search
+    ? await search.controlJson<{ allowed: boolean; chargedMicros: number; dispatched?: boolean }>(intent.request, (body, active) => stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body, signal: active }), false, signal)
+    : await (async () => {
+      const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(intent.request), signal });
+      if (!response.ok) throw new Error(`budget reserve returned ${response.status}`);
+      return response.json<{ allowed: boolean; chargedMicros: number; dispatched?: boolean }>();
+    })();
   if (typeof result?.allowed !== "boolean") throw new Error("budget reserve was not acknowledged");
   if (!result.allowed) throw new HttpError(402, intent.kind === "weekly" ? "weekly_budget_exhausted" : intent.kind === "daily" ? "daily_budget_exhausted" : intent.kind === "policy" ? "budget_exhausted" : "provider_budget_exhausted",
     withLimitHint(intent.kind === "weekly" ? weeklyBudgetMessage(intent.request.limitMicros) : intent.kind === "daily" ? dailyBudgetMessage(intent.request.limitMicros) : intent.kind === "policy" ? "proxy key budget is exhausted" : `provider ${intent.request.policyId.slice("provider/".length)} monthly budget is exhausted`, intent));
   return { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
 }
 
-export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
+export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<boolean> {
+  if (search) {
+    searchJsonBytes(event);
+    let success = true;
+    for (const run of [() => reservation.charges ? chargeBudget(env, reservation, actualCostMicros, search) : settleBudget(env, reservation, actualCostMicros, search),
+      () => publishUsage(env, event, search)]) {
+      try { await run(); } catch { success = false; logCorrelationError("accounting finalization failed", event.request_id); }
+    }
+    return success;
+  }
   const results = await Promise.allSettled([
     reservation.charges ? chargeBudget(env, reservation, actualCostMicros) : settleBudget(env, reservation, actualCostMicros),
     publishUsage(env, event),
@@ -132,45 +146,72 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   return results.every((result) => result.status === "fulfilled");
 }
 
-export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal): Promise<void> {
+export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal, search?: MiniMaxSearchOperation): Promise<void> {
   const results = await Promise.allSettled(reservation.reservations.filter(item => !item.dispatched).map(async (item) => {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(item.objectName));
+    if (search) {
+      const result = await search.controlJson<{ dispatched: boolean }>({ reservationId: item.reservationId }, (body, active) => stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body, signal: active }), false, signal);
+      if (result.dispatched !== true) throw new Error("budget dispatch was not acknowledged");
+    } else {
     const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }), signal });
     if (!response.ok || (await response.json<{ dispatched: boolean }>()).dispatched !== true) throw new Error("budget dispatch was not acknowledged");
+    }
   }));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw new HttpError(503, "accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.");
 }
 
-async function publishUsage(env: Env, event: UsageEvent): Promise<void> {
-  try { await env.USAGE_QUEUE.send(event); }
+async function publishUsage(env: Env, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<void> {
+  try { if (search) await search.task(() => env.USAGE_QUEUE.send(event), true); else await env.USAGE_QUEUE.send(event); }
   catch {
     // A rejected send can still have been accepted. Reuse the event ID so
     // direct recovery and later queue delivery converge on one stored row.
-    await ingestUsage(env, event);
+    await ingestUsage(env, event, undefined, search);
   }
 }
 
-export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {
+export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
+  if (search) {
+    let failure: unknown, failed = false;
+    for (const item of reservation.reservations) {
+      try { await settleReservation(env, item, actualCostMicros, search); }
+      catch (error) { if (!failed) failure = error; failed = true; }
+    }
+    if (failed) throw failure;
+    return;
+  }
   const results = await Promise.allSettled(reservation.reservations.map((reservation) => settleReservation(env, reservation, actualCostMicros)));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw failed.reason;
 }
 
-async function settleReservation(env: Env, reservation: LedgerBudgetReservation, actualCostMicros: number): Promise<void> {
+async function settleReservation(env: Env, reservation: LedgerBudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
   const body: BudgetSettleRequest = { reservationId: reservation.reservationId, actualCostMicros };
   try {
-    await settleLedger(env, reservation.objectName, body);
+    await settleLedger(env, reservation.objectName, body, undefined, search);
     return;
   } catch {
     // The durable queue is the recovery boundary for thrown and non-2xx ledger failures.
   }
-  await env.USAGE_QUEUE.send({ kind: "budget_settlement", ledger: { objectName: reservation.objectName }, request: body });
+  const message = { kind: "budget_settlement" as const, ledger: { objectName: reservation.objectName }, request: body };
+  if (search) await search.task(() => env.USAGE_QUEUE.send(message), true); else await env.USAGE_QUEUE.send(message);
 }
 
 export function emptyReservation(): BudgetReservation { return { reservations: [], reservedMicros: 0 }; }
 
-async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicros: number): Promise<void> {
+async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
+  if (search) {
+    let failure: unknown, failed = false;
+    for (const item of reservation.charges ?? []) {
+      const request = { ...item.request, amountMicros };
+      try {
+        try { await chargeLedger(env, item.objectName, request, search); }
+        catch { await search.task(() => env.USAGE_QUEUE.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }), true); }
+      } catch (error) { if (!failed) failure = error; failed = true; }
+    }
+    if (failed) throw failure;
+    return;
+  }
   const results = await Promise.allSettled((reservation.charges ?? []).map(async item => {
     const request = { ...item.request, amountMicros };
     try { await chargeLedger(env, item.objectName, request); }

@@ -1,3 +1,5 @@
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import { miniMaxSearchDenied, miniMaxSearchIdentity } from "./minimax-search-credential.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { capabilityForPath, createRouteCatalog, unifiedPathForRequestFormat } from "../shared/route-catalog.ts";
 export { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
@@ -205,9 +207,10 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
   return connection;
 }
 
-export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation): Promise<UpstreamAuth> {
-  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement, signal, wan);
+export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<UpstreamAuth> {
+  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement, signal, wan, search);
   const selected = resolution.selected;
+  if (search && !selected) miniMaxSearchDenied();
   if (!selected && resolution.hasConfiguredGrant) {
     const unavailable = () => grantPoolUnavailable(provider, resolution.retryAt);
     if (wan || !auth.policy.grantRouting?.environmentFallback || pinned?.key != null) throw unavailable();
@@ -358,11 +361,13 @@ function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | unde
   return new HttpError(429, "upstream_grant_pool_unavailable", message, { "retry-after": String(Math.max(1, Math.ceil(waitMs / 1_000))) });
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
+  if (requirement?.endpoint.request_format === "minimax.search" && (!search || excludedKeys.size || !recordSelection)) miniMaxSearchDenied();
   if (wan && (excludedKeys.size || !requirement || provider.id !== "alibaba" || requirement.endpoint.lifecycle?.protocol !== "dashscope.video"))
     throw new HttpError(503, "prediction_owner_unavailable", "Wan cannot reselect an original owner");
   const admitted = recordSelection && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key) : undefined;
+  if (search && !admitted) miniMaxSearchDenied();
   if (wan && !admitted) throw new HttpError(503, "prediction_owner_unavailable", "Wan requires its original admitted selection");
   if (!admitted && excludedKeys.size && auth.authType === "proxy_key") stickyHash = await grantStickyInput(auth, proxySessionHash(auth));
   const resolution = admitted ?? await resolveGrantSelection(provider.id, auth.policyId, auth.policy.tenantId ?? "default", tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
@@ -372,7 +377,13 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
   try {
-    if (wan) {
+    if (search) {
+      const { revalidateMiniMaxSearchOwner } = await import("./minimax-search-dispatch.ts");
+      const original = miniMaxSearchIdentity(grant);
+      const current = await revalidateMiniMaxSearchOwner(env, auth, requirement!, key, grant, search);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, search.operation.signal, "minimax.search", undefined, search);
+      if (miniMaxSearchIdentity(materialized) !== original) miniMaxSearchDenied();
+    } else if (wan) {
       if (grant.provider !== provider.id || grant.kind !== "api_key" || grant.credentialStore !== "durable_object"
         || !Number.isSafeInteger(grant.credentialGeneration) || !grant.credentialLineage)
         throw new HttpError(503, "prediction_owner_unavailable", "Wan requires an original durable key revision");
@@ -396,7 +407,7 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
       ? await refreshGrant(key, grant, provider, env, false, signal)
       : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));
   }
-  catch (error) { if (!wan) evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  catch (error) { if (!wan && !search) evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
   // A shared owner can be replaced after selection. Sharing subscriptions must
   // never authorize a replacement API-key/media transport under that same key.
   if (!grantsVisibleToPolicies([{ key, grant: materialized }], [{ policyId: auth.policyId, policy: auth.policy }]).length)
@@ -404,7 +415,7 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's
   // routing projection so later requests take the local hot path.
-  if (!wan && !admitted && recordSelection && !pinned && !excludedKeys.size && auth.authType === "proxy_key") scheduleProjectionRepair(env, key);
+  if (!wan && !search && !admitted && recordSelection && !pinned && !excludedKeys.size && auth.authType === "proxy_key") scheduleProjectionRepair(env, key);
   return { selected: { key, grant: materialized }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
 }
 

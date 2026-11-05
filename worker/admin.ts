@@ -1,3 +1,4 @@
+import { miniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
 import { minimaxImageBinding, readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { normalizeVertexAnthropicBinding, vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
@@ -107,7 +108,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
     if (path === "/v1/admin/credentials" || path.startsWith("/v1/admin/credentials/")) return await credentialMutationResponse(request, env, path === "/v1/admin/credentials" ? null : path.slice("/v1/admin/credentials/".length), authorization, "admin");
     if (path.startsWith("/v1/admin/connections/") && ["PUT", "PATCH"].includes(request.method)) return putConnection(request, env, path.slice("/v1/admin/connections/".length));
-    if (path.startsWith("/v1/admin/upstream-grants/")) return await upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
+    if (path.startsWith("/v1/admin/upstream-grants/")) return await upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length), authorization);
     if (path === "/v1/admin/keys" && request.method === "GET") return privateJson({ keys: (await listPolicies(env)).map(legacyKeyResponse) });
     if (path.startsWith("/v1/admin/keys/")) return await legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length), authorization);
     return errorResponse("route_not_found", "admin route not found", 404);
@@ -402,7 +403,7 @@ async function putConnection(request: Request, env: Env, encodedId: string): Pro
   return privateJson(await authorityCall<ProviderConnection>(env, "/connections/put", mutation));
 }
 
-async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
+async function upstreamGrantMutation(request: Request, env: Env, rest: string, actor: AccessSession): Promise<Response> {
   const parts = rest.split("/").map(decodePathSegment), action = parts.length === 4 && ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
@@ -436,7 +437,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request, {}), "invalid_upstream_grant", "revocation metadata");
-    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body));
+    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body), { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else if (!action && request.method === "PUT") {
     const mode = new URL(request.url).searchParams.get("mode");
@@ -467,6 +468,13 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     delete body.minimaxAnthropicAuthorization;
     if (Object.hasOwn(body, "minimaxImageBinding") || Object.hasOwn(body, "minimaxImageIntent"))
       throw new HttpError(400, "invalid_minimax_image_authorization", "Use explicit MiniMax image authorization");
+    if (["minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "searchAttestation"].some(field => Object.hasOwn(body, field)))
+      throw new HttpError(400, "invalid_minimax_search_authorization", "Use explicit Search authorization");
+    const searchIntent = body.minimaxSearchAuthorization;
+    if (searchIntent !== undefined && searchIntent !== null && searchIntent !== "minimax-global-tokenplan-search" && searchIntent !== "minimax-cn-tokenplan-search")
+      throw new HttpError(400, "invalid_minimax_search_authorization", "Search authorization must name its TokenPlan region or null");
+    delete body.minimaxSearchAuthorization;
+    const minimaxSearch = searchIntent == null ? searchIntent : miniMaxSearchBinding(searchIntent === "minimax-global-tokenplan-search" ? "global" : "cn");
     const minimaxImage = body.minimaxImageAuthorization;
     if (minimaxImage !== undefined && minimaxImage !== null && minimaxImage !== "minimax-global-image")
       throw new HttpError(400, "invalid_minimax_image_authorization", "Image authorization must be minimax-global-image or null");
@@ -478,7 +486,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant) && !vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     grant = await putGrantCredentials(env, key, normalizeGrant(body, existing, !!vertexPrivateKey), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage);
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage, minimaxSearch, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));

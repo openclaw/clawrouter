@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add administrator-attested regional MiniMax TokenPlan Search authority and bounded native/manifest execution, with current-role mutation fencing, original-key freshness, conservative unknown-cost accounting and retained physical cleanup. Declarations and client activation remain separate.
+
 - Bound Wan managed input, control exchanges and lifecycle delivery under one retained operation lease; pin the original grant revision and distinguish confirmed unsent dispatch from lost acknowledgments.
 
 - Add administrator-attested Copilot proxy identity, owner-bound native and manifest inference, and scoped live discovery with bounded cross-isolate retirement; provider declarations and native-client activation remain separate.

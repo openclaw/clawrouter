@@ -1,3 +1,4 @@
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
@@ -31,17 +32,17 @@ export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseCo
     policyId: auth.policyId, policyGeneration: auth.policy.generation, tenantId: auth.policy.tenantId ?? "default", proof } };
 }
 
-export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation): Promise<AccessPolicy | undefined> {
+export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<AccessPolicy | undefined> {
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
-  return authorizeIssuedControl(env, authorization.binding, owner, signal, retentionProtocol, wan);
+  return authorizeIssuedControl(env, authorization.binding, owner, signal, retentionProtocol, wan, search);
 }
 
 // The public path obtains this binding only from publicControlAuthorization.
 // Delegated asset reads obtain it only from a validated, verifier-matched
 // durable receipt issued by that path. URL fields never supply caller proof.
 export async function authorizeIssuedControl(env: Env, binding: PublicControlBinding, owner: ContinuationOwner,
-  signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation): Promise<AccessPolicy> {
+  signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<AccessPolicy> {
   const proof = binding.proof;
   assertIssuedControlLive(binding);
   if (binding.policyGeneration !== owner.policyGeneration) denied();
@@ -53,7 +54,7 @@ export async function authorizeIssuedControl(env: Env, binding: PublicControlBin
   if (proof.kind === "local" && !await currentLocalSession(proof, env)) denied();
   signal.throwIfAborted();
   const snapshot = await authorityCall<AuthorizationSnapshot>(env, "/authorization/snapshot",
-    { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId }, "policy-bindings", signal, wan);
+    { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId }, "policy-bindings", signal, wan, search);
   const policy = snapshot.policy;
   if (!policy || policy.policyId !== binding.policyId || !policy.policy.enabled || policy.policy.generation !== binding.policyGeneration
     || (policy.policy.tenantId ?? "default") !== binding.tenantId

@@ -1,3 +1,4 @@
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
@@ -468,23 +469,39 @@ export class BudgetSettlementError extends Error {
   constructor(disposition: BudgetSettlementError["disposition"]) { super("budget ledger did not acknowledge settlement"); this.disposition = disposition; }
 }
 
-export async function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest): Promise<void> {
+export async function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation): Promise<void> {
+  if (search) {
+    const receipt = await search.controlJson<{ charged?: boolean; chargeId?: string }>(request,
+      (body, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body, signal }), true);
+    if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+    return;
+  }
   const response = await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body: JSON.stringify(request) });
   const receipt = response.ok ? await response.json<{ charged?: boolean; chargeId?: string }>().catch(() => null) : null;
   if (receipt?.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
 }
 
-export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal): Promise<void> {
+export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation): Promise<void> {
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
+  if (search) {
+    const receipt = await search.controlJson<{ settled?: boolean }>(request,
+      (body, active) => stub.fetch("https://clawrouter.internal/settle", { method: "POST", body, signal: active }), true);
+    if (receipt.settled !== true) throw new BudgetSettlementError("unavailable");
+    return;
+  }
   const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request), signal });
   if (!response.ok) throw new BudgetSettlementError(response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unavailable");
   if ((await response.json<{ settled: boolean }>().catch(() => null))?.settled !== true) throw new BudgetSettlementError("unavailable");
 }
 
-export async function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal): Promise<UsageIngestReceipt> {
-  const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
-  if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
-  const receipt = await response.json<unknown>().catch(() => null);
+export async function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation): Promise<UsageIngestReceipt> {
+  const receipt: unknown = search
+    ? await search.controlJson<unknown>(event, (body, active) => usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active }), true)
+    : await (async () => {
+      const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
+      if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
+      return response.json<unknown>().catch(() => null);
+    })();
   // A 2xx from an older producer does not confirm this event's disposition.
   // Queue retry and direct-fallback failure keep their existing owners.
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
