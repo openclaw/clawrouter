@@ -1,7 +1,8 @@
 # Provider plugins
 
-Status: packaging contract, explicit local loader, and compiler integration
-implemented. Package-index generation is proposed for review. Existing `providers/*.provider.yaml` remain
+Status: packaging contract, explicit local loader, compiler integration,
+package-index generation, and scaffolding are implemented. Existing
+`providers/*.provider.yaml` remain
 the default production input. A descriptor does not activate itself.
 
 ## Start a provider
@@ -96,6 +97,21 @@ Its hashes identify content; they do not authenticate publishers, sanitize SVG,
 or authorize files for public serving. The Worker snapshot stays unchanged.
 A later asset publishing step must verify the captured hashes and apply its own
 admission rules before rendering or serving resources.
+
+## Compiled provider contract
+
+[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
+v1 snapshot, endpoint, model, auth, and quota declarations. Build tools and
+future package compilers can import these types without importing Worker
+bindings, credential records, or adapter implementations. Existing imports from
+`worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
+type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
+
+`GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
+It is a compatibility classification, not the future product or commercial
+model. Product/offer normalization still needs its own migration and parity
+checks. The shared module contains types only; it does not validate a snapshot
+or qualify a provider capability.
 
 ## Descriptor v1
 
@@ -206,8 +222,8 @@ proof that an account is entitled to upstream access.
 | Packaging types, parser, example, architecture docs | Initial additive contracts may land after review | No runtime or compiler import. |
 | Explicit local loader, filesystem validation, collision handling | Landed | Pure build tooling; no auto-discovery or active provider edits. |
 | Compiler `--plugin` input alongside legacy inputs | Landed | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
-| Generated package asset index and setup metadata | Separate future draft | Do not render untrusted SVG or add auth capabilities. |
-| Complete-package scaffold command | Separate draft | Create only a new directory; never register or deploy a provider. |
+| Generated package asset index and setup metadata | Landed | Do not render untrusted SVG or add auth capabilities. |
+| Complete-package scaffold command | Landed | Create only a new directory; never register or deploy a provider. |
 | Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |
 | Credential/connection and accounting migration | Separate future drafts | Preserve refresh ownership, reservations, and delayed execution settlement. |
