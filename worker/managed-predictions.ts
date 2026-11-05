@@ -1,3 +1,5 @@
+import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
+import { videoCollectionAuthorization } from "./response-control-authorization.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import type { BackgroundJob, BackgroundRecord, ManagedAdmission } from "./background-store.ts";
@@ -24,15 +26,18 @@ import { WanManagedOperation, preflightWanJson, assertWanHeaders, wanRecordBytes
 // Opt-in protocol path. Ordinary requests keep their existing hot path and do
 // not pay for durable admission, local idempotency or background collection.
 export async function proxyManagedPrediction(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
-  selection: ProxySelection, query: ProxyQuery, ownership?: WanManagedOperation): Promise<Response> {
+  selection: ProxySelection, query: ProxyQuery, ownership?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<Response> {
   const wan = selection.endpoint.lifecycle?.protocol === "dashscope.video" ? ownership ?? new WanManagedOperation() : undefined;
-  try { return await managedPrediction(request, env, context, auth, selection, query, wan); }
+  try { return await managedPrediction(request, env, context, auth, selection, query, wan, video); }
   finally { if (wan && !ownership) context.waitUntil(wan.finish()); }
 }
 
 async function managedPrediction(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,
-  selection: ProxySelection, query: ProxyQuery, wan?: WanManagedOperation): Promise<Response> {
-  const connection = await assertProviderAccess(selection.provider, auth, env, undefined, wan);
+  selection: ProxySelection, query: ProxyQuery, wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<Response> {
+  if (selection.endpoint.lifecycle?.protocol === "minimax.video" && !video) throw new HttpError(503, "minimax_video_owner_required", "Video requires its original operation owner");
+  const ownership = video ?? wan;
+  video?.requireOrdinary(14);
+  const connection = await assertProviderAccess(selection.provider, auth, env, undefined, wan, video);
   if (!selection.endpoint.lifecycle) throw new HttpError(409, "response_owner_unavailable", "the managed prediction lifecycle is unavailable; raw job IDs cannot be forwarded");
   const { adapter } = managedRoute(selection.provider, selection.endpoint);
   if (selection.method !== "POST"
@@ -46,7 +51,7 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
     if (selection.endpoint.path_params.length || Object.keys(selection.pathParams).length || adapter.retainedParams
       || selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4"))
       throw new HttpError(409, "managed_admission_unsupported", "retention admission requires a qualified body-only create route");
-    admittedPreparation = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection, undefined, "http", false, wan);
+    admittedPreparation = await prepareSelected(request, env, selection, query, auth, new Set(), true, connection, undefined, "http", false, wan, undefined, video);
     admission = requireManagedCreateAdmission(auth.policy, env, admittedPreparation.continuation, adapter.protocol);
   }
   let create: ManagedCreate;
@@ -63,15 +68,16 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
   if (key !== null && !/^[a-zA-Z0-9._:-]{1,128}$/.test(key)) throw new HttpError(400, "invalid_idempotency_key", "Idempotency-Key must be a bounded ASCII identifier");
   const digestInput = [selection.provider.id, selection.endpoint.id, selection.pathParams, create.body, create.headers.get("Cancel-After")];
   if (wan) { preflightWanJson(digestInput); preflightWanJson(create.body); assertWanHeaders(request.headers); }
+  if (video) { videoJsonBytes(digestInput); videoJsonBytes(create.body, "input"); assertVideoHeaders(request.headers); }
   const managed: ManagedAdmission = { protocol: adapter.protocol, providerId: selection.provider.id, requestedVersion: create.requestedVersion,
     idempotencyKey: key === null ? null : await sha256Hex(key),
     requestDigest: await sha256Hex(JSON.stringify(digestInput,
       (_key, value) => value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value)) };
   if (key !== null) {
-    const existing = await backgroundCall<BackgroundRecord | null>(env, scope, { action: "managed_lookup", managed, policyGeneration: auth.policy.generation }, wan);
-    if (existing) return existingPrediction(request, scope, existing, selection.provider, selection.endpoint, wan);
+    const existing = await backgroundCall<BackgroundRecord | null>(env, scope, { action: "managed_lookup", managed, policyGeneration: auth.policy.generation }, ownership);
+    if (existing) return existingPrediction(request, scope, existing, selection.provider, selection.endpoint, ownership);
   }
-  const prepared = admittedPreparation ?? await prepareSelected(request, env, selection, query, auth, new Set(), true, connection, undefined, "http", false, wan);
+  const prepared = admittedPreparation ?? await prepareSelected(request, env, selection, query, auth, new Set(), true, connection, undefined, "http", false, wan, undefined, video);
   if (admittedPreparation) prepared.requestBody = JSON.stringify(create.body);
   if (!prepared.continuation) throw new HttpError(503, "prediction_owner_unavailable", "prediction ownership is unavailable");
   // Qualify the selected grant before durable admission; never shop another
@@ -79,20 +85,21 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
   prepared.headers.delete("Prefer"); prepared.headers.delete("Idempotency-Key");
   applyManagedHeaders(selection.provider, prepared.headers, create);
   if (wan) assertWanHeaders(prepared.headers);
+  if (video) { assertVideoHeaders(prepared.headers); await video.reserveProvider(); await prepared.revalidateAccount?.(video.controlSignal); }
   const dispatchRequest = new Request(prepared.url, { method: "POST", headers: prepared.headers });
   assertManagedDispatch(adapter.protocol, dispatchRequest);
   const cost = { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   const accounting = createProxyAccounting({ request, env, context, auth, selection, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
   const background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection,
-    selection.pathParams, prepared.headers, false, wan);
+    selection.pathParams, prepared.headers, false, ownership);
   if (selection.endpoint.lifecycle?.files) managed.fileBaseUrl = managedFileBase(selection.provider, prepared.managedBaseUrl);
   background.admission.managed = managed;
-  const admitted = await backgroundCall<{ admitted: boolean; created: boolean; job: BackgroundRecord }>(env, scope, { action: "managed_admit", admission: background.admission }, wan);
+  const admitted = await backgroundCall<{ admitted: boolean; created: boolean; job: BackgroundRecord }>(env, scope, { action: "managed_admit", admission: background.admission }, ownership);
   if (admitted?.admitted !== true || !admitted.job || typeof admitted.created !== "boolean") throw new HttpError(503, "background_unavailable", "prediction admission was not acknowledged");
-  if (!admitted.created) return existingPrediction(request, scope, admitted.job, selection.provider, selection.endpoint, wan);
+  if (!admitted.created) return existingPrediction(request, scope, admitted.job, selection.provider, selection.endpoint, ownership);
   const task = (async () => {
     let attempted = false, dispatchConfirmed = false, providerStarted = false, response: Response | undefined;
-    const operation = new HttpOperation(undefined, Math.min(selection.endpoint.timeout_ms ?? 120_000, 120_000));
+    let operation = video?.operation ?? new HttpOperation(undefined, Math.min(selection.endpoint.timeout_ms ?? 120_000, 120_000));
     if (wan) wan.controlSignal = operation.signal;
     try {
       request.signal.throwIfAborted();
@@ -100,47 +107,53 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
       attempted = true;
       await background.dispatch(null);
       dispatchConfirmed = true;
-      if (wan && prepared.revalidateAccount) await operation.wait(prepared.revalidateAccount(operation.signal), "upstream");
+      if ((wan || video) && prepared.revalidateAccount) await operation.wait(prepared.revalidateAccount(operation.signal), "upstream");
       if (adapter.prepareAdmitted) requireManagedCreateAdmission(auth.policy, env, prepared.continuation, adapter.protocol);
       operation.signal.throwIfAborted();
       if (wan) assertManagedDispatch(adapter.protocol, dispatchRequest);
+      if (video) operation = video.detachAtPost();
       providerStarted = true;
-      const pending = fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" });
-      response = wan ? await wan.fetch(pending, operation) : await operation.wait(pending, "upstream",
-        late => { void late.body?.cancel().catch(() => undefined); });
+      if (video) response = await operation.wait(video.providerFetch(signal => fetch(prepared.url,
+        { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", late => video.discard(late));
+      else {
+        const pending = fetch(prepared.url, { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal: operation.signal, redirect: "manual" });
+        response = wan ? await wan.fetch(pending, operation) : await operation.wait(pending, "upstream",
+          late => { void late.body?.cancel().catch(() => undefined); });
+      }
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
       const reading = adapter.read(response, { action: "create", requestedVersion: create.requestedVersion, pathParams: create.pathParams,
-        signal: operation.signal, ...(wan ? { registerInput: wan.registerInput } : {}) });
-      let prediction = await operation.wait(wan ? wan.track(reading) : reading, "upstream");
-      const bound = await backgroundCall<{ bound: boolean }>(env, scope, { action: "managed_bind", id: background.admission.id, responseId: prediction.id }, wan);
+        signal: operation.signal, ...(ownership ? { registerInput: ownership.registerInput } : {}) });
+      let prediction = await operation.wait(ownership ? ownership.track(reading) : reading, "upstream");
+      const bound = await backgroundCall<{ bound: boolean }>(env, scope, { action: "managed_bind", id: background.admission.id, responseId: prediction.id }, ownership);
       if (bound?.bound !== true) throw new Error("prediction binding not acknowledged");
       prediction = qualifyManagedFiles(selection.provider, selection.endpoint, prediction, managed.fileBaseUrl);
-      await observePrediction(env, scope, background.admission.id, prediction, response.status, wan);
-      return predictionResponse(prediction, selection.provider, selection.endpoint, create.pathParams, response.status, wan, request.signal);
+      await observePrediction(env, scope, background.admission.id, prediction, response.status, ownership);
+      return predictionResponse(prediction, selection.provider, selection.endpoint, create.pathParams, response.status, ownership, request.signal);
     } catch {
-      const knownUnsent = !attempted || !!wan && dispatchConfirmed && !providerStarted;
+      const knownUnsent = !attempted || !!ownership && dispatchConfirmed && !providerStarted;
+      if (video && !providerStarted) video.releaseUnsentProvider();
       if (knownUnsent) await background.unsent(499, "client_error", null).catch(() => undefined);
-      if (wan && knownUnsent) return wan.publish({ error: { code: "prediction_submission_unsent", message: "prediction was not sent" } },
+      if (ownership && knownUnsent) return ownership.publish({ error: { code: "prediction_submission_unsent", message: "prediction was not sent" } },
         503, { "content-type": "application/json" }, request.signal);
       // No create replay and no inferred refund after dispatch. The existing
       // alarm retains the bound until a terminal or the observation deadline.
       const message = "prediction submission could not be confirmed; retry only with the original idempotency key or inspect the recovery locator";
-      return wan ? wan.publish({ error: { code: "prediction_submission_unknown", message } }, 503, { "content-type": "application/json" }, request.signal)
+      return ownership ? ownership.publish({ error: { code: "prediction_submission_unknown", message } }, 503, { "content-type": "application/json" }, request.signal)
         : errorResponse("prediction_submission_unknown", message, 503);
     } finally {
-      operation.stop("complete");
-      if (response && wan) wan.track(wan.discardUnclaimed(response));
+      if (!video) operation.stop("complete");
+      if (response && ownership) ownership.track(ownership.discardUnclaimed(response));
       else void response?.body?.cancel().catch(() => undefined);
     }
   })();
   // Delivery can disconnect. Binding, collection and accounting still belong
   // to the durable job, and the in-flight creation may finish publication.
   context.waitUntil(task.then(() => undefined, () => undefined));
-  if (wan) wan.track(task);
+  if (ownership) ownership.track(task);
   return task;
 }
 
-function existingPrediction(request: Request, scope: string, job: BackgroundRecord, provider: CompiledProvider, create: CompiledEndpoint, wan?: WanManagedOperation): Response {
+function existingPrediction(request: Request, scope: string, job: BackgroundRecord, provider: CompiledProvider, create: CompiledEndpoint, wan?: WanManagedOperation | MiniMaxVideoOperation): Response {
   if (!job.managed) throw new HttpError(409, "background_protocol_conflict", "the original job is not managed");
   setBackgroundRecovery(request, `${scope.slice("http-continuations:".length)}.${job.id}`);
   if (job.managed.observationUnavailable) return managedObservationUnavailable(wan, request.signal);
@@ -150,21 +163,21 @@ function existingPrediction(request: Request, scope: string, job: BackgroundReco
   return wan ? wan.publish(body, location ? 303 : 202, headers, request.signal) : json(body, location ? 303 : 202, headers);
 }
 
-export async function observePrediction(env: Env, scope: string, id: string, prediction: ManagedObservation, statusCode: number, wan?: WanManagedOperation): Promise<void> {
+export async function observePrediction(env: Env, scope: string, id: string, prediction: ManagedObservation, statusCode: number, wan?: WanManagedOperation | MiniMaxVideoOperation): Promise<void> {
   const ack = await backgroundCall<{ observed: boolean }>(env, scope, { action: "managed_observe", id, responseId: prediction.id, predictionStatus: prediction.terminal ?? "processing", statusCode, observationUnavailable: prediction.observationUnavailable, files: prediction.files }, wan);
   if (ack?.observed !== true) throw new HttpError(503, "background_unavailable", "prediction observation was not acknowledged");
 }
 
-export async function bindPredictionFiles(env: Env, scope: string, id: string, prediction: ManagedObservation): Promise<void> {
+export async function bindPredictionFiles(env: Env, scope: string, id: string, prediction: ManagedObservation, wan?: WanManagedOperation | MiniMaxVideoOperation): Promise<void> {
   if (prediction.files === undefined) return;
-  const ack = await backgroundCall<{ files: ManagedFileDescriptor[] }>(env, scope, { action: "managed_files", id, responseId: prediction.id, files: prediction.files });
+  const ack = await backgroundCall<{ files: ManagedFileDescriptor[] }>(env, scope, { action: "managed_files", id, responseId: prediction.id, files: prediction.files }, wan);
   if (!Array.isArray(ack?.files) || prediction.files.some(file => !ack.files.some(bound => bound.id === file.id && bound.mimeType === file.mimeType))) {
     throw new HttpError(503, "managed_files_unavailable", "output file ownership was not acknowledged; retain the existing job and do not resubmit generation");
   }
 }
 
 export function predictionResponse(prediction: ManagedObservation, provider: CompiledProvider, create: CompiledEndpoint,
-  pathParams: Record<string, string>, status: number, wan?: WanManagedOperation, caller?: AbortSignal): Response {
+  pathParams: Record<string, string>, status: number, wan?: WanManagedOperation | MiniMaxVideoOperation, caller?: AbortSignal): Response {
   const headers = { "cache-control": "no-store", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-content-retention": "off" };
   if (prediction.observationUnavailable) {
     // A qualified native cancel/delete ACK stays bodyless. It still supplies
@@ -178,7 +191,7 @@ export function predictionResponse(prediction: ManagedObservation, provider: Com
   return wan ? wan.publish(body, status, responseHeaders, caller) : json(body, status, responseHeaders);
 }
 
-export function managedObservationUnavailable(wan?: WanManagedOperation, caller?: AbortSignal): Response {
+export function managedObservationUnavailable(wan?: WanManagedOperation | MiniMaxVideoOperation, caller?: AbortSignal): Response {
   const message = "the original job can no longer be observed; its execution outcome is unknown, collection has stopped and automatic resubmission is unsafe";
   return wan ? wan.publish({ error: { code: "prediction_observation_unavailable", message } }, 410,
     { "content-type": "application/json", "cache-control": "no-store" }, caller)
@@ -187,26 +200,27 @@ export function managedObservationUnavailable(wan?: WanManagedOperation, caller?
 
 type ControlRead = { prediction: ManagedObservation; status: number };
 export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation, fileBaseUrl?: string,
-  wan?: WanManagedOperation): Promise<ControlRead & { evidence: ControlRead }> {
+  wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<ControlRead & { evidence: ControlRead }> {
   const adapter = input.protocol && managedLifecycleAdapter(input.protocol);
   if (!adapter) throw new HttpError(409, "response_owner_unavailable", "the managed protocol is unavailable");
   const read = async (action: "retrieve" | "result" | "cancel"): Promise<ControlRead> => {
     let response: Response | undefined;
     const dispatch = { ...input, action };
-    if (wan) {
-      preflightWanJson(dispatch, wanRecordBytes, true);
+    const ownership = video ?? wan;
+    if (ownership) {
+      if (video) videoJsonBytes(dispatch); else preflightWanJson(dispatch, wanRecordBytes, true);
       try {
-        const physical = wan.track(dispatchResponseControl(env, dispatch, operation.signal, wan));
-        response = await operation.wait(physical, "upstream", late => { void wan.discard(late).catch(() => undefined); });
+        const physical = ownership.track(dispatchResponseControl(env, dispatch, operation.signal, wan, video));
+        response = await operation.wait(physical, "upstream", late => { void ownership.discard(late).catch(() => undefined); });
         // The single native ticket owns the actual 1MiB response, not an ACK.
         const { providerById } = await import("./providers.ts");
         const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
         if (!provider || !create) throw new HttpError(409, "response_owner_unavailable", "original route is unavailable");
         const reading = adapter.read(response, { action, expectedId: input.responseId,
-          requestedVersion: input.requestedVersion ?? "", pathParams: input.route.pathParams, signal: operation.signal, registerInput: wan.registerInput });
-        const prediction = await operation.wait(wan.track(reading), "upstream");
+          requestedVersion: input.requestedVersion ?? "", pathParams: input.route.pathParams, signal: operation.signal, registerInput: ownership.registerInput });
+        const prediction = await operation.wait(ownership.track(reading), "upstream");
         return { prediction: qualifyManagedFiles(provider, create, prediction, fileBaseUrl), status: response.status };
-      } finally { if (response) wan.track(wan.discardUnclaimed(response)); }
+      } finally { if (response) ownership.track(ownership.discardUnclaimed(response)); }
     }
     try {
       response = await operation.wait(dispatchResponseControl(env, dispatch, operation.signal), "upstream",
@@ -239,13 +253,14 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
 
 export async function collectManagedPrediction(env: Env, job: BackgroundJob, accept: (id: string, status: string, statusCode: number, loss?: ManagedObservationLoss, files?: readonly ManagedFileDescriptor[]) => Promise<void>): Promise<void> {
   if (!job.managed || job.managed.observationUnavailable || !job.responseId || !job.route || Date.now() >= job.observeUntil) return;
-  const operation = new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
+  const video = job.managed.protocol === "minimax.video" ? new MiniMaxVideoOperation("collector", undefined, Math.min(10_000, job.observeUntil - Date.now())) : undefined;
+  const operation = video?.operation ?? new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
   const wan = job.managed.protocol === "dashscope.video" ? new WanManagedOperation("collector") : undefined;
   if (wan) { wan.controlSignal = operation.signal; wan.requireOrdinary(job.owner.grantKey ? 1 : 2); }
   try {
     const { evidence } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,
       action: "retrieve", query: "", stream: false, protocol: job.managed.protocol, requestedVersion: job.managed.requestedVersion,
-      deadline: job.observeUntil, authorization: { kind: "collection" } }, operation, job.managed.fileBaseUrl, wan);
+      deadline: Math.min(job.observeUntil, video?.deadline ?? job.observeUntil), authorization: video ? videoCollectionAuthorization(job) : { kind: "collection" } }, operation, job.managed.fileBaseUrl, wan, video);
     await accept(evidence.prediction.id, evidence.prediction.terminal ?? "processing", evidence.status, evidence.prediction.observationUnavailable, evidence.prediction.files);
-  } finally { operation.stop("complete"); await wan?.finish(); }
+  } finally { operation.stop("complete"); await wan?.finish(); await video?.finish(); }
 }

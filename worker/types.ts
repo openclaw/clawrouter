@@ -150,6 +150,7 @@ export interface OAuthState {
 
 export interface UpstreamGrant {
   minimaxSearchBinding?: import("../shared/minimax-search-binding").MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: import("../shared/minimax-video-binding").MiniMaxVideoBinding | null;
   minimaxImageBinding?: import("../shared/minimax-image-binding").MiniMaxImageBinding | null;
   vertexAnthropicBinding?: import("./vertex-anthropic-binding.ts").VertexAnthropicBinding | null;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicitly attested regional MiniMax Hailuo text-to-video execution and original-job file retrieval, with current SQL mutation authority, generation-bound job routes, bounded per-invocation ownership and conservative dispatch-acknowledgment handling. Public declarations and native-client activation remain separate.
+
 - Recheck current SQL administrator authority after MiniMax Music grant preparation and pool admission, fencing exact mutations and revocation retries while preserving the old owner on denial.
 
 - Add administrator-attested regional MiniMax TokenPlan Search authority and bounded native/manifest execution, with current-role mutation fencing, original-key freshness, conservative unknown-cost accounting and retained physical cleanup. Declarations and client activation remain separate.

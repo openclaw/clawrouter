@@ -1,6 +1,7 @@
+import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import type { InputRetirement } from "./input-retirement.ts";
-import type { SearchGrantAttestation, MusicGrantAttestation } from "./authority-contracts.ts";
+import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
 import { searchJsonBytes, searchUnavailable, searchControlBytes, inspectSearchJson, searchControlVersion, type MiniMaxSearchOperation, searchControlHeader, readSearchJson } from "./minimax-search-operation.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { normalizePolicyRecord } from "./authority-policy.ts";
@@ -25,6 +26,16 @@ import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } f
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
+type AuthorityReadBound = { bytes: number; records?: number; video?: boolean;
+  videoCounts?: { values: number; members: number; entries: number; units: number } };
+function inspectVideoRecord(text: string, bound: AuthorityReadBound): void {
+  const next = inspectVideoJson(text), total = bound.videoCounts ??= { values: 0, members: 0, entries: 0, units: 0 };
+  for (const key of ["values", "members", "entries", "units"] as const) {
+    total[key] += next[key];
+    if (total[key] > (key === "units" ? 32768 : 512)) searchUnavailable();
+  }
+}
+
 export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
 
@@ -52,14 +63,17 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
       if (path === "/grant-search/authorize") return json(this.authorizeSearchGrant(await readJson<SearchGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/grant-music/authorize") return json(this.authorizeMusicGrant(await readJson<MusicGrantAttestation>(request, undefined, 16 * 1024)));
+      if (path === "/grant-video/authorize") return json(this.authorizeVideoGrant(await readJson<VideoGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/authorization/snapshot") {
-        const bound = request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
-        const result = this.authorizationSnapshot(await readJson<AuthorizationSnapshotRequest>(request), bound);
-        if (bound) searchJsonBytes(result); return json(result);
+        const input = await readJson<AuthorizationSnapshotRequest & { video?: string }>(request, undefined, 64 * 1024);
+        const bound = request.headers.get(videoControlHeader) === videoControlVersion || input.video === videoControlVersion ? { bytes: 0, video: true }
+          : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
+        const result = this.authorizationSnapshot(input, bound);
+        if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
       }
       if (path === "/admission/resolve") {
         const input = await readJson<AdmissionRequest>(request);
-        const bound = input.search === searchControlVersion ? { bytes: 0 } : undefined;
+        const bound = input.video === videoControlVersion ? { bytes: 0, video: true } : input.search === searchControlVersion ? { bytes: 0 } : undefined;
         const result = await resolveAdmission(this.env, input, {
         getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: id => this.getUser(id, bound), hasMeta: key => this.hasMeta(key),
         seedCredential: (id, value) => this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]),
@@ -68,11 +82,11 @@ export class PolicyBindingIndexObject implements DurableObject {
         resolveConnections: ids => this.resolveConnections(ids, bound), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input, bound), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
           getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: email => this.getUser(email, bound),
           resolveConnections: ids => this.resolveConnections(ids, bound), resolveGrantPool: request => this.resolveGrantPool(request, bound),
-          grantAttachment: key => this.grantAttachment(key), consumeProjectionBytes: bytes => { if (bound && (bound.bytes += bytes) > searchControlBytes) searchUnavailable(); },
+          grantAttachment: key => this.grantAttachment(key), consumeProjectionBytes: (bytes, text) => { if (bound && (bound.bytes += bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable(); if (bound?.video && text !== undefined) inspectVideoRecord(text, bound); },
           selectGrant: request => this.selectGrant(request, bound), selectionState: poolKey => this.selectionState(poolKey),
         }),
         });
-        if (bound) searchJsonBytes(result);
+        if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result);
         return json(result);
       }
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
@@ -109,10 +123,11 @@ export class PolicyBindingIndexObject implements DurableObject {
       }
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
       if (path === "/connections/resolve") {
-        const bound = request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
+        const bound = request.headers.get(videoControlHeader) === videoControlVersion ? { bytes: 0, video: true }
+          : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
         const input = await readJson<{ providerIds: string[] }>(request);
         if (bound && (input.providerIds.length !== 1 || input.providerIds[0] !== "minimax")) searchUnavailable();
-        const result = this.resolveConnections(input.providerIds, bound); if (bound) searchJsonBytes(result); return json(result);
+        const result = this.resolveConnections(input.providerIds, bound); if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
       }
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
@@ -250,17 +265,18 @@ export class PolicyBindingIndexObject implements DurableObject {
     return this.getUser(defaults.email)!;
   }
 
-  private searchStored(table: string, column: string, keyColumn: string, key: string, bound: { bytes: number; records?: number }): unknown {
+  private searchStored(table: string, column: string, keyColumn: string, key: string, bound: AuthorityReadBound): unknown {
     const size = rows<{ bytes: number }>(this.sql.exec(`SELECT length(CAST(${column} AS BLOB)) AS bytes FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
     if (!size) return null;
     if ((bound.records = (bound.records ?? 0) + 1) > 32) searchUnavailable();
-    if (!Number.isSafeInteger(size.bytes) || size.bytes < 1 || (bound.bytes += size.bytes) > searchControlBytes) searchUnavailable();
+    if (!Number.isSafeInteger(size.bytes) || size.bytes < 1 || (bound.bytes += size.bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
     const row = rows<{ value: string }>(this.sql.exec(`SELECT ${column} AS value FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
     if (!row) searchUnavailable();
-    inspectSearchJson(row.value); return JSON.parse(row.value);
+    if (bound.video) inspectVideoRecord(row.value, bound); else inspectSearchJson(row.value);
+    return JSON.parse(row.value);
   }
 
-  private getUser(email: string, bound?: { bytes: number; records?: number }): AccessControlUser | null {
+  private getUser(email: string, bound?: AuthorityReadBound): AccessControlUser | null {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;
     if (bound) { const record = this.searchStored("access_users", "user_json", "email", normalized, bound) as AccessUserRecord | null; return record ? { email: normalized, record } : null; }
@@ -310,7 +326,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (this.hasMeta("policies_global_initialized")) return;
     for (const entry of entries) if (!this.getPolicy(entry.policyId)) this.putPolicy(entry);
   }
-  private getPolicy(id: string, bound?: { bytes: number; records?: number }): AccessPolicyEntry | null {
+  private getPolicy(id: string, bound?: AuthorityReadBound): AccessPolicyEntry | null {
     if (bound) { const policy = this.searchStored("access_policies", "policy_json", "policy_id", id, bound) as AccessPolicy | null; return policy ? { policyId: id, policy } : null; }
     const row = rows<{ policy_json: string }>(this.sql.exec("SELECT policy_json FROM access_policies WHERE policy_id = ?", id))[0];
     return row ? { policyId: id, policy: JSON.parse(row.policy_json) } : null;
@@ -369,6 +385,21 @@ export class PolicyBindingIndexObject implements DurableObject {
     return input;
   }
 
+  private authorizeVideoGrant(input: VideoGrantAttestation): VideoGrantAttestation {
+    searchJsonBytes(input);
+    if (!input || Object.keys(input).sort().join(",") !== "actor,admissionRevision,digest,domain,key,mode,original,resultGeneration,resultLineage,scope"
+      || input.domain !== "clawrouter.minimax-video-mutation.v1"
+      || !["preserve", "replace", "revoke", "tombstone"].includes(input.mode)
+      || !Array.isArray(input.scope) || input.scope.length !== 3
+      || JSON.stringify(input.scope) !== JSON.stringify(grantPoolIdentity(input.key)))
+      throw new HttpError(403, "minimax_video_admin_required", "Current video mutation authority is required");
+    const { domain: _domain, scope: _scope, mode, ...proof } = input;
+    this.authorizeSearchGrant(proof, mode === "tombstone");
+    if ((mode === "revoke" || mode === "tombstone") && this.grantAttachment(input.key).pending)
+      throw new HttpError(403, "minimax_video_admin_required", "Pending video mutations require explicit recovery");
+    return input;
+  }
+
   private putCredential(entry: ProxyCredentialEntry): void {
     this.sql.exec("INSERT OR REPLACE INTO proxy_credentials (credential_id, credential_json) VALUES (?, ?)", entry.credentialId, JSON.stringify(entry.credential));
   }
@@ -420,12 +451,12 @@ export class PolicyBindingIndexObject implements DurableObject {
       this.putCredential({ ...entry, credential });
     }
   }
-  private getCredential(id: string, bound?: { bytes: number; records?: number }): ProxyCredentialEntry | null {
+  private getCredential(id: string, bound?: AuthorityReadBound): ProxyCredentialEntry | null {
     if (bound) { const credential = this.searchStored("proxy_credentials", "credential_json", "credential_id", id, bound) as ProxyCredential | null; return credential ? { credentialId: id, credential } : null; }
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];
     return row ? { credentialId: id, credential: JSON.parse(row.credential_json) } : null;
   }
-  private authorizationSnapshot(input: AuthorizationSnapshotRequest, bound?: { bytes: number; records?: number }): AuthorizationSnapshot {
+  private authorizationSnapshot(input: AuthorizationSnapshotRequest, bound?: AuthorityReadBound): AuthorizationSnapshot {
     // No KV import or await: this is the authority admission point after a
     // queued control's preparation, using current stored groups and bindings.
     const credential = input.credentialId ? this.getCredential(input.credentialId, bound)?.credential ?? null : null;
@@ -461,18 +492,18 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (this.hasMeta("connections_global_initialized")) return;
     for (const item of items) if (!this.getConnection(item.providerId)) this.putConnection(item);
   }
-  private getConnection(id: string, bound?: { bytes: number; records?: number }): ProviderConnection | null {
+  private getConnection(id: string, bound?: AuthorityReadBound): ProviderConnection | null {
     if (bound) return this.searchStored("provider_connections", "connection_json", "provider_id", id, bound) as ProviderConnection | null;
     const row = rows<{ connection_json: string }>(this.sql.exec("SELECT connection_json FROM provider_connections WHERE provider_id = ?", id))[0];
     return row ? JSON.parse(row.connection_json) : null;
   }
-  private resolveConnections(ids: string[], bound?: { bytes: number; records?: number }): { initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] } {
+  private resolveConnections(ids: string[], bound?: AuthorityReadBound): { initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] } {
     const connections: ProviderConnection[] = [], missingProviderIds: string[] = [];
     for (const id of [...new Set(ids)]) { const entry = this.getConnection(id, bound); if (entry) connections.push(entry); else missingProviderIds.push(id); }
     return { initialized: this.hasMeta("connections_global_initialized"), connections, missingProviderIds };
   }
 
-  private resolveGrantPool(input: GrantPoolResolveRequest, bound?: { bytes: number; records?: number }): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean } {
+  private resolveGrantPool(input: GrantPoolResolveRequest, bound?: AuthorityReadBound): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean } {
     const providerId = grantSegment(input.providerId, "providerId");
     const policyId = grantPoolScopeId(input.policyId);
     const tenantId = grantPoolScopeId(input.tenantId);
@@ -487,7 +518,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         const count = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(token_ref AS BLOB))),0) AS bytes FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ?", scope, id, providerId))[0];
         members += count.count; bytes += count.bytes;
       }
-      if (members > 32 || bytes > searchControlBytes) searchUnavailable();
+      if (members > 32 || bytes > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
     }
     const sharedKeys = shared.filter(key => {
       if (this.attachmentMember(grantPoolIdentity(key), providerId)?.status !== "active") return false;
@@ -630,7 +661,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("INSERT OR REPLACE INTO upstream_grant_runtime (grant_key, state_json) VALUES (?, ?)", key, JSON.stringify(merged));
   }
 
-  private grantRuntimeStates(rawKeys: unknown, bound?: { bytes: number; records?: number }): Record<string, GrantRuntimeState> {
+  private grantRuntimeStates(rawKeys: unknown, bound?: AuthorityReadBound): Record<string, GrantRuntimeState> {
     if (!Array.isArray(rawKeys) || rawKeys.length > 98) invalidAuthorityRequest("grant runtime keys must be a bounded array");
     const states: Record<string, GrantRuntimeState> = {};
     for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
@@ -644,12 +675,12 @@ export class PolicyBindingIndexObject implements DurableObject {
     return states;
   }
 
-  private selectGrant(input: GrantPoolSelectRequest, bound?: { bytes: number; records?: number }): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
+  private selectGrant(input: GrantPoolSelectRequest, bound?: AuthorityReadBound): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
     const poolKey = grantSelectionPoolKey(input.poolKey);
     if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 98) invalidAuthorityRequest("grant selection candidates must be a bounded array");
     if (bound) {
       const size = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(grant_key AS BLOB))),0) AS bytes FROM upstream_grant_selection WHERE pool_key = ?", poolKey))[0];
-      if (size.count > 32 || (bound.bytes += size.bytes) > searchControlBytes) searchUnavailable();
+      if (size.count > 32 || (bound.bytes += size.bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
     }
     const candidates = normalizedChoiceCandidates(input.candidates, grantKey);
     const cursorKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
@@ -899,9 +930,9 @@ function invalidAuthorityValue(message: string): never {
 }
 
 
-export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<T> {
+export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
-  if (path === "/grant-search/authorize" || path === "/grant-music/authorize") {
+  if (path === "/grant-search/authorize" || path === "/grant-music/authorize" || path === "/grant-video/authorize") {
     searchJsonBytes(body);
     const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal, redirect: "manual", headers: { "content-type": "application/json" } });
     let input: InputRetirement | undefined;
@@ -911,6 +942,7 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
       return result as T;
     } finally { await input?.retired.catch(() => undefined); }
   }
+  if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
@@ -1017,7 +1049,13 @@ export async function listConnections(env: Env, providerIds: string[]): Promise<
   return (await authorityCall<typeof result>(env, "/connections/resolve", { providerIds: ids })).connections;
 }
 
-export async function resolveConnection(env: Env, providerId: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<ProviderConnection | null> {
+export async function resolveConnection(env: Env, providerId: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<ProviderConnection | null> {
+  if (video) {
+    const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
+      "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", video.controlSignal, undefined, undefined, video);
+    if (result.missingProviderIds.length || result.connections.length !== 1 || result.connections[0].providerId !== providerId) searchUnavailable();
+    return result.connections[0];
+  }
   if (search) {
     const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env, "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", search.operation.signal, undefined, search);
     if (result.missingProviderIds.length || result.connections.length !== 1) searchUnavailable();

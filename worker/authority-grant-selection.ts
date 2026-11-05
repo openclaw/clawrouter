@@ -1,3 +1,4 @@
+import { videoControlVersion, videoControlBytes, videoJsonBytes, inspectVideoJson } from "./minimax-video-operation.ts";
 import { inspectSearchJson, searchControlVersion, searchControlBytes, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
@@ -13,7 +14,7 @@ import { assertPolicyModel } from "./policy-models.ts";
 import { normalizeEmail, safeEqual, sha256Hex } from "./utils.ts";
 
 interface SelectionStore {
-  consumeProjectionBytes?(bytes: number): void;
+  consumeProjectionBytes?(bytes: number, text?: string): void;
   getCredential(id: string): ProxyCredentialEntry | null;
   getPolicy(id: string): AccessPolicyEntry | null;
   getUser(email: string): AccessControlUser | null;
@@ -35,9 +36,9 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
   const keys = store.resolveGrantPool(poolInput).keys;
   // One bounded import attempt per key. Recheck both the row marker and the
   // attachment revision after KV yields; an owner publication always wins.
-  if (input.search === searchControlVersion && keys.length > 32) searchUnavailable();
+  if ((input.search === searchControlVersion || input.video === videoControlVersion) && keys.length > 32) searchUnavailable();
   const missing = keys.filter(key => !rows(sql.exec("SELECT 1 FROM upstream_grant_projections WHERE grant_key = ?", key)).length);
-  if (input.search === searchControlVersion && missing.length) searchUnavailable();
+  if ((input.search === searchControlVersion || input.video === videoControlVersion) && missing.length) searchUnavailable();
   const versions = new Map(missing.map(key => [key, store.grantAttachment(key).revision]));
   let backfillFailed = false;
   if (missing.length) {
@@ -72,7 +73,9 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     const pool = store.resolveGrantPool(poolInput);
     fresh.pools = { ...fresh.pools, [provider.id]: pool };
     if (backfillFailed) return fresh;
-    const search = input.search === searchControlVersion;
+    const video = input.video === videoControlVersion;
+    const search = input.search === searchControlVersion || video;
+    const controlBytes = video ? videoControlBytes : searchControlBytes;
     if (search) {
       if (pool.keys.length > 32) searchUnavailable();
       let bytes = 0;
@@ -81,7 +84,7 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
         const bound = rows<{ bytes: number; legacy: number }>(sql.exec("SELECT length(CAST(projection_json AS BLOB)) AS bytes, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
         const attachment = store.grantAttachment(key);
         if (!bound || bound.legacy || !Number.isSafeInteger(bound.bytes) || bound.bytes < 1
-          || (bytes += bound.bytes) > searchControlBytes || attachment.pending) searchUnavailable();
+          || (bytes += bound.bytes) > controlBytes || attachment.pending) searchUnavailable();
       }
       store.consumeProjectionBytes?.(bytes);
     }
@@ -89,7 +92,10 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     for (const key of pool.keys) {
       const row = rows<{ projection_json: string | null; legacy: number }>(sql.exec("SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
       if (!row || row.legacy) return fresh;
-      if (search && row.projection_json) inspectSearchJson(row.projection_json);
+      if (search && row.projection_json) {
+        if (video) store.consumeProjectionBytes?.(0, row.projection_json);
+        else inspectSearchJson(row.projection_json);
+      }
       candidates.push({ key, grant: row.projection_json ? JSON.parse(row.projection_json) as UpstreamGrant : null });
     }
     const poolKey = `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(poolInput.tenantId)}`;
@@ -100,7 +106,7 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     };
     if (input.snapshot === "only") return { ...fresh, snapshots: { [provider.id]: snapshot() } };
     const selection = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey, candidates, states: pool.states, identityHash, fallbackSessionHash }, choice => store.selectGrant(choice), revision);
-    if (search) searchJsonBytes({ ...fresh, selection });
+    if (search) (video ? videoJsonBytes : searchJsonBytes)({ ...fresh, selection });
     return { ...fresh, selection, ...(input.snapshot === "select" ? { snapshots: { [provider.id]: snapshot() } } : {}) };
   });
 }

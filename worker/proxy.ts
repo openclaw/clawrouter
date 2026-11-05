@@ -1,3 +1,6 @@
+import { MiniMaxVideoOperation, readVideoJson, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
+import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
+import { prepareMiniMaxVideoDispatch } from "./minimax-video-dispatch.ts";
 import { MiniMaxSearchOperation, readSearchJson, assertSearchHeaders } from "./minimax-search-operation.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
 import { prepareNativeMiniMaxSearch } from "./native-minimax-search.ts";
@@ -401,6 +404,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const provider = providerById(decodePathSegment(match[1]));
   const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodePathSegment(match[2]));
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
+  if (miniMaxVideoRoute(provider, endpoint)) return proxyMiniMaxVideo(request, env, context, provider, endpoint, mode, "manifest");
   if (endpoint.request_format === "minimax.search") return proxyMiniMaxSearch(request, env, context, provider, endpoint, mode, "manifest");
   if (provider.id === "github-copilot") {
     if (mode !== "proxy_key") return errorResponse("copilot_public_unauthorized", "Current proxy credential required", 403);
@@ -498,6 +502,10 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
   let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
+  if (matching.some(candidate => miniMaxVideoRoute(provider, candidate))) {
+    if (matching.length !== 1 || !endpoint?.native_proxy) miniMaxVideoDenied();
+    return proxyMiniMaxVideo(request, env, context, provider, endpoint, "proxy_key", "native", match[2]);
+  }
   if (matching.some(candidate => candidate.request_format === "minimax.search")) {
     if (matching.length !== 1 || !endpoint?.native_proxy) miniMaxSearchDenied();
     return proxyMiniMaxSearch(request, env, context, provider, endpoint, "proxy_key", "native", match[2]);
@@ -606,6 +614,64 @@ async function proxyNativeRaw(request: Request, env: Env, context: ExecutionCont
   if (!fresh || initial.credentialId !== fresh.credentialId || initial.principalId !== fresh.principalId || initial.policyId !== fresh.policyId
     || initial.policy.tenantId !== fresh.policy.tenantId) throw new HttpError(403, "native_upload_owner_changed", "upload caller ownership changed before dispatch");
   return proxySelected(request, env, context, mode, selection, {}, fresh);
+}
+
+function miniMaxVideoRoute(provider: CompiledProvider, endpoint: CompiledEndpoint): boolean {
+  return provider.id === "minimax" && (endpoint.lifecycle?.protocol === "minimax.video"
+    || responsesControls(provider, endpoint).some(control => control.protocol === "minimax.video")
+    || responsesFileControls(provider, endpoint).some(control => control.create.lifecycle?.protocol === "minimax.video"));
+}
+
+async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionContext, provider: CompiledProvider,
+  endpoint: CompiledEndpoint, mode: AuthMode, route: "native" | "manifest", nativePath?: string): Promise<Response> {
+  if (mode !== "proxy_key") return errorResponse("minimax_video_proxy_key_required", "Video requires a proxy key", 403);
+  const files = responsesFileControls(provider, endpoint), controls = responsesControls(provider, endpoint);
+  const owner = new MiniMaxVideoOperation(files.length ? "file" : controls.length ? "poll" : "create", request, endpoint.timeout_ms ?? 120_000);
+  const operation = owner.operation;
+  try {
+    if (request.url.length > 16384) miniMaxVideoDenied();
+    assertVideoHeaders(request.headers);
+    if (!endpoint.native_proxy || files.length && controls.length) miniMaxVideoDenied();
+    const authenticate = (selection?: ProxySelection) => authenticateProxyKey(request.headers, env,
+      [{ id: provider.id, tokenRef: provider.id }], false, undefined,
+      selection ? { providerId: provider.id, endpointId: endpoint.id, mode: "http", model: selection.model?.upstream ?? null,
+        catalogModelId: selection.model?.id ?? null, capability: selection.capability } : undefined, "authoritative", undefined, owner);
+    const original = await operation.wait(owner.track(authenticate()));
+    if (original instanceof Response) return original;
+    if (files.length || controls.length) {
+      if (request.method !== "GET" || request.body !== null) miniMaxVideoDenied();
+      const query = new URL(request.url).searchParams;
+      const params = route === "native" ? nativeParams(endpoint, nativePath!) : {};
+      if (files.length) return await operation.wait(owner.track((await import("./managed-files.ts")).proxyManagedFile(request, env, provider,
+        files.map(control => ({ ...control, endpoint, pathParams: params })), query, mode, original, undefined, context, owner)), "upstream", late => owner.discard(late));
+      const control = controls[0];
+      if (controls.some(candidate => candidate.protocol !== "minimax.video" || candidate.action !== "retrieve")) miniMaxVideoDenied();
+      const id = await (await import("./managed-routes.ts")).managedControlIdentity("minimax.video", "retrieve", params, query);
+      return await operation.wait(owner.track(proxyResponseControl(request, env, control.action, id, {}, mode, provider.id,
+        controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), original, undefined,
+        "minimax.video", params, context, undefined, owner)), "upstream", late => owner.discard(late));
+    }
+    if (request.method !== "POST" || new URL(request.url).search || endpoint.lifecycle?.protocol !== "minimax.video") miniMaxVideoDenied();
+    let body = await operation.wait(owner.track(readVideoJson(request, operation.signal, "input", owner.registerInput)));
+    let prepared;
+    if (route === "manifest") {
+      const envelope = manifestEnvelope(body);
+      if (envelope.method && envelope.method !== "POST" || Object.keys(envelope.pathParams).length || hasProxyQuery(envelope.query)) miniMaxVideoDenied();
+      prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env); envelope.body = undefined;
+    } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env);
+    body = undefined;
+    const selection: ProxySelection = { provider, endpoint, model: prepared.model, capability: "media.predict", body: prepared.body,
+      pathParams: prepared.pathParams, method: "POST" };
+    prepared.body = {};
+    if (!selection.model || !selection.model.capabilities.includes("media.predict")) miniMaxVideoDenied();
+    const auth = await operation.wait(owner.track(authenticate(selection)));
+    if (auth instanceof Response) return auth;
+    if (auth.credentialId !== original.credentialId || auth.principalId !== original.principalId || auth.policyId !== original.policyId
+      || auth.policy.generation !== original.policy.generation || auth.policy.tenantId !== original.policy.tenantId) miniMaxVideoDenied();
+    const task = owner.track(proxyManagedPrediction(request, env, context, auth, selection, {}, undefined, owner));
+    // The managed branch owns its post-dispatch lifetime. Only delivery races the caller.
+    return await operation.wait(task, "upstream", late => owner.discard(late));
+  } finally { context.waitUntil(owner.finish()); }
 }
 
 async function proxyMiniMaxSearch(request: Request, env: Env, context: ExecutionContext, provider: CompiledProvider,
@@ -1133,13 +1199,13 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner);
+  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner, video);
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || video || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -1148,7 +1214,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1167,19 +1233,20 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   if (search && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_search_query", "search options must be in JSON, not query parameters");
   if (compact && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");
   let connection: ProviderConnection;
-  try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection, wan); }
+  try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection, wan, video); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   // Native owner materialization follows known monetary denials. Messages
   // may refresh inside the owner; images may only read the exact admitted key.
-  if ((["minimax.images", "minimax.music", "minimax.search"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
+  if ((["minimax.images", "minimax.music", "minimax.search", "minimax.video_create"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
     const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
       selection.capability, selection.endpoint, undefined, undefined, selection.provider.id);
     validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, connection,
       auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
   }
   let upstream: UpstreamAuth;
+  if (video) videoJsonBytes(selection.body, "input");
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, searchOwner?.operation.signal ?? request.signal, wan, searchOwner); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -1206,7 +1273,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     // Decide once from the materialized transport, before reservation. An
     // ordinary failover cannot promote an already reserved request into a job.
     const backgroundRecovery = recoverBackground && backgroundResponse(selection.endpoint, selection.body) && grantSupports(lifecycle, upstream.grant);
-    if (selection.endpoint.lifecycle) assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: transport, managedLifecycle: true }, upstream.grant, env);
+    if (selection.endpoint.lifecycle) assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: transport, managedLifecycle: true, ...(video ? { model: selection.model?.upstream } : {}) }, upstream.grant, env);
     if (backgroundRecovery) {
       assertOperationConfiguration(lifecycle, upstream.grant, env);
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
@@ -1276,10 +1343,11 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
         lineage: upstream.grant?.credentialLineage ?? null,
         // A WebSocket GET is only the handshake; both transports execute the
         // same logical Responses POST and must share continuation ownership.
-        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams),
+        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams, selection.model?.upstream),
         policyGeneration: auth.policy.generation,
       };
     }
+    const videoCheck = video ? prepareMiniMaxVideoDispatch(env, auth, selection, upstream, url, headers, video) : undefined;
     const tokenPlanCheck = searchOwner ? prepareMiniMaxSearchDispatch(env, auth, selection, upstream, url, headers, searchOwner) : undefined;
     if (searchOwner) {
       const origin = upstream.grant?.minimaxSearchBinding?.origin;
@@ -1290,7 +1358,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     }
     const wanCheck = wanCreate(selection.endpoint) && continuation
       ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan) : undefined;
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
