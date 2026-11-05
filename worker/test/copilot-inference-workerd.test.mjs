@@ -4,7 +4,24 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
+import { createRequire } from "node:module";
+
+// Use the same locked Wrangler dependencies as the shared harness, with an
+// explicit second isolate. No shared module singleton can lend control authority.
+async function isolatedFixture(directory, source, upstreamSource, bindings) {
+ const require=createRequire(import.meta.resolve('wrangler/package.json'));
+ const {Miniflare,convertV4MiniflareOptions}=require('miniflare'),{build}=require('esbuild');
+ const bundled=await build({stdin:{contents:source,resolveDir:process.cwd(),sourcefile:'copilot-isolation-fixture.ts',loader:'ts'},write:false,bundle:true,format:'esm',platform:'browser',target:'es2022',logLevel:'silent'});
+ const classes={ACCESS_CONTROL:'PolicyBindingIndexObject',BUDGET_LEDGER:'BudgetLedgerObject',USAGE_LEDGER:'UsageLedgerObject',GRANT_CREDENTIALS:'GrantCredentialObject'};
+ const objects=external=>Object.fromEntries(Object.entries(classes).map(([name,className])=>[name,{className,useSQLite:true,unsafePreventEviction:true,...(external?{scriptName:'owner'}:{})}]));
+ const common={modules:true,script:bundled.outputFiles[0].text,compatibilityDate:'2026-06-05',compatibilityFlags:['enable_request_signal'],bindings:{CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS:'0',...bindings},kvNamespaces:{POLICY_KV:'copilot-fixture-policy'},outboundService:'upstream'};
+ const runtime=new Miniflare(convertV4MiniflareOptions({resourceTmpPath:directory,workers:[
+  {...common,name:'front',durableObjects:objects(true)},
+  {...common,name:'owner',durableObjects:objects(false),queueProducers:{USAGE_QUEUE:'usage'},queueConsumers:{usage:{maxBatchSize:1,maxBatchTimeout:0}}},
+  {name:'upstream',modules:true,script:upstreamSource,compatibilityDate:'2026-06-05',compatibilityFlags:['enable_request_signal']},
+ ]}));
+ try{await runtime.ready;return runtime;}catch(error){await runtime.dispose();throw error;}
+}
 
 const origin = "https://router.example", issuer = "https://device-workerd.cloudflareaccess.com";
 const email = "device-admin@example.invalid", key = "oauth/fixture/copilot";
@@ -37,7 +54,7 @@ async function ioFixture(t){
   if(phase==='inference'){
    let body='';for await(const part of req)body+=part;const input=JSON.parse(body),format=req.headers['x-fixture-api'];let text;
    const value=format==='messages'?{id:'reply',type:'message',role:'assistant',model:'model-0',content:[{type:'text',text:'hello'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}}:format==='responses'?{id:'reply',object:'response',status:'completed',model:'model-0',output:[{type:'message',role:'assistant',content:[{type:'output_text',text:'hello'}]}],usage:{input_tokens:2,output_tokens:3,total_tokens:5}}:{id:'reply',object:'chat.completion',model:'model-0',choices:[{index:0,message:{role:'assistant',content:'hello'},finish_reason:'stop'}],usage:{prompt_tokens:2,completion_tokens:3,total_tokens:5}};
-   if(['held-inference','cleanup-error','revoke','replace','account-cancel'].includes(mode)){res.writeHead(200,{'content-type':input.stream?'text/event-stream':'application/json'});res.write(' ');return;}
+   if(['held-inference','cleanup-error','revoke','replace','account-cancel','account-borrow'].includes(mode)){res.writeHead(200,{'content-type':input.stream?'text/event-stream':'application/json'});res.write(' ');return;}
    if(input.stream){const frame='data: '+JSON.stringify({model:'model-0',choices:[{delta:{content:'hello'}}]})+'\n\n';text=format==='messages'?'event: message_start\ndata: '+JSON.stringify({type:'message_start',message:{...value,content:[],stop_reason:null,usage:{input_tokens:2,output_tokens:0}}})+'\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n':format==='responses'?'event: response.completed\ndata: '+JSON.stringify({type:'response.completed',response:value})+'\n\n':frame+'data: [DONE]\n\n';
     if(mode==='maximum-stream'){const prefix='data: {"x":"',suffix='"}\n\n',chunk=prefix+'x'.repeat(65536-Buffer.byteLength(prefix+suffix))+suffix;text=chunk.repeat(512);}
     if(mode==='incremental'){res.writeHead(200,{'content-type':'text/event-stream'});res.write(frame);gates.set('/gate/incremental/stream',{end(){res.end('data: [DONE]\n\n');}});return;}
@@ -46,7 +63,7 @@ async function ioFixture(t){
    res.writeHead(200,{'content-type':input.stream?'text/event-stream':'application/json','content-length':Buffer.byteLength(text)});res.end(text);return;
   }
 
-  if((mode==='held-account'&&phase==='account')||(mode==='held-catalog'&&phase==='catalog')||(['held-inference','cleanup-error','revoke','replace','account-cancel'].includes(mode)&&phase==='inference')){res.writeHead(200,{'content-type':'application/json'});res.write(' ');return;}
+  if((mode==='held-account'&&phase==='account')||(mode==='held-catalog'&&phase==='catalog')||(['held-inference','cleanup-error','revoke','replace','account-cancel','account-borrow'].includes(mode)&&phase==='inference')){res.writeHead(200,{'content-type':'application/json'});res.write(' ');return;}
   let text=phase==='account'?(mode==='maximum'?maximumAccount():'{"endpoints":{"api":"https://api.individual.githubcopilot.com/v1"}}')
    :(mode==='maximum'?maximumCatalog():JSON.stringify({data:mode==='empty'?[]:[{id:'model-0',model_picker_enabled:true,policy:{state:mode==='unknown'?'future':'enabled'},supported_endpoints:['/chat/completions','/messages','/responses']}]}));
   if(mode==='destination'&&phase==='account')text='{"endpoints":{"api":"https://api.business.githubcopilot.com"}}';
@@ -77,8 +94,8 @@ globalThis.fetch=async(input,init)=>{
    if((exact||over)&&a.reads<=(over?8191:8190))return{done:false,value:view.subarray(0,0)};
    const pending=native.read(view);
    try{const part=await pending;if(part.value)a.maximumBacking=Math.max(a.maximumBacking,part.value.buffer.byteLength);return part;}
-   finally{if(((mode==='held-account'&&phase==='account')||(mode==='held-catalog'&&phase==='catalog')||(['held-inference','cleanup-error','revoke','replace','account-cancel'].includes(mode)&&phase==='inference'))&&a.reads===2){await gate('read');a.readRetired=true;}}
-  },async cancel(reason){a.cancels++;await native.cancel(reason);if(mode.startsWith('held-')||['cleanup-error','revoke','replace','account-cancel','late'].includes(mode)){await gate('cleanup');a.cleanup=true;}if(mode==='cleanup-error')throw Error('synthetic cleanup failure');},
+   finally{if(((mode==='held-account'&&phase==='account')||(mode==='held-catalog'&&phase==='catalog')||(['held-inference','cleanup-error','revoke','replace','account-cancel','account-borrow'].includes(mode)&&phase==='inference'))&&a.reads===2){await gate('read');a.readRetired=true;}}
+  },async cancel(reason){a.cancels++;await native.cancel(reason);if(mode.startsWith('held-')||['cleanup-error','revoke','replace','account-cancel','account-borrow','late'].includes(mode)){await gate('cleanup');a.cleanup=true;}if(mode==='cleanup-error')throw Error('synthetic cleanup failure');},
   releaseLock(){native.releaseLock();a.unlocks++;}};};
  if(mode==='late'&&phase==='inference')await gate('response');
  if(mode==='tighten'&&phase==='catalog')await authorityCall(contextEnv,'/policies/put',{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:[]}});
@@ -97,7 +114,7 @@ export class GrantCredentialObject extends Owner{
    const input={initiator:'user',body,key:r.grantKey,expectedGeneration:r.generation,expectedLineage:r.lineage,deviceAttemptId:r.copilotDeviceAttempt.id,accountAttemptId:b.accountAttemptId,
     authorization:supplied.authorization,deadline:Date.now()+30000,runtimeIdentity:{ownerBinding:b.ownerBinding,integrationId:'fixture',editorVersion:'Fixture/1',editorPluginVersion:'Fixture/1',userAgent:'Fixture/1'},selection:{modelId:'github-copilot/model-0',format}};
    if(mode==='maximum')body.padding='x'.repeat(262144-new TextEncoder().encode(JSON.stringify(input)).length);
-   const abort=new AbortController();if(mode==='held-input'||mode==='held-account'||mode==='held-catalog'||mode==='held-inference'||mode==='cleanup-error'||mode==='late'||mode==='revoke'||mode==='replace'||mode==='account-cancel')this.fixtureState.waitUntil(gate('abort').then(()=>abort.abort()));
+   const abort=new AbortController();if(mode==='held-input'||mode==='held-account'||mode==='held-catalog'||mode==='held-inference'||mode==='cleanup-error'||mode==='late'||mode==='revoke'||mode==='replace'||mode==='account-cancel'||mode==='account-borrow')this.fixtureState.waitUntil(gate('abort').then(()=>abort.abort()));
    const native=new Request('https://clawrouter.internal/copilot-inference',{method:'POST',headers:{'content-type':'application/json','x-clawrouter-copilot-deadline':String(input.deadline)},body:JSON.stringify(input),signal:abort.signal});
    const a={phase:'input',reads:0,cancels:0,unlocks:0,maximumBacking:0,body:native.body};readers.push(a);const get=native.body.getReader.bind(native.body);
    native.body.getReader=options=>{const r=get(options);return{async read(view){a.reads++;if((mode==='reads-exact'||mode==='reads-over-input')&&a.reads<=(mode==='reads-over-input'?8191:8190))return{done:false,value:view.subarray(0,0)};try{const part=await r.read(view);if(part.value)a.maximumBacking=Math.max(a.maximumBacking,part.value.buffer.byteLength);return part;}finally{if(mode==='held-input'&&a.reads===1){await gate('read');a.readRetired=true;}}},async cancel(reason){a.cancels++;await r.cancel(reason);if(mode==='held-input'){await gate('cleanup');a.cleanup=true;}},releaseLock(){a.unlocks++;r.releaseLock();}};};
@@ -106,8 +123,12 @@ export class GrantCredentialObject extends Owner{
   return super.fetch(request);
  }
 }
+let frontLease;
 export default{async fetch(request,env,ctx){
  const url=new URL(request.url),key='oauth/fixture/'+(url.searchParams.get('grant')??'copilot');
+ if(url.pathname==='/fixture/front-hold'){frontLease=new BodyLease();return Response.json({admitted:frontLease.grow(48*1024*1024),charged:bodyBudgetCharged()});}
+ if(url.pathname==='/fixture/front-release'){frontLease?.release();frontLease=undefined;return Response.json({charged:bodyBudgetCharged()});}
+ if(url.pathname==='/fixture/front-stats')return Response.json({charged:bodyBudgetCharged()});
  if(url.pathname==='/fixture/setup'){
   await authorityCall(env,'/users/initialize-all',[{email:${JSON.stringify(email)},record:{role:'admin',tenantId:'default',enabled:true,groups:[],contentRetentionDisabled:false}}]);
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['github-copilot'],models:null,requestCostMicros:700}}]);
@@ -138,18 +159,18 @@ async function body(response,status=200){const text=await response.text();assert
 
 test('actual workerd private Copilot inference three APIs, composite limits and physical retirement',{timeout:180000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'copilot-inference-owner-'));t.after(()=>rm(directory,{recursive:true,force:true}));
- const io=await ioFixture(t),signed=await access(),runtime=await startWorkerdFixture(directory,router,upstream(io,signed),{preventEviction:true,bindings:{CLAWROUTER_ACCESS_TEAM_DOMAIN:issuer,CLAWROUTER_ACCESS_AUD:'device-workerd',CLAWROUTER_ACCESS_ADMIN_EMAILS:email}});t.after(()=>runtime.dispose());
+ const io=await ioFixture(t),signed=await access(),runtime=await isolatedFixture(directory,router,upstream(io,signed),{CLAWROUTER_ACCESS_TEAM_DOMAIN:issuer,CLAWROUTER_ACCESS_AUD:'device-workerd',CLAWROUTER_ACCESS_ADMIN_EMAILS:email});t.after(()=>runtime.dispose());
  const request=(p,grant,mode)=>runtime.dispatchFetch(origin+p+'?grant='+grant+(mode?'&mode='+mode:''));
  const control=async(p,grant,mode)=>{const r=await request(p,grant,mode);assert.equal(r.status,200,await r.clone().text());return r.json();};
  const run=(grant,flow,value)=>runtime.dispatchFetch(origin+path.replace('/copilot/','/'+grant+'/')+'?flow='+flow,{method:'POST',headers:{origin,'content-type':'application/json','cf-access-jwt-assertion':signed.jwt},body:JSON.stringify({flow,provider:'github-copilot',...value})});
  const until=async(grant,predicate)=>{let s;for(let i=0;i<150;i++){s=await control('/fixture/stats',grant);if(predicate(s))return s;await new Promise(r=>setTimeout(r,10));}assert.fail(JSON.stringify(s));};
  await control('/fixture/setup','copilot');
- const cases=[...['openai.chat_completions','anthropic.messages','openai.responses'].flatMap(format=>[false,true].map(stream=>({mode:format+'-'+stream,format,stream}))),...['maximum','maximum-stream','incremental','reads-exact','reads-over-input','reads-over-account','reads-over-catalog','reads-over-inference','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','tighten','destination','empty','unknown','unknown-price','bad-frame','downstream-cancel'].map(mode=>({mode,format:'openai.responses',stream:['maximum-stream','incremental','bad-frame'].includes(mode)}))];
+ const cases=[...['openai.chat_completions','anthropic.messages','openai.responses'].flatMap(format=>[false,true].map(stream=>({mode:format+'-'+stream,format,stream}))),...['maximum','maximum-stream','incremental','reads-exact','reads-over-input','reads-over-account','reads-over-catalog','reads-over-inference','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','account-borrow','tighten','destination','empty','unknown','unknown-price','bad-frame','downstream-cancel'].map(mode=>({mode,format:'openai.responses',stream:['maximum-stream','incremental','bad-frame'].includes(mode)}))];
  for(const {mode,format,stream} of cases)await t.test(mode,async t=>{
   const grant='inference-'+mode.replaceAll('.','-');
   // A failed assertion must still release only this case's original-network
   // barriers, so its retained allocation cannot contaminate sibling cases.
-  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
+  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream'])io.release(mode+'/'+phase);await control('/fixture/front-release',grant);await until(grant,s=>s.charged===0);});
   io.setMode(mode==='maximum'?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');
   const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-inference-'+mode.replaceAll('.','-'),expectedGeneration:0}));
   await new Promise(r=>setTimeout(r,Math.max(0,begun.nextPollAt-Date.now())+10));
@@ -158,14 +179,24 @@ test('actual workerd private Copilot inference three APIs, composite limits and 
   assert.equal((await body(await account('qualify'))).status,'qualified');await until(grant,s=>s.charged===0);
   io.setMode(mode);await control('/fixture/mode',grant,mode);if(mode==='unknown-price')await control('/fixture/unknown',grant);const counts={...io.counts};
   const pending=runtime.dispatchFetch(origin+'/fixture/inference?grant='+grant+'&format='+format+'&stream='+stream);
-  const held=['held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel'].includes(mode);
+  const held=['held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','account-borrow'].includes(mode);
   if(held){
    const target=mode==='held-input'?'input':mode==='held-account'?'account':mode==='held-catalog'?'catalog':'inference';
    const readResponse=target==='inference'&&mode!=='late'?await pending:null;
    let consuming=readResponse?.text();if(consuming)void consuming.catch(()=>{});
    await until(grant,s=>s.readers.some(r=>r.phase===target&&r.reads===(mode==='late'?0:mode==='held-input'?1:2)));
    if(mode==='revoke'||mode==='replace')await bounded(control('/fixture/'+mode,grant),'owner mutation');
-   else if(mode==='account-cancel')assert.equal((await body(await bounded(account('cancel'),'account cancellation'))).status,'cancelled');
+   else if(mode==='account-cancel'||mode==='account-borrow'){
+    assert.equal((await control('/fixture/front-stats',grant)).charged,0);
+    assert.equal((await control('/fixture/stats',grant)).charged,96*MiB);
+    if(mode==='account-borrow')assert.deepEqual(await control('/fixture/front-hold',grant),{admitted:true,charged:96*MiB});
+    assert.equal((await body(await bounded(account('status'),'account status'))).status,'qualified');
+    // Neither qualification nor stale input may consume the exclusive cancel slot.
+    await body(await bounded(account('qualify'),'qualification denial'),409);
+    await body(await bounded(run(grant,'copilot-account.v1',{operation:'cancel',attemptId:begun.attemptId,expectedGeneration:original.generation+1,expectedLineage:original.lineage}),'stale cancellation'),409);
+    assert.equal((await body(await bounded(account('cancel'),'account cancellation'))).status,'cancelled');
+    if(mode==='account-borrow'){assert.equal((await control('/fixture/front-stats',grant)).charged,96*MiB);await control('/fixture/front-release',grant);}
+   }
    else io.release(mode+'/abort');
    if(consuming)await assert.rejects(bounded(consuming,'prompt delivery failure'));else await body(await bounded(pending,'prompt failure'),503);
    let stats=await control('/fixture/stats',grant);assert.equal(stats.charged,96*MiB);assert.equal(stats.contender,false);

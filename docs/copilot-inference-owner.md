@@ -98,6 +98,60 @@ or input backing is at most 16 KiB, not merely its visible slice. No per-read
 HttpOperation race/history is retained. Existing account/catalog wire, shape,
 row, URL and record limits remain unchanged.
 
+## Cancellation at full composite capacity
+
+The existing 2 MiB control share admits one exclusive, opaque, grant-bound
+cancel/status participant. It does not increase the 96 MiB charge. The credential
+owner registers current key, generation, lineage and original admin actor before
+input reads. Registration closes before allocation retirement, and closure joins
+all admitted control participants. A failed concurrent inference cannot close
+another operation's registration. Qualification, foreign/stale scope and unrelated
+grant operations cannot borrow this slot.
+
+| Control owners, simultaneously bounded | KiB |
+| --- | ---: |
+| Original predecessor, one ordered current record and one pending storage representation | 896 |
+| One control input parse graph; frontend forwards bounded original bytes | 512 |
+| Required Access/CSRF/framing headers and bounded private HTTP copies | 256 |
+| Original raw input, decoded text, windows and bounded replies | 80 |
+| Tokenizer, promises and fixed ownership state | 128 |
+| Remaining structural/headroom allowance | 176 |
+| Total | 2048 |
+
+Each record is checked before copying/serialization: at most 128 values and 128
+members, depth 6, 96 KiB aggregate decoded string/key units and 96 KiB serialized
+UTF-8. The slot enforces one current record continuation and one storage write;
+the owner's ordering tail excludes concurrent record mutations. The conservative
+record allowance includes three 192 KiB string representations, a 96 KiB storage
+encoding and 224 KiB bounded object/control overhead. These are operational
+allowances, not JavaScript heap-size measurements. Account/canonical identity and
+credential acquisition bounds remain unchanged.
+
+All source headers, including excluded fields, are checked before construction:
+at most 32 headers, 16 KiB units per value and 32 KiB aggregate UTF-8 name/value
+bytes, including internal control headers. Only required Access/CSRF and JSON
+framing headers are forwarded. Up to four simultaneous 64 KiB header-string
+representations fit the 256 KiB allowance. Caller IDs are never authority and
+private control IDs never enter public projections or replies. Control input uses
+the unchanged 8 KiB/8192-read device reader and preparse guard; only the owner
+parses the forwarded input. Replies stay at most 2 KiB.
+
+A frontend with its own available charge retains that charge. If its pool is
+full, private reserve/execute/retire HTTP messages join the original owner's slot.
+No module-global registry is shared across Worker/DO isolates. Both layers verify
+current Access admin and same origin; the owner resolves and rechecks current
+record authority. Only the private retirement acknowledgment can follow admin
+revocation: it releases an already registered participant and cannot mutate a
+credential or authorize input.
+
+The slot joins original reads, FIRST cancel cleanup, late returned responses,
+record settlement and both reply producers. The cancellation reply waits only for
+its own cleanup/retirement acknowledgment; it never awaits inference retirement,
+which itself joins the slot. Thus cancellation can return while inference cleanup
+is held. Cleanup rejection does not rewrite accounting; failed lock retirement
+retains capacity. This protocol does not certify unrelated upstream producer
+buffers across the credential transport.
+
 ## Physical retirement and proof
 
 Whole-operation cancellation and accounting remain prompt. Separate retained

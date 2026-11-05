@@ -1,6 +1,7 @@
 import { assertCopilotAccountRecord, type CopilotAccountBinding } from "./copilot-account-flow.ts";
 import { readCopilotDeviceJson } from "./copilot-device-admin.ts";
 import { copilotAccountRequest, copilotCatalogRequest, copilotModelFormats, qualifyCopilotIdentity, prepareCopilotRequest, type CopilotRuntimeIdentity, type CopilotWireFormat } from "./provider-copilot.ts";
+import { CopilotInferenceControl } from "./copilot-inference-control.ts";
 import { runCopilotInference } from "./copilot-inference-flow.ts";
 import { copilotInferenceInput, copilotInferenceUnavailable, copilotInferenceUpload } from "./copilot-inference-dispatch.ts";
 import { disposeCopilotInferenceResponse } from "./copilot-inference-response.ts";
@@ -77,6 +78,7 @@ function input(value: unknown, inference = false): CopilotCatalogInput {
 }
 
 export class CopilotCatalogFlow {
+  readonly inferenceControl = new CopilotInferenceControl();
   private active?: Active;
   private readonly owner: CopilotCatalogOwner;
   private readonly env: Env;
@@ -94,7 +96,17 @@ export class CopilotCatalogFlow {
       retain: work => this.owner.retain(work),
       begin: operation => this.owner.order(async () => {
         if (this.active) throw unavailable();
-        operation.signal.throwIfAborted(); active = { operation, responses: [] }; this.active = active;
+        operation.signal.throwIfAborted();
+        const record = await this.owner.read();
+        if (!record) throw unavailable();
+        assertCopilotAccountRecord(record);
+        operation.signal.throwIfAborted();
+        const binding = record.copilotAccountBinding, device = record.copilotDeviceAttempt;
+        if (!binding || !device || record.providerId !== provider || record.enabled !== true || record.revokedAt
+          || binding.key !== record.grantKey || binding.generation !== record.generation || binding.lineage !== record.lineage
+          || binding.actor !== device.actor) throw unavailable();
+        this.inferenceControl.register({ key: binding.key, generation: record.generation, lineage: record.lineage, actor: binding.actor });
+        active = { operation, responses: [] }; this.active = active;
       }),
       qualify: async (value, deadline, preflight) => {
         if (!active) throw unavailable();
@@ -164,6 +176,7 @@ export class CopilotCatalogFlow {
       },
       end: async () => {
         if (active?.responses.some(response => response.body?.locked)) throw new Error("copilot_inference_input_not_retired");
+        if (active && this.active === active) await this.inferenceControl.close();
         active?.responses.splice(0); qualified = undefined; selected = undefined;
         if (this.active === active) this.active = undefined;
       },

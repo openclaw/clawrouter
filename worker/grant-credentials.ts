@@ -92,6 +92,7 @@ export class GrantCredentialObject implements DurableObject {
     }, env);
     this.copilotAccount = new CopilotAccountFlow({
       invalidateCatalog: () => this.copilotCatalog.invalidate(),
+      inferenceControl: this.copilotCatalog.inferenceControl,
       order: run => this.order(run),
       read: () => this.state.storage.get<CredentialRecord>("credential"),
       save: async record => { assertCopilotAccountRecord(record); await this.state.storage.put("credential", record); },
