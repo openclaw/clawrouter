@@ -15,7 +15,7 @@ on:
         description: Explicit experiment JSON including prior spend and cumulative cap
         required: true
         type: string
-        default: '{"strategies":["strong"],"trials":1,"maxTurns":10,"outputTokens":2048,"deadlineMs":180000,"trialBudgetMicros":200000,"campaignBudgetMicros":100000000,"priorCostMicros":34030327}'
+        default: '{"strategies":["strong"],"trials":1,"maxTurns":10,"outputTokens":2048,"deadlineMs":180000,"trialBudgetMicros":200000,"campaignBudgetMicros":100000000,"priorCostMicros":34697983}'
 
 permissions:
   contents: read

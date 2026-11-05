@@ -228,7 +228,13 @@ checkpoint. An interrupted corpus prevents the next corpus from starting. A
 missing pre-inference receipt and malformed accounting are distinguished; corrupt
 accounting conservatively reserves the current corpus's full allowance.
 
-The hosted campaign enforces a starting ledger floor of $34.030327 from the
+The hosted campaign enforces a starting ledger floor of $34.697983 from the
 preceding experiments. Supply any later incurred costs as a higher
 `priorCostMicros`; never reuse the floor after a paid run. The floor is not a
 shared billing ledger or protection against separate concurrent operators.
+
+HTTP failures retain only an allowlisted provider error type and a diagnostic
+hint such as `credit_balance`, `structured_output`, or `unknown`. Raw error text
+is discarded because it can echo request content. A hint is not proof that an
+attempt was unbilled: its reservation remains charged to the campaign until
+accounting is reconciled. No HTTP failure triggers an automatic retry.

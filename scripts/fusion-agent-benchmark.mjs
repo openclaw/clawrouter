@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
-import { nativePins, nativeRequest, nativeResult, responseDisposition, requireCompleteResponse } from './fusion-native-provider.mjs';
+import { nativePins, nativeRequest, nativeResult, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 import { runCandidateEnsemble, compareCandidates, candidateSummaries } from './fusion-candidate-ensemble.mjs';
 
@@ -310,7 +310,11 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
       const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body),
         signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
-      if (!response.ok) throw new Error('unknown_cost');
+      if (!response.ok) {
+        Object.assign(attempt, nativeErrorMetadata(await response.json().catch(() => null)));
+        if (attempt.errorHint === 'safety_notice') console.log("Provider safety notice: This content can't be shown. The campaign stopped without retry or fallback.");
+        throw new Error('unknown_cost');
+      }
       result = nativeResult(model, await response.json());
       attempt.responseDisposition = responseDisposition(result.result);
       attempt.finishReason = finishReason(result.result.choices?.[0]?.finish_reason);
