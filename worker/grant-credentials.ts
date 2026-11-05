@@ -1,3 +1,6 @@
+import { miniMaxSearchDenied, miniMaxSearchOwnerBinding, miniMaxSearchProjection, mutateMiniMaxSearchBinding } from "./minimax-search-credential.ts";
+import { searchJsonBytes, inspectSearchJson, searchControlBytes, readSearchJson, searchControlHeader, searchControlVersion, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import type { SearchGrantAttestation } from "./authority-contracts.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { CopilotCatalogFlow } from "./copilot-catalog-flow.ts";
 import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
@@ -21,7 +24,7 @@ import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuo
 import { grantUsable, REFRESH_MARGIN_MS } from "./grant-selection.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
-import { errorResponse, HttpError, json, readJson } from "./utils.ts";
+import { errorResponse, HttpError, json, readJson, sha256Hex } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -301,7 +304,14 @@ export class GrantCredentialObject implements DurableObject {
         if (current) nextCredentialGeneration(current.generation);
         let attachment: GrantAttachmentSnapshot;
         let previous: UpstreamGrant | null;
-        if (replace && (!current || !canonicalRecord(current))) {
+        if (input.minimaxSearchIntent !== undefined || current?.minimaxSearchBinding) {
+          // Search never repairs or adopts a legacy/pending attachment on the
+          // way to attestation. The original record must already be canonical.
+          if (current && !canonicalRecord(current)) miniMaxSearchDenied();
+          attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key: input.key });
+          if (attachment.pending || attachment.generation !== (current?.generation ?? 0)) miniMaxSearchDenied();
+          previous = current ? metadataGrant(current) : null;
+        } else if (replace && (!current || !canonicalRecord(current))) {
           // Recover directly into the final mutation. An incomplete old owner
           // must not publish a synthetic migration or adopt newer index facts.
           previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key, true);
@@ -338,6 +348,8 @@ export class GrantCredentialObject implements DurableObject {
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt, input.vertexPrivateKey);
         mutateMiniMaxImageBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxImageIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        mutateMiniMaxSearchBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxSearchIntent,
+          !!input.searchActor && !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
         const freshAuthority = !current || record.refreshToken !== current.refreshToken;
         record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
@@ -350,6 +362,22 @@ export class GrantCredentialObject implements DurableObject {
           record.status = current.status; record.refreshAttempt = current.refreshAttempt;
           record.refreshDiagnosis = current.refreshDiagnosis; record.nextRefreshAttemptAt = current.nextRefreshAttemptAt;
         }
+        const searchMutation = input.minimaxSearchIntent !== undefined || !!current?.minimaxSearchBinding;
+        let searchProof: Omit<SearchGrantAttestation, "admissionRevision"> | undefined;
+        if (searchMutation) {
+          if (!input.searchActor || input.provenance || !canonicalRecord(record)) miniMaxSearchDenied();
+          searchJsonBytes(record);
+          const fingerprint = await sha256Hex(miniMaxApiKeySecret(record) ?? "");
+          const mutation = { key: input.key, original: { exists: !!current, generation: current?.generation ?? 0,
+            lineage: current?.lineage ?? null, revision: attachment.revision }, resultGeneration: record.generation,
+            resultLineage: record.lineage!, credentialFingerprint: fingerprint, account: record.accountId ?? null,
+            provider: record.providerId ?? null, kind: record.kind ?? null, binding: record.minimaxSearchBinding ?? null,
+            expiry: record.expiresAt ?? null, preserve: input.preserveUnspecifiedSecrets, replace };
+          searchJsonBytes(mutation);
+          const digest = await sha256Hex(JSON.stringify(mutation));
+          searchProof = { actor: input.searchActor, key: input.key, original: mutation.original,
+            resultGeneration: record.generation, resultLineage: record.lineage!, digest };
+        }
         const grant = metadataGrant(record);
         // Admission reserves capacity without removing the old attachment. A
         // failed store leaves indexed pending work for this owner to reconcile.
@@ -357,15 +385,28 @@ export class GrantCredentialObject implements DurableObject {
         // Only this explicit commit may acknowledge the reservation; later
         // refreshes and legacy imports cannot complete a failed account write.
         record.poolAdmissionRevision = admitted.revision;
+        if (searchProof) {
+          // LAST remote wait: role and exact mutation are checked after pool admission.
+          // No hash/preparation/other await may be inserted before the storage commit.
+          const expected: SearchGrantAttestation = { ...searchProof, admissionRevision: admitted.revision };
+          searchJsonBytes(expected);
+          const reply = await authorityCall<SearchGrantAttestation>(this.env, "/grant-search/authorize", expected);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(expected)) miniMaxSearchDenied();
+        }
         await this.state.storage.put("credential", record);
         await this.schedule(record);
         await this.publishProjection(record);
         return json({ grant });
       }
       if (path === "/inspect") {
-        const input = request.body ? await readJson<{ wanOriginal?: true }>(request).catch(() => ({} as { wanOriginal?: true })) : {};
+        const input = request.body ? await readJson<{ wanOriginal?: true; searchOriginal?: true }>(request).catch(() => ({} as { wanOriginal?: true; searchOriginal?: true })) : {};
         let record = await this.state.storage.get<CredentialRecord>("credential");
         if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
+        if (input.searchOriginal) {
+          if (!canonicalRecord(record) || !miniMaxSearchOwnerBinding(record) || !miniMaxSearchProjection(metadataGrant(record))) miniMaxSearchDenied();
+          const grant = metadataGrant(record); searchJsonBytes({ grant }); return json({ grant });
+        }
         if (input.wanOriginal) {
           if (!canonicalRecord(record)) throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner is unavailable");
           return json({ grant: metadataGrant(record) });
@@ -405,7 +446,7 @@ export class GrantCredentialObject implements DurableObject {
         return json(result);
       }
       if (path === "/revoke") {
-        const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
+        const { key, metadata, searchActor } = await readJson<{ key: string; metadata?: GrantRevokeMetadata; searchActor?: PutRequest["searchActor"] }>(request);
         await this.minimaxDevice.invalidate();
         await this.copilotDevice.invalidate();
         await this.copilotAccount.invalidate();
@@ -425,6 +466,21 @@ export class GrantCredentialObject implements DurableObject {
         const record = current?.revokedAt
           ? { ...current, metadata: current.metadata ?? stripLegacySecrets(previous) as UpstreamGrant, lineage: current.lineage ?? crypto.randomUUID(), poolSyncPending: true }
           : revokedRecord(key, current ? previous : { ...previous, ...metadata }, generation);
+        if (current?.minimaxSearchBinding && !current.revokedAt) {
+          if (!searchActor || !canonicalRecord(current)) miniMaxSearchDenied();
+          searchJsonBytes(record);
+          const fingerprint = await sha256Hex(miniMaxApiKeySecret(current) ?? "");
+          const digest = await sha256Hex(JSON.stringify({ key, generation: current.generation, lineage: current.lineage,
+            fingerprint, provider: current.providerId, account: current.accountId ?? null, kind: current.kind,
+            binding: null, expiry: record.expiresAt ?? null, revoke: true }));
+          const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+          if (attachment.pending || attachment.generation !== current.generation) miniMaxSearchDenied();
+          const proof: SearchGrantAttestation = { actor: searchActor, key,
+            original: { exists: true, generation: current.generation, lineage: current.lineage!, revision: attachment.revision },
+            resultGeneration: record.generation, resultLineage: record.lineage!, admissionRevision: attachment.revision, digest };
+          const reply = await authorityCall<SearchGrantAttestation>(this.env, "/grant-search/authorize", proof);
+          searchJsonBytes(reply); if (JSON.stringify(reply) !== JSON.stringify(proof)) miniMaxSearchDenied();
+        }
         // Never erase the tombstone or restore secrets when a derived write fails.
         // Retrying revoke republishes this same generation after partial failure.
         await this.state.storage.put("credential", record);
@@ -464,7 +520,7 @@ export class GrantCredentialObject implements DurableObject {
       updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
       metadata: { provider: "minimax", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight,
         createdAt: current?.createdAt ?? now, updatedAt: now },
-      nativeMediaBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null,
+      nativeMediaBinding: null, minimaxSearchBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null,
     };
     const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
       key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "minimax", status: "reauth_required",
@@ -568,6 +624,15 @@ export class GrantCredentialObject implements DurableObject {
         || record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= Date.now()))
         throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner revision is unavailable");
       return { grant: materializedGrant(metadataGrant(record), record) };
+    }
+    if (input.operation === "minimax.search") {
+      const record = await this.state.storage.get<CredentialRecord>("credential");
+      if (!record || !canonicalRecord(record) || record.grantKey !== input.key || input.providerId !== "minimax"
+        || record.generation !== input.expectedGeneration || record.lineage !== input.grant.credentialLineage
+        || input.force || input.legacy || input.refresh || !miniMaxSearchProjection(metadataGrant(record))) miniMaxSearchDenied();
+      searchJsonBytes(record);
+      const grant = materializedGrant(metadataGrant(record), record); searchJsonBytes({ grant });
+      return { grant };
     }
     let record = await this.loadRecord(input.key);
     // Unlike generic refresh, this operation may only materialize the exact
@@ -1171,12 +1236,12 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/inspect", wan ? { wanOriginal: true } : {}, signal, wan)).grant;
+export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/inspect", search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent, minimaxSearchIntent, searchActor })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -1193,8 +1258,9 @@ export async function materializeGrantCredentials(
   signal?: AbortSignal,
   operation?: MaterializeRequest["operation"],
   wan?: WanManagedOperation,
+  search?: MiniMaxSearchOperation,
 ): Promise<UpstreamGrant> {
-  const legacy = !wan && hasRawCredential(grant) ? grant : null;
+  const legacy = !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
     key,
     grant,
@@ -1205,17 +1271,17 @@ export async function materializeGrantCredentials(
     expectedGeneration: grant.credentialGeneration ?? null,
     operation,
     ...(wan ? { wanOriginal: true } : {}),
-  }, signal, wan)).grant;
+  }, signal, wan, search)).grant;
 }
 
-export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata })).grant;
+export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata, searchActor })).grant;
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
   for (const name of ["minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
-  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
+  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxSearchBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {
@@ -1297,8 +1363,9 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<T> {
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
+  if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
@@ -1350,7 +1417,7 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 

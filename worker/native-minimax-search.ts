@@ -1,3 +1,4 @@
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { mediaObject } from "./managed-media-json.ts";
 import { miniMaxSearchOrigins, miniMaxSearchPath, prepareMiniMaxSearch, readMiniMaxSearch } from "./minimax-search.ts";
@@ -10,7 +11,7 @@ import { HttpError } from "./utils.ts";
 // Messages OAuth, native speech permission and manifest defaults cannot supply it.
 export function prepareNativeMiniMaxSearch(
   selection: ProxySelection,
-  input: Readonly<{ origin: "https://api.minimax.io" | "https://api.minimaxi.com" }>,
+  input: Readonly<{ origin: "https://api.minimax.io" | "https://api.minimaxi.com"; operation?: MiniMaxSearchOperation }>,
 ): NativeResponse | undefined {
   const { provider, endpoint, model, body } = selection;
   if (endpoint.request_format !== "minimax.search") return;
@@ -37,20 +38,12 @@ export function prepareNativeMiniMaxSearch(
     // downstream EOF/cancel, including after this reader has buffered upstream.
     acquire: () => nativeResponseLease(8 * 1024 * 1024),
     async read(response, signal) {
-      const encoding = response.headers.get("content-encoding"), mime = response.headers.get("content-type");
-      if (response.status !== 200 || response.redirected || !mime
-        || !/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(mime.trim())
-        || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
-      }
-      if (encoding !== null) {
-        const headers = new Headers(response.headers); headers.delete("content-encoding");
-        response = new Response(response.body, { status: response.status, headers });
-      }
+      // Register the original reader before headers: rejection must join the
+      // first cancellation, without substituting a second cancel promise.
       try {
         // Ten selects only the codec's consumer projection. Native rows (up to
         // 100) are retained; truncation alone is not a malformed response.
-        const observed = await readMiniMaxSearch(response, 10, signal);
+        const observed = await readMiniMaxSearch(response, 10, signal, input.operation);
         // The codec filters unsafe destinations from its projection but retains
         // them in body. Validate every raw row before returning that native body.
         if (!Array.isArray(observed.body.organic)) invalid();

@@ -1,3 +1,4 @@
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { vertexAnthropicRoute } from "./vertex-anthropic-dispatch.ts";
 import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -30,6 +31,7 @@ export interface CompoundRequestContext {
 }
 
 interface AccountingContext {
+  search?: MiniMaxSearchOperation;
   env: Env;
   context: ExecutionContext;
   auth: AuthorizedIdentity;
@@ -216,13 +218,13 @@ export function createProxyAccounting(options: AccountingContext) {
     if (chargedUpstreamResponse) Object.assign(outcome, { billable: true, tokens: null, characterEstimate: null,
       pricingUnavailable: facts.fixed == null, hostedSearch: undefined, requestTariffOutcome: "unknown", requestCostReceipt: undefined });
     const event = accountingReceipt(facts, outcome);
-    return finalizeAccounting(env, reservation, event.actual_cost_micros, event);
+    return finalizeAccounting(env, reservation, event.actual_cost_micros, event, options.search);
   }
   return {
     settle,
     pricingFailure(tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
       const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode: 502, status: "provider_error", billable: true, tokens, reservation, contentRef, pricingUnavailable: true });
-      return finalizeAccounting(env, reservation, event.actual_cost_micros, event);
+      return finalizeAccounting(env, reservation, event.actual_cost_micros, event, options.search);
     },
     cost,
     requestId,
@@ -255,7 +257,7 @@ export function createProxyAccounting(options: AccountingContext) {
 
 export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, parentTools?: ToolKnowledge, preparedTariff?: RequestTariff, providerId?: string): EstimatedCost {
   if (endpoint.request_format === "openai.moderations" || isModelDiscovery(endpoint) || capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
-  if ((providerId === "github-copilot" || ["minimax.speech", "minimax.images", "minimax.music"].includes(endpoint.request_format)) && fixed == null)
+  if ((providerId === "github-copilot" || ["minimax.speech", "minimax.images", "minimax.music", "minimax.search"].includes(endpoint.request_format)) && fixed == null)
     return { reserveMicros: 0, basis: "unpriced_request", pricingGap: "opaque_input_bound", inputTokens: null, outputTokens: null };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   // Raw audio bytes and response duration cannot bound the whole upload price.
