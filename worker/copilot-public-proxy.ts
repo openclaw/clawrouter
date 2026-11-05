@@ -223,11 +223,12 @@ export class CopilotPublicOwner {
       const work = this.hooks.observe(active.seed, active.operation);
       active.reservePhysical = Promise.allSettled([active.reservePhysical, work]).then(() => undefined);
       this.hooks.retain(active.reservePhysical);
-      try { return this.binaryReply(await active.operation.wait(work, "upstream"), active); }
+      try { return this.handoff(this.binaryReply(await active.operation.wait(work, "upstream"), active), request, active); }
       catch (error) {
         active.closed = true; active.operation.stop("upstream", error);
+        const response = this.handoff(this.reply({ error: { code: "copilot_public_unavailable" } }, 409, active), request, active);
         this.hooks.retain(this.finish(active));
-        return this.reply({ error: { code: "copilot_public_unavailable" } }, 409, active);
+        return response;
       }
     }
     if (phase !== "/copilot-public/execute" || active.catalog || active.closed || active.started || !active.seed
@@ -235,13 +236,7 @@ export class CopilotPublicOwner {
     active.started = true; active.operation.stop("complete");
     const execution = this.hooks.execute(request, active.seed, active.admission, active.retired, () => {
       if (this.active === active) this.active = undefined;
-    }).then(async response => {
-      // An aborted transport may reject before the owner creates its error
-      // response. Retire that unpublished producer here; no receiver owns it.
-      if (!request.signal.aborted) return response;
-      await disposeCopilotInferenceResponse(response, request.signal.reason);
-      return new Response(null, { status: response.status });
-    });
+    }).then(response => this.handoff(response, request, active));
     active.reservePhysical = Promise.allSettled([active.reservePhysical, execution]).then(() => undefined);
     this.hooks.retain(active.reservePhysical);
     return execution;
@@ -273,12 +268,23 @@ export class CopilotPublicOwner {
     this.hooks.retain(active.reservePhysical);
     try {
       await active.operation.wait(work, "upstream");
-      return this.reply({ id: active.id, revision: active.seed!.attestation.revision }, 200, active);
+      return this.handoff(this.reply({ id: active.id, revision: active.seed!.attestation.revision }, 200, active), request, active);
     } catch (error) {
       active.closed = true; active.operation.stop("upstream", error);
+      const response = this.handoff(this.reply({ error: { code: error instanceof HttpError ? error.code : "copilot_public_unavailable" } }, error instanceof HttpError ? error.status : 503, active), request, active);
       this.hooks.retain(this.finish(active));
-      return this.reply({ error: { code: error instanceof HttpError ? error.code : "copilot_public_unavailable" } }, error instanceof HttpError ? error.status : 503, active);
+      return response;
     }
+  }
+
+  private handoff(response: Response, request: Request, active: PublicState): Response | Promise<Response> {
+    // A transport can reject before its error/compact producer exists. Cancel
+    // that unpublished source and join its lock retirement before admission.
+    if (!request.signal.aborted) return response;
+    const disposal = disposeCopilotInferenceResponse(response, request.signal.reason);
+    active.reservePhysical = Promise.allSettled([active.reservePhysical, disposal]).then(() => undefined);
+    this.hooks.retain(active.reservePhysical);
+    return disposal.then(() => new Response(null, { status: response.status }));
   }
 
   private finish(active: PublicState): Promise<void> {

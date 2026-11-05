@@ -195,6 +195,41 @@ test("aborted public execution disposes its unpublished owner reply before physi
   assert.equal(ended, true); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 0);
 });
 
+for (const phase of ["reserve", "observe"]) test("aborted discovery " + phase + " disposes its unpublished reply and joins original work", async t => {
+  const retained = [], selected = seed(provider(), 0), entered = Promise.withResolvers(), physical = Promise.withResolvers();
+  selected.route = { mode: "catalog", endpointId: "catalog", path: "/v1/catalog" };
+  selected.registryDigest = "0".repeat(64);
+  const abort = new AbortController(); let closed = 0, acknowledged = false;
+  const value = { id: "c".repeat(32), key: selected.selected.key, expectedGeneration: 3, expectedLineage: selected.selected.expectedLineage,
+    deadline: Date.now() + 30000, authorization: selected.selected.authorization, route: selected.route, registryDigest: selected.registryDigest };
+  const headers = { "content-type": "application/json", "x-clawrouter-copilot-public-id": value.id,
+    "x-clawrouter-copilot-public-key": value.key, "x-clawrouter-copilot-deadline": String(value.deadline) };
+  const owner = new CopilotPublicOwner({ async begin() {},
+    async prepare(_input, operation) { if (phase === "reserve") { entered.resolve(); await physical.promise; operation.signal.throwIfAborted(); } return selected; },
+    async observe(_seed, operation) { entered.resolve(); await physical.promise; operation.signal.throwIfAborted(); throw Error("aborted catalog must not publish"); },
+    async execute() { throw Error("catalog must not execute"); }, async close() { closed++; }, retain(work) { retained.push(work); },
+  });
+  let pending = owner.fetch(new Request("https://clawrouter.internal/copilot-public/catalog-reserve", {
+    method: "POST", headers, body: JSON.stringify(value), ...(phase === "reserve" ? { signal: abort.signal } : {}),
+  }));
+  if (phase === "observe") { await (await pending).json(); pending = owner.fetch(new Request("https://clawrouter.internal/copilot-public/observe", { method: "POST", headers, signal: abort.signal })); }
+  t.after(async () => {
+    physical.resolve(); abort.abort(); const response = await pending;
+    if (response.body && !response.bodyUsed && !response.body.locked) await response.body.cancel();
+    if (!acknowledged) await (await owner.fetch(new Request("https://clawrouter.internal/copilot-public/retire", { method: "POST", headers }))).arrayBuffer();
+    await Promise.allSettled(retained);
+  });
+  await entered.promise; abort.abort(); const response = await pending;
+  assert.equal(response.status, phase === "reserve" ? 503 : 409); assert.equal(response.body, null);
+  assert.equal(bodyBudgetCharged(), 96 * MiB); assert.equal(closed, 0);
+  const acknowledgment = await owner.fetch(new Request("https://clawrouter.internal/copilot-public/retire", { method: "POST", headers }));
+  await acknowledgment.json(); acknowledged = true;
+  assert.equal(bodyBudgetCharged(), 96 * MiB); assert.equal(closed, 0);
+  const other = new BodyLease(); assert.equal(other.grow(MiB), false); other.release();
+  physical.resolve(); await Promise.all(retained);
+  assert.equal(bodyBudgetCharged(), 0); assert.equal(closed, 1);
+});
+
 test("compact discovery binds exact compiled tariff/route identity and current policy", async () => {
   const { copilotDiscoveryPieces } = await import("../discovery.ts");
   const p = provider(), registry = await copilotPublicRegistry(p), selected = seed(p, 0);
