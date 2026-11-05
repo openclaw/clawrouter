@@ -46,7 +46,7 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { loadTasks } from './scripts/fusion-workloads.mjs';
-                    import { workloadSets, validateCampaign } from './scripts/run-fusion-workload-campaign.mjs';
+          import { workloadSets, validateCampaign } from './scripts/run-fusion-workload-campaign.mjs';
           const counts = await Promise.all(workloadSets.map(async set =>
             (await loadTasks(`benchmarks/fusion/${set.manifest}.json`)).length));
           validateCampaign(JSON.parse(process.env.FUSION_WORKLOAD_CONFIG), counts.reduce((a, b) => a + b, 0));
