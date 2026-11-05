@@ -28,12 +28,15 @@ async function fixture(t){
  const record=owner.values.get('credential'),deviceId='device-attempt-fixture',accountId='account-attempt-fixture',acquisition='original-acquisition-binding',binding='current-account-binding',actor='original-admin-actor';
  // Bootstrap the real owner/attachment, then seed the private post-onboarding state.
  // The actual workerd fixture obtains this state through device/account admin flows.
- delete record.accessToken;record.status='reauth_required';record.copilotDeviceCredential={version:1,githubDomain:'github.com',ownerBinding:acquisition,accessToken:'synthetic-original-github-token'};
+ delete record.accessToken;record.generation++;record.poolSyncPending=true;record.status='reauth_required';record.copilotDeviceCredential={version:1,githubDomain:'github.com',ownerBinding:acquisition,accessToken:'synthetic-original-github-token'};
  record.copilotDeviceAttempt={version:1,id:deviceId,key,generation:record.generation,lineage:record.lineage,githubDomain:'github.com',actor,ownerBinding:acquisition,phase:'committed',expiresAt:1};
  const scope={key,generation:record.generation,lineage:record.lineage,deviceAttemptId:deviceId,acquisitionBinding:acquisition,githubDomain:'github.com',actor};
  record.copilotAccountAttempt={...scope,version:1,id:accountId,ownerBinding:binding,phase:'qualified'};
  record.copilotAccountBinding={...scope,version:1,accountAttemptId:accountId,ownerBinding:binding,apiBaseUrl:base,qualifiedAt:1};
  owner.values.set('credential',structuredClone(record));
+ // Account acquisition changes generation; publish its inactive attachment too.
+ // A same-generation active -> reauth_required rewrite is correctly rejected.
+ await inspectGrantCredentials(env,key);assert.equal(owner.values.get('credential').poolSyncPending,false);
  const input={key,expectedGeneration:record.generation,expectedLineage:record.lineage,deviceAttemptId:deviceId,accountAttemptId:accountId,authorization:publicControlAuthorization(auth),runtimeIdentity:{ownerBinding:binding,integrationId:'fixture',editorVersion:'Fixture/1',editorPluginVersion:'Fixture/1',userAgent:'Fixture/1'},deadline:Date.now()+30000,selection:{modelId:'github-copilot/'+model,format:'openai.responses'}};
  const f={env,owner,input,sent,policy,call,record:()=>structuredClone(owner.values.get('credential')),reply:(url)=>vendor(url,url.endsWith('/models')?{data:[row()]}:{endpoints:{api:base}}),
  run:(patch={},signal)=>env.GRANT_CREDENTIALS.get(key).fetch('https://clawrouter.internal/copilot-catalog',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...input,...patch}),signal}),
