@@ -147,7 +147,7 @@ export async function readSearchJson(source: Request | Response, signal: AbortSi
       if (!chunk.value || (bytes += chunk.value.byteLength) > raw.length) searchUnavailable();
       raw.set(chunk.value, bytes - chunk.value.byteLength);
       for (let at = 0; at < chunk.value.length; at += 256) inspect.push(decoder.decode(chunk.value.subarray(at, at + 256), { stream: true }));
-      if (byob) { if (!chunk.value.buffer.byteLength) searchUnavailable(); window = new Uint8Array(chunk.value.buffer); }
+      if (byob) { const backing = chunk.value.buffer; if (!(backing instanceof ArrayBuffer) || !backing.byteLength) searchUnavailable(); window = new Uint8Array(backing); }
     }
     inspect.push(decoder.decode()); inspect.end();
     if (length !== null && Number(length) !== bytes) searchUnavailable();

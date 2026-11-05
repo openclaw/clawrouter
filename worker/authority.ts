@@ -10,8 +10,8 @@ import { storedCredentialName } from "./credential-name.ts";
 import { finishAdmissionSelection } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
 import type {
-  AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
+  AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
+  UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
 } from "./types";
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
