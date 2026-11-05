@@ -120,6 +120,7 @@
 - Dispatch declared Groq and Mistral unary transcription through authenticated bounded multipart intake, original-key revalidation and conservative settlement; keep unknown audio-dollar budgets closed and preserve native file bytes.
 - Qualify finite Groq and Mistral multipart transcription declarations with exact frozen models, original credential/path binding and unknown audio costs; shared ingress activation remains separate.
 - Keep Groq and Mistral native transcription costs unknown before token/free/image estimates and settlement; deny unqualified hard-dollar admission while preserving explicit policy-fixed charges.
+- Declare frozen Groq Whisper Turbo and Mistral Voxtral unary transcription cards on their provider-specific multipart formats, preserving existing inference blocks and keeping whole-upload tariffs unknown.
 - Keep model-less xAI native STT unpriced before token/free/image estimates and settlement, preserving explicit policy-fixed charging and conservative silence/duration accounting.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Qualify model-less xAI native STT declarations with original multipart/credential binding, unchanged Chat cards and conservative unknown-dollar admission; shared upload activation remains separate.

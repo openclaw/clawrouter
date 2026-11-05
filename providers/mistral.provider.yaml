@@ -31,6 +31,9 @@ capabilities:
   - id: llm.embeddings
     endpoint: embeddings
     methods: [POST]
+  - id: audio.transcription
+    endpoint: transcription
+    methods: [POST]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -45,6 +48,15 @@ endpoints:
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings
     timeoutMs: 120000
+  transcription:
+    path: /v1/audio/transcriptions
+    pathParams: []
+    method: POST
+    requestFormat: mistral.transcription
+    responseFormat: mistral.transcription
+    nativeProxy: true
+    headers:
+      Accept: application/json
 models:
   entries:
     - id: mistral/mistral-medium-3-5
@@ -80,6 +92,18 @@ models:
         outputMicrosPerMillion: 0
         maxInputTokens: 8192
         defaultMaxOutputTokens: 0
+    # The frozen selector has no qualified alias tariff or whole-upload price bound.
+    - id: mistral/voxtral-mini-latest
+      upstream: voxtral-mini-latest
+      capabilities: [audio.transcription]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          transcription:
+            sources:
+              - https://docs.mistral.ai/api/endpoint/audio/transcriptions
+            checkedAt: "2026-11-03"
+            input: [audio]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
