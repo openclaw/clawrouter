@@ -427,6 +427,7 @@
 - Scope MiniMax music availability metadata by region, distinguishing global free-discontinuation notice from stopped CN free service without changing origins, entitlement or pricing.
 - Qualify bounded global MiniMax music-2.6 unary hex responses with complete native JSON, playable test audio and conservative unknown costs; music dispatch still requires separate operation authority.
 - Add bounded global MiniMax music streaming inspection and complete terminal SSE replay without retaining full wire or hex copies; operation authority, actual transport bounds and registered-client activation remain unqualified.
+- Bind MiniMax music dispatch to explicit global music credentials and fresh original-owner authorization; retain response capacity through input cleanup and downstream completion.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 

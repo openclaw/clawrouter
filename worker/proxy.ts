@@ -1027,7 +1027,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+    if (!(error instanceof SelectedGrantCredentialFailure) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
     try {
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
@@ -1059,7 +1059,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   // Native owner materialization follows known monetary denials. Messages
   // may refresh inside the owner; images may only read the exact admitted key.
-  if ((selection.endpoint.request_format === "minimax.images" || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
+  if ((["minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || vertexAnthropicRoute(selection.provider, selection.endpoint)) && !softBudgetPolicy(auth.policy)) {
     const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
       selection.capability, selection.endpoint, undefined, undefined, selection.provider.id);
     validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, connection,
@@ -1149,8 +1149,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       : music ? await prepareInlineMusicOwner(env, auth, selection, upstream, url, headers, music.evidence) : undefined;
     const imageCheck = selection.endpoint.request_format === "minimax.images"
       ? prepareMiniMaxImageDispatch(env, auth, selection, upstream, url, headers) : undefined;
-    const nativeMediaCheck = selection.endpoint.request_format === "minimax.speech"
-      ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers) : undefined;
+    const nativeMediaCheck = ["minimax.speech", "minimax.music"].includes(selection.endpoint.request_format)
+      ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers, auth) : undefined;
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");

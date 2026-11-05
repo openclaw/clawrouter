@@ -1,5 +1,6 @@
 import { mediaObject } from "./managed-media-json.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
+import { inputRetirement } from "./input-retirement.ts";
 
 export const miniMaxMusicModels = ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"] as const;
 // Regional documentation observations, not account entitlement, prices or routing authority.
@@ -197,19 +198,22 @@ const streamWindow = 64 * 1024, streamReadLimit = 262144, metadataLimit = 64 * 1
 // Owns one 8 MiB accumulator, never the request, full wire, frame array or hex.
 // Caller owns the returned view/backing and capacity through delivery/cancel.
 export async function readMiniMaxMusicStream(response: Response, model: string, signal: AbortSignal): Promise<MiniMaxMusicStreamObservation> {
+  // Own the original body before validation. The public operation can fail
+  // promptly, while this promise joins its first cancellation and pending read.
+  if (!response.body || response.bodyUsed || response.body.locked) fail("stream_http");
+  let byob: ReadableStreamBYOBReader | undefined, regular: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  try { byob = response.body.getReader({ mode: "byob" }); }
+  catch { regular = response.body.getReader(); }
+  const reader = byob ?? regular!, input = inputRetirement(reader);
   const mime = response.headers.get("content-type"), encoding = response.headers.get("content-encoding"), length = response.headers.get("content-length");
   if (!["music-2.6", "music-2.6-free"].includes(model) || response.status !== 200 || response.redirected || !response.body
     || response.headers.has("content-range") || !mime || !/^text\/event-stream(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(mime.trim())
     || encoding !== null && encoding.trim().toLowerCase() !== "identity"
     || length !== null && (!/^(0|[1-9][0-9]*)$/.test(length) || Number(length) > maxEnvelope)) {
-    await response.body?.cancel().catch(() => undefined); fail("stream_http");
+    await input.retire("cancel"); fail("stream_http");
   }
-  let byob: ReadableStreamBYOBReader | undefined, regular: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try { byob = response.body.getReader({ mode: "byob" }); }
-  catch { regular = response.body.getReader(); }
-  const reader = byob ?? regular!;
-  let cancellation: Promise<void> | undefined;
-  const cancel = () => { cancellation ??= reader.cancel().catch(() => undefined); };
+  let eof = false;
+  const cancel = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", cancel, { once: true });
   try {
     signal.throwIfAborted();
@@ -218,9 +222,9 @@ export async function readMiniMaxMusicStream(response: Response, model: string, 
     for (;;) {
       if (++reads > streamReadLimit) fail("stream_reads");
       // Never lend audio backing to BYOB. Only the returned view owns a read window.
-      const part = byob ? await byob.read(window) : await regular!.read();
+      const part = await input.read(() => byob ? byob.read(window) : regular!.read());
       signal.throwIfAborted();
-      if (part.done) { if (part.value?.byteLength) fail("stream_eof"); break; }
+      if (part.done) { if (part.value?.byteLength) fail("stream_eof"); eof = true; break; }
       const bytes = part.value;
       if (!(bytes instanceof Uint8Array) || !(bytes.buffer instanceof ArrayBuffer)
         || bytes.byteLength > streamWindow || bytes.buffer.byteLength > streamWindow) fail("stream_window");
@@ -231,8 +235,8 @@ export async function readMiniMaxMusicStream(response: Response, model: string, 
     framing.push(decoder.decode()); framing.end();
     if (length !== null && Number(length) !== size) fail("stream_length");
     return state.result();
-  } catch { cancel(); return fail("stream_response"); }
-  finally { signal.removeEventListener("abort", cancel); if (cancellation) await cancellation; reader.releaseLock(); }
+  } catch { await input.retire(eof ? "eof" : "cancel", signal.reason); return fail("stream_response"); }
+  finally { signal.removeEventListener("abort", cancel); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
 
 class BoundedMusicStream {

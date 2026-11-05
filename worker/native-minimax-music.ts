@@ -5,6 +5,7 @@ import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./utils.ts";
+import { inputRetirement } from "./input-retirement.ts";
 
 const audioLimit = 4 * 1024 * 1024, responseLimit = audioLimit * 2 + 65536;
 
@@ -55,7 +56,9 @@ function musicResponse(model: string, streaming: boolean): NativeResponse {
       if (response.status !== 200 || response.redirected
         || !mime || !/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(mime.trim())
         || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
+        if (response.body && !response.bodyUsed && !response.body.locked)
+          await inputRetirement(response.body.getReader()).retire("cancel", signal.reason);
+        invalid();
       }
       if (encoding !== null) {
         const headers = new Headers(response.headers); headers.delete("content-encoding");

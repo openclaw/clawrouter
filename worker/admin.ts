@@ -12,7 +12,7 @@ import { normalizePolicyTiers } from "./service-tiers.ts";
 import { normalizeLimitHint } from "./policy-limits.ts";
 import { validGrantKey } from "./grant-routing.ts";
 import { authorizeAdmin } from "./access";
-import { minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
+import { minimaxMusicBinding, minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { backgroundRecovery } from "./background-recovery.ts";
 import {
   authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
@@ -462,13 +462,13 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
       throw new HttpError(400, "invalid_minimax_image_authorization", "Image authorization must be minimax-global-image or null");
     delete body.minimaxImageAuthorization;
     const nativeMedia = body.nativeMediaAuthorization;
-    if (nativeMedia !== undefined && nativeMedia !== null && nativeMedia !== "minimax-global-speech")
-      throw new HttpError(400, "invalid_native_media_authorization", "Native media authorization must be minimax-global-speech or null");
+    if (nativeMedia !== undefined && nativeMedia !== null && nativeMedia !== "minimax-global-speech" && nativeMedia !== "minimax-global-music")
+      throw new HttpError(400, "invalid_native_media_authorization", "Native media authorization must be minimax-global-speech, minimax-global-music or null");
     delete body.nativeMediaAuthorization;
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant) && !vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     grant = await putGrantCredentials(env, key, normalizeGrant(body, existing, !!vertexPrivateKey), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage);
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));

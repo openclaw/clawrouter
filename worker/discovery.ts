@@ -328,12 +328,14 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
   const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
   if (auth instanceof Response) return auth;
   const mediaProvider = snapshot.providers.find(provider => provider.id === "minimax"
-    && provider.endpoints.some(endpoint => endpoint.request_format === "minimax.speech")
+    && provider.endpoints.some(endpoint => ["minimax.speech", "minimax.music"].includes(endpoint.request_format))
     && (!auth.policy.providers.length || auth.policy.providers.includes(provider.id)));
   const mediaEnvironment = mediaProvider ? await qualifyMiniMaxEnvironmentBinding(mediaProvider, env) : null;
   // A rotated server key cannot reuse an eligible discovery body from either
   // isolate or colo caches. No credential bytes enter the cache identity.
-  const mediaRevision = mediaProvider ? [mediaEnvironment ? await sha256Hex(mediaEnvironment.binding) : null] : [];
+  const musicEnvironment = mediaProvider ? await qualifyMiniMaxEnvironmentBinding(mediaProvider, env, "minimax.music") : null;
+  const mediaRevision = mediaProvider ? [mediaEnvironment ? await sha256Hex(mediaEnvironment.binding) : null,
+    musicEnvironment ? await sha256Hex(musicEnvironment.binding) : null] : [];
   const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision(), ["clawrouter.published-input.v1", publicOrigin], ...mediaRevision]);
   const config = hotCacheConfig(env), shared = `${variant}\n${key}`;
   if (!entitlementCache.peek(key, config)) {
@@ -383,7 +385,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
       // PCM key authority and Vertex model/location support depend on the
       // selected model even when multiple models share one endpoint.
-      const modelRequirement = model && (provider.id === "anthropic-vertex" || provider.id === "minimax" && model.upstream === "image-01" || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
+      const modelRequirement = model && (provider.id === "anthropic-vertex" || provider.id === "minimax" && ["image-01", "music-2.6", "music-2.6-free"].includes(model.upstream) || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
       const key = JSON.stringify([matching.map(pool => pool.entry.policyId), modelRequirement ?? null]);
       const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false, modelRequirement };
       if (model === undefined) group.passthrough = true;
@@ -415,6 +417,8 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
               assertOperationConfiguration(requirement, null, env);
               if (endpoint.request_format === "minimax.speech" && !await qualifyMiniMaxEnvironmentBinding(provider, env))
                 throw new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires matching original credential authorization");
+              if (endpoint.request_format === "minimax.music" && !await qualifyMiniMaxEnvironmentBinding(provider, env, "minimax.music"))
+                throw new HttpError(403, "minimax_music_authorization_required", "Global MiniMax music requires matching original credential authorization");
             }
           }
           if (endpoint.inputProfile !== undefined) {
