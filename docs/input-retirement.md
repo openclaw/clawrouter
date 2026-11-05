@@ -1,4 +1,4 @@
-# Input retirement: JSON, delivery and native adapters
+# Input retirement: JSON, delivery, native adapters and charged catalogs
 
 An operation result, an abort notification or native protocol terminal does not
 prove that a response reader has retired. `inputRetirement(reader, sourceRetired?)`
@@ -21,7 +21,7 @@ The optional `sourceRetired` represents source ownership retirement, not an
 arbitrary operation result. A transform adapter must join its actual pipe and
 source cleanup; calling a second cancel after discarding the first is not proof.
 
-`readNativeJson` and `readGoogleJson` retain their existing signatures and limits.
+`readNativeJson` and `readGoogleJson` retain existing caller behavior and limits.
 Their header, size, parse, observation and abort paths now join owned cleanup.
 `observeUsage.result` remains prompt usage/accounting evidence, while its separate
 `retired` promise joins reader retirement and the active delivery pull, including
@@ -59,11 +59,30 @@ The multipart response forwarding hunk shares the first source cancellation
 with the Groq/Mistral reader. This does not qualify the separate multipart
 controller's admission/read race.
 
+## Charged catalog ownership
+
+The existing OpenAI/GMI/Requesty and Featherless catalog leases also retain
+physical fetches and every original response reader. Registration precedes
+`operation.wait`; an aborted public result is not a completed fetch or cleanup.
+Failure closes scan/projection registration, disposes unpublished late responses,
+and joins all original readers before releasing capacity. Cleanup rejection is
+settlement, not a claim that cancellation succeeded. An unowned locked/used body
+or failed lock retirement cannot certify release. Successful publication keeps
+the existing `observeUsage.retired` delivery boundary.
+
+`readNativeJson` accepts optional `NativeJsonInputHooks` as its sixth argument.
+`registerInput(owner, response)` runs synchronously before header cleanup or the
+first read. `observeChunk(chunk)` is a synchronous borrowed view for counting;
+it must not retain bytes. Featherless and Requesty pass their original responses
+and count through this hook, without a counting transform. Existing page, total
+wire, empty-chunk and output bounds remain unchanged. Featherless also registers
+each physical fetch with the same idempotent disposer used by its late callback.
+
 ## Remaining phases
 
 This change does not qualify every NativeResponse factory. The modern MiniMax
-music stream module is unchanged. Charged catalog, multipart-controller and
-managed-file ownership remain required follow-up work.
+music stream module is unchanged. Multipart-controller and managed-file
+ownership remain required follow-up work.
 Public Cerebras/NVIDIA/Chutes/Venice and private Baseten/Arcee/Novita
 prepared catalog branches do not acquire response leases here; cleanup defects
 there are not represented as existing response-charge bugs or new charges.

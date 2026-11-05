@@ -90,3 +90,130 @@ test("workerd Requesty native/manifest actual fetch holds capacity through 4096-
   assert.equal(proof.deadlineResult.chargeAtReadEnd, 32 * 1024 * 1024);
   assert.equal(proof.deadlineResult.aborted, true); assert.equal(proof.deadlineResult.released, 0);
 });
+async function catalogRetirementBarriers(t) {
+  const { createServer } = await import("node:http");
+  const held = new Map(), released = new Set(), counts = new Map();
+  const server = createServer((request, response) => {
+    const key = request.url;
+    if (request.method !== "GET" || request.headers.authorization || !/^\/(requesty|featherless)\/(abort|read|cleanup)$/.test(key)) {
+      response.writeHead(400); response.end(); return;
+    }
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (counts.get(key) !== 1) { response.writeHead(409); response.end(); return; }
+    if (released.has(key)) response.end("released"); else held.set(key, response);
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+  return { origin: "http://127.0.0.1:" + server.address().port,
+    release(mode, phase) { const key = "/" + mode + "/" + phase; released.add(key); held.get(key)?.end("released"); held.delete(key); },
+    count(mode, phase) { return counts.get("/" + mode + "/" + phase) ?? 0; } };
+}
+
+const retirementRouter = String.raw`
+export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
+import worker from './worker/index.ts';
+import {snapshot} from './worker/providers.ts';
+import {authorityCall} from './worker/authority.ts';
+import {putGrantCredentials} from './worker/grant-credentials.ts';
+import {sha256Hex} from './worker/utils.ts';
+import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
+const rawFetch=globalThis.fetch.bind(globalThis),release=BodyLease.prototype.release;
+const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+let active;
+BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&bodyBudgetCharged()<before)active.releases++;};
+const state=()=>active?{mode:active.mode,fetches:active.fetches,reads:active.reads,cancels:active.cancels,cleanup:active.cleanup,readRetired:active.readRetired,
+  results:active.results,status:active.status,releases:active.releases,lateEnqueues:active.lateEnqueues,charged:bodyBudgetCharged(),
+  sourceLocked:active.source?.locked??false,physicalLocked:active.physical?.locked??false}:{};
+const gate=(a,phase)=>rawFetch('https://catalog-retirement-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async response=>{
+ if(!response.ok)throw new Error('fixture gate rejected');await response.text();
+});
+globalThis.fetch=async(input,init)=>{
+ const request=new Request(input,init),a=active;
+ if(!a||!request.url.startsWith(a.base+'/models'))throw new Error('unexpected catalog fetch');
+ a.fetches++;
+ const response=await rawFetch(request);a.physical=response.body;const reader=response.body.getReader();
+ let stopped=false,first=true,cancellation,pulling;
+ const cancel=reason=>cancellation??=(async()=>{
+   stopped=true;a.cancels++;
+   const cleanup=(async()=>{try{await reader.cancel(reason);}catch{}await gate(a,'cleanup');a.cleanup=true;})();
+   // This fixture owns its extra source continuation as well as the real reader.
+   await Promise.allSettled([pulling,cleanup]);reader.releaseLock();
+ })();
+ a.source=new ReadableStream({pull(controller){return pulling=(async()=>{
+   a.reads++;let next;
+   try{next=await reader.read();}
+   finally{if(first){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}
+   if(stopped)return;
+   if(next.done)controller.close();else controller.enqueue(next.value);
+ })();},cancel},{highWaterMark:0});
+ return new Response(a.source,{status:response.status,headers:response.headers});
+};
+export default {async fetch(request,env,ctx){
+ const url=new URL(request.url);
+ if(url.pathname==='/state')return Response.json(state());
+ if(url.pathname==='/contend'){const lease=new BodyLease(),allowed=lease.grow(33*1024*1024);lease.release();return Response.json({allowed,charged:bodyBudgetCharged()});}
+ if(url.pathname!=='/start'||active&&active.releases!==1)return new Response(null,{status:409});
+ const mode=url.searchParams.get('mode');if(!['requesty','featherless'].includes(mode))return new Response(null,{status:400});
+ const a={mode,base:mode==='requesty'?'https://router.requesty.ai/v1':'https://api.featherless.ai/v1',fetches:0,reads:0,cancels:0,cleanup:false,
+  readRetired:false,results:0,status:0,releases:0,lateEnqueues:0,ready:deferred(),abort:new AbortController()};active=a;
+ const provider=structuredClone(snapshot.providers.find(p=>p.id==='openai'));
+ const endpoint={...provider.endpoints.find(e=>e.id==='models_list'),id:mode==='requesty'?'models_managed':'catalog',
+  path:mode==='requesty'?'/models/managed':'/models',method:'GET',methods:['GET'],request_format:mode==='requesty'?'requesty.models_managed':'featherless.catalog',
+  response_format:mode==='requesty'?'requesty.models_managed':'featherless.catalog',native_proxy:mode==='requesty',timeout_ms:10000,path_params:[],path_param_styles:{},headers:{},query:{}};
+ Object.assign(provider,{id:mode,base_urls:{default:a.base},native_prefixes:[mode],routing:{nativePrefixes:[mode],modelPrefixes:[mode+'/'],baseUrlParam:null,serviceParam:null},
+  auth:{schemes:[{type:'bearer',header:'Authorization',format:'Bearer '+String.fromCharCode(36)+'{secret}',secretKind:'api_key'}],grantTransports:{}},
+  adapter:{...provider.adapter,injectHeaders:{},injectQuery:{},passthroughHeaders:[]},
+  capabilities:[{id:'models.list',endpoint:endpoint.id,methods:['GET']}],endpoints:[endpoint],
+  models:[{id:mode+'/one',upstream:'one',capabilities:[],pricing:null,pricing_ref:null}]});
+ snapshot.providers=[...snapshot.providers.filter(p=>p.id!==mode),provider];
+ await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:[mode],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
+ await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
+ await authorityCall(env,'/connections/initialize-all',[{providerId:mode,enabled:true,monthlyBudgetMicros:10000}]);
+ await putGrantCredentials(env,'oauth/fixture/'+mode,{provider:mode,kind:'api_key',enabled:true,credential:'synthetic-original-key'});
+ // The abort continuation originates in this request; control requests only read state.
+ ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('synthetic caller cancellation'))));
+ const route=mode==='requesty'?'/v1/native/requesty/models/managed':'/v1/proxy/featherless/catalog';
+ ctx.waitUntil(worker.fetch(new Request('https://router.example'+route,{headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret'},signal:a.abort.signal}),env,ctx)
+  .then(async response=>{a.status=response.status;await response.text();a.results++;}));
+ await a.ready.promise;return Response.json(state());
+},queue:worker.queue};
+`;
+const retirementUpstream = origin => (String.raw`
+export default {fetch(request){
+ const url=new URL(request.url);
+ if(url.origin==='https://catalog-retirement-gate.example'){
+  if(request.headers.has('authorization'))throw new Error('gate credential leak');
+  return fetch(BARRIER_ORIGIN+url.pathname,{redirect:'manual',signal:request.signal});
+ }
+ if(request.headers.get('authorization')!=='Bearer synthetic-original-key'||request.method!=='GET')throw new Error('wrong original catalog credential');
+ if(url.origin==='https://router.requesty.ai')return Response.json({data:[{id:'one',api:'chat'}]});
+ if(url.origin==='https://api.featherless.ai')return Response.json({data:[{id:'one'}],pagination:{current_page:1,per_page:100,total_items:1,total_pages:1},total:1});
+ throw new Error('unexpected fixture origin');
+}};
+`).replace("BARRIER_ORIGIN", JSON.stringify(origin));
+
+test("workerd charged catalogs keep original read and first cleanup through prompt abort", { timeout: 120000 }, async t => {
+  const { setTimeout: delay } = await import("node:timers/promises");
+  const temporary = await mkdtemp(join(tmpdir(), "charged-catalog-retirement-")); t.after(() => rm(temporary, { recursive: true, force: true }));
+  const barriers = await catalogRetirementBarriers(t);
+  const runtime = await startWorkerdFixture(temporary, retirementRouter, retirementUpstream(barriers.origin), { preventEviction: true });
+  t.after(() => runtime.dispose());
+  const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
+  const until = async predicate => { let value; for (let i=0;i<100;i++) { value=await call("/state"); if(predicate(value))return value; await delay(10); } assert.fail(JSON.stringify(value)); };
+  for (const mode of ["requesty", "featherless"]) {
+    const charge=(mode==="requesty"?32:96)*1024*1024;
+    let state=await call("/start?mode="+mode); assert.equal(state.charged,charge); assert.equal(state.fetches,1); assert.equal(state.reads,1);
+    barriers.release(mode,"abort"); state=await until(s=>s.results===1&&s.cancels===1);
+    assert.equal(state.status,502); assert.equal(state.releases,0); assert.equal(state.charged,charge);
+    assert.equal(state.sourceLocked,true); assert.equal(state.physicalLocked,true);
+    assert.deepEqual(await call("/contend"),{allowed:false,charged:charge});
+    const first=mode==="requesty"?"read":"cleanup",second=first==="read"?"cleanup":"read";
+    barriers.release(mode,first); state=await until(s=>first==="read"?s.readRetired:s.cleanup);
+    assert.equal(state.releases,0); assert.equal(state.charged,charge); assert.equal(state.sourceLocked,true);
+    barriers.release(mode,second); state=await until(s=>s.releases===1);
+    assert.equal(state.charged,0); assert.equal(state.cleanup,true); assert.equal(state.readRetired,true);
+    assert.equal(state.sourceLocked,false); assert.equal(state.physicalLocked,false); assert.equal(state.cancels,1); assert.equal(state.fetches,1); assert.equal(state.results,1);
+    assert.equal(state.lateEnqueues,0);
+    for (const phase of ["abort","read","cleanup"]) assert.equal(barriers.count(mode,phase),1);
+  }
+});

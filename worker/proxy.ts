@@ -6,6 +6,7 @@ import { inlineMusicInput, prepareInlineMusicInput, type InlineMusicInput } from
 import { publishedMusicInput, preparePublishedMusicInput, PublishedMusicUnsent, type PublishedMusicInput } from "./published-music-runtime.ts";
 import { readInlineMusicJson } from "./openrouter-music-input.ts";
 import { nativeResponseLease } from "./native-response.ts";
+import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
 import { assertMultipartIntake } from "./transcription-protocol.ts";
@@ -704,14 +705,40 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
+  const catalogInputs = prepared.featherlessCatalog || prepared.acquireDiscovery
+    ? new Map<ReadableStream<Uint8Array>, InputRetirement>() : undefined;
+  const catalogFetches: Array<{ pending: Promise<Response>; discard: (response: Response) => Promise<void> }> = [];
+  let catalogWork: Promise<Response> | undefined;
+  const registerCatalogInput = (input: InputRetirement, response: Response): void => {
+    if (response.body) catalogInputs?.set(response.body, input);
+    if (signal.aborted) void input.retire("cancel", signal.reason).catch(() => undefined);
+  };
   let discarded: WeakMap<Response, Promise<void>> | undefined;
   const discard = (response: Response): Promise<void> => {
     let pending = discarded?.get(response);
     if (!pending) {
-      pending = response.body?.cancel(signal.reason).catch(() => undefined) ?? Promise.resolve();
+      pending = (async () => {
+        if (!catalogInputs) { await response.body?.cancel(signal.reason).catch(() => undefined); return; }
+        if (!response.body) return;
+        let input = catalogInputs.get(response.body);
+        if (!input) {
+          // A locked/used body without our owner is not a retirement receipt.
+          if (response.bodyUsed || response.body.locked) throw new Error("catalog input ownership unavailable");
+          input = inputRetirement(response.body.getReader());
+          registerCatalogInput(input, response);
+        }
+        await input.retire("cancel", signal.reason);
+      })();
+      void pending.catch(() => undefined);
       (discarded ??= new WeakMap()).set(response, pending);
     }
     return pending;
+  };
+  const registerCatalogFetch = (pending: Promise<Response>, dispose = discard): void => {
+    // Keep the physical response, including one that arrives after the public
+    // race. Failure joins this same disposer even if its callback already ran.
+    catalogFetches.push({ pending, discard: dispose });
+    void pending.catch(() => undefined);
   };
   const discardNative = (value: { response: Response }) => discard(value.response);
   let response: Response | undefined;
@@ -733,13 +760,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const upstreamStart = performance.now();
     const pending = published ? published.dispatch(env, prepared.requestBody, { requestId, eventId: accounting.facts.event.id,
       reservedMicros: cost.reserveMicros, reservations: (reservation?.reservations ?? []).map(({ objectName, reservationId }) => ({ objectName, reservationId })) }) : prepared.featherlessCatalog
-      ? featherlessCatalogResponse(prepared.featherlessCatalog, operation)
+      ? featherlessCatalogResponse({ ...prepared.featherlessCatalog, registerInput: registerCatalogInput, registerFetch: registerCatalogFetch }, operation)
       : prepared.publicCatalog
       ? fetchPublicModelDiscovery({ ...prepared.publicCatalog, operation }).then(result => Response.json(
         manifestOnlyPublicCatalog(selection.endpoint.request_format) ? result : result.catalog,
         { headers: { "cache-control": "private, no-store" } }))
       : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
     if (selection.nativeResponse) nativeFetch = pending;
+    if (prepared.featherlessCatalog) catalogWork = pending;
+    else if (catalogInputs) registerCatalogFetch(pending);
     if (useSoft) {
       soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
       reservation = soft.reservation;
@@ -783,13 +812,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Do not pass Location downstream for the client to replay either.
     if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
     if (isModelDiscovery(selection.endpoint) && !prepared.publicCatalog && !prepared.featherlessCatalog) {
-      response = await modelDiscoveryResponse(response, selection.provider, selection.endpoint, auth.policy, discoveryQuery(queryInput), operation, async (cursor, before) => {
+      const reading = modelDiscoveryResponse(response, selection.provider, selection.endpoint, auth.policy, discoveryQuery(queryInput), operation, async (cursor, before) => {
         const pageUrl = new URL(prepared.url);
         pageUrl.searchParams.set(before ? "before_id" : "after_id", cursor);
         signal.throwIfAborted();
-        const page = await operation.wait(fetch(pageUrl, { method: "GET", headers: prepared.headers, signal, redirect: "manual" }), "upstream", discard);
+        const pending = fetch(pageUrl, { method: "GET", headers: prepared.headers, signal, redirect: "manual" });
+        if (catalogInputs) registerCatalogFetch(pending);
+        const page = await operation.wait(pending, "upstream", discard);
         return page;
-      }, prepared.revalidateDiscovery ? () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined);
+      }, prepared.revalidateDiscovery ? () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined,
+      catalogInputs ? registerCatalogInput : undefined);
+      if (catalogInputs) catalogWork = reading;
+      response = catalogInputs ? await operation.wait(reading, "upstream", discard) : await reading;
     }
     if (selection.nativeResponse) {
       if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
@@ -837,7 +871,21 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     const failedLease = nativeLease;
     nativeLease = undefined;
-    if (nativeRead || nativeFetch) {
+    if (catalogInputs) {
+      operation.stop("upstream", error);
+      const retirement = (async () => {
+        // Whole scan/projection completion closes registration. A late fetch can
+        // still add its original reader while disposal is settling.
+        const work = await Promise.allSettled([catalogWork?.then(discard, () => undefined), response ? discard(response) : undefined]);
+        const fetches = await Promise.allSettled(catalogFetches.map(({ pending, discard }) => pending.then(discard, () => undefined)));
+        const inputs = await Promise.allSettled([...catalogInputs.values()].map(input => input.retire("cancel", signal.reason)));
+        // Cleanup settlement is not success: failed ownership/lock retirement
+        // cannot certify release, and never replaces the public error outcome.
+        const failed = [...work, ...fetches, ...inputs].find(result => result.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
+      })();
+      context.waitUntil(retirement.then(() => failedLease?.release()));
+    } else if (nativeRead || nativeFetch) {
       // Cancellation/accounting can finish now. A qualified reader settles only
       // after input retirement; late fetch/results also retain their first cleanup.
       const retirement = (async () => {

@@ -158,3 +158,62 @@ for (const changed of [false, true]) test(`native catalog error delivery require
   else assert.doesNotMatch(JSON.stringify(result), /synthetic native refusal/);
   assert.equal(f.sent.length, 1); assert.equal((await f.events())[0].actual_cost_micros, 0);
 });
+const retirementGate = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+for (const first of ["read", "cancel"]) for (const cleanupRejects of [false, true]) {
+  test("generic catalog public abort holds physical read, first cancel and capacity (" + first + ", rejection=" + cleanupRejects + ")", { timeout: 5000 }, async t => {
+    const f = await setup(t), caller = new AbortController();
+    const started = retirementGate(), cancelStarted = retirementGate(), readAck = retirementGate(), cancelAck = retirementGate();
+    let physical, reads = 0, cancels = 0, unlocks = 0, drained = false;
+    f.upstream = () => {
+      physical = new ReadableStream({ pull() { started.resolve(); }, async cancel() {
+        cancels++; cancelStarted.resolve(); await cancelAck.promise;
+        if (cleanupRejects) throw new Error("synthetic cleanup rejection");
+      } }, { highWaterMark: 0 });
+      const acquire = physical.getReader.bind(physical);
+      physical.getReader = () => {
+        const reader = acquire();
+        return { async read() { reads++; try { return await reader.read(); } finally { await readAck.promise; } },
+          cancel: reason => reader.cancel(reason), releaseLock() { unlocks++; reader.releaseLock(); } };
+      };
+      return new Response(physical, { headers: { "content-type": "application/json" } });
+    };
+    try {
+      const pending = f.request(false, { signal: caller.signal }); await started.promise; caller.abort(new Error("synthetic caller stop"));
+      const response = await pending; assert.equal(response.status, 502); await response.text(); await cancelStarted.promise;
+      const retirement = f.drain().then(() => { drained = true; });
+      assert.equal(physical.locked, true); assert.equal(bodyBudgetCharged(), capacity); assert.equal(cancels, 1);
+      const contender = new BodyLease(); assert.equal(contender.grow(33 * 1024 * 1024), false); contender.release();
+      (first === "read" ? readAck : cancelAck).resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(drained, false); assert.equal(physical.locked, true); assert.equal(bodyBudgetCharged(), capacity);
+      (first === "read" ? cancelAck : readAck).resolve(); await retirement;
+      assert.equal(reads, 1); assert.equal(cancels, 1); assert.equal(unlocks, 1); assert.equal(physical.locked, false);
+      assert.equal(bodyBudgetCharged(), 0); assert.equal(f.sent.length, 1);
+      const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 0);
+    } finally { readAck.resolve(); cancelAck.resolve(); }
+  });
+}
+
+for (const cleanupRejects of [false, true]) test("generic catalog aborted physical fetch retains its late body through first cleanup (" + cleanupRejects + ")", { timeout: 5000 }, async t => {
+  const f = await setup(t), caller = new AbortController(), fetched = retirementGate(), responseGate = retirementGate();
+  const cancelStarted = retirementGate(), cleanup = retirementGate(); let physical, cancels = 0, drained = false;
+  f.upstream = request => {
+
+    fetched.resolve(); return responseGate.promise;
+  };
+  try {
+    const pending = f.request(false, { signal: caller.signal }); await fetched.promise; caller.abort();
+    const response = await pending; assert.equal(response.status, 502); await response.text();
+    const retirement = f.drain().then(() => { drained = true; });
+    assert.equal(bodyBudgetCharged(), capacity); assert.equal(drained, false);
+    physical = new ReadableStream({ async cancel() { cancels++; cancelStarted.resolve(); await cleanup.promise;
+      if (cleanupRejects) throw new Error("synthetic late cleanup rejection");
+    } }, { highWaterMark: 0 });
+    responseGate.resolve(new Response(physical, { headers: { "content-type": "application/json" } }));
+    await cancelStarted.promise;
+    assert.equal(physical.locked, true); assert.equal(bodyBudgetCharged(), capacity); assert.equal(drained, false);
+    cleanup.resolve(); await retirement;
+    assert.equal(cancels, 1); assert.equal(physical.locked, false); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(f.sent.length, 1); assert.equal((await f.events()).length, 1);
+  } finally { responseGate.resolve(new Response(null)); cleanup.resolve(); }
+});

@@ -212,3 +212,24 @@ test("Featherless scan helper has qualified native Node runtime import suffixes"
   assert.equal(execFileSync(process.execPath, ["--experimental-transform-types", "--input-type=module", "-e",
     `const m = await import(${JSON.stringify(url)}); if (typeof m.fetchFeatherlessModelCatalog !== "function") throw new Error("missing scan");`], { encoding: "utf8" }), "");
 });
+test("Featherless exposes every original page owner before reads and preserves registered physical fetches", async t => {
+  const responses = [], owners = [], fetches = [], order = [];
+  const selected = input(t, {
+    registerFetch(pending, discard) { order.push("fetch registered"); fetches.push({ pending, discard }); },
+    registerInput(owner, response) { order.push("input registered"); owners.push(owner); assert.equal(response, responses.at(-1)); },
+  });
+  mockPages(t, n => {
+    const bytes = encode(page(n, 200, [{ id: n === 1 ? "one" : "two" }])); let sent = false;
+    const response = new Response(new ReadableStream({ pull(controller) {
+      assert.equal(order.at(-1), "input registered");
+      if (sent) controller.close(); else { sent = true; controller.enqueue(bytes); }
+    } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
+    responses.push(response); return response;
+  });
+  assert.equal((await scan(selected)).catalog.length, 2);
+  assert.deepEqual(order, ["fetch registered", "input registered", "fetch registered", "input registered"]);
+  assert.equal(owners.length, 2); assert.notEqual(owners[0], owners[1]);
+  await Promise.all(owners.map(owner => owner.retired));
+  for (const [i, tracked] of fetches.entries()) { assert.equal(await tracked.pending, responses[i]); await tracked.discard(responses[i]); }
+  assert.ok(responses.every(response => !response.body.locked));
+});

@@ -1,6 +1,7 @@
 import { featherlessCatalogRequest, filterFeatherlessModels, type FeatherlessModelRow } from "./featherless-model-catalog.ts";
 import type { HttpOperation } from "./http-operation.ts";
-import { readNativeJson } from "./native-json.ts";
+import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
+import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { HttpError } from "./utils.ts";
 
 const PAGE_BYTES = 2 * 1024 * 1024;
@@ -13,10 +14,6 @@ const encoder = new TextEncoder();
 function invalid(): never {
   throw new HttpError(502, "invalid_model_discovery_response", "Featherless catalog scan is invalid or exceeds the discovery bound");
 }
-function discard(response: Response): void {
-  void response.body?.cancel().catch(() => undefined);
-}
-
 // The caller owns capacity through result serialization/publication, and owns
 // operation completion. This leaf neither releases that lease nor ends delivery.
 export async function fetchFeatherlessModelCatalog(input: Readonly<{
@@ -26,6 +23,8 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
   revalidateAccount: (signal: AbortSignal) => Promise<void>;
   allows: (upstreamId: string) => boolean;
   permittedModelIds: ReadonlySet<string>;
+  registerInput?: NativeJsonInputHooks["registerInput"];
+  registerFetch?: (pending: Promise<Response>, discard: (response: Response) => Promise<void>) => void;
 }>): Promise<{ providerId: "featherless"; catalog: FeatherlessModelRow[] }> {
   const { operation, inferenceBaseUrl, selectedApiKey, revalidateAccount, allows, permittedModelIds } = input;
   const { signal } = operation;
@@ -34,6 +33,21 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
   let wireBytes = 0, resultBytes = encoder.encode(JSON.stringify({ providerId: "featherless", catalog: [] })).byteLength;
   let totals: { items: number; pages: number } | undefined;
   let active: Response | undefined;
+  const inputs = new WeakMap<Response, InputRetirement>();
+  const registerInput: NonNullable<NativeJsonInputHooks["registerInput"]> = (owner, response) => {
+    inputs.set(response, owner);
+    input.registerInput?.(owner, response);
+  };
+  async function discard(response: Response): Promise<void> {
+    if (!response.body) return;
+    let owner = inputs.get(response);
+    if (!owner) {
+      if (response.bodyUsed || response.body.locked) invalid();
+      owner = inputRetirement(response.body.getReader());
+      registerInput(owner, response);
+    }
+    await owner.retire("cancel", signal.reason);
+  }
   async function revalidate(): Promise<void> {
     signal.throwIfAborted();
     await operation.wait(revalidateAccount(signal));
@@ -43,22 +57,16 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
     for (let page = 1; page <= MAX_PAGES; page++) {
       const request = featherlessCatalogRequest(inferenceBaseUrl, selectedApiKey, page, signal);
       await revalidate();
-      active = await operation.wait(fetch(request), "upstream", discard);
+      // Registration includes late-response disposal, before the public race.
+      const fetching = fetch(request);
+      input.registerFetch?.(fetching, discard);
+      const pending = fetching.then(async response => {
+        if (signal.aborted) { await discard(response); signal.throwIfAborted(); }
+        return response;
+      });
+      active = await operation.wait(pending, "upstream", response => { void discard(response).catch(() => undefined); });
       signal.throwIfAborted();
-      // A new Response cannot preserve the readonly redirected flag.
-      if (active.redirected) invalid();
-      if (active.body) {
-        let chunks = 0, pageBytes = 0;
-        const body = active.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-          transform(chunk, controller) {
-            signal.throwIfAborted();
-            chunks++; pageBytes += chunk.byteLength; wireBytes += chunk.byteLength;
-            if (chunks > MAX_CHUNKS || pageBytes > PAGE_BYTES || wireBytes > WIRE_BYTES) invalid();
-            controller.enqueue(chunk);
-          },
-        }));
-        active = new Response(body, { status: active.status, statusText: active.statusText, headers: active.headers });
-      }
+      let chunks = 0, pageBytes = 0;
       const parsed = await operation.wait(readNativeJson(active, signal, PAGE_BYTES, payload => {
         const result = filterFeatherlessModels(payload, () => true, page);
         // The codec validates every raw ID, including unavailable/filtered rows.
@@ -69,7 +77,11 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
           seen.add(row.id);
         }
         return result;
-      }, invalid), "upstream");
+      }, invalid, { registerInput, observeChunk(chunk) {
+        signal.throwIfAborted();
+        chunks++; pageBytes += chunk.byteLength; wireBytes += chunk.byteLength;
+        if (chunks > MAX_CHUNKS || pageBytes > PAGE_BYTES || wireBytes > WIRE_BYTES) invalid();
+      } }), "upstream");
       active = undefined;
       await revalidate();
       const { total_items: items, total_pages: pages } = parsed.pagination;
@@ -90,6 +102,6 @@ export async function fetchFeatherlessModelCatalog(input: Readonly<{
     }
     return invalid();
   } finally {
-    if (active) discard(active);
+    if (active) await discard(active);
   }
 }
