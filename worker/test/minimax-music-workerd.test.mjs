@@ -125,12 +125,12 @@ test("MiniMax music registered workerd DO body, both routes, exact maximum, reti
   t.after(async()=>{for(const mode of ['held-input','delivery-eof','delivery-cancel'])for(const phase of ['abort','read','cleanup','delivery'])controls.release(mode,phase);await runtime.dispose();});
   const call=async path=>{const r=await runtime.dispatchFetch('https://router.example'+path);assert.equal(r.status,200,await r.clone().text());return r.json();};
   const until=async predicate=>{let s;for(let i=0;i<200;i++){s=await call('/state');if(predicate(s))return s;await delay(10);}assert.fail(JSON.stringify(s));};
-  const put=async()=>{const r=await runtime.dispatchFetch('https://router.example/v1/admin/upstream-grants/policies/fixture/music',{
+  const put=async(replace=false)=>{const r=await runtime.dispatchFetch('https://router.example/v1/admin/upstream-grants/policies/fixture/music'+(replace?'?mode=replace':''),{
     method:'PUT',headers:{authorization:'Bearer synthetic-admin','content-type':'application/json'},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-music-key',nativeMediaAuthorization:'minimax-global-music'})});
     assert.equal(r.status,200,await r.clone().text());assert.doesNotMatch(await r.text(),/synthetic-music-key/);};
   await put();let events=0,abortedRequestId;
   for(const mode of ['unary','manifest','maximum','held-input','delivery-eof','delivery-cancel','revoke','unpriced']){
-    if(mode==='unpriced')await put();
+    if(mode==='unpriced')await put(true); // Explicitly replace the preceding revoked owner.
     let s=await call('/start?mode='+mode);
     if(mode==='held-input'){
       assert.equal(s.reads,1,JSON.stringify(s));controls.release(mode,'abort');s=await until(s=>s.results===1&&s.cancels===1);
