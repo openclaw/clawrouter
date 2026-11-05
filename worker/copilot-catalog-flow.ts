@@ -120,10 +120,10 @@ export class CopilotCatalogFlow {
         if (!model || model.policy?.state !== "enabled" || model.model_picker_enabled !== true || !copilotModelFormats(model).includes(inference.selected.selection.format)) throw unavailable();
         const sent = await this.owner.order(async () => {
           const scope = this.scope(await this.owner.read(), selected!, original);
-          const upstream = prepareCopilotRequest(inference.body, scope.binding, scope.binding.ownerBinding, scope.token, model,
-            inference.selected.selection.format, selected!.runtimeIdentity, inference.context);
           current.operation.signal.throwIfAborted(); control.assertControlCallerLive(selected!.authorization);
           if (Date.now() >= selected!.deadline || posted) throw unavailable();
+          const upstream = prepareCopilotRequest(inference.body, scope.binding, scope.binding.ownerBinding, scope.token, model,
+            inference.selected.selection.format, selected!.runtimeIdentity, inference.context);
           posted = true; dispatched();
           let response: Promise<Response>;
           try { response = fetch(upstream, { signal: current.operation.signal, redirect: "manual" }); }

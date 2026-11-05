@@ -25,7 +25,7 @@ function maximumAccount(){
  return JSON.stringify(root);
 }
 function maximumCatalog(){
- const data=Array.from({length:4096},(_,i)=>({id:'model-'+i,model_picker_enabled:true,policy:{state:'enabled'},supported_endpoints:['/chat/completions','/messages','/responses']}));
+ const data=Array.from({length:4096},(_,i)=>({id:'model-'+i,model_picker_enabled:true,policy:{state:'enabled'},supported_endpoints:['/responses']}));
  const text='{"data":'+JSON.stringify(data)+',"discarded":['+'['.repeat(62)+']'.repeat(62)+','+'[],'.repeat(20416)+'null,'.repeat(102401)+'null],"meta":{'+Array(110588).fill('"":0').join(',')+'},"padding":"';
  const result=text+'x'.repeat(2*MiB-Buffer.byteLength(text+'"}'))+'"}';assert.equal(Buffer.byteLength(result),2*MiB);return result;
 }
@@ -35,13 +35,14 @@ async function ioFixture(t){
   if(req.url.startsWith('/gate/')){if(released.has(req.url))res.end('released');else gates.set(req.url,res);return;}
   const phase=req.url==='/account'?'account':req.url==='/catalog'?'catalog':req.url==='/inference'?'inference':null;if(!phase){res.writeHead(404);res.end();return;}counts[phase]++;
   if(phase==='inference'){
-   let body='';for await(const part of req)body+=part;const input=JSON.parse(body);let text;
+   let body='';for await(const part of req)body+=part;const input=JSON.parse(body),format=req.headers['x-fixture-api'];let text;
+   const value=format==='messages'?{id:'reply',type:'message',role:'assistant',model:'model-0',content:[{type:'text',text:'hello'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}}:format==='responses'?{id:'reply',object:'response',status:'completed',model:'model-0',output:[{type:'message',role:'assistant',content:[{type:'output_text',text:'hello'}]}],usage:{input_tokens:2,output_tokens:3,total_tokens:5}}:{id:'reply',object:'chat.completion',model:'model-0',choices:[{index:0,message:{role:'assistant',content:'hello'},finish_reason:'stop'}],usage:{prompt_tokens:2,completion_tokens:3,total_tokens:5}};
    if(['held-inference','cleanup-error','revoke','replace','account-cancel'].includes(mode)){res.writeHead(200,{'content-type':input.stream?'text/event-stream':'application/json'});res.write(' ');return;}
-   if(input.stream){const frame='data: '+JSON.stringify({model:'model-0',choices:[{delta:{content:'hello'}}]})+'\n\n';text=frame+'data: [DONE]\n\n';
+   if(input.stream){const frame='data: '+JSON.stringify({model:'model-0',choices:[{delta:{content:'hello'}}]})+'\n\n';text=format==='messages'?'event: message_start\ndata: '+JSON.stringify({type:'message_start',message:value})+'\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n':format==='responses'?'event: response.completed\ndata: '+JSON.stringify({type:'response.completed',response:value})+'\n\n':frame+'data: [DONE]\n\n';
     if(mode==='maximum-stream'){const prefix='data: {"x":"',suffix='"}\n\n',chunk=prefix+'x'.repeat(65536-Buffer.byteLength(prefix+suffix))+suffix;text=chunk.repeat(512);}
     if(mode==='incremental'){res.writeHead(200,{'content-type':'text/event-stream'});res.write(frame);gates.set('/gate/incremental/stream',{end(){res.end('data: [DONE]\n\n');}});return;}
     if(mode==='bad-frame')text=frame+'data: {"x":['+Array(4096).fill(0).join(',')+']}\n\n';
-   }else{text=JSON.stringify({id:'reply',model:'model-0',usage:{prompt_tokens:2,completion_tokens:3,total_tokens:5}});if(mode==='maximum')text='{"x":"'+'x'.repeat(262144-8)+'"}';}
+   }else{text=JSON.stringify(value);if(mode==='maximum')text='{"x":"'+'x'.repeat(262144-8)+'"}';}
    res.writeHead(200,{'content-type':input.stream?'text/event-stream':'application/json','content-length':Buffer.byteLength(text)});res.end(text);return;
   }
 
@@ -128,7 +129,7 @@ function upstream(io,signed){return `export default{async fetch(request){
  if(request.url==='https://github.com/login/oauth/access_token')return Response.json({access_token:'synthetic-original-github-token',token_type:'bearer',scope:'read:user'});
  const phase=request.url==='https://api.github.com/copilot_internal/user'?'account':request.url.startsWith('https://api.individual.githubcopilot.com/')&&request.url.endsWith('/models')?'catalog':request.url.startsWith('https://api.individual.githubcopilot.com/')?'inference':null;
  if(phase){if(request.method!==(phase==='inference'?'POST':'GET')||request.headers.get('authorization')!=='Bearer synthetic-original-github-token'||request.headers.has('cf-access-jwt-assertion'))throw Error('original token');
-  if(phase==='catalog'&&request.headers.get('copilot-integration-id')!=='fixture')throw Error('runtime identity');return fetch(${JSON.stringify(io.origin)}+'/'+phase,{method:request.method,...(phase==='inference'?{body:request.body}:{}),signal:request.signal});}
+  if(phase==='catalog'&&request.headers.get('copilot-integration-id')!=='fixture')throw Error('runtime identity');return fetch(${JSON.stringify(io.origin)}+'/'+phase,{method:request.method,...(phase==='inference'?{body:request.body,headers:{'x-fixture-api':new URL(request.url).pathname.split('/').at(-1)}}:{}),signal:request.signal});}
  if(request.url.startsWith('https://catalog-fixture.example/gate/'))return fetch(${JSON.stringify(io.origin)}+new URL(request.url).pathname);
  return new Response(null,{status:400});}};`;}
 async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,no)=>{timer=setTimeout(()=>no(Error(label+' did not settle')),5000);})]);}finally{clearTimeout(timer);}}

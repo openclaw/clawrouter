@@ -106,6 +106,7 @@ export function copilotInferenceResponse(response: Response, operation: HttpOper
   } catch (error) { headerError = error; }
   let buffer = new Uint8Array(streaming ? 64 * KiB : 256 * KiB), used = 0, offset = 0;
   let pending: Uint8Array | undefined, pendingOffset = 0, unaryReady = false, frameReady = false, ended = false, upstreamEOF = false;
+  let lineSize = 0, skipLF = false, boundaryCR = false;
   const qualify = async (final = false) => {
     await revalidate(final);
     operation.signal.throwIfAborted();
@@ -159,12 +160,24 @@ export function copilotInferenceResponse(response: Response, operation: HttpOper
         }
         let complete = false;
         while (pending && pendingOffset < pending.length) {
+          // A CR delimiter may still own the next LF. Do not strand that LF as
+          // an incomplete future frame or release an unvalidated partial frame.
+          if (boundaryCR) {
+            if (pending[pendingOffset] === 10) {
+              if (used === buffer.length) throw invalid(); buffer[used++] = pending[pendingOffset++];
+            }
+            boundaryCR = false; skipLF = false; complete = true; break;
+          }
           const byte = pending[pendingOffset++];
           if (used === buffer.length) throw invalid(); buffer[used++] = byte;
-          complete = used >= 2 && (byte === 10 && buffer[used - 2] === 10 || byte === 13 && buffer[used - 2] === 13)
-            || used >= 4 && byte === 10 && buffer[used - 2] === 13 && buffer[used - 3] === 10 && buffer[used - 4] === 13;
+          if (skipLF) { skipLF = false; if (byte === 10) continue; }
+          if (byte === 13 || byte === 10) {
+            if (lineSize === 0) { if (byte === 13) boundaryCR = true; else complete = true; }
+            lineSize = 0; skipLF = byte === 13;
+          } else lineSize++;
           if (complete) break;
         }
+        if (!complete && upstreamEOF && boundaryCR) { boundaryCR = false; skipLF = false; complete = true; }
         if (complete) { validateFrame(); await qualify(); frameReady = true; offset = 0; continue; }
         pending = undefined; pendingOffset = 0;
         if (upstreamEOF) {

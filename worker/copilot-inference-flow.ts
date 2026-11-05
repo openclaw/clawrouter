@@ -82,7 +82,10 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
       }, () => { dispatched = true; });
       accounting!.observeUpstreamResponse(upstream.response, new URL(upstream.url));
       const guarded = copilotInferenceResponse(upstream.response, current, upstream.url, qualified.input.body.stream === true, access.revalidate);
-      const observed = observeUsage(guarded.response, current, undefined, qualified.input.selected.selection.format);
+      // Generic JSON/SSE usage already recognizes all three protocols. Do not
+      // enable the Responses continuation/hosted-tool index for this private,
+      // unpriced operation: retain scalar usage, never an event/tool archive.
+      const observed = observeUsage(guarded.response, current);
       const completion = observed.result.then(result => {
         // All possibly-paid failures retain the reservation. Generic parsed
         // error/consumer cancellation is not evidence of an upstream refund.
