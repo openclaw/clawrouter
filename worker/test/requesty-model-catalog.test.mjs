@@ -204,3 +204,38 @@ test("actual workerd constructs the Requesty factory and never follows redirects
     });
   }
 });
+test("Requesty registers its original reader before header rejection and joins first cleanup", async () => {
+  let release, started, owner, canceled = 0, settled = false;
+  const cleanup = new Promise(resolve => { release = resolve; }), reached = new Promise(resolve => { started = resolve; });
+  const response = new Response(new ReadableStream({ async cancel() {
+    assert.ok(owner); canceled++; started(); await cleanup; throw new Error("synthetic cleanup rejection");
+  } }, { highWaterMark: 0 }), { headers: { "content-type": "text/plain" } });
+  const pending = readRequestyModels(response, signal(), all, (input, original) => { assert.equal(original, response); owner = input; });
+  const rejected = assert.rejects(pending, invalid).then(() => { settled = true; });
+  try {
+    await reached; assert.equal(response.body.locked, true); assert.equal(settled, false);
+    const first = owner.retire("cancel"), second = owner.retire("cancel"); assert.equal(first, second);
+    release(); await rejected; await first; assert.equal(canceled, 1); assert.equal(response.body.locked, false);
+  } finally { release(); }
+});
+
+test("Requesty never registers ownership of an already used or externally locked response", async () => {
+  let registered = 0;
+  const used = Response.json(list()); await used.text();
+  await assert.rejects(readRequestyModels(used, signal(), all, () => { registered++; }), invalid);
+  const locked = Response.json(list()), reader = locked.body.getReader();
+  await assert.rejects(readRequestyModels(locked, signal(), all, () => { registered++; }), invalid);
+  assert.equal(registered, 0); assert.equal(locked.body.locked, true);
+  await reader.cancel(); reader.releaseLock();
+});
+test("Requesty preserves known rejection separately from failed registered lock retirement", async () => {
+  const response = new Response(new ReadableStream({}, { highWaterMark: 0 }), { headers: { "content-type": "text/plain" } });
+  const acquire = response.body.getReader.bind(response.body), failure = new Error("synthetic lock retirement failure"); let owner;
+  response.body.getReader = () => {
+    const reader = acquire();
+    return { read: () => reader.read(), cancel: reason => reader.cancel(reason), releaseLock() { reader.releaseLock(); throw failure; } };
+  };
+  await assert.rejects(readRequestyModels(response, signal(), all, input => { owner = input; }), invalid);
+  await assert.rejects(owner.retired, error => error === failure);
+  assert.equal(response.body.locked, false);
+});

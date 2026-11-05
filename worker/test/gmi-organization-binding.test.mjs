@@ -283,3 +283,25 @@ test("GMI binding does not alter another provider's original auth or configured 
   assert.equal(f.sent[0].headers.get("authorization"), "Bearer synthetic-original-key");
   assert.equal(f.sent[0].headers.get("x-organization-id"), "synthetic-other-provider-value");
 });
+for (const accountId of [undefined, "synthetic-organization"]) test(`GMI catalog preserves original organization while cancellation cleanup holds capacity (${accountId ?? "Bearer-only"})`, { timeout: 5000 }, async t => {
+  const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
+  const f = await setup(t, { accountId }), caller = new AbortController();
+  let reached, release, cancelling, cancels = 0, physical;
+  const readStarted = new Promise(resolve => { reached = resolve; }), cleanup = new Promise(resolve => { release = resolve; });
+  const cancelStarted = new Promise(resolve => { cancelling = resolve; });
+  f.upstream = request => {
+    assert.equal(request.headers.get("authorization"), "Bearer synthetic-original-key");
+    assert.equal(request.headers.get("x-organization-id"), accountId ?? null);
+    physical = new ReadableStream({ pull() { reached(); }, async cancel() { cancels++; cancelling(); await cleanup; } }, { highWaterMark: 0 });
+    return new Response(physical, { headers: { "content-type": "application/json" } });
+  };
+  try {
+    const pending = f.call("/v1/native/gmi/models", null, { signal: caller.signal, headers: { "x-organization-id": "synthetic-foreign" } });
+    await readStarted; caller.abort(); const response = await pending; assert.equal(response.status, 502); await response.text(); await cancelStarted;
+    assert.equal(physical.locked, true); assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024);
+    const contender = new BodyLease(); assert.equal(contender.grow(33 * 1024 * 1024), false); contender.release();
+    release(); await f.drain(); assert.equal(bodyBudgetCharged(), 0); assert.equal(physical.locked, false); assert.equal(cancels, 1);
+    assert.equal(f.sent.length, 1); const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 0);
+    assert.doesNotMatch(JSON.stringify(events), /synthetic-(original-key|organization|foreign)/);
+  } finally { release(); }
+});

@@ -1,4 +1,4 @@
-import { readNativeJson } from "./native-json.ts";
+import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { HttpError } from "./utils.ts";
 
 export const REQUESTY_MODELS_FORMAT = "requesty.models_managed";
@@ -83,19 +83,15 @@ export function filterRequestyModels(payload: unknown, allows: (id: string) => b
 
 // Reuse the complete native JSON reader. The caller owns the original deadline,
 // capacity and fresh authorization before fetch and after parsing/publication.
-export async function readRequestyModels(response: Response, signal: AbortSignal, allows: (id: string) => boolean): Promise<RequestyModelCatalog> {
-  if (response.status !== 200 || response.redirected || !response.body || signal.aborted) {
-    void response.body?.cancel().catch(() => undefined);
-    invalid();
-  }
+export async function readRequestyModels(response: Response, signal: AbortSignal, allows: (id: string) => boolean,
+  registerInput?: NativeJsonInputHooks["registerInput"]): Promise<RequestyModelCatalog> {
   let chunks = 0;
-  const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      signal.throwIfAborted();
-      if (++chunks > MAX_CHUNKS || !(chunk instanceof Uint8Array)) invalid();
-      controller.enqueue(chunk);
-    },
-  }));
-  return readNativeJson(new Response(body, { status: response.status, headers: response.headers }), signal, MAX_BYTES,
-    payload => filterRequestyModels(payload, allows), invalid);
+  return readNativeJson(response, signal, MAX_BYTES,
+    payload => filterRequestyModels(payload, allows), invalid, {
+      registerInput,
+      observeChunk(chunk) {
+        signal.throwIfAborted();
+        if (++chunks > MAX_CHUNKS || !(chunk instanceof Uint8Array)) invalid();
+      },
+    });
 }

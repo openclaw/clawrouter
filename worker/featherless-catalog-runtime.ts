@@ -16,7 +16,8 @@ import { HttpError, sha256Hex } from "./utils.ts";
 // no ingress body and cannot stack a second native response lease.
 export function acquireFeatherlessCatalog() { return nativeResponseLease(48 * 1024 * 1024); }
 
-export async function featherlessCatalogResponse(input: Awaited<ReturnType<typeof prepareFeatherlessCatalogOwner>>, operation: HttpOperation): Promise<Response> {
+export async function featherlessCatalogResponse(input: Awaited<ReturnType<typeof prepareFeatherlessCatalogOwner>>
+  & Pick<Parameters<typeof fetchFeatherlessModelCatalog>[0], "registerInput" | "registerFetch">, operation: HttpOperation): Promise<Response> {
   const result = await fetchFeatherlessModelCatalog({ ...input, operation });
   operation.signal.throwIfAborted();
   // Streaming serialization retains the bounded result, not another whole JSON

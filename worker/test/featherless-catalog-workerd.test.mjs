@@ -15,7 +15,7 @@ import { bodyBudgetCharged, BodyLease } from './worker/body-budget.ts';
 import { HttpOperation } from './worker/http-operation.ts';
 const originalFetch=globalThis.fetch.bind(globalThis);let fetches=0;const attempts=[];let physicalPending,scanOperation,producerComplete=false,producerCanceled=false;
 const originalWait=HttpOperation.prototype.wait,originalStop=HttpOperation.prototype.stop;
-HttpOperation.prototype.wait=function(pending,...rest){if(pending===physicalPending)scanOperation=this;return originalWait.call(this,pending,...rest);};
+HttpOperation.prototype.wait=function(pending,...rest){if(physicalPending&&!scanOperation){const physical=physicalPending;void physical.then(response=>pending.then(value=>{if(value===response)scanOperation=this;},()=>undefined),()=>undefined);}return originalWait.call(this,pending,...rest);};
 HttpOperation.prototype.stop=function(cause,...rest){if(this===scanOperation){if(cause==='complete')producerComplete=true;if(cause==='caller')producerCanceled=true;}return originalStop.call(this,cause,...rest);};
 globalThis.fetch=(input,init)=>{const req=new Request(input,init);const url=new URL(req.url);attempts.push({origin:url.origin,path:url.pathname,query:[...url.searchParams.keys()],capacity:bodyBudgetCharged()});if(!req.url.startsWith('https://api.featherless.ai/v1/models?')||bodyBudgetCharged()!==96*1024*1024)throw new Error('unqualified dispatch or capacity');fetches++;physicalPending=originalFetch(req);return physicalPending;};
 const id=n=>'model-'+String(n).padStart(4,'0')+'x'.repeat(470);
