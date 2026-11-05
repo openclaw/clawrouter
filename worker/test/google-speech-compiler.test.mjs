@@ -18,10 +18,11 @@ test.beforeEach(t => t.mock.method(Date, "now", () => now));
 function fixture(isolated = false) {
   const manifest = structuredClone(existing);
   if (isolated) {
-    // Provider-wide mutations must reach the speech guard, not the image guard.
-    manifest.capabilities = manifest.capabilities.filter(row => row.endpoint !== "image_generate");
+    // Provider-wide mutations must reach the speech guard, not unrelated image/music guards.
+    manifest.capabilities = manifest.capabilities.filter(row => !["image_generate", "music_generate"].includes(row.endpoint));
     delete manifest.endpoints.image_generate;
-    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.includes("image.generate"));
+    delete manifest.endpoints.music_generate;
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => ["image.generate", "audio.generate"].includes(id)));
   }
   for (const [id, interactions] of [["speech_generate_content", false], ["speech_interactions", true]]) {
     manifest.capabilities.push({ id: "audio.speech", endpoint: id, methods: ["POST"] });
