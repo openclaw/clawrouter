@@ -57,3 +57,10 @@ test('retirement during reservation authorization joins that original continuati
  await tick();assert.equal(closed,false);assert.throws(()=>control.join(id,scope.key));
  slot.reserved(true);await closing;assert.equal(closed,true);assert.throws(()=>control.join(id,scope.key));
 });
+
+test('public producer EOF precedes retirement ACK while the owner stays charged',async()=>{
+ const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);slot.reserved(true);control.join(id,scope.key);slot.ownerDone();
+ const ack=Promise.withResolvers();let finished=false;const closing=control.close().then(()=>{finished=true;});
+ const response=copilotControlReply({status:'cancelled'},200,async()=>{await ack.promise;control.retireRemote(id,scope.key);});
+ assert.match(await response.text(),/cancelled/);assert.equal(finished,false);ack.resolve();await closing;assert.equal(finished,true);
+});

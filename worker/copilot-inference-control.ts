@@ -131,7 +131,7 @@ export function copilotControlReply(value: unknown, status: number, release: () 
   return new Response(new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (bytes) { const part = bytes; bytes = undefined; controller.enqueue(part); }
-      else { await finish(); controller.close(); }
+      else { controller.close(); await finish(); }
     },
     async cancel() { bytes = undefined; await finish(); },
   }, { highWaterMark: 0 }), { status, headers: { "content-type": "application/json", "cache-control": "private, no-store" } });

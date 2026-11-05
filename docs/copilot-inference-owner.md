@@ -141,13 +141,16 @@ A frontend with its own available charge retains that charge. If its pool is
 full, private reserve/execute/retire HTTP messages join the original owner's slot.
 No module-global registry is shared across Worker/DO isolates. Both layers verify
 current Access admin and same origin; the owner resolves and rechecks current
-record authority. Only the private retirement acknowledgment can follow admin
+record authority, including a fresh admin check after the ordered record read
+and immediately before cancellation mutates it. Only the private retirement
+acknowledgment can follow admin
 revocation: it releases an already registered participant and cannot mutate a
 credential or authorize input.
 
 The slot joins original reads, FIRST cancel cleanup, late returned responses,
-record settlement and both reply producers. The cancellation reply waits only for
-its own cleanup/retirement acknowledgment; it never awaits inference retirement,
+record settlement and both reply producers. The public producer reaches EOF before the private retirement acknowledgment;
+its continuation joins that acknowledgment without delaying producer closure. The
+cancellation reply waits only for its own cleanup/retirement acknowledgment; it never awaits inference retirement,
 which itself joins the slot. Thus cancellation can return while inference cleanup
 is held. Cleanup rejection does not rewrite accounting; failed lock retirement
 retains capacity. This protocol does not certify unrelated upstream producer

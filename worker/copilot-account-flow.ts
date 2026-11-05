@@ -281,6 +281,7 @@ export class CopilotAccountFlow {
       slot.assert({ key, generation: scope.generation, lineage: scope.lineage, actor });
       let attempt = record.copilotAccountAttempt;
       if (!attempt) throw accountConflict(); this.assertAttempt(scope, attempt);
+      await copilotDeviceAdmin(request, this.env, actor);
       if (input.operation === "cancel") {
         this.owner.invalidateCatalog?.(); this.inFlight?.operation.stop("caller");
         attempt = record.copilotAccountAttempt = { ...attempt, phase: "cancelled" };

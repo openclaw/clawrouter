@@ -300,3 +300,16 @@ test('control record limits include every retained string, node and serialized r
  assert.throws(()=>assertCopilotAccountRecord({get x(){throw Error('must not invoke accessor');}}));
  assertCopilotAccountRecord({key:'bounded',nested:{enabled:true,generation:2}});
 });
+
+test('admin disabled during control owner read cannot invalidate inference or mutate account',async t=>{
+ const f=await chargedInferenceControl(t),before=f.record(),entered=deferred(),release=deferred();
+ const account=f.owner().object.copilotAccount,read=account.owner.read;let reads=0,invalidations=0;
+ t.mock.method(account.owner,'read',async()=>{const record=await read();if(++reads===2){entered.resolve();await release.promise;}return record;});
+ const catalog=f.owner().object.copilotCatalog,invalidate=catalog.invalidate.bind(catalog);
+ t.mock.method(catalog,'invalidate',()=>{invalidations++;invalidate();});
+ const pending=f.account('cancel');f.cleanup.push(async()=>{release.resolve();const response=await pending;if(response.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();});
+ let reached=false;await Promise.race([entered.promise.then(()=>{reached=true;}),pending.then(async response=>{if(reached)return;const text=await response.text();throw Error('control ended before owner read: '+response.status+' '+text);})]);
+ assert.equal(bodyBudgetCharged(),96*1024*1024);await f.user(false);release.resolve();
+ await body(await pending,403);assert.equal(invalidations,0);assert.deepEqual(f.record(),before);
+ assert.deepEqual(f.record().copilotAccountBinding,before.copilotAccountBinding);assert.deepEqual(f.record().copilotAccountAttempt,before.copilotAccountAttempt);
+});
