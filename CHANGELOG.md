@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an offline Fusion opportunity analyzer and small-model research plan to screen experiments before paid inference.
+
 - Retain bounded provider error categories in Fusion benchmark accounting without persisting request or response text.
 
 - Add an opt-in hosted Fusion workload campaign with exact-source verification, cumulative budget preflight and content-free checkpoints across both corpora.
