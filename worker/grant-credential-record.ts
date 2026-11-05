@@ -3,6 +3,7 @@ import type { MiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { vertexOwnerBinding, type VertexAnthropicBinding } from "./vertex-anthropic-binding.ts";
 import { miniMaxOwnerBinding, type MiniMaxAnthropicBinding } from "./minimax-anthropic-binding.ts";
 import type { MiniMaxDeviceAttempt } from "./minimax-device-flow.ts";
+import type { CopilotDeviceAttempt, CopilotDeviceCredential } from "./copilot-device-flow.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import type { UpstreamGrant, RefreshConfig } from "./types.ts";
 import { readNativeMediaBinding, type NativeMediaBinding } from "../shared/native-media-binding.ts";
@@ -17,6 +18,8 @@ interface CredentialMetadata extends Pick<UpstreamGrant,
 export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant, "credential" | "credentials" | "accessToken" | "refreshToken"> {
   // Private owner state; deliberately absent from every materialized projection.
   minimaxDeviceAttempt?: MiniMaxDeviceAttempt;
+  copilotDeviceAttempt?: CopilotDeviceAttempt;
+  copilotDeviceCredential?: CopilotDeviceCredential;
   vertexAnthropicBinding?: VertexAnthropicBinding | null;
   vertexPrivateKey?: string;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
