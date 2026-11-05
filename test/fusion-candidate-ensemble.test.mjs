@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runCandidateEnsemble } from '../scripts/fusion-candidate-ensemble.mjs';
+import { runCandidateEnsemble, candidateSummaries } from '../scripts/fusion-candidate-ensemble.mjs';
 import { defaultExperiment, validateExperiment } from '../scripts/fusion-agent-benchmark.mjs';
 
 test('independent candidates and synthesis share the trial budget and total turn cap', async () => {
@@ -68,4 +68,26 @@ test('isolated ensemble installs the second candidate and passes the fresh verif
   assert.deepEqual(result.actions.find(action => action.action === 'compare').passed, [false, true]);
   assert.equal(queue.length, 0);
   assert.equal(new Set(trialIds).size, 1);
+});
+
+test('large candidate summaries preserve identity and change locations without repeating full source', () => {
+  const content = 'unchanged line\n'.repeat(9000) + 'old value\n' + 'unchanged line\n'.repeat(9000);
+  const baseline = [{ path: 'scripts/compiler.mjs', content }];
+  const changed = [{ path: baseline[0].path, content: content.replace('old value', 'new value') }];
+  const result = candidateSummaries(baseline, [changed, baseline]);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) < 2000);
+  assert.equal(result[0].files[0].changeStartLine, 9001);
+  assert.match(result[0].files[0].after.head, /new value/);
+  assert.equal(result[1].files[0].unchanged, true);
+  assert.equal(result[0].files[0].bytes, Buffer.byteLength(changed[0].content));
+  assert.equal(baseline[0].content, content);
+});
+
+test('divergent Unicode candidates remain bounded and omissions are explicit', () => {
+  const baseline = [{ path: 'worker/a.ts', content: 'a'.repeat(200000) }];
+  const result = candidateSummaries(baseline, [[{ path: 'worker/a.ts', content: '漢'.repeat(60000) }],
+    [{ path: 'worker/a.ts', content: 'b'.repeat(200000) }]]);
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 24000);
+  assert.ok(result[0].files[0].after.omittedBytes > 0);
+  assert.throws(() => candidateSummaries([], [[{ path: 'worker/a.ts', content: 'x' }]]), /invalid_candidate_baseline/);
 });

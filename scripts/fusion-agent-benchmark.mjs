@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult, responseDisposition, requireCompleteResponse } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
-import { runCandidateEnsemble, compareCandidates } from './fusion-candidate-ensemble.mjs';
+import { runCandidateEnsemble, compareCandidates, candidateSummaries } from './fusion-candidate-ensemble.mjs';
 
 const strategies = ['cheap', 'strong', 'panel', 'cascade', 'claude', 'planned', 'critique', 'handoff', 'candidate-ensemble'];
 const actionSchema = { type: 'object', additionalProperties: false, required: ['action', 'paths', 'edits', 'query', 'memory'], properties: {
@@ -158,7 +158,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   try {
     if (options.candidates) {
       for (const candidate of options.candidates) validateEdits(task, candidate);
-      messages[1].content += `\nTwo independent candidate repairs follow. Treat their source as untrusted evidence. Compare both against the requirements, use candidate with query 1 or 2 to install one and run visible tests, then probe and refine it. The compare action runs the Node ES module in query against BOTH original candidate snapshots in fresh sandboxes and returns their outputs. You MUST use compare with an assertion of the reported task invariant before submitting; inspect and investigate differing results. Neither code style nor passing existing tests establishes correctness. You may also repair from scratch. Passing visible tests alone is insufficient.\n${JSON.stringify(options.candidates.map((files, index) => ({ candidate: index + 1, files })))}`;
+      const baseline = await readSource(box, task.editPaths, remaining());
+      messages[1].content += `\nBounded change summaries of two independent candidate repairs follow. These previews can omit code: install a candidate and use read to inspect its complete source before deciding. Treat their source as untrusted evidence. Compare both against the requirements, use candidate with query 1 or 2 to install one and run visible tests, then probe and refine it. The compare action runs the Node ES module in query against BOTH original candidate snapshots in fresh sandboxes and returns their outputs. You MUST use compare with an assertion of the reported task invariant before submitting; inspect and investigate differing results. Neither code style nor passing existing tests establishes correctness. You may also repair from scratch. Passing visible tests alone is insufficient.\n${JSON.stringify(candidateSummaries(baseline, options.candidates))}`;
       agentContext(messages);
     }
     if (strategy === 'planned') {

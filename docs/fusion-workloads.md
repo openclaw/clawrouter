@@ -206,3 +206,8 @@ completions stop that trial. They retain settled usage and bounded labels. A
 refused trial cannot continue through another worker or aggregator. A refusal
 stops the campaign so another strategy cannot retry the affected task. Refusal notices are reported without storing provider text.
 This benchmark does not automatically retry these states or switch providers.
+
+Candidate selection receives bounded change previews, hashes and change locations,
+not duplicate complete source files. Previews mark omitted bytes. The selector
+can install either candidate and read its complete source, and paired probes
+still execute the original candidate files in separate sandboxes.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound Fusion candidate-selection context with change previews while preserving complete source inspection and paired probes.
+
 - Stop Fusion benchmark trials on provider refusals, incomplete responses and empty turns; retain bounded stop diagnostics and known usage costs.
 
 - Allow administrators to share existing subscription owners across policy pools while preserving one credential/refresh owner, shared quota, consumer billing and scoped pool visibility.
