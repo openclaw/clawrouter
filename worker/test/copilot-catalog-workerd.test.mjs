@@ -133,7 +133,8 @@ test('actual workerd owner-bound Copilot catalog two-response maximum shape and 
   io.setMode(mode);await control('/fixture/mode',grant,mode);const counts={...io.counts},pending=request('/fixture/catalog',grant);
   const held=['held-account','held-catalog','cleanup-error','late','revoke','replace','account-cancel'].includes(mode);
   if(held){
-   await until(grant,s=>s.readers.some(r=>mode==='late'?r.phase==='catalog'&&r.reads===0:r.reads===2));
+   const target=mode==='held-account'?'account':'catalog';
+   await until(grant,s=>s.readers.some(r=>r.phase===target&&r.reads===(mode==='late'?0:2)));
    if(mode==='revoke'||mode==='replace')await bounded(control('/fixture/'+mode,grant),'owner mutation');
    else if(mode==='account-cancel')assert.equal((await body(await bounded(account('cancel'),'account cancellation'))).status,'cancelled');
    else io.release(mode+'/abort');

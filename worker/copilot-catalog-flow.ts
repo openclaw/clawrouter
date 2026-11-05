@@ -4,7 +4,7 @@ import { copilotAccountRequest, copilotCatalogRequest, copilotModelFormats, qual
 import { readCopilotAccountResponse } from "./copilot-account-response.ts";
 import { readCopilotResponseText } from "./copilot-response-body.ts";
 import { decodeCopilotModelCatalog, type CopilotModelCatalog } from "./provider-copilot-catalog.ts";
-import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
+import type { ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { grantRoutingPolicy } from "./grant-routing.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -35,6 +35,7 @@ export interface CopilotCatalogInput {
   deadline: number;
   selection?: Readonly<{ modelId: string; format: CopilotWireFormat }>;
 }
+type Control = typeof import("./response-control-authorization.ts");
 type Scope = { binding: CopilotAccountBinding; token: string };
 type Active = { operation: HttpOperation; responses: Response[] };
 type CatalogView = {
@@ -115,15 +116,15 @@ export class CopilotCatalogFlow {
     }
   }
 
-  private async policy(selected: CopilotCatalogInput, operation: HttpOperation): Promise<AccessPolicy> {
+  private async policy(selected: CopilotCatalogInput, operation: HttpOperation, control: Control): Promise<AccessPolicy> {
     const authorization = selected.authorization;
     if (authorization.kind !== "public") throw unavailable();
-    const policy = await authorizeResponseControl(this.env, authorization, {
+    const policy = await control.authorizeResponseControl(this.env, authorization, {
       providerId: provider, endpointId: "models", grantKey: selected.key, lineage: selected.expectedLineage,
       routeSha256: await sha256Hex(JSON.stringify([provider, selected.key, selected.expectedGeneration, selected.expectedLineage, selected.accountAttemptId, selected.runtimeIdentity])),
       policyGeneration: authorization.binding.policyGeneration,
     }, operation.signal);
-    operation.signal.throwIfAborted(); assertControlCallerLive(authorization);
+    operation.signal.throwIfAborted(); control.assertControlCallerLive(authorization);
     if (!policy) throw unavailable();
     // This private onboarding owner is not an active generic pool credential.
     // Direct policy/tenant scope only; shared/alternate owners are not inferred.
@@ -159,9 +160,9 @@ export class CopilotCatalogFlow {
     return { binding, token: credential.accessToken };
   }
 
-  private async dispatch(selected: CopilotCatalogInput, active: Active, original: Scope | undefined, catalog: boolean): Promise<{ response: Promise<Response>; url: string; scope: Scope; policy: AccessPolicy }> {
+  private async dispatch(selected: CopilotCatalogInput, active: Active, original: Scope | undefined, catalog: boolean, control: Control): Promise<{ response: Promise<Response>; url: string; scope: Scope; policy: AccessPolicy }> {
     const { operation } = active;
-    const policy = await this.policy(selected, operation);
+    const policy = await this.policy(selected, operation, control);
     return this.owner.order(async () => {
       // The final original-owner read is the last await before fetch starts.
       const scope = this.scope(await this.owner.read(), selected, original);
@@ -170,7 +171,7 @@ export class CopilotCatalogFlow {
         : copilotAccountRequest(scope.binding.githubDomain, scope.token);
       // Also qualify the closed runtime identity BEFORE the first account GET.
       if (!catalog) copilotCatalogRequest(scope.binding, scope.binding.ownerBinding, scope.token, selected.runtimeIdentity);
-      operation.signal.throwIfAborted(); assertControlCallerLive(selected.authorization);
+      operation.signal.throwIfAborted(); control.assertControlCallerLive(selected.authorization);
       if (Date.now() >= selected.deadline) throw unavailable();
       let response: Promise<Response>;
       try { response = fetch(request, { signal: operation.signal, redirect: "manual" }); }
@@ -191,21 +192,23 @@ export class CopilotCatalogFlow {
 
   private async acquire(selected: CopilotCatalogInput, active: Active): Promise<CatalogView> {
     const { operation } = active;
-    const account = await this.dispatch(selected, active, undefined, false);
+    // Keep owner construction independent of the public authorization loader.
+    const control = await import("./response-control-authorization.ts");
+    const account = await this.dispatch(selected, active, undefined, false, control);
     const accountResponse = await this.response(account.response, active);
     const projection = await readCopilotAccountResponse(accountResponse, { operation, expectedUrl: account.url });
     const identity = qualifyCopilotIdentity(projection, account.scope.binding.githubDomain, account.scope.binding.ownerBinding);
     if (identity.apiBaseUrl !== account.scope.binding.apiBaseUrl) throw unavailable();
     const admitted = account.policy;
-    await this.policy(selected, operation);
-    const catalog = await this.dispatch(selected, active, account.scope, true);
+    await this.policy(selected, operation, control);
+    const catalog = await this.dispatch(selected, active, account.scope, true, control);
     const catalogResponse = await this.response(catalog.response, active);
     const text = await readCopilotResponseText(catalogResponse, { operation, expectedUrl: catalog.url, profile: "catalog" });
     const decoded = decodeCopilotModelCatalog(text);
-    const policy = await this.policy(selected, operation);
+    const policy = await this.policy(selected, operation, control);
     return this.owner.order(async () => {
       this.scope(await this.owner.read(), selected, account.scope);
-      operation.signal.throwIfAborted(); assertControlCallerLive(selected.authorization);
+      operation.signal.throwIfAborted(); control.assertControlCallerLive(selected.authorization);
       if (Date.now() >= selected.deadline) throw unavailable();
       const data = Object.freeze(decoded.data.filter(row => policyAllowsModel(admitted, provider, provider + "/" + row.id)
         && policyAllowsModel(policy, provider, provider + "/" + row.id)));
