@@ -1,6 +1,7 @@
 import { normalizeTierList } from "./service-tiers.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { normalizeCredentialName } from "./credential-name.ts";
+import { normalizeCopilotPublicIdentity } from "./copilot-public-identity.ts";
 import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit } from "./authority";
 import type { CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, Env, ProxyCredential, ProxyCredentialEntry } from "./types";
@@ -10,6 +11,10 @@ export async function credentialMutationResponse(request: Request, env: Env, res
   const operation = rest === null ? "create" : rest.endsWith("/revoke") ? "revoke" : rest.endsWith("/rotate") ? "rotate" : rest.endsWith("/rename") ? "rename" : "put";
   if (request.method !== (operation === "put" ? "PUT" : "POST")) throw new HttpError(405, "method_not_allowed", "credential method is not allowed");
   const body: Record<string, unknown> = operation === "revoke" ? {} : mutationObject(await readJson<unknown>(request));
+  const profileIntent = Object.hasOwn(body, "copilotPublicIdentity");
+  if (profileIntent && (scope !== "admin" || !["create", "put"].includes(operation))) {
+    throw new HttpError(403, "access_admin_required", "Copilot integration attestation requires administrator credential mutation");
+  }
   const rawId = rest === null ? body.credentialId : decodePathSegment(operation === "put" ? rest : rest.slice(0, -7));
   // New keys must satisfy proxy-key syntax; admin PUT retains its released ID contract.
   const keyIdRequired = scope === "personal" || operation === "create";
@@ -25,7 +30,8 @@ export async function credentialMutationResponse(request: Request, env: Env, res
   } else if (operation === "rotate") {
     if (Object.keys(body).some((key) => key !== "secretSha256")) throw new HttpError(400, "invalid_credential", "rotation accepts only secretSha256");
     mutation = { ...target, operation, secretSha256: credentialDigest(body.secretSha256) };
-  } else mutation = { ...target, operation, credential: normalizeCredential(body, scope === "admin" && operation === "put") };
+  } else mutation = { ...target, operation, credential: normalizeCredential(body, scope === "admin" && operation === "put"),
+    ...(profileIntent ? { copilotPublicIdentity: body.copilotPublicIdentity === null ? null : normalizeCopilotPublicIdentity(body.copilotPublicIdentity) } : {}) };
   // Close legacy imports before the owner checks collisions, holdings and quotas.
   // Imported snapshots never overwrite writes made while these reads are pending.
   await Promise.all([listCredentials(env), listPolicies(env), listUsers(env), ...(scope === "personal" ? [listBindings(env)] : [])]);

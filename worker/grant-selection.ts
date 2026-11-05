@@ -1,8 +1,9 @@
 import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
+import { HttpError } from "./utils.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantQuotaRatio } from "./grant-quota.ts";
 export * from "./grant-eligibility.ts";
-import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
+import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
@@ -83,6 +84,7 @@ export async function resolveGrantCandidates(
   excludedKeys: ReadonlySet<string> = new Set(), routing: GrantRoutingPolicy = DEFAULT_GRANT_ROUTING,
   pinnedKey?: string | null, requirement?: GrantRequirement,
   admittedPool?: AdmissionPool,
+  privateCopilot = false,
 ): Promise<GrantCandidates> {
   routing = grantRoutingPolicy(routing);
   const defaultKeys = [
@@ -91,6 +93,7 @@ export async function resolveGrantCandidates(
   ];
   const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
   if (admittedPool?.unavailable) throw new Error("admission pool resolution failed");
+  if (privateCopilot && (providerId !== "github-copilot" || pool.keys.length > 128)) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
   const grants = keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
   const nowMs = Date.now();
@@ -99,7 +102,28 @@ export async function resolveGrantCandidates(
       const grant = grants.get(key) ?? null;
       return { key, grant, runtimeState: grant ? currentGrantRuntime(grant, pool.states?.[key]) : null };
     });
-  return filterGrantCandidates(providerId, candidates, excludedKeys, routing, pinnedKey, requirement, nowMs);
+  return filterGrantCandidates(providerId, candidates, excludedKeys, routing, pinnedKey, requirement, nowMs, privateCopilot);
+}
+
+// Route/provider are known before input; model permission is deliberately NOT
+// decided here. Choose once within the original policy/tenant, then pin this
+// owner through model qualification. Never retry a different owner after read.
+export async function selectCopilotPublicGrant(policyId: string, policy: import("./types.ts").AccessPolicy, env: Env,
+  tokenRef: string, stickyHash: string | null = null): Promise<SelectedGrant> {
+  const routing = grantRoutingPolicy(policy.grantRouting), tenant = policy.tenantId ?? "default";
+  const candidates = await resolveGrantCandidates("github-copilot", policyId, tenant, tokenRef, env, new Set(), routing, undefined, undefined, undefined, true);
+  const scoped = candidates.available.filter(entry => entry.key.startsWith(`oauth/${policyId}/`) || entry.key.startsWith(`oauth/tenants/${tenant}/`));
+  const priority = scoped.length ? Math.min(...scoped.map(entry => grantPriority(entry.grant))) : null;
+  const available = scoped.filter(entry => grantPriority(entry.grant) === priority);
+  if (!available.length) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
+  const choice = await authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", {
+    poolKey: `${encodeURIComponent("github-copilot")}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenant)}`,
+    strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
+    candidates: available.map(entry => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, Date.now(), routing.staleAfterSeconds * 1_000) })),
+  });
+  const selected = available.find(entry => entry.key === choice.selectedKey);
+  if (!selected) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
+  return selected;
 }
 
 export async function recordGrantRuntime(env: Env, key: string, state: GrantRuntimeState): Promise<void> {

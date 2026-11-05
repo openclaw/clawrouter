@@ -118,6 +118,11 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && ["/copilot-public/reserve", "/copilot-public/catalog-reserve", "/copilot-public/observe", "/copilot-public/execute", "/copilot-public/retire"].includes(new URL(request.url).pathname)) {
+      const operation = this.copilotCatalog.publicOwner.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/copilot-inference") {
       const operation = this.copilotCatalog.inference(request);
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));

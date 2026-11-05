@@ -5,7 +5,8 @@ export type CredentialMutation = {
   scope: "admin" | "personal";
   actor: Pick<AccessSession, "auth" | "email" | "role">;
 } & (
-  | { operation: "create" | "put"; credential: Omit<ProxyCredential, "policyGeneration"> }
+  | { operation: "create" | "put"; credential: Omit<ProxyCredential, "policyGeneration" | "copilotPublicIdentity">;
+      copilotPublicIdentity?: import("./copilot-public-identity.ts").CopilotPublicIdentityProfile | null }
   | { operation: "rotate"; secretSha256: string }
   | { operation: "rename"; name: string | null }
   | { operation: "revoke" }

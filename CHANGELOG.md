@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add administrator-attested Copilot proxy identity, owner-bound native and manifest inference, and scoped live discovery with bounded cross-isolate retirement; provider declarations and native-client activation remain separate.
+
 - Add a local small-model selector smoke test with counterbalanced candidates, abstention checks and content-free replay metrics.
 
 - Add an offline Fusion opportunity analyzer and small-model research plan to screen experiments before paid inference.
