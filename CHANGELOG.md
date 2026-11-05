@@ -19,6 +19,8 @@
 
 - Add bounded, Access-admin-only Copilot device token acquisition with original-owner fences, atomic private installation and cancellation-safe capacity retirement; account and inference activation remain closed.
 
+- Qualify Copilot account identity privately under the original credential owner, with atomic binding, bounded streaming intake and cancellation-safe retirement; catalog and inference remain closed.
+
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
 - Add a separate pinned Fusion transfer-validation corpus and qualify every bundled workload set, fetching missing pinned history in shallow CI checkouts.
 - Add an experimental independent-candidate Fusion comparison with shared inference, turn and time budgets and paired candidate behavior probes.

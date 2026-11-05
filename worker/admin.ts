@@ -408,6 +408,10 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
   if (action === "authorize" && request.method === "POST") {
+    if (new URL(request.url).searchParams.get("flow") === "copilot-account.v1") {
+      const { copilotAccountAuthorize } = await import("./copilot-account-admin.ts");
+      return copilotAccountAuthorize(request, env, key);
+    }
     if (new URL(request.url).searchParams.get("flow") === "copilot-device.v1") {
       const { copilotDeviceAuthorize } = await import("./copilot-device-admin.ts");
       return copilotDeviceAuthorize(request, env, key);
@@ -440,7 +444,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
     if (Object.hasOwn(body, "minimaxDeviceAttempt"))
       throw new HttpError(400, "invalid_minimax_device_request", "Device attempt state is owner-managed");
-    if (["copilotDeviceAttempt", "copilotDeviceCredential"].some(field => Object.hasOwn(body, field)))
+    if (["copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding"].some(field => Object.hasOwn(body, field)))
       throw new HttpError(400, "invalid_copilot_device_request", "Device attempt state is owner-managed");
     if (Object.hasOwn(body, "nativeMediaBinding") || Object.hasOwn(body, "nativeMediaIntent"))
       throw new HttpError(400, "invalid_native_media_authorization", "Use the explicit native media product authorization");
