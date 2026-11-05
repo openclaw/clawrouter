@@ -38,5 +38,5 @@ test('upload first cancel and original pending read retire independently', {time
 });
 
 test('declared length mismatch denies after physical EOF and retires its lock', {timeout:30000}, async()=>{
- const f=source('{}',{headers:{'content-length':'9'}}),g=guard(f);await assert.rejects(g.response.text());await g.retired();assert.equal(f.response.body.locked,false);assert.equal(f.stats.reads,2);assert.equal(f.stats.cancels,0);
+ const f=source('{}',{headers:{'content-length':'9'}}),g=guard(f);await assert.rejects(g.response.text());await g.retired;assert.equal(f.response.body.locked,false);assert.equal(f.stats.reads,2);assert.equal(f.stats.cancels,0);
 });

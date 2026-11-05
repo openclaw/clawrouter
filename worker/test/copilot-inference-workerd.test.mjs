@@ -97,7 +97,7 @@ export class GrantCredentialObject extends Owner{
    const input={initiator:'user',body,key:r.grantKey,expectedGeneration:r.generation,expectedLineage:r.lineage,deviceAttemptId:r.copilotDeviceAttempt.id,accountAttemptId:b.accountAttemptId,
     authorization:supplied.authorization,deadline:Date.now()+30000,runtimeIdentity:{ownerBinding:b.ownerBinding,integrationId:'fixture',editorVersion:'Fixture/1',editorPluginVersion:'Fixture/1',userAgent:'Fixture/1'},selection:{modelId:'github-copilot/model-0',format}};
    if(mode==='maximum')body.padding='x'.repeat(262144-new TextEncoder().encode(JSON.stringify(input)).length);
-   const abort=new AbortController();if(mode==='held-input'||mode==='held-account'||mode==='held-catalog'||mode==='held-inference'||mode==='cleanup-error'||mode==='late')this.fixtureState.waitUntil(gate('abort').then(()=>abort.abort()));
+   const abort=new AbortController();if(mode==='held-input'||mode==='held-account'||mode==='held-catalog'||mode==='held-inference'||mode==='cleanup-error'||mode==='late'||mode==='revoke'||mode==='replace'||mode==='account-cancel')this.fixtureState.waitUntil(gate('abort').then(()=>abort.abort()));
    const native=new Request('https://clawrouter.internal/copilot-inference',{method:'POST',headers:{'content-type':'application/json','x-clawrouter-copilot-deadline':String(input.deadline)},body:JSON.stringify(input),signal:abort.signal});
    const a={phase:'input',reads:0,cancels:0,unlocks:0,maximumBacking:0,body:native.body};readers.push(a);const get=native.body.getReader.bind(native.body);
    native.body.getReader=options=>{const r=get(options);return{async read(view){a.reads++;if((mode==='reads-exact'||mode==='reads-over-input')&&a.reads<=(mode==='reads-over-input'?8191:8190))return{done:false,value:view.subarray(0,0)};try{const part=await r.read(view);if(part.value)a.maximumBacking=Math.max(a.maximumBacking,part.value.buffer.byteLength);return part;}finally{if(mode==='held-input'&&a.reads===1){await gate('read');a.readRetired=true;}}},async cancel(reason){a.cancels++;await r.cancel(reason);if(mode==='held-input'){await gate('cleanup');a.cleanup=true;}},releaseLock(){a.unlocks++;r.releaseLock();}};};
@@ -145,8 +145,12 @@ test('actual workerd private Copilot inference three APIs, composite limits and 
  const until=async(grant,predicate)=>{let s;for(let i=0;i<150;i++){s=await control('/fixture/stats',grant);if(predicate(s))return s;await new Promise(r=>setTimeout(r,10));}assert.fail(JSON.stringify(s));};
  await control('/fixture/setup','copilot');
  const cases=[...['openai.chat_completions','anthropic.messages','openai.responses'].flatMap(format=>[false,true].map(stream=>({mode:format+'-'+stream,format,stream}))),...['maximum','maximum-stream','incremental','reads-exact','reads-over-input','reads-over-account','reads-over-catalog','reads-over-inference','held-input','held-account','held-catalog','held-inference','cleanup-error','late','revoke','replace','account-cancel','tighten','destination','empty','unknown','unknown-price','bad-frame','downstream-cancel'].map(mode=>({mode,format:'openai.responses',stream:['maximum-stream','incremental','bad-frame'].includes(mode)}))];
- for(const {mode,format,stream} of cases)await t.test(mode,async()=>{
-  const grant='inference-'+mode.replaceAll('.','-');io.setMode(mode==='maximum'?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');
+ for(const {mode,format,stream} of cases)await t.test(mode,async t=>{
+  const grant='inference-'+mode.replaceAll('.','-');
+  // A failed assertion must still release only this case's original-network
+  // barriers, so its retained allocation cannot contaminate sibling cases.
+  t.after(async()=>{for(const phase of ['abort','response','cleanup','read','stream'])io.release(mode+'/'+phase);await until(grant,s=>s.charged===0);});
+  io.setMode(mode==='maximum'?'maximum':'setup');await control('/fixture/policy',grant);await control('/fixture/mode',grant,'setup');
   const begun=await body(await run(grant,'copilot-device.v1',{operation:'begin',githubDomain:'github.com',intentId:'synthetic-inference-'+mode.replaceAll('.','-'),expectedGeneration:0}));
   await new Promise(r=>setTimeout(r,Math.max(0,begun.nextPollAt-Date.now())+10));
   assert.equal((await body(await run(grant,'copilot-device.v1',{operation:'poll',attemptId:begun.attemptId}))).status,'committed');
