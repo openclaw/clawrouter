@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Serve usage snapshots from exact, transactionally maintained rollups after a resumable historical backfill, avoiding retained-event aggregate scans.
+
 - Add a local small-model selector smoke test with counterbalanced candidates, abstention checks and content-free replay metrics.
 
 - Add an offline Fusion opportunity analyzer and small-model research plan to screen experiments before paid inference.

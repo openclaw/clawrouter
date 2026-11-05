@@ -81,11 +81,11 @@ test("snapshots equal the legacy SQL before and after bounded attribution backfi
   for (const [index, scope] of scopes.entries()) {
     assert.deepEqual(await (await ledger.fetch(snapshotRequest(scope))).json(), expected[index]);
     const marker = f.db.prepare("SELECT * FROM usage_attribution_migration").get();
-    assert.equal(marker.last_rowid, (index + 1) * 2_000);
+    assert.equal(marker.last_rowid, (index + 1) * 250);
     assert.equal(marker.complete, 0);
     ledger = f.open(); // Progress survives reconstruction.
   }
-  assert.equal(f.alarm(), now + 60_000);
+  assert.equal(f.alarm(), now + 500);
   // New ingests are projected immediately, including reused rowids and rows
   // above the fixed upper bound after retention deletes the previous last row.
   const fresh = { ...syntheticUsage(1, now), id: "during-backfill", occurred_at_ms: now };
@@ -94,11 +94,12 @@ test("snapshots equal the legacy SQL before and after bounded attribution backfi
   assert.equal(f.db.prepare("SELECT rowid FROM usage_events WHERE id = ?").get(fresh.id).rowid, upper);
   await ledger.fetch(new Request("https://ledger/ingest", { method: "POST", body: JSON.stringify({ ...fresh, id: "above-backfill" }) }));
   assert.ok(f.db.prepare("SELECT rowid FROM usage_events WHERE id = 'above-backfill'").get().rowid > upper);
-  while (!f.db.prepare("SELECT complete FROM usage_attribution_migration").get().complete) await ledger.alarm();
+  while (!f.db.prepare("SELECT complete FROM usage_attribution_migration").get().complete || !f.db.prepare("SELECT complete FROM usage_rollup_migration").get().complete) await ledger.alarm();
   for (const scope of scopes) {
     f.queries.length = 0;
     assert.deepEqual(await (await ledger.fetch(snapshotRequest(scope))).json(), legacySnapshot(f.db, scope, now));
-    assert.ok(f.queries.every(query => !/json_extract|json_type|json_each/i.test(query)), "completed snapshots never parse JSON in SQL");
+    assert.ok(f.queries.every(query => !/json_(extract|type)\(event_json/i.test(query)), "completed snapshots never parse event JSON in SQL");
+    assert.ok(f.queries.every(query => !/FROM usage_events.*(?:GROUP BY|SUM\()/i.test(query)), "completed snapshots never aggregate events");
     assert.ok(f.queries.every(query => !query.includes("SELECT rowid, event_json")), "completion marker prevents another scan");
   }
   f.queries.length = 0;
