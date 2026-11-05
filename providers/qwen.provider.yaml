@@ -40,9 +40,118 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: qwen/qwen3.5-plus
+      upstream: qwen3.5-plus
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: qwen/qwen3.6-flash
+      upstream: qwen3.6-flash
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: qwen/qwen3.6-plus
+      upstream: qwen3.6-plus
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: qwen/qwen3.7-max
+      upstream: qwen3.7-max
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: qwen/qwen3.7-plus
+      upstream: qwen3.7-plus
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
     - id: qwen/qwen3.8-max
       upstream: qwen3.8-max
       capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: qwen/qwen3.8-flash
+      upstream: qwen3.8-flash
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: qwen/qwen3-max-2026-01-23
+      upstream: qwen3-max-2026-01-23
+      capabilities: []
+    - id: qwen/qwen3-coder-next
+      upstream: qwen3-coder-next
+      capabilities: []
+    - id: qwen/qwen3-coder-plus
+      upstream: qwen3-coder-plus
+      capabilities: []
+    - id: qwen/MiniMax-M2.5
+      upstream: MiniMax-M2.5
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: qwen/glm-5
+      upstream: glm-5
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: qwen/glm-4.7
+      upstream: glm-4.7
+      capabilities: []
+    - id: qwen/kimi-k2.5
+      upstream: kimi-k2.5
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/models.ts, https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/qwen/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
