@@ -166,9 +166,10 @@ export default {async fetch(request,env,ctx){
   capabilities:[{id:'models.list',endpoint:endpoint.id,methods:['GET']}],endpoints:[endpoint],
   models:[{id:mode+'/one',upstream:'one',capabilities:[],pricing:null,pricing_ref:null}]});
  snapshot.providers=[...snapshot.providers.filter(p=>p.id!==mode),provider];
- await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:[mode],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
+ // These owner initializers seed once; both sequential cases must be admitted from the first call.
+ await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['requesty','featherless'],tenantId:'fixture',monthlyBudgetMicros:10000,requestCostMicros:700,retainRequestContent:false}}]);
  await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
- await authorityCall(env,'/connections/initialize-all',[{providerId:mode,enabled:true,monthlyBudgetMicros:10000}]);
+ await authorityCall(env,'/connections/initialize-all',['requesty','featherless'].map(providerId=>({providerId,enabled:true,monthlyBudgetMicros:10000})));
  await putGrantCredentials(env,'oauth/fixture/'+mode,{provider:mode,kind:'api_key',enabled:true,credential:'synthetic-original-key'});
  // The abort continuation originates in this request; control requests only read state.
  ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('synthetic caller cancellation'))));
