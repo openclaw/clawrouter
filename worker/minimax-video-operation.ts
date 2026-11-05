@@ -104,7 +104,7 @@ export function inspectVideoJson(text: string, profile: Profile = "control"): Vi
   return inspect.counts();
 }
 
-export function assertVideoHeaders(headers: Headers, control = false): void {
+export function assertVideoHeaders(headers: Headers): void {
   let count = 0, bytes = 0;
   for (const [key, value] of headers) {
     if (++count > 32) videoUnavailable();
@@ -139,7 +139,7 @@ export async function readVideoJson(source: Request | Response, signal: AbortSig
     // A default reader cannot bound the backing before acquisition. Own its
     // cancellation, but refuse BEFORE read; only a byte-stream BYOB is admitted.
     if (!byob) videoUnavailable();
-    assertVideoHeaders(source.headers, profile === "control");
+    assertVideoHeaders(source.headers);
     const type = source.headers.get("content-type"), length = source.headers.get("content-length");
     if (source instanceof Response && (source.redirected || profile !== "control" && source.status !== 200) || !type || !/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(type.trim())
       || source.headers.has("content-range") || ![null, "identity"].includes(source.headers.get("content-encoding"))

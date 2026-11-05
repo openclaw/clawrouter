@@ -20,7 +20,7 @@ import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuot
 import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
-import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, grantSupports, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,

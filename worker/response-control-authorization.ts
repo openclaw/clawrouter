@@ -32,6 +32,7 @@ interface VideoCollectionContext {
 
 // Constructed only by the durable collector from its admitted job, never HTTP input.
 export function videoCollectionAuthorization(job: BackgroundJob): ResponseControlAuthorization {
+  if (!job.facts) denied();
   const event = job.facts.event, managed = job.managed;
   if (!managed || managed.protocol !== "minimax.video" || managed.providerId !== "minimax" || job.owner.providerId !== "minimax"
     || event.auth_type !== "proxy_key" || event.provider !== "minimax" || event.capability !== "media.predict"

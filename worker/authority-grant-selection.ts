@@ -1,4 +1,4 @@
-import { videoControlVersion, videoControlBytes, videoJsonBytes, inspectVideoJson } from "./minimax-video-operation.ts";
+import { videoControlVersion, videoControlBytes, videoJsonBytes } from "./minimax-video-operation.ts";
 import { inspectSearchJson, searchControlVersion, searchControlBytes, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };

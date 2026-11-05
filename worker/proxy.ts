@@ -668,6 +668,7 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
     if (auth instanceof Response) return auth;
     if (auth.credentialId !== original.credentialId || auth.principalId !== original.principalId || auth.policyId !== original.policyId
       || auth.policy.generation !== original.policy.generation || auth.policy.tenantId !== original.policy.tenantId) miniMaxVideoDenied();
+    const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     const task = owner.track(proxyManagedPrediction(request, env, context, auth, selection, {}, undefined, owner));
     // The managed branch owns its post-dispatch lifetime. Only delivery races the caller.
     return await operation.wait(task, "upstream", late => owner.discard(late));
