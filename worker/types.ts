@@ -86,6 +86,8 @@ export interface AccessPolicy {
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
 
 export interface ProxyCredential {
+  /** Private administrator attestation. Never projected as caller authority. */
+  copilotPublicIdentity?: import("./copilot-public-identity.ts").CopilotPublicIdentityAttestation;
   name?: string | null;
   enabled: boolean;
   secretSha256: string;

@@ -19,8 +19,33 @@ export interface CopilotInferenceAccess {
   end(): Promise<void>;
 }
 
-export async function runCopilotInference(request: Request, env: Env, access: CopilotInferenceAccess): Promise<Response> {
+export interface CopilotInferenceAdmission {
+  execute(request: Request, env: Env, access: CopilotInferenceAccess): Promise<Response>;
+  discard(): void;
+}
+
+// The credential owner alone holds this closure. No charge, lease or reusable
+// execution credential is accepted over HTTP. Reservation precedes front-end
+// intake; execution consumes the continuation exactly once in its OWN request.
+export function reserveCopilotInference(): CopilotInferenceAdmission {
   const allocation = new BodyLease();
+  if (!allocation.grow(48 * 1024 * 1024)) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
+  let claimed = false;
+  return Object.freeze({
+    execute(request: Request, env: Env, access: CopilotInferenceAccess) {
+      if (claimed) throw copilotInferenceUnavailable();
+      claimed = true; return runAllocatedCopilotInference(request, env, access, allocation);
+    },
+    discard() { if (!claimed) { claimed = true; allocation.release(); } },
+  });
+}
+
+export function runCopilotInference(request: Request, env: Env, access: CopilotInferenceAccess): Promise<Response> {
+  return runAllocatedCopilotInference(request, env, access);
+}
+
+async function runAllocatedCopilotInference(request: Request, env: Env, access: CopilotInferenceAccess, admitted?: BodyLease): Promise<Response> {
+  const allocation = admitted ?? new BodyLease();
   let operation: HttpOperation | undefined, dispatched = false, reserving = false, settled: Promise<boolean> | undefined;
   let accounting: ReturnType<typeof import("./proxy-accounting.ts")["createProxyAccounting"]> | undefined;
   let reservation: BudgetReservation = { reservations: [], reservedMicros: 0 }, delivery = Promise.resolve();
@@ -35,7 +60,7 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
   try {
     // One synchronous all-or-nothing 96 MiB reservation. No release/reacquire,
     // nested catalog charge, caller allocation or zero-charge qualification.
-    if (!allocation.grow(48 * 1024 * 1024)) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
+    if (!admitted && !allocation.grow(48 * 1024 * 1024)) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
     // This private owner RPC bypasses public ingress. Initialize the existing
     // accounting correlation on the ORIGINAL Request, without cloning its body.
     const correlation = correlateIngressRequest(request);
@@ -49,8 +74,8 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
       const [{ createProxyAccounting, estimateCost }, budgets, { resolveConnection }, { policyRequestCost }, { observeUsage }] = await Promise.all([
         import("./proxy-accounting.ts"), import("./accounting.ts"), import("./authority.ts"), import("../shared/request-pricing.ts"), import("./proxy-response.ts"),
       ]);
-      let admittedBudget: string | undefined;
-      const budgetIdentity = (policy: AccessPolicy) => JSON.stringify([policyRequestCost(policy, "llm.chat"), policy.monthlyBudgetMicros ?? null,
+      let admittedBudget: string | undefined, capability = "llm.chat";
+      const budgetIdentity = (policy: AccessPolicy) => JSON.stringify([policyRequestCost(policy, capability), policy.monthlyBudgetMicros ?? null,
         policy.dailyBudgetMicros ?? null, policy.weeklyBudgetMicros ?? null, policy.budgetScope ?? null, policy.budgetMode ?? null]);
       const checkPolicy = (policy: AccessPolicy) => { if (budgetIdentity(policy) !== admittedBudget) throw copilotInferenceUnavailable(); };
       let providerBudget: number | null | undefined;
@@ -62,11 +87,13 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
       };
       const qualified = await access.qualify(value, deadline, async (input, policy) => {
         if (jsonBodyBytes(input.selected) > 32 * 1024 || jsonBodyBytes(input.body) > 512 * 1024) throw copilotInferenceUnavailable();
-        const selection = copilotAccountingSelection(input), cost = estimateCost(selection.model, input.body, policyRequestCost(policy, "llm.chat"),
-          "llm.chat", selection.endpoint, undefined, undefined, "github-copilot");
+        const selection = copilotAccountingSelection(input);
+        capability = selection.capability;
+        const cost = estimateCost(selection.model, input.body, policyRequestCost(policy, capability),
+          capability, selection.endpoint, undefined, undefined, "github-copilot");
         const linked = await connection(); providerBudget = linked?.monthlyBudgetMicros ?? null;
         // Dollar admission precedes ALL authenticated account/catalog egress.
-        budgets.validateBudgetReservation("llm.chat", cost, policy.monthlyBudgetMicros, linked, policy.dailyBudgetMicros, policy.limitHint, policy.weeklyBudgetMicros);
+        budgets.validateBudgetReservation(capability, cost, policy.monthlyBudgetMicros, linked, policy.dailyBudgetMicros, policy.limitHint, policy.weeklyBudgetMicros);
         admittedBudget = budgetIdentity(policy);
         accounting = createProxyAccounting({ env, context: { waitUntil: work => access.retain(work) } as ExecutionContext,
           auth: copilotAccountingIdentity(input, policy), selection, request, cost, grantKey: input.selected.key });
@@ -75,7 +102,7 @@ export async function runCopilotInference(request: Request, env: Env, access: Co
       const linked = await connection();
       if ((linked?.monthlyBudgetMicros ?? null) !== providerBudget) throw copilotInferenceUnavailable();
       reserving = true;
-      try { reservation = await budgets.reserveBudget(env, copilotAccountingIdentity(qualified.input, qualified.policy), "llm.chat", accounting!.cost, linked); }
+      try { reservation = await budgets.reserveBudget(env, copilotAccountingIdentity(qualified.input, qualified.policy), capability, accounting!.cost, linked); }
       finally { reserving = false; }
       current.signal.throwIfAborted();
       const upstream = await access.post(qualified.input, async policy => {

@@ -15,6 +15,8 @@ export interface CopilotInferenceInput {
   selected: CopilotCatalogInput & { selection: NonNullable<CopilotCatalogInput["selection"]> };
   body: Record<string, unknown>;
   context: CopilotInferenceContext;
+  /** Server-resolved public route only; never parsed from the private DTO. */
+  accountingSelection?: ProxySelection;
 }
 
 // Bound the complete graph BEFORE JSON.parse, including overwritten members,
@@ -82,6 +84,7 @@ const accountingProvider: CompiledProvider = {
   capabilities: [], endpoints: [], models: [], billing: { meter: null, dimensions: [], counters: [] }, meter: null, quota: { responseHeaders: [], probes: [] },
 };
 export function copilotAccountingSelection(input: CopilotInferenceInput): ProxySelection {
+  if (input.accountingSelection) return input.accountingSelection;
   const { selection } = input.selected, format = selection.format;
   return { provider: accountingProvider, capability: "llm.chat", body: input.body, method: "POST", pathParams: {},
     model: { id: selection.modelId, upstream: selection.modelId.slice("github-copilot/".length), capabilities: ["llm.chat"], pricing_ref: null, pricing: null },

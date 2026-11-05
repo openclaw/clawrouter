@@ -55,6 +55,8 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.provider.id === "github-copilot")
+    throw new HttpError(400, "copilot_public_route_required", "Copilot requires its exact owner-bound native or manifest route");
   if (selection.provider.id === "minimax"
     && ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"].includes(selection.model?.upstream ?? (!Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : ""))
     && (selection.endpoint.request_format !== "minimax.music" || selection.capability !== "music.generate"))

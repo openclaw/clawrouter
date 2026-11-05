@@ -9,7 +9,7 @@ import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { policyAllowsModel } from "./policy-models.ts";
-import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
+import type { CatalogOffer, ClientCatalog, ClientCatalogModel, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
 import { resolveTemplate } from "./provider-templates.ts";
@@ -31,6 +31,7 @@ import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
 import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
+import { copilotPublicRecord, qualifiedPublicModel, type CopilotPublicDiscoveryView } from "./copilot-public-proxy.ts";
 
 // Only compiled metadata lives across requests. Eligibility, health, balances
 // and policy projections are always rebuilt from this request's observations.
@@ -86,8 +87,13 @@ export async function avatarResponse(request: Request, env: Env): Promise<Respon
   return new Response(bytes, { headers: { "content-type": type, "cache-control": "private, no-store", vary: "cf-access-jwt-assertion" } });
 }
 
-export function modelsResponse(request: Request, env: Env): Promise<Response> {
+export function modelsResponse(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
   const anthropic = request.headers.has("anthropic-version");
+  if (new URL(request.url).searchParams.getAll("provider").includes("github-copilot")) {
+    if (!context) return Promise.resolve(errorResponse("copilot_public_unavailable", "Discovery retirement owner required", 503));
+    return import("./copilot-public-proxy.ts").then(({ proxyCopilotDiscovery }) => proxyCopilotDiscovery(request, env, context,
+      view => copilotDiscoveryPieces(view, anthropic ? "models-anthropic" : "models")));
+  }
   return discoveryResponse(request, env, anthropic ? "models-anthropic" : "models", entitlements => modelsBody(entitlements, anthropic));
 }
 
@@ -117,8 +123,83 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   return { object: "list", data };
 }
 
-export function catalogResponse(request: Request, env: Env): Promise<Response> {
+export function catalogResponse(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
+  if (new URL(request.url).searchParams.getAll("provider").includes("github-copilot")) {
+    if (!context) return Promise.resolve(errorResponse("copilot_public_unavailable", "Discovery retirement owner required", 503));
+    return import("./copilot-public-proxy.ts").then(({ proxyCopilotDiscovery }) => proxyCopilotDiscovery(request, env, context,
+      view => copilotDiscoveryPieces(view, "catalog")));
+  }
   return discoveryResponse(request, env, "catalog", catalogProjection);
+}
+
+// A compact observation filters only registered server metadata. Produce one
+// closed record at a time in BOTH the counting and delivery passes; no second
+// catalog graph, model/offer archive or serialized document is retained.
+export function* copilotDiscoveryPieces(view: CopilotPublicDiscoveryView, variant: "catalog" | "models" | "models-anthropic"): Generator<string> {
+  const { registry, observation, policy, connection } = view, provider = registry.provider;
+  const auth = { ...view.auth, policy };
+  const admitted = (index: number, api: number) => observation.permits(index, api)
+    && qualifiedPublicModel(registry, provider.models[index], api, policy);
+  const capability = (api: number) => ["llm.chat", "llm.responses", "llm.messages"][api];
+  const affordable = (index: number, api: number) => operationAffordability(auth, connection, provider.models[index], capability(api), registry.endpoints[api], undefined, {}, provider.id);
+  let count = 0, firstId: string | null = null, lastId: string | null = null;
+  const executable = new Set<string>();
+  for (let index = 0; index < provider.models.length; index++) {
+    let visible = false;
+    for (let api = 0; api < 3; api++) if (admitted(index, api) && affordable(index, api).status !== "exact-blocked") {
+      executable.add(registry.endpoints[api].id);
+      if (variant !== "models-anthropic" || api === 2) visible = true;
+    }
+    if (visible) { count++; firstId ??= provider.models[index].id; lastId = provider.models[index].id; }
+  }
+  if (variant !== "catalog") {
+    yield variant === "models" ? '{"object":"list","data":[' : '{"data":[';
+    let comma = false;
+    for (let index = 0; index < provider.models.length; index++) {
+      const model = provider.models[index], capabilities = [0, 1, 2].filter(api => (variant !== "models-anthropic" || api === 2)
+        && admitted(index, api) && affordable(index, api).status !== "exact-blocked").map(capability);
+      if (!capabilities.length) continue;
+      if (comma) yield ","; comma = true;
+      yield copilotPublicRecord(variant === "models" ? { id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}`, capabilities }
+        : { id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: null, max_tokens: null });
+    }
+    yield variant === "models" ? "]}" : '],"first_id":' + copilotPublicRecord(firstId) + ',"last_id":' + copilotPublicRecord(lastId) + ',"has_more":false}';
+    return;
+  }
+  yield '{"version":"clawrouter.client-catalog.v1","observedAt":' + copilotPublicRecord(new Date(observation.observedAt).toISOString())
+    + ',"scope":' + copilotPublicRecord({ authType: "proxy_key", credentialId: auth.credentialId, principalId: auth.principalId }) + ',"providers":[';
+  const header = { id: provider.id, displayName: provider.display_name, allowed: true, executable: executable.size > 0,
+    openaiCompatible: false, nativeBaseUrl: `/v1/native/${provider.id}`, policies: [auth.policyId], connectionTypes: ["oauth"],
+    readiness: { id: provider.id, displayName: provider.display_name, class: provider.class, serviceKind: provider.service_kind,
+      requiredConfig: [], optionalConfig: [], missingConfig: [], configPresent: true, oauthGrantRequired: true, oauthGrantCount: 1,
+      upstreamGrantCount: 1, openaiCompatible: false, manifestRoutes: 3, modelCount: count, connectionEnabled: connection.enabled,
+      executable: executable.size > 0, executableEndpoints: [...executable], verified: false, lastCheckedAt: null, latencyMs: null,
+      status: executable.size ? "configured" : "unavailable", reasons: executable.size ? [] : ["No current model/API offer is executable."] } };
+  yield copilotPublicRecord(header).slice(0, -1) + ',"routes":[';
+  for (let api = 0; api < 3; api++) {
+    if (api) yield ",";
+    const endpoint = registry.endpoints[api];
+    yield copilotPublicRecord({ endpoint: endpoint.id, methods: ["POST"], path: endpoint.path, requestFormat: endpoint.request_format,
+      responseFormat: endpoint.response_format, streaming: endpoint.streaming });
+  }
+  yield '],"models":['; let comma = false;
+  for (let index = 0; index < provider.models.length; index++) {
+    const model = provider.models[index], capabilities = [0, 1, 2].filter(api => admitted(index, api)).map(capability);
+    if (!capabilities.length) continue;
+    if (comma) yield ","; comma = true;
+    yield copilotPublicRecord({ id: model.id, upstream: model.upstream, capabilities, pricing_ref: null, pricing: null });
+  }
+  yield '],"offers":['; comma = false;
+  for (let index = 0; index < provider.models.length; index++) for (let api = 0; api < 3; api++) {
+    if (!admitted(index, api)) continue;
+    const model = provider.models[index], endpoint = registry.endpoints[api], availability = affordable(index, api);
+    if (comma) yield ","; comma = true;
+    yield copilotPublicRecord({ endpoint: endpoint.id, modelId: model.id, transport: "http", policyId: auth.policyId,
+      policyGeneration: policy.generation, routeKind: endpoint.native_proxy ? "native" : "manifest",
+      route: endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/proxy/${provider.id}/${endpoint.id}`,
+      eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}) });
+  }
+  yield "]}]}";
 }
 
 // The compiler validates declarations; retain a fail-closed projection for
@@ -374,6 +455,13 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     const pools = providerPools[index];
     const savedConnection = connections.find((connection) => connection.providerId === provider.id);
     const connection = savedConnection ?? { providerId: provider.id, enabled: true };
+    if (provider.id === "github-copilot") {
+      const readiness = providerReadinessForState(provider, env, [], connection, undefined, {
+        executableEndpoints: [], executable: false, status: "unavailable", reasons: ["copilot_public_discovery_required"],
+      });
+      return [provider.id, { configured: false, endpoints: [] as string[], websockets: [] as string[], models: [] as ClientCatalogModel[], offers: [] as CatalogOffer[], readiness,
+        operation: (_selection: ProxySelection): null => null }] as const;
+    }
     const keyScope = pools[0]?.entry.authType === "proxy_key";
     let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)
       || provider.config_keys.some((key) => typeof env[key] === "string" && (env[key] as string).trim());

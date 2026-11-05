@@ -51,6 +51,17 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
 
 export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; recovering?: Array<{ entry: SelectedGrant; atMs: number }> }
 
+// Candidate metadata only. The private owner must still prove its original
+// device/account binding; this does not make generic materialization usable.
+export function copilotPrivateCandidate(grant: UpstreamGrant): boolean {
+  return grant.provider === "github-copilot" && grant.enabled === true && grant.kind === "oauth"
+    && grant.credentialStore === "durable_object" && grant.credentialStatus === "reauth_required"
+    && Number.isSafeInteger(grant.credentialGeneration) && grant.credentialGeneration! > 0
+    && typeof grant.credentialLineage === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(grant.credentialLineage)
+    && !grant.credential && !grant.credentials && !grant.accessToken && !grant.refreshToken
+    && !grant.hasCredential && !grant.hasAccessToken && !grant.hasRefreshToken;
+}
+
 export function activeOperationCandidates(available: SelectedGrant[], env: Env, requirement?: GrantRequirement): SelectedGrant[] {
   // Qualification follows policy choice. Preserve the original pool-presence
   // fact so an unusable configured pool cannot fall back to environment auth.
@@ -72,15 +83,16 @@ function operationConfigured(grant: UpstreamGrant, env: Env, requirement?: Grant
   catch (error) { if (error instanceof HttpError) return false; throw error; }
 }
 
-export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number): GrantCandidates {
-  const configured = candidates.filter((entry): entry is SelectedGrant => !!entry.grant && entry.grant.enabled !== false && (!entry.grant.provider || entry.grant.provider === providerId) && grantCredentialPresent(entry.grant));
+export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number, privateCopilot = false): GrantCandidates {
+  const configured = candidates.filter((entry): entry is SelectedGrant => !!entry.grant && entry.grant.enabled !== false && (!entry.grant.provider || entry.grant.provider === providerId)
+    && (privateCopilot ? providerId === "github-copilot" && copilotPrivateCandidate(entry.grant) : grantCredentialPresent(entry.grant)));
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
   const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
   const recovering: Array<{ entry: SelectedGrant; atMs: number }> = [];
   const available = configured.filter((entry) => {
     // Keep configured-pool presence (and pinned owner error semantics) even
     // when refresh cannot currently produce a dispatchable access token.
-    if (pinnedKey === undefined && grantRefreshBlocked(entry.grant, nowMs)) return false;
+    if (!privateCopilot && pinnedKey === undefined && grantRefreshBlocked(entry.grant, nowMs)) return false;
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
     if (excludedKeys.has(entry.key)) return false;

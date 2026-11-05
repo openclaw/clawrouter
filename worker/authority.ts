@@ -300,6 +300,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (actor.auth !== "admin_token" && (!user || user.record.enabled === false)) return { outcome: "actor_disabled" };
     if (scope === "admin" && (actor.role !== "admin" || actor.auth === "local" && user?.record.role !== "admin")) return { outcome: "admin_required" };
     if (scope === "personal" && (!principalId || actor.auth === "admin_token")) return { outcome: "actor_disabled" };
+    if (Object.hasOwn(request, "copilotPublicIdentity") && scope !== "admin") return { outcome: "admin_required" };
     const existing = this.getCredential(credentialId);
     // A create collision must not prune retained rows or replace any part of the key.
     if (operation === "create" && existing) return { outcome: "exists" };
@@ -333,7 +334,11 @@ export class PolicyBindingIndexObject implements DurableObject {
   private deleteCredential(id: string): void { this.sql.exec("DELETE FROM proxy_credentials WHERE credential_id = ?", id); }
   private initializeCredentials(entries: ProxyCredentialEntry[]): void {
     if (this.hasMeta("credentials_global_initialized")) return;
-    for (const entry of entries) if (!this.getCredential(entry.credentialId)) this.putCredential(entry);
+    for (const entry of entries) if (!this.getCredential(entry.credentialId)) {
+      // Legacy KV/import metadata has no administrator attestation provenance.
+      const { copilotPublicIdentity: _untrusted, ...credential } = entry.credential;
+      this.putCredential({ ...entry, credential });
+    }
   }
   private getCredential(id: string): ProxyCredentialEntry | null {
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];

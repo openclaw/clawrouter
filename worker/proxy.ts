@@ -352,6 +352,10 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const provider = providerById(decodePathSegment(match[1]));
   const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodePathSegment(match[2]));
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
+  if (provider.id === "github-copilot") {
+    if (mode !== "proxy_key") return errorResponse("copilot_public_unauthorized", "Current proxy credential required", 403);
+    return (await import("./copilot-public-proxy.ts")).proxyCopilotPublic(request, env, context, provider, endpoint, "manifest");
+  }
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
   if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, mode, provider, endpoint);
@@ -440,6 +444,10 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const matching = provider.endpoints.filter(candidate => nativeMatch(candidate, match[2]));
   let endpoint = matching.find(candidate => candidate.methods.includes(request.method.toUpperCase())) ?? matching[0];
+  if (provider.id === "github-copilot" && endpoint) {
+    if (matching.length !== 1) return errorResponse("copilot_public_unavailable", "One exact Copilot endpoint required", 409);
+    return (await import("./copilot-public-proxy.ts")).proxyCopilotPublic(request, env, context, provider, endpoint, "native");
+  }
   if (!endpoint || !endpoint.native_proxy || manifestOnlyPublicCatalog(endpoint.request_format) || endpoint.request_format === "featherless.catalog") { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
