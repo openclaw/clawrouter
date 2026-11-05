@@ -121,7 +121,7 @@ const rawFetch=globalThis.fetch.bind(globalThis),release=BodyLease.prototype.rel
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 let active;
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&bodyBudgetCharged()<before)active.releases++;};
-const state=()=>active?{mode:active.mode,fetches:active.fetches,reads:active.reads,cancels:active.cancels,cleanup:active.cleanup,readRetired:active.readRetired,
+const state=()=>active?{mode:active.mode,phase:active.phase,errorClass:active.errorClass,errorCode:active.errorCode,fetches:active.fetches,reads:active.reads,cancels:active.cancels,cleanup:active.cleanup,readRetired:active.readRetired,
   results:active.results,status:active.status,releases:active.releases,lateEnqueues:active.lateEnqueues,charged:bodyBudgetCharged(),
   sourceLocked:active.source?.locked??false,physicalLocked:active.physical?.locked??false}:{};
 const gate=(a,phase)=>rawFetch('https://catalog-retirement-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async response=>{
@@ -130,8 +130,8 @@ const gate=(a,phase)=>rawFetch('https://catalog-retirement-gate.example/'+a.mode
 globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init),a=active;
  if(!a||!request.url.startsWith(a.base+'/models'))throw new Error('unexpected catalog fetch');
- a.fetches++;
- const response=await rawFetch(request);a.physical=response.body;const reader=response.body.getReader();
+ a.fetches++;a.phase='physical-fetch';
+ const response=await rawFetch(request);a.phase='headers';a.physical=response.body;const reader=response.body.getReader();
  let stopped=false,first=true,cancellation,pulling;
  const cancel=reason=>cancellation??=(async()=>{
    stopped=true;a.cancels++;
@@ -140,7 +140,7 @@ globalThis.fetch=async(input,init)=>{
    await Promise.allSettled([pulling,cleanup]);reader.releaseLock();
  })();
  a.source=new ReadableStream({pull(controller){return pulling=(async()=>{
-   a.reads++;let next;
+   a.reads++;a.phase='physical-read';let next;
    try{next=await reader.read();}
    finally{if(first){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}
    if(stopped)return;
@@ -154,7 +154,7 @@ export default {async fetch(request,env,ctx){
  if(url.pathname==='/contend'){const lease=new BodyLease(),allowed=lease.grow(33*1024*1024);lease.release();return Response.json({allowed,charged:bodyBudgetCharged()});}
  if(url.pathname!=='/start'||active&&active.releases!==1)return new Response(null,{status:409});
  const mode=url.searchParams.get('mode');if(!['requesty','featherless'].includes(mode))return new Response(null,{status:400});
- const a={mode,base:mode==='requesty'?'https://router.requesty.ai/v1':'https://api.featherless.ai/v1',fetches:0,reads:0,cancels:0,cleanup:false,
+ const a={mode,phase:'setup',base:mode==='requesty'?'https://router.requesty.ai/v1':'https://api.featherless.ai/v1',fetches:0,reads:0,cancels:0,cleanup:false,
   readRetired:false,results:0,status:0,releases:0,lateEnqueues:0,ready:deferred(),abort:new AbortController()};active=a;
  const provider=structuredClone(snapshot.providers.find(p=>p.id==='openai'));
  const endpoint={...provider.endpoints.find(e=>e.id==='models_list'),id:mode==='requesty'?'models_managed':'catalog',
@@ -173,8 +173,10 @@ export default {async fetch(request,env,ctx){
  // The abort continuation originates in this request; control requests only read state.
  ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('synthetic caller cancellation'))));
  const route=mode==='requesty'?'/v1/native/requesty/models/managed':'/v1/proxy/featherless/catalog';
+ a.phase='router-call';
  ctx.waitUntil(worker.fetch(new Request('https://router.example'+route,{headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret'},signal:a.abort.signal}),env,ctx)
-  .then(async response=>{a.status=response.status;await response.text();a.results++;}));
+  .then(async response=>{a.status=response.status;const body=await response.text();try{a.errorCode=JSON.parse(body)?.error?.code;}catch{}a.results++;a.phase='result';a.ready.resolve();})
+  .catch(error=>{a.errorClass=error?.name;a.results++;a.phase='rejected';a.ready.resolve();}));
  await a.ready.promise;return Response.json(state());
 },queue:worker.queue};
 `;
@@ -197,12 +199,15 @@ test("workerd charged catalogs keep original read and first cleanup through prom
   const temporary = await mkdtemp(join(tmpdir(), "charged-catalog-retirement-")); t.after(() => rm(temporary, { recursive: true, force: true }));
   const barriers = await catalogRetirementBarriers(t);
   const runtime = await startWorkerdFixture(temporary, retirementRouter, retirementUpstream(barriers.origin), { preventEviction: true });
-  t.after(() => runtime.dispose());
+  t.after(async () => {
+    for (const mode of ["requesty", "featherless"]) for (const phase of ["abort", "read", "cleanup"]) barriers.release(mode, phase);
+    await runtime.dispose();
+  });
   const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
   const until = async predicate => { let value; for (let i=0;i<100;i++) { value=await call("/state"); if(predicate(value))return value; await delay(10); } assert.fail(JSON.stringify(value)); };
   for (const mode of ["requesty", "featherless"]) {
     const charge=(mode==="requesty"?32:96)*1024*1024;
-    let state=await call("/start?mode="+mode); assert.equal(state.charged,charge); assert.equal(state.fetches,1); assert.equal(state.reads,1);
+    let state=await call("/start?mode="+mode); assert.equal(state.charged,charge,JSON.stringify(state)); assert.equal(state.fetches,1,JSON.stringify(state)); assert.equal(state.reads,1,JSON.stringify(state));
     barriers.release(mode,"abort"); state=await until(s=>s.results===1&&s.cancels===1);
     assert.equal(state.status,502); assert.equal(state.releases,0); assert.equal(state.charged,charge);
     assert.equal(state.sourceLocked,true); assert.equal(state.physicalLocked,true);
