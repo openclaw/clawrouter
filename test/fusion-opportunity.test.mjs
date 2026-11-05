@@ -38,3 +38,10 @@ test('other trials and strategies cannot silently change the selected experiment
   assert.equal(result.oracleSolved, 1);
   assert.deepEqual(result.rows[0].solvedBy, ['a']);
 });
+
+test('filesystem and URL-shaped identifiers cannot leak through provenance', () => {
+  for (const value of ['C:/Users/example/private/run.json', 'file:/Users/example/private/run.json', '/home/example/private']) {
+    assert.throws(() => analyzeOpportunity([{ ...source([]), evaluationId: value }], ['a', 'b']), /invalid/);
+    assert.throws(() => analyzeOpportunity([source([{ ...row('first', 'a', 1), configurationId: value }, row('first', 'b', 0)])], ['a', 'b']), /invalid/);
+  }
+});

@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
-const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,127}$/.test(value);
+const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._@+-]{0,127}$/.test(value);
 
 /** Hindsight opportunity only. This does not simulate a deployable selector. */
 export function analyzeOpportunity(inputs, strategies, trial = 1) {
