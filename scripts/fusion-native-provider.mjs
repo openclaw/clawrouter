@@ -66,6 +66,24 @@ export function nativeResult(model, result) {
     costMicros: costMicros([[input, price.input], [cached, price.cached], [short, price.write], [hour, price.input * 2], [output, price.output]]), provider };
 }
 
+// Classify normalized responses before treating their text as an action.
+export function responseDisposition(result) {
+  const choice = result?.choices?.[0], reason = choice?.finish_reason;
+  if (reason === 'refusal' || reason === 'content_filter' || choice?.message?.refusal) return 'refused';
+  if (reason === 'model_context_window_exceeded') return 'context_limit';
+  if (reason === 'length' || reason === 'max_tokens') return 'truncated';
+  if (['pause_turn', 'tool_use', 'tool_calls'].includes(reason)) return 'paused';
+  if (!['stop', 'end_turn', 'stop_sequence'].includes(reason)) return 'unknown_stop';
+  const content = choice?.message?.content;
+  return typeof content === 'string' && content.trim() ? 'complete' : 'empty';
+}
+
+export function requireCompleteResponse(result) {
+  const disposition = responseDisposition(result);
+  if (disposition !== 'complete') throw new Error(`provider_${disposition}`);
+  return result;
+}
+
 export async function nativePins(env, fetcher = fetch) {
   if (!env.OPENAI_API_KEY || !env.ANTHROPIC_API_KEY) throw new Error('native_credentials_missing');
   const pins = {};

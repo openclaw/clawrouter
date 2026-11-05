@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
-import { nativePins, nativeRequest, nativeResult } from './fusion-native-provider.mjs';
+import { nativePins, nativeRequest, nativeResult, responseDisposition, requireCompleteResponse } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 import { runCandidateEnsemble, compareCandidates } from './fusion-candidate-ensemble.mjs';
 
@@ -73,9 +73,10 @@ export function replaceEdits(task, files, edits) {
 const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
   'invalid_read_paths', 'invalid_edits', 'invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size',
   'missing_query', 'invalid_probe', 'invalid_action', 'command_timeout', 'command_output_limit',
-  'command_failed', 'context_header_too_large', 'ensemble_deadline']);
+  'command_failed', 'context_header_too_large', 'ensemble_deadline',
+  'provider_refused', 'provider_context_limit', 'provider_truncated', 'provider_empty', 'provider_paused', 'provider_unknown_stop']);
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
-export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens'].includes(value) ? value : 'other';
+export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens', 'stop_sequence', 'pause_turn', 'refusal', 'content_filter', 'model_context_window_exceeded'].includes(value) ? value : 'other';
 
 export const executorModel = (strategy, turn, forced = false) => ['claude', 'planned'].includes(strategy) ? models.critic
   : ['strong', 'critique', 'handoff'].includes(strategy) || (strategy === 'cascade' && (turn >= 2 || forced)) ? models.strong : models.cheap;
@@ -194,10 +195,11 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         }
         response = await invoke(trialId, model, request, deadline);
       } catch (error) {
-        if (error.message === 'unknown_cost') throw error;
+        if (error.message === 'unknown_cost' || error.message.startsWith('provider_')) throw error;
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         throw error;
       }
+      requireCompleteResponse(response);
       const content = response.choices?.[0]?.message?.content;
       let action;
       try { action = JSON.parse(content); } catch { actions.push({ turn: turns + 1, action: 'invalid_json', status: 'rejected' }); invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
@@ -254,7 +256,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           }
         } else throw new Error('invalid_action');
       } catch (error) {
-        if (error.message === 'unknown_cost') throw error;
+        if (error.message === 'unknown_cost' || error.message.startsWith('provider_')) throw error;
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         event.status = toolErrorCode(error);
         if (deadline.aborted) { outcome = 'deadline'; break; }
@@ -297,21 +299,27 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
     return tail;
   };
   const ledger = new SpendLedger(config, snapshot);
+  const stoppedTrials = new Map();
   const invoke = async (trialId, model, body, signal) => {
+    if (stoppedTrials.has(trialId)) throw new Error(stoppedTrials.get(trialId));
     const request = nativeRequest(model, body, env);
     const attempt = await ledger.reserve(trialId, model, priceBound(request.body, pins[model].price));
+    let result;
     try {
       const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body),
         signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
       if (!response.ok) throw new Error('unknown_cost');
-      const result = nativeResult(model, await response.json());
+      result = nativeResult(model, await response.json());
+      attempt.responseDisposition = responseDisposition(result.result);
       attempt.finishReason = finishReason(result.result.choices?.[0]?.finish_reason);
       const content = result.result.choices?.[0]?.message?.content;
       attempt.emptyOutput = typeof content !== 'string' || !content.trim();
       await ledger.settle(attempt, result.costMicros, response.status);
-      return result.result;
     } catch { ledger.blocked = true; await snapshot(); throw new Error('unknown_cost'); }
+    try { requireCompleteResponse(result.result); }
+    catch (error) { stoppedTrials.set(trialId, error.message); throw error; }
+    return result.result;
   };
   await snapshot();
   try {
@@ -335,6 +343,7 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
             latencyMs: Math.round(performance.now() - started),
             callCount: ledger.attempts.filter(attempt => attempt.trialId === trialId).length, status: 'error' });
           await snapshot();
+          if (error.message === 'provider_refused') console.log(JSON.stringify({ trialId, notice: 'Provider refused the request; this trial stopped without retry or fallback.' }));
           if (ledger.blocked) throw error;
           continue;
         }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop Fusion benchmark trials on provider refusals, incomplete responses and empty turns; retain bounded stop diagnostics and known usage costs.
+
 - Allow administrators to share existing subscription owners across policy pools while preserving one credential/refresh owner, shared quota, consumer billing and scoped pool visibility.
 
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
