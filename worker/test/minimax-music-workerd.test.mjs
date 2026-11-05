@@ -75,7 +75,7 @@ export default {async fetch(request,bindings,context){
  if(mode==='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,requestCostMicros:null}});
  const ledger=env.BUDGET_LEDGER;env.BUDGET_LEDGER={idFromName:n=>ledger.idFromName(n),get:id=>{const stub=ledger.get(id);return {async fetch(input,init){
   const r=await stub.fetch(input,init);if(new URL(input).pathname==='/dispatch'&&mode==='revoke')await revokeGrantCredentials(env,'oauth/fixture/music');return r;
- }}};
+ }}}};
  const controller=new AbortController(),stream=mode!=='unary',manifest=mode==='manifest',body=musicBody(stream,manifest?'music-2.6-free':'music-2.6');
  body.prompt=mode==='maximum'?'maximum':'Synthetic music';
  const track=p=>{const held=Promise.resolve(p).finally(()=>pending.delete(held));pending.add(held);context.waitUntil(held);};
@@ -110,7 +110,7 @@ export class MusicSource {async fetch(request){
   }else{yield head(2);yield '00';yield 'ff80';yield '"}}\n\n';}
   yield 'data: [DONE]\n\n';
  }
- const iterator=chunks();return new Response(new ReadableStream({type:'bytes',pull(c){const next=iterator.next();if(next.done){c.close();return;}const bytes=encoder.encode(next.value);wire+=bytes.length;c.enqueue(bytes);},cancel(){iterator.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream','content-encoding':'identity'}});
+ const iterator=chunks();return new Response(new ReadableStream({type:'bytes',pull(c){const next=iterator.next();if(next.done){c.close();c.byobRequest?.respond(0);return;}const bytes=encoder.encode(next.value);wire+=bytes.length;c.enqueue(bytes);},cancel(){iterator.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream','content-encoding':'identity'}});
 }}
 export default {async fetch(request,env){const url=new URL(request.url);
  if(url.hostname==='music-gate.example')return fetch(BARRIER_ORIGIN+url.pathname,{redirect:'manual'});

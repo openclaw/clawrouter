@@ -7,7 +7,7 @@ import { snapshot } from "../providers.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, materializeGrantCredentials, inspectGrantCredentials, revokeGrantCredentials, secretlessGrant } from "../grant-credentials.ts";
 import { routingProjection } from "../grant-projection.ts";
-import { prepareMiniMaxMediaDispatch } from "../minimax-media-dispatch.ts";
+const { prepareMiniMaxMediaDispatch } = await import("../minimax-media-dispatch.ts");
 import { configuredUpstream } from "../providers.ts";
 import { cachedGrantCredentials } from "../credential-cache.ts";
 import { overrideHotCacheConfig, HOT_CACHE_DISABLED } from "../hot-cache.ts";

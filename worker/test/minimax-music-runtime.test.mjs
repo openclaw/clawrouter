@@ -28,7 +28,7 @@ async function setup(t, options = {}) {
   f.put = async (body, query = "") => { const r = await f.admin(body, query), text = await r.text(); assert.equal(r.status, 200, text); assert.doesNotMatch(text, /synthetic-(?:original-music|replacement|forbidden-environment)-key/); return JSON.parse(text); };
   if (!options.environment) await f.put({ provider: "minimax", kind: "api_key", enabled: true, accountId: "synthetic-account", credential: originalKey,
     ...(options.qualify === false ? {} : { nativeMediaAuthorization: "minimax-global-music" }) });
-  f.policy.models = [musicModel]; f.policy.grantRouting = { eligibleGrants: { minimax: options.environment ? [] : ["replicate"] }, environmentFallback: true, failover: true };
+  f.policy.models = [musicModel]; f.policy.grantRouting = { eligibleGrants: options.environment ? {} : { minimax: ["replicate"] }, environmentFallback: true, failover: true };
   await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
   f.request = (manifest = false, body = musicBody(), extra = {}) => f.call(manifest ? manifestPath : nativePath,
     manifest ? { body } : body, extra);
@@ -273,3 +273,10 @@ for (const stream of [false, true]) for (const failedCleanup of [false, true])
     assert.equal(cancels, 1); assert.equal(pulls, 1); assert.equal(f.sent.length, 1);
     const [event] = await f.events(); assert.equal(event.actual_cost_micros, 700);
   });
+
+for (const fixed of [0, 17]) test(`MiniMax music explicit fixed policy ${fixed} never uses a token tariff`, async t => {
+  const f = await setup(t, { fixed }); const response = await f.request();
+  assert.equal(response.status, 200, await response.clone().text()); await response.text(); await f.drain();
+  const [event] = await f.events(); assert.equal(f.sent.length, 1); assert.equal(event.cost_basis, "policy_fixed");
+  assert.equal(event.actual_cost_micros, fixed); assert.equal(event.total_tokens, null);
+});
