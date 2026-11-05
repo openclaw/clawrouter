@@ -12,7 +12,7 @@ const examples = {
   'nullish-default': [[null, 9], [undefined, 9], [0, 9], [false, 9], ['', 9], [3, 9]],
   'exact-leaf': [['model', 'model'], ['prefixmodel', 'model'], ['p/model', 'model'], ['model/other', 'model']],
   'https-only': [['https://example.test'], ['http://example.test'], ['httpsjunk'], ['invalid']],
-  'decimal-string': [['0'], ['000'], ['12'], [''], ['1.5'], ['+1'], [' 1'], ['3x'], [4]],
+  'decimal-string': [['0'], ['000'], ['12'], [''], ['1.5'], ['+1'], [' 1'], ['3x'], [4], ['12\n'], ['12\r'], ['12\u2028']],
   'integer-range': [[1, 3], [3, 3], [1.5, 3], [0, 3]],
   'utf8-limit': [['a', 1], ['é', 1], ['😀', 3], ['a', 2]],
   'round-cost-up': [[1, 0.2], [1, 1], [3, 0.6]],
@@ -22,7 +22,7 @@ const examples = {
 const expected = {
   'finite-positive': [true, false, false, false, false, false],
   'nullish-default': [9, 9, 0, false, '', 3], 'exact-leaf': [true, false, true, false],
-  'https-only': [true, false, false, false], 'decimal-string': [true, true, true, false, false, false, false, false, false],
+  'https-only': [true, false, false, false], 'decimal-string': [true, true, true, false, false, false, false, false, false, false, false, false],
   'integer-range': [true, true, false, false], 'utf8-limit': [true, false, false, true],
   'round-cost-up': [1, 1, 2], 'sort-copy': [[1, 2, 10]], 'stable-unique': [['b', 'a', 'c']],
   'literal-path': ['/A%2FB/'],

@@ -14,7 +14,7 @@ const families = [
     's => { try { return new URL(s).protocol === "https:"; } catch { return false; } }',
     ['s => s.startsWith("https")', 's => new URL(s).protocol === "https:"', 's => { try { return new URL(s).protocol.startsWith("http"); } catch { return false; } }']],
   ['decimal-string', 'Accept only nonempty strings of ASCII decimal digits. Leading zeros are valid; signs, decimals and whitespace are not.',
-    's => typeof s === "string" && /^[0-9]+$/.test(s)',
+    's => typeof s === "string" && s.trim() === s && /^[0-9]+$/.test(s)',
     ['s => Number.isFinite(Number(s))', 's => Number.isFinite(parseInt(s, 10))', 's => /^[0-9.]+$/.test(s)']],
   ['integer-range', 'Accept integer values from 1 through max inclusive; reject fractions and values outside that range.',
     '(v, max) => Number.isInteger(v) && v >= 1 && v <= max',
