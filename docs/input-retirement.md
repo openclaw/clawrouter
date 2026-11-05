@@ -97,6 +97,10 @@ one memoized disposer. Adapter completion remains owned even after source EOF.
 Buffered metadata and file output stay charged through downstream retirement.
 The existing request context owns background cleanup after a prompt failure.
 No pipeline-completion promise is treated as proof of an unowned source's cleanup.
+For a credential-owner dispatch, the caller owns the original response body
+returned by the Durable Object transport. That transport does not expose an ACK
+for the owner's separate provider-reader cleanup. This phase does not qualify
+that owner-side tail or treat the caller's retirement as its completion.
 
 ## Remaining phases
 
