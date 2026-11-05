@@ -1,6 +1,7 @@
 import type { CompiledEndpoint } from "./types.ts";
 
-export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video" | "minimax.video";
+import type { ManagedProtocol } from "../shared/provider-snapshot.ts";
+export type { ManagedProtocol, ManagedFileLinks } from "../shared/provider-snapshot.ts";
 export type ManagedObservationLoss = "expired_or_unknown" | "deleted" | "canceled_or_deleted";
 export type ManagedTerminal = "succeeded" | "failed" | "canceled" | "aborted";
 export type ManagedControlAction = "retrieve" | "result" | "cancel";
@@ -101,8 +102,6 @@ export interface ManagedFileState {
   status: "processing" | "active" | "failed";
   body: Record<string, unknown>;
 }
-export type ManagedFileLinks = { mode?: "metadata"; metadata: string; download: string }
-  | { mode: "download_only"; metadata?: never; download: string };
 export interface ManagedFilePaths { id: string; metadata?: string; download: string }
 // Source-owned wrappers expose this through managedFileAdapter(protocol).
 // These methods parse/prepare only; the scoped runtime owns all authority/I/O.
