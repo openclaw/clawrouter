@@ -53,6 +53,7 @@ export class CopilotControlSlot {
   private readonly remote: boolean;
   private owner = false;
   private started = false;
+  private reserving: boolean;
   private recordHeld = false;
   private serializing = false;
   private resolve!: () => void;
@@ -61,10 +62,16 @@ export class CopilotControlSlot {
   readonly scope: CopilotControlScope;
   constructor(id: string, scope: CopilotControlScope, remote: boolean) {
     this.id = id; this.scope = scope;
-    this.remote = remote; this.front = !remote;
+    this.remote = remote; this.front = !remote; this.reserving = remote;
     this.retired = new Promise(resolve => { this.resolve = resolve; });
   }
-  begin(): void { if (this.started || this.remote && this.front || this.owner) throw conflict(); this.started = true; }
+  begin(): void { if (this.reserving || this.started || this.remote && this.front || this.owner) throw conflict(); this.started = true; }
+  reserved(accepted: boolean): void {
+    if (!this.reserving) throw conflict();
+    this.reserving = false;
+    if (!accepted || this.front && !this.started) this.owner = true;
+    this.complete();
+  }
   assert(scope: CopilotControlScope): void {
     if (scope.key !== this.scope.key || scope.generation !== this.scope.generation || scope.lineage !== this.scope.lineage || scope.actor !== this.scope.actor) throw conflict();
   }
@@ -81,8 +88,8 @@ export class CopilotControlSlot {
     try { await run(); } finally { this.serializing = false; this.complete(); }
   }
   ownerDone(): void { this.owner = true; this.complete(); }
-  frontDone(): void { this.front = true; if (!this.started) this.owner = true; this.complete(); }
-  private complete(): void { if (this.front && this.owner && !this.recordHeld && !this.serializing) this.resolve(); }
+  frontDone(): void { this.front = true; if (!this.reserving && !this.started) this.owner = true; this.complete(); }
+  private complete(): void { if (!this.reserving && this.front && this.owner && !this.recordHeld && !this.serializing) this.resolve(); }
 }
 
 // Validate ALL headers before constructing a copy. Only Access/CSRF and body

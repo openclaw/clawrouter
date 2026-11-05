@@ -71,7 +71,7 @@ async function borrowedCopilotAccountControl(request: Request, env: Env, key: st
   const id = crypto.randomUUID().replaceAll("-", "");
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
   let response: Response | undefined, attempted = false, retirement: Promise<void> | undefined;
-  const send = (phase: "reserve" | "execute" | "retire", body?: Uint8Array) => {
+  const send = (phase: "reserve" | "execute" | "retire", body?: Uint8Array<ArrayBuffer>) => {
     const headers = qualifiedCopilotControlHeaders(request.headers, {
       [copilotControlHeaders.phase]: phase, [copilotControlHeaders.id]: id,
       [copilotControlHeaders.key]: key, [copilotControlHeaders.source]: request.url,
@@ -105,7 +105,7 @@ async function borrowedCopilotAccountControl(request: Request, env: Env, key: st
     await dispose(response); response = undefined;
     await copilotDeviceAdmin(request, env, actor);
     // Forward original bounded bytes: only the owner creates the input graph.
-    let bytes: Uint8Array | undefined = await readCopilotDeviceBytes(request);
+    let bytes: Uint8Array<ArrayBuffer> | undefined = await readCopilotDeviceBytes(request);
     await copilotDeviceAdmin(request, env, actor);
     try { response = await send("execute", bytes); } finally { bytes = undefined; }
     const replyStatus = response.status;

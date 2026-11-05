@@ -6,7 +6,7 @@ const scope={key:'oauth/policy/copilot',generation:2,lineage:'original-lineage',
 const tick=()=>Promise.resolve();
 
 test('exclusive owner slot closes registration before joining BOTH participants',async()=>{
- const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);control.join(id,scope.key);
+ const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);slot.reserved(true);control.join(id,scope.key);
  assert.throws(()=>control.claim('b'.repeat(32),scope.key,true));assert.throws(()=>control.register(scope));
  let closed=false;const closing=control.close().then(()=>{closed=true;});await tick();assert.equal(closed,false);
  slot.ownerDone();await tick();assert.equal(closed,false);assert.throws(()=>control.claim('b'.repeat(32),scope.key,true));
@@ -19,12 +19,12 @@ test('local slot has no fictitious remote participant and cannot close another r
 test('grant, actor, generation and lineage are exact; IDs cannot join another owner',async()=>{
  const a=new CopilotInferenceControl(),b=new CopilotInferenceControl();a.register(scope);b.register({...scope,key:'oauth/policy/foreign'});
  assert.throws(()=>a.claim(id,'oauth/policy/foreign',true));assert.throws(()=>a.claim('bad',scope.key,true));
- const slot=a.claim(id,scope.key,true);assert.throws(()=>a.join('b'.repeat(32),scope.key));assert.throws(()=>b.join(id,scope.key));
+ const slot=a.claim(id,scope.key,true);slot.reserved(true);assert.throws(()=>a.join('b'.repeat(32),scope.key));assert.throws(()=>b.join(id,scope.key));
  for(const patch of [{key:'foreign'},{generation:3},{lineage:'foreign'},{actor:'foreign'}])assert.throws(()=>slot.assert({...scope,...patch}));
  a.join(id,scope.key);assert.throws(()=>a.join(id,scope.key));slot.assert(scope);slot.ownerDone();slot.frontDone();await a.close();await b.close();
 });
 test('late execute cannot reuse a refused or retired reservation',async()=>{
- const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);slot.ownerDone();assert.throws(()=>control.join(id,scope.key));slot.frontDone();await control.close();
+ const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);slot.reserved(false);assert.throws(()=>control.join(id,scope.key));slot.frontDone();await control.close();
 });
 test('record and storage representations are exclusive and join cleanup rejection',async()=>{
  const control=new CopilotInferenceControl();control.register(scope);const slot=control.claimLocal(),held=Promise.withResolvers();
@@ -33,7 +33,7 @@ test('record and storage representations are exclusive and join cleanup rejectio
  held.reject(Error('synthetic persistence failure'));await assert.rejects(record);await closing;assert.equal(done,true);
 });
 test('reply EOF joins only control retirement, never the inference allocation waiting on it',async()=>{
- const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);control.join(id,scope.key);slot.ownerDone();
+ const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);slot.reserved(true);control.join(id,scope.key);slot.ownerDone();
  const response=copilotControlReply({status:'cancelled'},200,async()=>control.retireRemote(id,scope.key));
  let closed=false;const closing=control.close().then(()=>{closed=true;});const reader=response.body.getReader();
  assert.equal((await reader.read()).done,false);assert.equal(closed,false);assert.equal((await reader.read()).done,true);reader.releaseLock();await closing;assert.equal(closed,true);
@@ -49,4 +49,11 @@ test('headers are bounded BEFORE copying; only required headers and server IDs f
  assert.throws(()=>qualifiedCopilotControlHeaders(new Headers({'x-unforwarded':'x'.repeat(16385)})));
  assert.throws(()=>qualifiedCopilotControlHeaders(new Headers({'x-a':'x'.repeat(16384),'x-b':'x'.repeat(16384)})));
  assert.throws(()=>qualifiedCopilotControlHeaders(source,{'authorization':'forged'}));
+});
+
+test('retirement during reservation authorization joins that original continuation',async()=>{
+ const control=new CopilotInferenceControl();control.register(scope);const slot=control.claim(id,scope.key,true);
+ let closed=false;const closing=control.close().then(()=>{closed=true;});control.retireRemote(id,scope.key);
+ await tick();assert.equal(closed,false);assert.throws(()=>control.join(id,scope.key));
+ slot.reserved(true);await closing;assert.equal(closed,true);assert.throws(()=>control.join(id,scope.key));
 });

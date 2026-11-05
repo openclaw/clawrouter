@@ -48,7 +48,7 @@ export async function copilotDeviceAdmin(request: Request, env: Env, expected?: 
 
 // Bounded from the first byte. The fixed URL discriminator selects this reader
 // before the ordinary admin JSON parser; it grants no authority.
-export async function readCopilotDeviceBytes(request: Pick<Request, "body" | "bodyUsed" | "headers" | "signal">): Promise<Uint8Array> {
+export async function readCopilotDeviceBytes(request: Pick<Request, "body" | "bodyUsed" | "headers" | "signal">): Promise<Uint8Array<ArrayBuffer>> {
   const body = request.body;
   if (!body || body.locked || request.bodyUsed) throw invalid();
   let reader: ReadableStreamDefaultReader<Uint8Array> | ReadableStreamBYOBReader;
@@ -59,7 +59,7 @@ export async function readCopilotDeviceBytes(request: Pick<Request, "body" | "bo
     async cancel(reason) { try { await reader.cancel(reason); } catch (error) { cleanupFailed = true; throw error; } },
     releaseLock() { reader.releaseLock(); if (body.locked) throw invalid(); },
   }), abort = () => { void owner.retire("cancel", request.signal.reason).catch(() => undefined); };
-  let eof = false, bytes: Uint8Array | undefined = new Uint8Array(8192);
+  let eof = false, bytes: Uint8Array<ArrayBuffer> | undefined = new Uint8Array(8192);
   try {
     const length = request.headers.get("content-length");
     if (request.headers.has("content-encoding") || !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers.get("content-type") ?? "")

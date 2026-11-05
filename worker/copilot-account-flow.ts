@@ -236,11 +236,12 @@ export class CopilotAccountFlow {
       if (phase === "reserve") {
         if (internal.body) throw accountConflict();
         const reserved = this.owner.inferenceControl.claim(id, key, true);
+        let accepted = false;
         try {
           const actor = await copilotDeviceAdmin(request, this.env);
           await this.owner.order(() => reserved.record(async () => {
             await copilotDeviceAdmin(request, this.env, actor);
-            const record = await this.owner.read(); if (!record) throw accountConflict();
+            const record = await this.owner.read(); if (!record || typeof record.lineage !== "string") throw accountConflict();
             assertCopilotAccountRecord(record);
             reserved.assert({ key, generation: record.generation, lineage: record.lineage, actor });
             if (record.grantKey !== key || !record.copilotDeviceAttempt || !record.copilotAccountAttempt) throw accountConflict();
@@ -248,8 +249,8 @@ export class CopilotAccountFlow {
               expectedGeneration: record.generation, expectedLineage: record.lineage } satisfies CopilotAccountInput;
             this.assertAttempt(this.scope(record, key, input, actor), record.copilotAccountAttempt);
           }));
-          return new Response(null, { status: 204 });
-        } catch (error) { reserved.ownerDone(); throw error; }
+          accepted = true; return new Response(null, { status: 204 });
+        } finally { reserved.reserved(accepted); }
       }
       if (phase !== "execute") throw accountConflict();
       slot = this.owner.inferenceControl.join(id, key);

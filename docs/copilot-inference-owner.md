@@ -104,7 +104,8 @@ The existing 2 MiB control share admits one exclusive, opaque, grant-bound
 cancel/status participant. It does not increase the 96 MiB charge. The credential
 owner registers current key, generation, lineage and original admin actor before
 input reads. Registration closes before allocation retirement, and closure joins
-all admitted control participants. A failed concurrent inference cannot close
+all admitted control participants, including reservation authorization still in
+flight when the frontend retires. A failed concurrent inference cannot close
 another operation's registration. Qualification, foreign/stale scope and unrelated
 grant operations cannot borrow this slot.
 
