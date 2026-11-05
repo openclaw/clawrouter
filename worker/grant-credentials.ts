@@ -1,3 +1,4 @@
+import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
 import { VertexOwnerRefresh } from "./vertex-owner-refresh.ts";
 import { mutateVertexAnthropicBinding, vertexOwnerBinding } from "./vertex-anthropic-binding.ts";
 import { mutateMiniMaxAnthropicBinding, miniMaxCredential, miniMaxOwnerBinding } from "./minimax-anthropic-binding.ts";
@@ -55,6 +56,7 @@ export class GrantCredentialObject implements DurableObject {
   private readonly vertexRefresh: VertexOwnerRefresh;
   private readonly minimaxDevice: MiniMaxDeviceFlow;
   private readonly copilotDevice: CopilotDeviceFlow;
+  private readonly copilotAccount: CopilotAccountFlow;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -81,6 +83,13 @@ export class GrantCredentialObject implements DurableObject {
       install: (record, credential, revalidate) => this.installMiniMaxDevice(record, credential, revalidate),
       publish: async record => { await this.schedule(record); await this.publishProjection(record); },
     }, env);
+    this.copilotAccount = new CopilotAccountFlow({
+      order: run => this.order(run),
+      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      save: async record => { assertCopilotAccountRecord(record); await this.state.storage.put("credential", record); },
+      publish: record => this.publishProjection(record),
+      retain: work => { this.state.waitUntil?.(work); void work.catch(() => undefined); },
+    }, env);
     this.copilotDevice = new CopilotDeviceFlow({
       order: run => this.order(run),
       read: () => this.state.storage.get<CredentialRecord>("credential"),
@@ -100,6 +109,11 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/copilot-account") {
+      const operation = this.copilotAccount.fetch(request);
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/copilot-device") {
       const operation = this.copilotDevice.fetch(request);
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
@@ -254,6 +268,7 @@ export class GrantCredentialObject implements DurableObject {
         const input = await readJson<PutRequest>(request);
         await this.minimaxDevice.invalidate();
         await this.copilotDevice.invalidate();
+        await this.copilotAccount.invalidate();
         this.vertexRefresh.invalidate();
         const replace = input.intent === "replace";
         if (replace && !hasPrimaryCredential(input.grant) && !input.vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
@@ -287,6 +302,8 @@ export class GrantCredentialObject implements DurableObject {
         // Generic mutations never carry an acquired GitHub token or its device
         // attempt into another generation, provider, domain or credential kind.
         delete record.copilotDeviceCredential;
+        delete record.copilotAccountAttempt;
+        delete record.copilotAccountBinding;
         delete record.copilotDeviceAttempt;
         mutateNativeMediaBinding(record, current, input.nativeMediaIntent,
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
@@ -361,6 +378,7 @@ export class GrantCredentialObject implements DurableObject {
         const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
         await this.minimaxDevice.invalidate();
         await this.copilotDevice.invalidate();
+        await this.copilotAccount.invalidate();
         this.vertexRefresh.invalidate();
         // An unavailable index must not block deleting an owner's secrets.
         const current = await this.state.storage.get<CredentialRecord>("credential");
@@ -467,6 +485,7 @@ export class GrantCredentialObject implements DurableObject {
       throw new HttpError(409, "copilot_device_owner_unavailable", "Original credential owner is unavailable");
     if ((current?.generation ?? 0) !== input.expectedGeneration)
       throw new HttpError(409, "copilot_device_conflict", "Credential generation changed");
+    await this.copilotAccount.invalidate();
     const { result: attachment } = await this.reconcileAttachment(key);
     if (attachment.generation !== (current?.generation ?? 0)) throw new HttpError(409, "copilot_device_conflict", "Credential attachment changed");
     const now = new Date().toISOString();
@@ -1149,7 +1168,7 @@ export async function revokeGrantCredentials(env: Env, key: string, metadata?: G
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  for (const name of ["minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
+  for (const name of ["minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
   return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
@@ -1284,7 +1303,7 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["copilotDeviceAttempt", "copilotDeviceCredential", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 

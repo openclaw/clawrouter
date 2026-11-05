@@ -46,7 +46,9 @@ export async function consumeCopilotResponse<T>(response: Response, input: Reado
       if (++reads > 8192) throw invalid(); // Empty results AND EOF count.
       // Register the actual pending read before the deadline race can reject.
       const pending = retirement.read(() => ownedReader.read(window));
-      const next = await operation.wait(pending);
+      // Account public cancellation is raced once by its owner. Keep this
+      // continuation attached to the physical read, without per-read races.
+      const next = await (profile === "account" ? pending : operation.wait(pending));
       operation.signal.throwIfAborted();
       if (next.value) {
         if (!(next.value instanceof Uint8Array) || !(next.value.buffer instanceof ArrayBuffer)

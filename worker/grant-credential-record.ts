@@ -1,3 +1,4 @@
+import type { CopilotAccountAttempt, CopilotAccountBinding } from "./copilot-account-flow.ts";
 import { miniMaxImageOwnerBinding } from "./minimax-image-credential.ts";
 import type { MiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { vertexOwnerBinding, type VertexAnthropicBinding } from "./vertex-anthropic-binding.ts";
@@ -20,6 +21,8 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
   minimaxDeviceAttempt?: MiniMaxDeviceAttempt;
   copilotDeviceAttempt?: CopilotDeviceAttempt;
   copilotDeviceCredential?: CopilotDeviceCredential;
+  copilotAccountAttempt?: CopilotAccountAttempt;
+  copilotAccountBinding?: CopilotAccountBinding;
   vertexAnthropicBinding?: VertexAnthropicBinding | null;
   vertexPrivateKey?: string;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
