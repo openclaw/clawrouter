@@ -45,18 +45,19 @@ async function external(t) {
     } else if (path === "/v1/files/retrieve_content") {
       counts.download++; const bytes = mp4(16 * MiB); response.writeHead(200, { "content-type": "application/json", "content-length": bytes.length }); response.end(bytes); return;
     } else { response.writeHead(404); response.end(); return; }
-    if (mode === "maximum" && !path.includes("/files/")) {
-      value.ignored = { a: "x".repeat(65530), b: "x".repeat(65530), c: "x".repeat(65530) };
+    if (mode === "maximum") {
+      const units = path.includes("/files/") ? 2000 : 65530;
+      value.ignored = { a: "x".repeat(units), b: "x".repeat(units), c: "x".repeat(units) };
       let nodes = 0; const count = x => { nodes++; if (x && typeof x === "object") for (const v of Object.values(x)) count(v); }; count(value);
       value.discarded = Array(4095 - nodes).fill(null);
     }
     let text = JSON.stringify(value);
-    if (mode === "maximum" && !path.includes("/files/")) text += " ".repeat(MiB - Buffer.byteLength(text));
+    if (mode === "maximum") text += " ".repeat((path.includes("/files/") ? 65536 : MiB) - Buffer.byteLength(text));
     response.writeHead(200, { "content-type": "application/json", "content-length": Buffer.byteLength(text) }); response.end(text);
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
-  return { origin: "http://127.0.0.1:" + server.address().port, counts, entered(key) { const gate = Promise.withResolvers(); entered.set("/gate/" + key, gate); return gate.promise; }, mode(value) { mode = value; },
+  return { origin: "http://127.0.0.1:" + server.address().port, counts, current: () => current, entered(key) { const gate = Promise.withResolvers(); entered.set("/gate/" + key, gate); return gate.promise; }, mode(value) { mode = value; },
     release(key) { const path = "/gate/" + key; released.add(path); held.get(path)?.end("released"); held.delete(path); },
     releaseAll() { for (const [path, response] of held) { released.add(path); response.end("released"); } held.clear(); } };
 }
@@ -70,7 +71,9 @@ import {GrantCredentialObject as BaseGrantCredentialObject,putGrantCredentials,i
 import {miniMaxVideoBinding} from './shared/minimax-video-binding.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
-import {MiniMaxVideoOperation,readVideoJson} from './worker/minimax-video-operation.ts';
+import {MiniMaxVideoOperation,readVideoJson,inspectVideoJson} from './worker/minimax-video-operation.ts';
+import {collectManagedPrediction} from './worker/managed-predictions.ts';
+import {resolveResponseControlOwner} from './worker/response-controls.ts';
 import {usageStub} from './worker/ledgers.ts';
 const provider=snapshot.providers.find(p=>p.id==='minimax');configureVideo(provider);
 const key='oauth/fixture/video',actor={auth:'cloudflare_access',role:'admin',email:'video-admin@example.invalid'};
@@ -93,9 +96,37 @@ export class GrantCredentialObject extends BaseGrantCredentialObject {
  }
 }
 let active;
-const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,error:active.error,results:active.results,
+const records=new WeakMap(),operationFetch=MiniMaxVideoOperation.prototype.fetch,providerFetch=MiniMaxVideoOperation.prototype.providerFetch;
+function measure(response,a){if(!response.body)return response;const get=response.body.getReader.bind(response.body);response.body.getReader=options=>{const r=get(options);return {async read(...args){const part=await r.read(...args);if(part.value){a.nativeBytes=(a.nativeBytes??0)+part.value.byteLength;a.nativeMaxBacking=Math.max(a.nativeMaxBacking??0,part.value.buffer.byteLength);}return part;},cancel:x=>r.cancel(x),releaseLock:()=>r.releaseLock()};};return response;}
+function counters(owner){let row=records.get(owner);if(!row){row={kind:owner.kind,ordinary:0,mandatory:0};records.set(owner,row);active?.exchanges.push(row);}return row;}
+MiniMaxVideoOperation.prototype.fetch=function(start,mandatory=false,...rest){const row=counters(this);return operationFetch.call(this,signal=>{
+ row[mandatory?'mandatory':'ordinary']++;return start(signal);
+},mandatory,...rest);};
+MiniMaxVideoOperation.prototype.providerFetch=function(start){const row=counters(this);return providerFetch.call(this,async signal=>{row.ordinary++;const response=await start(signal);return active?measure(response,active):response;});};
+function fresh(mode){return active={mode,status:null,error:null,results:0,reads:0,cancels:0,unlocks:0,releases:0,maxBacking:0,actions:[],exchanges:[],controls:[],candidates:0,controlMaxValues:0,
+ cleanup:false,readRetired:false,ready:deferred(),abort:new AbortController()};}
+async function paddedControl(response,a){
+ if(!response.body||!response.headers.get('content-type')?.includes('application/json'))return response;
+ const value=await response.json();
+ if(value?.pools?.minimax)a.candidates=Math.max(a.candidates,value.pools.minimax.keys.length);
+ const counts=inspectVideoJson(JSON.stringify(value));
+ if(value&&typeof value==='object'&&!Array.isArray(value)){
+ if(counts.values+3>512||counts.members+3>512)throw Error('fixture control has no padding room');
+ const room=32768-counts.units-'fixtureAfixtureBfixtureC'.length;
+ if(room<0)throw Error('fixture strings overflow');
+ value.fixtureA='x'.repeat(Math.min(16384,room));value.fixtureB='x'.repeat(Math.min(16384,room-value.fixtureA.length));
+ value.fixtureC=Array(512-counts.values-3).fill(null);
+ }
+ let text=JSON.stringify(value);const verified=inspectVideoJson(text);if(verified.values>512||text.length>65536)throw Error('fixture maximum malformed');
+ a.controlMaxValues=Math.max(a.controlMaxValues,verified.values);text+=' '.repeat(65536-text.length);
+ let at=0;return new Response(new ReadableStream({type:'bytes',pull(c){if(at===text.length){c.close();c.byobRequest?.respond(0);return;}
+ const end=Math.min(at+16384,text.length);c.enqueue(new TextEncoder().encode(text.slice(at,end)));at=end;},cancel(){text='';}},{highWaterMark:0}),
+ {status:response.status,headers:{'content-type':'application/json','content-length':'65536'}});
+}
+
+const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,locator:active.locator,error:active.error,results:active.results,
  reads:active.reads,cancels:active.cancels,unlocks:active.unlocks,releases:active.releases,maxBacking:active.maxBacking,actions:active.actions,
- cleanup:active.cleanup,readRetired:active.readRetired,locked:active.source?.locked??false}: {})});
+ cleanup:active.cleanup,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
 function hold(source,a){a.source=source;const get=source.getReader.bind(source);let first=true,cancel;
@@ -108,18 +139,19 @@ function hold(source,a){a.source=source;const get=source.getReader.bind(source);
 }
 function controlled(env,a){const grants=env.GRANT_CREDENTIALS,authority=env.ACCESS_CONTROL;return {...env,
  GRANT_CREDENTIALS:{idFromName:n=>grants.idFromName(n),get:id=>{const stub=grants.get(id);return {async fetch(input,init){
-  const response=await stub.fetch(input,init);
-  if(new URL(input).pathname==='/responses/control'&&['poll-read','file-read','cleanup-reject','late'].includes(a.mode)){
+  const path=new URL(input).pathname;a.controls.push('grant:'+path);const response=await stub.fetch(input,init);
+  if(path==='/responses/control')measure(response,a);
+  if(path==='/responses/control'&&['poll-read','file-read','cleanup-reject','late'].includes(a.mode)){
    if(a.mode!=='file-read'||JSON.parse(init.body).file?.action==='download'){hold(response.body,a);if(a.mode==='late'){a.ready.resolve();await gate(a,'arrival');}}
-  }return response;
+  }return a.mode.startsWith('combined')&&path!=='/responses/control'?paddedControl(response,a):response;
  }}}},
  ACCESS_CONTROL:{idFromName:n=>authority.idFromName(n),get:id=>{const stub=authority.get(id);return {async fetch(input,init){
-  const path=new URL(input).pathname,packet=JSON.parse(init.body);if(path==='/responses-background')a.actions.push(packet.action);
+  const path=new URL(input).pathname,packet=JSON.parse(init.body);a.controls.push('authority:'+path);if(path==='/responses-background')a.actions.push(packet.action);
   const response=await stub.fetch(input,init);
   if(path==='/responses-background'&&packet.action==='dispatch'){
    if(a.mode==='lost-ack'){await response.body.cancel();throw Error('synthetic lost ACK');}
    if(a.mode==='confirmed-revoke')await revokeGrantCredentials(env,key,undefined,undefined,undefined,actor);
-  }return response;
+  }return a.mode.startsWith('combined')?paddedControl(response,a):response;
  }}}}};
 }
 export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCESS_ENV},u=new URL(request.url);
@@ -127,7 +159,7 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
  if(u.pathname==="/fixture/user"){await authorityCall(env,"/users/put",{email:"music-admin@example.invalid",record:{role:u.searchParams.get("role")??"admin",enabled:u.searchParams.get("enabled")!=="false",tenantId:"fixture",groups:[]}});return Response.json({updated:true});}
  if(["/fixture/arm","/fixture/pin"].includes(u.pathname))return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/fixture/video-admin-"+u.searchParams.get("mode"))).fetch("https://owner"+u.pathname+"?mode="+u.searchParams.get("mode"));
  if(u.pathname==='/state')return Response.json(state());
- if(u.pathname==='/contend'){const l=new BodyLease(),allowed=l.grow(1);l.release();return Response.json({allowed,charged:bodyBudgetCharged()});}
+ if(u.pathname==='/contend'){const l=new BodyLease();try{const allowed=l.grow(1024*1024);return Response.json({allowed,charged:bodyBudgetCharged()});}finally{l.release();}}
  if(u.pathname==='/setup'){
   const policy={enabled:true,generation:'g1',providers:['minimax'],tenantId:'fixture',dailyBudgetMicros:100000,weeklyBudgetMicros:100000,monthlyBudgetMicros:100000,requestCostMicros:700,retainRequestContent:false,
     grantRouting:{eligibleGrants:{minimax:['video']},environmentFallback:true,failover:true}};
@@ -139,6 +171,67 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
     undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,miniMaxVideoBinding(u.searchParams.get('region')??'global'),actor);
   return Response.json({ready:true});
  }
+ if(u.pathname==='/maximum-pool'){
+  // Determine the reachable boundary using genuine owner attestations and the
+  // actual SQL admission guard. Every probe is setup, not an inference ticket.
+  const policy={enabled:true,generation:'g1',providers:['minimax'],tenantId:'fixture',dailyBudgetMicros:100000,weeklyBudgetMicros:100000,monthlyBudgetMicros:100000,
+   requestCostMicros:700,retainRequestContent:false,grantRouting:{environmentFallback:false,failover:false}};
+  await authorityCall(env,'/policies/put',{policyId:'fixture',policy});
+  const input={video:'clawrouter.minimax-video.v1',credentialId:'fixture',secretSha256:await sha256Hex('fixture-secret'),providers:[{id:'minimax',tokenRef:'minimax'}],
+   selection:{providerId:'minimax',endpointId:'video',mode:'http',model:'MiniMax-Hailuo-2.3',catalogModelId:'minimax/MiniMax-Hailuo-2.3',capability:'media.predict'}};
+  const probe=()=>env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings')).fetch('https://owner/admission/resolve',{method:'POST',body:JSON.stringify(input)});
+  let candidates=1,overflow=null;
+  for(let i=1;i<32;i++){
+   const name='oauth/fixture/maximum'+i;
+   await putGrantCredentials(env,name,{provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-video-key',accountId:'synthetic-account'},false,undefined,
+    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,miniMaxVideoBinding('global'),actor);
+   const response=await probe(),body=await response.json();
+   if(!response.ok){overflow={count:i+1,status:response.status,code:body.error?.code};await revokeGrantCredentials(env,name,undefined,undefined,undefined,actor);break;}
+   if(!body.selection?.selected)throw Error('maximum fixture lost all eligible candidates');candidates=body.pools.minimax.keys.length;
+  }
+  const verified=await probe(),body=await verified.json();if(!verified.ok||body.pools.minimax.keys.length!==candidates)throw Error('maximum restoration failed');
+  return Response.json({candidates,overflow});
+ }
+ if(u.pathname==='/slots'){
+  const locator=u.searchParams.get('locator');if(!/^[a-f0-9]{64}\.bg_[a-f0-9]{32}$/.test(locator))throw Error('fixture locator');
+  const [scope,id]=locator.split('.'),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('http-continuations:'+scope)),
+   job=await (await stub.fetch('https://owner/responses-background',{method:'POST',body:JSON.stringify({action:'get',id})})).json();
+  const a=fresh('slots'),owner=new MiniMaxVideoOperation('poll',request),ready=Array.from({length:4},deferred),cleanup=deferred();
+  const work=ready.map((r,i)=>owner.controlJson({},async(text,signal)=>{
+   const response=await env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch('https://owner/inspect',{method:'POST',body:text,signal});
+   const get=response.body.getReader.bind(response.body);let first=true,cancel;
+   response.body.getReader=options=>{const reader=get(options);return {
+    async read(...args){try{return await reader.read(...args);}finally{if(first){first=false;r.resolve();await gate(a,'read'+i);a.readRetired=true;}}},
+    cancel(reason){return cancel??=(async()=>{a.cancels++;await reader.cancel(reason);if(a.cancels===4)cleanup.resolve();await gate(a,'cleanup'+i);a.cleanupDone=(a.cleanupDone??0)+1;a.cleanup=a.cleanupDone===4;})();},
+    releaseLock(){reader.releaseLock();a.unlocks++;}
+   };};return response;
+  }));
+  for(const p of work)void p.catch(()=>{});
+  ctx.waitUntil((async()=>{try{await Promise.all(ready.map(r=>r.promise));owner.operation.cancel(Error('controlled all-slot cancel'));await cleanup.promise;
+   const ack=await owner.controlJson({action:'managed_files',id,responseId:job.managed.upstreamId,files:job.managed.files},
+    (text,signal)=>stub.fetch('https://owner/responses-background',{method:'POST',body:text,signal}),true);
+   if(!Array.isArray(ack.files))throw Error('mandatory ACK absent');a.status=200;a.ready.resolve();await Promise.allSettled(work);
+  }catch(e){a.error=e.code??e.name;a.ready.resolve();}finally{await owner.finish();a.results++;}})());
+  await a.ready.promise;return Response.json(state());
+ }
+ if(u.pathname==='/scope-overflow'){
+  const kind=u.searchParams.get('kind'),a=fresh('scope-overflow'),owner=new MiniMaxVideoOperation(kind,request);let lookups=0,code;
+  try{await resolveResponseControlOwner({...env,ACCESS_CONTROL:{idFromName:n=>n,get(){lookups++;throw Error('unreachable lookup');}}},
+   Array(kind==='file'?12:16).fill({}),'synthetic',owner.operation,'minimax','video',undefined,owner);}catch(e){code=e.code??e.name;}finally{await owner.finish();}
+  return Response.json({code,lookups,charged:bodyBudgetCharged(),exchanges:a.exchanges});
+ }
+ if(u.pathname==='/collect'){
+  const locator=u.searchParams.get('locator');if(!/^[a-f0-9]{64}\.bg_[a-f0-9]{32}$/.test(locator))throw Error('fixture locator');
+  const [scope,id]=locator.split('.'),reply=await env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('http-continuations:'+scope))
+   .fetch('https://owner/responses-background',{method:'POST',body:JSON.stringify({action:'get',id})}),job=await reply.json();
+  const a=fresh('collector'),competing=new BodyLease();let accepted=0,error;
+  if(u.searchParams.has('missing'))job.facts=null;
+  if(u.searchParams.has('deny'))await authorityCall(env,'/users/put',{email:actor.email,record:{enabled:false,role:'admin',tenantId:'fixture',groups:[]}});
+  try{if(u.searchParams.has('contend')){if(!competing.grow(1024*1024))throw Error('fixture competition');}
+   await collectManagedPrediction(controlled(env,a),job,async()=>{accepted++;});
+  }catch(e){error=e.code??e.name;}finally{competing.release();if(u.searchParams.has('deny'))await authorityCall(env,'/users/put',{email:actor.email,record:{enabled:true,role:'admin',tenantId:'fixture',groups:[]}});}
+  return Response.json({...state(),accepted,error});
+ }
  if(u.pathname==='/metadata-edit'){await putGrantCredentials(env,key,{label:'metadata changed'},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,actor);return Response.json({changed:true});}
  if(u.pathname==='/events')return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
  if(u.pathname==='/job'){const locator=u.searchParams.get('locator');if(!/^[a-f0-9]{64}\.bg_[a-f0-9]{32}$/.test(locator))return new Response(null,{status:400});
@@ -149,11 +242,16 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   let ok=false,error;try{await readVideoJson(request,owner.controlSignal,'input',owner.registerInput);ok=true;}catch(e){error=e.code??e.name;}finally{await owner.finish();}
   return Response.json({ok,error,reads,maxBacking,charged:bodyBudgetCharged()});
  }
- if(!['/call','/held','/scenario'].includes(u.pathname))return new Response(null,{status:404});
+ if(!['/call','/held','/scenario','/max-held'].includes(u.pathname))return new Response(null,{status:404});
  const target=u.searchParams.get('target');if(!target?.startsWith('/v1/'))return new Response(null,{status:400});
  const headers=new Headers(request.headers);headers.set('authorization','Bearer clawrouter-live-fixture-fixture-secret');
- if(u.pathname==='/call')return worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),env,ctx);
- const a=active={mode:u.searchParams.get('mode'),status:null,error:null,results:0,reads:0,cancels:0,unlocks:0,releases:0,maxBacking:0,actions:[],cleanup:false,readRetired:false,ready:deferred(),abort:new AbortController()};
+ const a=fresh(u.searchParams.get('mode')??'normal');
+ if(u.pathname==='/call')return worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
+ if(u.pathname==='/max-held'){
+  ctx.waitUntil((async()=>{const response=await worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
+   a.status=response.status;a.locator=response.headers.get('x-clawrouter-background-recovery');a.ready.resolve();await gate(a,'output');const reader=response.body.getReader();try{for(;;){const part=await reader.read();if(part.done)break;a.reads++;}}finally{reader.releaseLock();}a.results++;})().catch(e=>{a.error=e.code??e.name;a.results++;a.ready.resolve();}));
+  await a.ready.promise;return Response.json(state());
+ }
  if(u.pathname==='/scenario')return worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
  if(a.mode==='upload')hold(request.body,a);
  const routed=new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:a.abort.signal});
@@ -185,14 +283,23 @@ test("isolated workerd Hailuo original owner, restart/file, full charge and phys
     assert.deepEqual(await json("/setup?region=" + region), { ready: true }); io.mode("maximum");
     const value = manifest ? { body: { ...videoInput(model), model: "minimax/" + model } } : videoInput(model), text = JSON.stringify(value);
     const r = await call(manifest ? "/v1/proxy/minimax/video" : native, text + " ".repeat(65536 - Buffer.byteLength(text)), { "idempotency-key": region + model + manifest });
-    assert.equal(r.status, 200, await r.clone().text()); locator = r.headers.get("x-clawrouter-background-recovery"); task = (await r.json()).task_id; await idle();
+    assert.equal(r.status, 200, await r.clone().text()); locator = r.headers.get("x-clawrouter-background-recovery"); task = (await r.json()).task_id; let counts = await idle();
+    assert.equal(counts.exchanges.length, 1); assert.equal(counts.exchanges[0].kind, "create");
+    assert.ok(counts.exchanges[0].ordinary <= 16); assert.ok(counts.exchanges[0].mandatory <= 5);
+    assert.equal(counts.exchanges[0].ordinary + counts.exchanges[0].mandatory, counts.controls.length + 1);
     await runtime.dispose(); runtime = await isolated(directory, script, upstream(io.origin, access.jwk));
     const pollPath = (manifest ? "/v1/proxy/minimax/task?task_id=" : "/v1/native/minimax/v1/query/video_generation?task_id=") + task;
-    const p = await call(pollPath, null); assert.equal(p.status, 200, await p.clone().text()); const body = await p.json(); await idle();
+    const p = await call(pollPath, null); assert.equal(p.status, 200, await p.clone().text()); const body = await p.json(); counts = await idle();
+    assert.equal(counts.exchanges.length, 1); assert.equal(counts.exchanges[0].kind, "poll");
+    assert.ok(counts.exchanges[0].ordinary <= 8); assert.ok(counts.exchanges[0].mandatory <= 2);
+    assert.equal(counts.exchanges[0].ordinary + counts.exchanges[0].mandatory, counts.controls.length);
     assert.equal(body.status, "Success"); filePath = body.video_url;
     const f = await call(filePath, null, { "x-clawrouter-job-id": task }); if (f.status !== 200) assert.fail(await f.text());
-    assert.equal(f.headers.get("content-type"), "video/mp4"); assert.equal((await f.arrayBuffer()).byteLength, 16 * MiB); await idle();
-    const job = await json("/job?locator=" + encodeURIComponent(locator)); assert.equal(job.event.cost_basis, "policy_fixed"); assert.equal(job.event.actual_cost_micros, 700);
+    assert.equal(f.headers.get("content-type"), "video/mp4"); assert.equal((await f.arrayBuffer()).byteLength, 16 * MiB); counts = await idle();
+    assert.equal(counts.exchanges.length, 1); assert.equal(counts.exchanges[0].kind, "file");
+    assert.ok(counts.exchanges[0].ordinary <= 12); assert.equal(counts.exchanges[0].mandatory, 0);
+    assert.equal(counts.exchanges[0].ordinary, counts.controls.length);
+    const job = await json("/job?locator=" + encodeURIComponent(locator)); assert.equal(job.basis ?? job.event?.cost_basis, "policy_fixed"); assert.equal(job.amount ?? job.event?.actual_cost_micros, 700);
   }
   assert.equal(io.counts.post, 8);
   for (const [empty, ok] of [[8190, true], [8191, false]]) {
@@ -208,14 +315,22 @@ test("isolated workerd Hailuo original owner, restart/file, full charge and phys
     if (mode === "late") io.release(mode + "/arrival");
     for (let i = 0; i < 100; i++) { s = await json("/state"); if (s.cancels === 1) break; await delay(10); }
     assert.equal(s.cancels, 1); assert.equal(s.locked, true); assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
-    io.release(mode + "/cleanup");
-    for (let i = 0; i < 100; i++) { s = await json("/state"); if (s.cleanup) break; await delay(10); }
-    assert.equal(s.cleanup, true); assert.equal(s.charged, 96 * MiB); assert.equal(s.locked, true);
-    io.release(mode + "/read"); s = await idle(); assert.equal(s.releases, 1); assert.equal(s.unlocks, 1); assert.ok(s.maxBacking <= 16384);
+    if (mode === "late") {
+      assert.equal(s.reads, 0); assert.equal(s.readRetired, false);
+      io.release(mode + "/cleanup"); s = await idle();
+      assert.equal(s.cleanup, true); assert.equal(s.reads, 0); assert.equal(s.readRetired, false);
+    } else {
+      assert.ok(s.reads >= 1); io.release(mode + "/cleanup");
+      for (let i = 0; i < 100; i++) { s = await json("/state"); if (s.cleanup) break; await delay(10); }
+      assert.equal(s.cleanup, true); assert.equal(s.charged, 96 * MiB); assert.equal(s.locked, true);
+      io.release(mode + "/read"); s = await idle(); assert.equal(s.readRetired, true);
+    }
+    assert.equal(s.releases, 1); assert.equal(s.unlocks, 1); assert.ok(s.maxBacking <= 16384);
   }
   for (const mode of ["lost-ack", "confirmed-revoke"]) {
     await json("/setup"); const before = io.counts.post;
-    const r = await call(native, videoInput(), {}, "scenario", mode); assert.equal(r.status, 503, await r.clone().text()); await r.text(); await idle();
+    const r = await call(native, videoInput(), {}, "scenario", mode); assert.equal(r.status, 503, await r.clone().text()); const error = await r.json();
+    assert.equal(error.error.code, mode === "confirmed-revoke" ? "prediction_submission_unsent" : "prediction_submission_unknown"); await idle();
     const s = await json("/state"); assert.equal(io.counts.post, before); assert.equal(s.actions.filter(a => a === "freeze").length, mode === "confirmed-revoke" ? 1 : 0);
   }
   const put = (mode, body) => request("/v1/admin/upstream-grants/policies/fixture/video-admin-" + mode, {
@@ -233,6 +348,51 @@ test("isolated workerd Hailuo original owner, restart/file, full charge and phys
     assert.deepEqual(await json("/fixture/pin?mode=" + mode), before);
     await json("/fixture/user"); const retry = await put(mode, { label: "no pending adoption" }); assert.equal(retry.status, 403, await retry.clone().text()); await retry.text();
     assert.deepEqual(await json("/fixture/pin?mode=" + mode), before);
+  }
+
+  await json("/setup");
+  const pool = await json("/maximum-pool"); assert.ok(pool.candidates >= 2 && pool.candidates <= 32, JSON.stringify(pool));
+  if (pool.candidates < 32) { assert.equal(pool.overflow.count, pool.candidates + 1); assert.ok(pool.overflow.status >= 400); }
+  io.mode("maximum");
+  for (const kind of ["create", "poll", "file"]) {
+    const mode = "combined-" + kind;
+    const target = kind === "create" ? native : kind === "poll" ? "/v1/native/minimax/v1/query/video_generation?task_id=" + task
+      : "/v1/native/minimax/v1/files/retrieve_content?file_id=" + task + "1";
+    const text = JSON.stringify({ ...videoInput(), prompt: "x".repeat(2000) });
+    const response = await call(target, kind === "create" ? text + " ".repeat(65536 - Buffer.byteLength(text)) : null,
+      { "x-clawrouter-job-id": task, "idempotency-key": "combined-maximum" }, "max-held", mode);
+    let state = await response.json(); assert.equal(state.status, 200, JSON.stringify(state));
+    assert.equal(state.charged, 96 * MiB); assert.equal(state.candidates, pool.candidates); assert.equal(state.controlMaxValues, 512);
+    assert.equal(state.exchanges.length, 1); const exchange = state.exchanges[0]; assert.equal(exchange.kind, kind);
+    assert.ok(exchange.ordinary <= { create: 16, poll: 8, file: 12 }[kind]); assert.ok(exchange.mandatory <= { create: 5, poll: 2, file: 0 }[kind]);
+    assert.equal(exchange.ordinary + exchange.mandatory, state.controls.length + (kind === "create" ? 1 : 0));
+    assert.equal(state.nativeBytes, kind === "file" ? 16 * MiB + 65536 : MiB); assert.ok(state.nativeMaxBacking <= 16384);
+    assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB }); assert.equal(state.releases, 0);
+    if (kind === "create") { task = io.current(); locator = state.locator; }
+    io.release(mode + "/output"); state = await idle(); assert.equal(state.results, 1); assert.equal(state.releases, 1);
+    if (kind === "create") {
+      const denied = await json("/collect?contend=1&locator=" + encodeURIComponent(locator));
+      assert.equal(denied.error, "server_overloaded"); assert.equal(denied.accepted, 0); assert.deepEqual(denied.exchanges, []);
+      for (const refusal of ["missing", "deny"]) {
+        const before = io.counts.poll, refused = await json("/collect?" + refusal + "=1&locator=" + encodeURIComponent(locator));
+        assert.equal(refused.accepted, 0); assert.ok(refused.error, JSON.stringify(refused)); assert.equal(refused.charged, 0); assert.equal(io.counts.poll, before);
+      }
+      const collected = await json("/collect?locator=" + encodeURIComponent(locator));
+      assert.equal(collected.accepted, 1, JSON.stringify(collected)); assert.deepEqual(collected.exchanges, [{ kind: "collector", ordinary: 4, mandatory: 0 }]);
+      assert.equal(collected.controls.length, 4); assert.equal(collected.charged, 0);
+    }
+  }
+  const slots = await json("/slots?locator=" + encodeURIComponent(locator));
+  assert.equal(slots.status, 200, JSON.stringify(slots)); assert.equal(slots.cancels, 4); assert.equal(slots.unlocks, 0);
+  assert.equal(slots.charged, 96 * MiB); assert.deepEqual(slots.exchanges, [{ kind: "poll", ordinary: 4, mandatory: 1 }]);
+  assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+  for (let i = 0; i < 4; i++) io.release("slots/cleanup" + i);
+  for (let i = 0; i < 100; i++) { const s = await json("/state"); if (s.cleanup) break; await delay(10); }
+  const pending = await json("/state"); assert.equal(pending.cleanup, true); assert.equal(pending.charged, 96 * MiB); assert.equal(pending.unlocks, 0);
+  for (let i = 0; i < 4; i++) io.release("slots/read" + i); const retired = await idle(); assert.equal(retired.unlocks, 4); assert.equal(retired.releases, 1);
+  for (const kind of ["poll", "file"]) {
+    const result = await json("/scope-overflow?kind=" + kind);
+    assert.equal(result.code, "minimax_video_control_limit"); assert.equal(result.lookups, 0); assert.equal(result.charged, 0); assert.deepEqual(result.exchanges, []);
   }
 
 });

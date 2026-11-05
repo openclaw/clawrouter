@@ -88,7 +88,10 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
   if (video) { assertVideoHeaders(prepared.headers); await video.reserveProvider(); await prepared.revalidateAccount?.(video.controlSignal); }
   const dispatchRequest = new Request(prepared.url, { method: "POST", headers: prepared.headers });
   assertManagedDispatch(adapter.protocol, dispatchRequest);
-  const cost = { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  const currentFixed = video ? policyRequestCost(auth.policy, selection.capability) : fixed;
+  if (currentFixed == null || !Number.isSafeInteger(currentFixed) || currentFixed < 0) throw new HttpError(400, "pricing_required", "managed predictions require a current fixed tariff");
+  if (video) prepared.connection = video.currentConnection;
+  const cost = { reserveMicros: currentFixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   const accounting = createProxyAccounting({ request, env, context, auth, selection, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
   const background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection,
     selection.pathParams, prepared.headers, false, ownership);
@@ -107,7 +110,7 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
       attempted = true;
       await background.dispatch(null);
       dispatchConfirmed = true;
-      if ((wan || video) && prepared.revalidateAccount) await operation.wait(prepared.revalidateAccount(operation.signal), "upstream");
+      if ((wan || video) && prepared.revalidateAccount) await operation.wait(prepared.revalidateAccount(operation.signal), video ? undefined : "upstream");
       if (adapter.prepareAdmitted) requireManagedCreateAdmission(auth.policy, env, prepared.continuation, adapter.protocol);
       operation.signal.throwIfAborted();
       if (wan) assertManagedDispatch(adapter.protocol, dispatchRequest);

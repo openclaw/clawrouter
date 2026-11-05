@@ -1,3 +1,4 @@
+import type { ProviderConnection } from "./types.ts";
 import { BodyLease } from "./body-budget.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
@@ -258,6 +259,7 @@ export class MiniMaxVideoOperation {
   private finishing?: Promise<void>;
   private closed = false;
   private pinValue?: string;
+  private admittedConnection?: ProviderConnection;
   private providerRelease?: () => void;
   private providerStarted = false;
   private outputStarted = false;
@@ -275,6 +277,8 @@ export class MiniMaxVideoOperation {
     this.execution = new HttpOperation(undefined, duration);
   }
 
+  setCurrentConnection(connection: ProviderConnection): void { videoJsonBytes(connection); this.admittedConnection = connection; }
+  get currentConnection(): ProviderConnection { if (!this.admittedConnection) videoUnavailable(); return this.admittedConnection; }
   get controlSignal(): AbortSignal { return this.detached ? this.execution.signal : this.operation.signal; }
   get executionOperation(): HttpOperation { return this.detached ? this.execution : this.operation; }
   detachAtPost(): HttpOperation {
@@ -508,7 +512,7 @@ export class MiniMaxVideoOperation {
       if (this.ownershipFailed || this.physicalBodies.some(body => body.locked)) videoUnavailable();
       this.providerRelease?.(); this.providerRelease = undefined;
       this.operation.stop("complete"); this.execution.stop("complete");
-      this.inputs.length = 0; this.physicalBodies.length = 0; this.pinValue = undefined;
+      this.inputs.length = 0; this.physicalBodies.length = 0; this.pinValue = undefined; this.admittedConnection = undefined;
       this.lease.release();
       if (this.cleanupFailed) throw new HttpError(503, "minimax_video_cleanup_failed", "Video input cleanup failed");
     })();

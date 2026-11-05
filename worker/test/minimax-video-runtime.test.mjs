@@ -21,7 +21,8 @@ for (const region of ["global", "cn"]) for (const manifest of [false, true]) for
     const file = await f.invoke(observed.video_url, null, { headers: { "x-clawrouter-job-id": submitted.task_id } });
     assert.equal(file.status, 200, file.status === 200 ? "" : await file.clone().text());
     assert.equal(file.headers.get("content-type"), "video/mp4"); assert.equal(bodyBudgetCharged(), 96 * MiB);
-    const competing = new BodyLease(); assert.equal(competing.grow(1), false); competing.release();
+    const competing = new BodyLease();
+    try { assert.equal(competing.grow(MiB), false); assert.equal(bodyBudgetCharged(), 96 * MiB); } finally { competing.release(); }
     assert.deepEqual(new Uint8Array(await file.arrayBuffer()), mp4()); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
     assert.equal(f.sent.filter(request => request.method === "POST").length, 1);
     for (const request of f.sent) { assert.equal(new URL(request.url).origin, miniMaxVideoBinding(region).origin); assert.equal(request.headers.get("authorization"), "Bearer synthetic-video-key"); }
@@ -84,7 +85,10 @@ for (const confirmed of [false, true]) test(`Hailuo ${confirmed ? "confirmed the
     }
     return response;
   } }; };
-  await denied(f, await f.create()); assert.equal(actions.filter(action => action === "freeze").length, confirmed ? 1 : 0);
+  const response = await f.create(); const body = await consume(response, 503); await f.drain();
+  assert.equal(body.error.code, confirmed ? "prediction_submission_unsent" : "prediction_submission_unknown");
+  assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+  assert.equal(actions.filter(action => action === "freeze").length, confirmed ? 1 : 0);
 });
 for (const manifest of [false, true]) for (const field of ["dailyBudgetMicros", "weeklyBudgetMicros", "monthlyBudgetMicros"])
   test(`Hailuo first current principal ${field}/${manifest}: unknown USD before materialization`, async t => {
@@ -96,3 +100,76 @@ for (const manifest of [false, true]) for (const field of ["dailyBudgetMicros", 
       .run(JSON.stringify({ ...f.credential, principalId }), "fixture");
     await denied(f, await f.create(manifest)); assert.equal(f.materializations, 0);
   });
+for (const manifest of [false, true]) test(`Hailuo current tariff before first snapshot reaches original durable receipt/${manifest}`, async t => {
+  const f = await setup(t), get = f.env.ACCESS_CONTROL.get; let changed = false;
+  f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+    if (new URL(url).pathname === "/authorization/snapshot" && !changed) {
+      changed = true; f.policy.requestCostMicros = 900; await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+    }
+    return stub.fetch(url, init);
+  } }; };
+  const response = await f.create(manifest); await consume(response); await f.drain();
+  await consume(await f.invoke(poll, null)); await f.drain();
+  const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 900);
+  assert.equal(events[0].cost_basis, "policy_fixed"); assert.equal(f.sent.filter(r => r.method === "POST").length, 1);
+});
+
+for (const kind of ["poll", "file"]) test(`Hailuo ${kind} complete-scope overflow denies before ANY lookup`, async t => {
+  const f = await setup(t);
+  const { MiniMaxVideoOperation } = await import("../minimax-video-operation.ts");
+  const { resolveResponseControlOwner } = await import("../response-controls.ts");
+  const owner = new MiniMaxVideoOperation(kind); let lookups = 0;
+  const env = { ...f.env, ACCESS_CONTROL: { idFromName: value => value, get() { lookups++; throw new Error("lookup must not start"); } } };
+  try { await assert.rejects(resolveResponseControlOwner(env, Array(kind === "poll" ? 16 : 12).fill({}), "synthetic", owner.operation,
+    "minimax", "video", undefined, owner), { code: "minimax_video_control_limit" }); assert.equal(lookups, 0); }
+  finally { await owner.finish(); }
+  assert.equal(bodyBudgetCharged(), 0);
+});
+for (const collection of [false, true]) test(`Hailuo final owner policy after preparation denies ${collection ? "collector" : "public"} GET`, async t => {
+  const f = await setup(t);
+  f.env.ACCESS_CONTROL.objects.get("policy-bindings").db.prepare("UPDATE proxy_credentials SET credential_json=? WHERE credential_id=?")
+    .run(JSON.stringify({ ...f.credential, principalId: actor.email }), "fixture");
+  const response = await f.create(), state = f.state(response); await consume(response); await f.drain();
+  const original = state.job(), grantGet = f.env.GRANT_CREDENTIALS.get, authorityGet = f.env.ACCESS_CONTROL.get, order = [];
+  let inside = false;
+  f.env.GRANT_CREDENTIALS.get = id => { const stub = grantGet(id); return { async fetch(url, init) {
+    if (new URL(url).pathname !== "/responses/control") return stub.fetch(url, init);
+    inside = true; try { return await stub.fetch(url, init); } finally { inside = false; }
+  } }; };
+  f.env.ACCESS_CONTROL.get = id => { const stub = authorityGet(id); return { async fetch(url, init) {
+    const path = new URL(url).pathname;
+    if (inside) {
+      if (["/connections/resolve", "/authorization/snapshot"].includes(path)) order.push(path);
+      if (path === "/authorization/snapshot") {
+        assert.ok(order.includes("/connections/resolve"));
+        await f.authority("/users/put", { email: actor.email, record: { enabled: false, role: "admin", tenantId: "tenant", groups: [] } });
+      }
+    }
+    return stub.fetch(url, init);
+  } }; };
+  const sent = f.sent.length; let accepted = 0;
+  if (collection) {
+    const { collectManagedPrediction } = await import("../managed-predictions.ts");
+    await assert.rejects(collectManagedPrediction(f.env, original, async () => { accepted++; }));
+  } else { const denied = await f.invoke(poll, null); assert.ok(denied.status >= 400, await denied.text()); await f.drain(); }
+  assert.equal(accepted, 0); assert.equal(f.sent.length, sent); assert.equal(order.at(-1), "/authorization/snapshot");
+  assert.equal(bodyBudgetCharged(), 0);
+});
+
+test("Hailuo durable admission accepts its exact protocol and preserves closed metadata and tariff guards", async t => {
+  const f = await setup(t), get = f.env.ACCESS_CONTROL.get; let admission;
+  f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+    if (new URL(url).pathname === "/responses-background") { const packet = JSON.parse(init.body); if (packet.action === "managed_admit") admission = packet.admission; }
+    return stub.fetch(url, init);
+  } }; };
+  await consume(await f.create()); await f.drain(); assert.ok(admission);
+  const { BackgroundStore } = await import("../background-store.ts"), { sqliteFixture } = await import("./sqlite-storage.mjs");
+  const { sql } = sqliteFixture(t), store = new BackgroundStore(sql);
+  assert.equal(store.admitManaged(admission).created, true);
+  assert.equal(new BackgroundStore(sql).get(admission.id).managed.protocol, "minimax.video");
+  for (const change of [{ protocol: "minimax.video.unknown" }, { providerId: undefined }, { requestDigest: "invalid" },
+    { requestedVersion: "" }, { unexpected: true }, { fileBaseUrl: "https://user@foreign.example" }]) {
+    assert.throws(() => store.admitManaged({ ...admission, managed: { ...admission.managed, ...change } }), { code: "background_request_invalid" });
+  }
+  assert.throws(() => store.admitManaged({ ...admission, facts: { ...admission.facts, fixed: 701 } }), { code: "pricing_required" });
+});

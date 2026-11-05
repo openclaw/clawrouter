@@ -7,14 +7,18 @@ const MiB = 1024 * 1024, tick = () => new Promise(resolve => setImmediate(resolv
 const deferred = () => Promise.withResolvers();
 
 test("Hailuo fixed96 admission is before intake; failure has no read or job", async () => {
-  const competitor = new BodyLease(); assert.equal(competitor.grow(1), true);
-  let reads = 0;
+  const competitor = new BodyLease(); let owner, reads = 0;
   const request = new Request("https://router.example", { method: "POST", duplex: "half", body: new ReadableStream({ pull() { reads++; } }, { highWaterMark: 0 }) });
-  assert.throws(() => new MiniMaxVideoOperation("create", request), { code: "server_overloaded" });
-  assert.equal(reads, 0); assert.equal(bodyBudgetCharged(), 2); competitor.release(); await request.body.cancel();
-  const owner = new MiniMaxVideoOperation("create"); assert.equal(bodyBudgetCharged(), 96 * MiB);
-  assert.equal(competitor.grow(1), false); await owner.finish(); assert.equal(bodyBudgetCharged(), 0);
+  try {
+    assert.equal(competitor.grow(MiB), true); assert.equal(bodyBudgetCharged(), 2 * MiB);
+    assert.throws(() => new MiniMaxVideoOperation("create", request), { code: "server_overloaded" });
+    assert.equal(reads, 0); assert.equal(bodyBudgetCharged(), 2 * MiB); competitor.release();
+    owner = new MiniMaxVideoOperation("create"); assert.equal(bodyBudgetCharged(), 96 * MiB);
+    assert.equal(competitor.grow(MiB), false); assert.equal(bodyBudgetCharged(), 96 * MiB);
+  } finally { competitor.release(); await request.body.cancel(); await owner?.finish(); }
+  assert.equal(bodyBudgetCharged(), 0);
 });
+
 test("Hailuo JSON preflight counts escaped UTF8 and all occurrences before serialization", () => {
   assert.equal(videoJsonBytes({ a: "\u0000" }), Buffer.byteLength(JSON.stringify({ a: "\u0000" })));
   assert.throws(() => videoJsonBytes({ a: "\u0000".repeat(16384) }));
@@ -78,4 +82,21 @@ test("Hailuo unclaimed JSON output remains subject to the ORIGINAL deadline", as
   const response = owner.publish({ ok: true }, 200, { "content-type": "application/json" });
   const finish = owner.finish(); assert.equal(bodyBudgetCharged(), 96 * MiB);
   await finish; await assert.rejects(response.text()); assert.equal(bodyBudgetCharged(), 0);
+});
+
+test("Hailuo mandatory slot progresses while all four ordinary FIRST cancellations remain held", async () => {
+  const owner = new MiniMaxVideoOperation("poll"), release = deferred(), entered = Array.from({ length: 4 }, deferred);
+  let ordinary = 0, mandatory = 0, cancels = 0;
+  const inputs = entered.map((ready, i) => owner.controlJson({ i }, async () => {
+    ordinary++; return new Response(new ReadableStream({ type: "bytes", pull() { ready.resolve(); },
+      cancel() { cancels++; return release.promise; } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
+  }));
+  for (const pending of inputs) void pending.catch(() => undefined);
+  try {
+    await Promise.all(entered.map(item => item.promise)); owner.operation.cancel(new Error("controlled cancellation"));
+    await tick(); assert.equal(ordinary, 4); assert.equal(cancels, 4);
+    const result = await owner.controlJson({ action: "managed_observe" }, async () => { mandatory++; return jsonResponse({ observed: true }); }, true);
+    assert.deepEqual(result, { observed: true }); assert.equal(mandatory, 1); assert.equal(bodyBudgetCharged(), 96 * MiB);
+  } finally { release.resolve(); await Promise.allSettled(inputs); await owner.finish(); }
+  assert.equal(bodyBudgetCharged(), 0);
 });

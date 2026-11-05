@@ -42,6 +42,7 @@ export async function revalidateMiniMaxVideoOwner(env: Env, auth: AuthorizedIden
   signal.throwIfAborted(); assertControlCallerLive(caller);
   if (miniMaxVideoIdentity(current) !== original || !filterGrantCandidates("minimax", [{ key, grant: current, runtimeState: null }],
     new Set(), grantRoutingPolicy(policy.grantRouting), key, requirement, Date.now()).available.length) miniMaxVideoDenied();
+  operation.setCurrentConnection(connection);
   auth.policy = policy;
   return current;
 }

@@ -232,6 +232,7 @@ export class GrantCredentialObject implements DurableObject {
           const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
           const { prepareResponseControl, assertControlDeadline, assertResponseControlRetention, responseControlRetentionProtocol } = await import("./responses-control-dispatch.ts");
           const { assertControlCallerLive, authorizeResponseControl } = await import("./response-control-authorization.ts");
+          const { assertManagedDispatch } = await import("./managed-dispatch.ts");
           assertControlDeadline(input);
           if (input.deadline !== undefined) {
             preparation.stop("complete");
@@ -254,7 +255,6 @@ export class GrantCredentialObject implements DurableObject {
           if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
           }
-          const { assertManagedDispatch } = await import("./managed-dispatch.ts");
           assertResponseControlRetention(this.env, input);
           assertManagedDispatch(input.protocol, outbound);
           // Start egress before releasing the serialized credential check, but
