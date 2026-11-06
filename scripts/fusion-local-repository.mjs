@@ -24,9 +24,13 @@ export function validateLocalQualification(tasks, qualification) {
   return tasks.map(task => {
     const matches = qualification.receipts?.filter(row => row.taskId === task.id), receipt = matches?.[0];
     if (matches?.length !== 1 || receipt.taskDigest !== hash(JSON.stringify(task)) || receipt.qualified !== true
-      || receipt.visible?.passed !== true || receipt.oracle?.passed !== true || receipt.broken?.valid !== true || receipt.broken.passed !== false
+      || receipt.visible?.passed !== true || receipt.oracle?.passed !== true || receipt.oracle.valid !== true
+      || !Number.isSafeInteger(receipt.oracle.tests) || receipt.oracle.tests < 1
+      || !Number.isSafeInteger(receipt.oracle.skipped) || receipt.oracle.skipped < 0
+      || receipt.broken?.valid !== true || receipt.broken.passed !== false
       || !/^sha256:[a-f0-9]{64}$/.test(receipt.image)) throw new Error('unqualified_local_task');
-    return { taskId: task.id, taskDigest: receipt.taskDigest, image: receipt.image };
+    return { taskId: task.id, taskDigest: receipt.taskDigest, image: receipt.image,
+      oracleTests: receipt.oracle.tests, oracleSkipped: receipt.oracle.skipped };
   });
 }
 
@@ -130,14 +134,16 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         if (!['provider_context_limit', 'provider_truncated', 'provider_local_deadline'].includes(error.message)) throw error;
         outcome = { provider_context_limit: 'context_limit', provider_truncated: 'truncated', provider_local_deadline: 'deadline' }[error.message];
       }
-      state.records.push({ caseId: task.id, strategy, score: graded?.passed ? 1 : 0, outcome,
+      const passed = graded?.passed === true && graded.tests === receipt.oracleTests && graded.skipped === receipt.oracleSkipped;
+      state.records.push({ caseId: task.id, strategy, score: passed ? 1 : 0, outcome,
         calls: trialCalls.filter(row => row.dispatched).length, attempts: trialCalls.length,
         inputTokens: trialCalls.reduce((sum, row) => sum + (row.inputTokens ?? 0), 0),
         outputTokens: trialCalls.reduce((sum, row) => sum + (row.outputTokens ?? 0), 0),
         usageIncomplete: trialCalls.some(row => row.inputTokens === null),
         patchDigest: result?.patchDigest ?? null, actions: result?.actions ?? [], invalidActions: result?.invalidActions ?? 0,
-        handoffUsed: result?.handoffUsed ?? false, graderDigest: graded?.digest ?? null, elapsedMs: Math.round(performance.now() - started) });
-      await checkpoint(); console.log(JSON.stringify({ caseId: task.id, strategy, score: graded?.passed ? 1 : 0,
+        handoffUsed: result?.handoffUsed ?? false, graderDigest: graded?.digest ?? null,
+        graderTests: graded?.tests ?? null, graderSkipped: graded?.skipped ?? null, elapsedMs: Math.round(performance.now() - started) });
+      await checkpoint(); console.log(JSON.stringify({ caseId: task.id, strategy, score: passed ? 1 : 0,
         calls: trialCalls.filter(row => row.dispatched).length, attempts: trialCalls.length }));
     }
     await local.verifyPins();

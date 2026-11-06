@@ -220,7 +220,8 @@ GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-local-repository.mjs \
 
 Run from a clean committed checkout. Qualification must match each task digest,
 have a passing oracle and failing broken baseline, and identify cached immutable
-Docker images. The runner does not download models, images or dependencies.
+Docker images. A passing repair must execute the same test and skipped-test
+counts as the qualified oracle. The runner does not download models, images or dependencies.
 The local transport validates both model identities before execution and checks
 their digests again afterward. It never invokes a paid provider. Role labels
 inside the reused harness map explicitly to these local model pins.
