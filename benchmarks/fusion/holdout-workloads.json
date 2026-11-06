@@ -33,24 +33,6 @@
         "worker/test/opaque-input-accounting.test.mjs"
       ],
       "instruction": "Responses compaction items and reasoning input items with encrypted_content can conceal more input tokens than their serialized size indicates. Reserve the full qualified model input bound for these protocol items, including malformed or empty opaque values. Reject budgeted opaque input without a qualified bound unless an explicit fixed request price applies. Do not treat literal text, function arguments, schemas or output controls as opaque input. Preserve existing pricing and output reservations."
-    },
-    {
-      "id": "abliteration-canonical-credential",
-      "split": "development",
-      "base": "4458c6b0ef3962ab1d60ae3043ce2c0a2950e7d6",
-      "oracle": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
-      "editPaths": [
-        "worker/provider-auth.ts",
-        "worker/providers.ts"
-      ],
-      "visibleTests": [
-        "worker/test/hosted-provider-contracts.test.mjs"
-      ],
-      "hiddenTests": [
-        "worker/test/abliteration-credential-runtime.test.mjs",
-        "worker/test/hosted-provider-contracts.test.mjs"
-      ],
-      "instruction": "Recognize ABLIT_KEY as the canonical server credential for the canonical Abliteration API, with ABLITERATION_API_KEY as a compatible alias. Prefer the canonical key regardless of configuration order, treat either alias as satisfying the qualified provider configuration, and reject malformed selected values before constructing headers. Restrict this behavior to the canonical provider identity, base URL and bearer API-key scheme. Preserve grant credentials without environment fallback and retain existing credentials for other providers."
     }
   ]
 }

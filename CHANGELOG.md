@@ -4,7 +4,7 @@
 
 - Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
 
-- Add three pinned Fusion repair tasks for prospective policy comparisons, with explicit exposure and qualification requirements.
+- Add two pinned Fusion repair tasks for prospective policy comparisons, with explicit exposure and qualification requirements.
 
 - Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
 
