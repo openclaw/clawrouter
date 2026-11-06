@@ -73,8 +73,10 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
   const checked = config.requireReproducer === true;
   let reproducer = null, probePassed = false;
   const probeModules = task.editPaths.map((path, index) => ({ binding: `source${index}`, path: `./${path}` }));
-  const probePrelude = ['import assert from "node:assert/strict";',
-    ...probeModules.map(({ binding, path }) => `import * as ${binding} from ${JSON.stringify(path)};`)].join('\n');
+  // Global bindings avoid duplicate lexical declarations if a worker still
+  // supplies its own imports despite the body-only instruction.
+  const probePrelude = ['globalThis.assert = (await import("node:assert/strict")).default;',
+    ...probeModules.map(({ binding, path }) => `globalThis.${binding} = await import(${JSON.stringify(path)});`)].join('\n');
   const isolatedProbe = async (files, source) => {
     const isolated = await makeSandbox(image);
     try {

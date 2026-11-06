@@ -66,7 +66,7 @@ test('an expired action deadline still allows bounded final patch collection', a
 test('checked handoff isolates probes and repairs against the same failing reproduction', async () => {
   const task = { instruction: 'Set enabled to true.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
   const boxes = [], seenProbes = [], roles = [];
-  const reproducer = 'assert.equal(source0.enabled, true);';
+  const reproducer = 'import assert from "node:assert/strict"; import * as source0 from "./worker/example.ts"; assert.equal(source0.enabled, true);';
   let call = 0;
   const result = await runGroundedAgent(task, 'image', 'handoff', 'trial',
     { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000, requireReproducer: true },
@@ -87,15 +87,20 @@ test('checked handoff isolates probes and repairs against the same failing repro
       test: async () => ({ passed: true, feedback: '' }),
       runProbe: async (box, source) => {
         assert.notEqual(box, boxes[0]); seenProbes.push(source);
-        const passed = box.source.includes('true');
+        const module = source.replaceAll(JSON.stringify('./worker/example.ts'),
+          JSON.stringify('data:text/javascript,' + encodeURIComponent(box.source)));
+        let passed = false;
+        try { await import('data:text/javascript,' + encodeURIComponent(module)); passed = true; }
+        catch (error) { assert.equal(error.code, 'ERR_ASSERTION'); }
+        finally { delete globalThis.assert; delete globalThis.source0; }
         box.source = 'probe side effect must not reach the repair workspace';
         return { passed, assertionFailed: !passed, feedback: passed ? '' : 'ERR_ASSERTION' };
       },
     });
   assert.deepEqual(roles, [models.strong, models.critic]);
   assert.equal(seenProbes.length, 2); assert.equal(seenProbes[0], seenProbes[1]);
-  assert.ok(seenProbes[0].includes('import assert from "node:assert/strict";'));
-  assert.ok(seenProbes[0].includes('import * as source0 from "./worker/example.ts";'));
+  assert.ok(seenProbes[0].includes('globalThis.assert = (await import("node:assert/strict")).default;'));
+  assert.ok(seenProbes[0].includes('globalThis.source0 = await import("./worker/example.ts");'));
   assert.ok(seenProbes[0].endsWith(reproducer));
   assert.equal(result.outcome, 'verified'); assert.equal(result.reproducerQualified, true);
   assert.equal(result.probePassed, true); assert.equal(result.files[0].content, 'export const enabled = true;');
