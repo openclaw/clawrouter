@@ -27,39 +27,42 @@ MusicCoverUploadSource.prototype.disposeSource=async function(){
 };
 BodyLease.prototype.splitCharges=function(left,right){
  const a=active;if(a){a.splitBefore=bodyBudgetCharged();a.splitReferences=a.source?.snapshot().references;a.splits++;
-  if(a.mode==='split-fail')return null;}
+  if(a.mode==='split-fail'||a.mode==='unlock-pre')return null;}
  const result=split.call(this,left,right);if(a)a.splitAfter=bodyBudgetCharged();return result;
 };
 const post=MiniMaxMusicCoverControl.prototype.post;
 MiniMaxMusicCoverControl.prototype.post=function(...args){if(active)active.owner=this;return post.apply(this,args);};
 const state=()=>active?{mode:active.mode,charged:bodyBudgetCharged(),result:active.result,done:active.done,retired:active.retired,
  error:active.error,cleanupError:active.cleanupError,fetches:active.fetches,headers:active.headers,
- reads:active.reads,nativeReads:active.nativeReads,nativeEOF:active.nativeEOF,cancels:active.cancels,unlocks:active.unlocks,
+ reads:active.reads,nativeReads:active.nativeReads,nativeEOF:active.nativeEOF,cancels:active.cancels,unlocks:active.unlocks,unlockAttempts:active.unlockAttempts,
  uploadHeld:active.uploadHeld,cancelHeld:active.cancelHeld,readHeld:active.readHeld,discards:active.discards,
  source:active.source?.snapshot(),splits:active.splits,splitBefore:active.splitBefore,splitAfter:active.splitAfter,splitReferences:active.splitReferences,
  outputBytes:active.outputBytes,maxOutputBacking:active.maxOutputBacking,flow:active.flow?.snapshot(),locked:active.original?.locked??false,
  retainedTickets:active.owner?.tickets.reduce((n,t)=>n+Number(!!t.work)+Number(!!t.input)+Number(!!t.response)+Number(!!t.cancellation),0)}:{};
 function ownObserved(response,a){
  a.original=response.body;if(!response.body)return response;
- const get=response.body.getReader.bind(response.body);let cancellation,nativeDone=false;
+ const get=response.body.getReader.bind(response.body);let cancellation,nativeDone=false,emptyBacking;
  response.body.getReader=options=>{const reader=get(options);return {
   async read(view){
    a.reads++;let part;
-   if(nativeDone)part={done:true,value:new Uint8Array(view.buffer,0,0)};
-   else {a.nativeReads++;part=await reader.read(view);if(part.done){nativeDone=true;a.nativeEOF=true;}}
+   if(nativeDone)part={done:true,value:new Uint8Array(emptyBacking,0,0)};
+   else {a.nativeReads++;part=await reader.read(view);if(part.done){nativeDone=true;a.nativeEOF=true;
+    if(['read8192','read8193'].includes(a.mode))emptyBacking=part.value?.buffer?.byteLength?part.value.buffer:new ArrayBuffer(16384);
+   }}
    if(['read8192','read8193'].includes(a.mode)&&nativeDone){
     const limit=a.mode==='read8192'?8192:8193;
-    if(a.reads<limit)return {done:false,value:new Uint8Array(part.value?.buffer??view.buffer,0,0)};
+    if(a.reads<limit)return {done:false,value:new Uint8Array(emptyBacking,0,0)};
    }
    if(a.mode==='backing'&&!part.done)return {done:false,value:new Uint8Array(new ArrayBuffer(16385),0,2)};
+   if(a.mode==='read-error')throw new Error('synthetic original read failure',{cause:{discarded:'x'.repeat(100000)}});
    if(['read','read-reject'].includes(a.mode)&&a.reads===1){a.readHeld=true;await gate(a.mode,'read');}
    return part;
   },cancel(reason){if(!cancellation){let resolve,reject;cancellation=new Promise((yes,no)=>{resolve=yes;reject=no;});
    Promise.resolve().then(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{
-    if(['read','read-reject','late','split-fail'].includes(a.mode)){a.cancelHeld=true;await gate(a.mode,'cleanup');}
+    if(['read','read-reject','read-error','late','split-fail'].includes(a.mode)){a.cancelHeld=true;await gate(a.mode,'cleanup');}
     if(a.mode==='read-reject')throw Error('synthetic FIRST response cancel rejection');
    }}).then(resolve,reject);}return cancellation;
-  },releaseLock(){a.unlocks++;reader.releaseLock();}
+  },releaseLock(){a.unlockAttempts++;if(a.mode==='unlock'||a.mode==='unlock-pre')throw Error('synthetic pre-unlock failure');a.unlocks++;reader.releaseLock();}
  };};return response;
 }
 async function consume(response,a){
@@ -80,7 +83,7 @@ export default {async fetch(request,env,context){
  if(url.pathname!=='/start')return new Response(null,{status:404});
  if(active&&!active.retired)return new Response(null,{status:409});
  const a=active={mode:url.searchParams.get('mode')??'normal',audio:Number(url.searchParams.get('audio')??3),controller:new AbortController(),
-  fetches:0,reads:0,nativeReads:0,cancels:0,unlocks:0,discards:0,splits:0,outputBytes:0,maxOutputBacking:0,headers:false,result:false,done:false,retired:false};
+  fetches:0,reads:0,nativeReads:0,cancels:0,unlocks:0,unlockAttempts:0,discards:0,splits:0,outputBytes:0,maxOutputBacking:0,headers:false,result:false,done:false,retired:false};
  const input=beginMiniMaxMusicCoverInput({body:request.body,signal:a.controller.signal,deadlineAt:Date.now()+(a.mode==='deadline'?1500:60000),
   route:url.searchParams.get('route')==='manifest'?'manifest':'native',contentType:'application/json'});
  try{
@@ -99,6 +102,9 @@ export default {async fetch(request,env,context){
    else if(a.mode==='deadline'){try{await a.flow.retired;}finally{try{await response.body.cancel();}catch{}}}
    else await consume(response,a);
   }catch{a.error='transport';}finally{a.done=true;}
+  if(a.mode==='unlock'||a.mode==='unlock-pre'){
+   context.waitUntil(a.flow.retired);return Response.json(state());
+  }
   try{await a.flow.retired;}catch{a.cleanupError='control_cleanup';}
  }catch{a.error='input';await input.discard().catch(()=>{});}
  try{await input.retired;}catch{a.cleanupError??='input_cleanup';}a.retired=true;
@@ -136,7 +142,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   const release = key => { released.add(key); held.get(key)?.end("ok"); held.delete(key); };
   const releaseAll = () => {
     // Open future arrivals too: failure can precede entry into a physical gate.
-    for (const mode of ["early", "upload-reject", "read", "read-reject", "late", "split-fail", "unclaimed"])
+    for (const mode of ["early", "upload-reject", "read", "read-reject", "read-error", "late", "split-fail", "unclaimed"])
       for (const phase of ["upload", "cleanup", "read", "late", "delivery"]) released.add("/" + mode + "/" + phase);
     for (const response of held.values()) response.end("ok"); held.clear();
   };
@@ -243,14 +249,15 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
       else assert.equal(done.error, undefined);
     } finally { release("/" + nextMode + "/cleanup"); release("/" + nextMode + "/upload"); await client.promise; }
   }
-  for (const nextMode of ["read", "read-reject", "late", "split-fail"]) {
+  for (const nextMode of ["read", "read-reject", "read-error", "late", "split-fail"]) {
     const client = start(nextMode);
     try {
       if (nextMode === "late") { await wait(s => s.headers); await call("abort"); release("/late/late"); }
-      else if (nextMode !== "split-fail") { await wait(s => s.readHeld); await call("abort"); }
+      else if (nextMode !== "split-fail" && nextMode !== "read-error") { await wait(s => s.readHeld); await call("abort"); }
       await wait(s => s.cancelHeld); const heldState = await call("state");
       assert.equal(heldState.charged, 96 * 1024 * 1024); assert.equal(heldState.locked, true); assert.equal(heldState.cancels, 1);
       if (nextMode === "late" || nextMode === "split-fail") assert.equal(heldState.reads, 0);
+      assert.equal(heldState.done, true);
       release("/" + nextMode + "/cleanup");
       if (["read", "read-reject"].includes(nextMode)) { assert.equal((await call("state")).charged, 96 * 1024 * 1024); release("/" + nextMode + "/read"); }
       const done = await client.promise; check(done); assert.equal(done.error, "transport"); assert.equal(done.unlocks, 1);
@@ -258,4 +265,26 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     } finally { release("/" + nextMode + "/late"); release("/" + nextMode + "/cleanup"); release("/" + nextMode + "/read"); await client.promise; }
   }
   assert.deepEqual(errors, []);
+});
+
+for (const mode of ["unlock", "unlock-pre"]) test("actual Workerd retains locked response, slot and charge after " + mode, { timeout: 30000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "cover-unlock-workerd-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const upstream = `export default {async fetch(request){if(request.url!=='https://api.minimax.io/v1/music_generation')throw Error('egress');
+    await request.arrayBuffer();return new Response('{"base_resp":{"status_code":0},"data":{"status":2,"audio":"ababab"}}',{headers:{'content-type':'application/json'}});}};`;
+  const runtime = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true });
+  // These roots intentionally CANNOT retire. The isolated fixture ends only
+  // after proving no released capacity; disposal is not a runtime cleanup ACK.
+  t.after(() => runtime.dispose());
+  const document = JSON.stringify({ model: "music-cover", prompt: "Synthetic cover style", audio_base64: "AAAAAAA=" });
+  const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode, { method: "POST", body: document, headers: { "content-type": "application/json" } });
+  assert.equal(response.status, 200); const state = await response.json();
+  assert.equal(state.done, true); assert.equal(state.error, "transport"); assert.equal(state.retired, false);
+  assert.equal(state.locked, true); assert.equal(state.unlockAttempts, 1); assert.equal(state.unlocks, 0);
+  assert.equal(state.charged, 96 * 1024 * 1024); assert.equal(state.flow.ordinaryActive, 1); assert.equal(state.flow.postAttempts, 1);
+  assert.equal(state.fetches, 1); assert.equal(state.source.references, 0);
+  if (mode === "unlock-pre") { assert.equal(state.reads, 0); assert.equal(state.cancels, 1); assert.equal(state.splitAfter, undefined); }
+  else { assert.equal(state.nativeEOF, true); assert.equal(state.splitAfter, 96 * 1024 * 1024); }
+  const contender = await runtime.dispatchFetch("https://router.example/contend");
+  assert.deepEqual(await contender.json(), { admitted: false, charged: 96 * 1024 * 1024 });
 });

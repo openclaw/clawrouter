@@ -166,7 +166,7 @@ export class MiniMaxMusicCoverControl {
   // Inactive transport only. This spends scheduling capacity, NOT a verifier
   // or preparation record. Start owns upload/fetch/late-body/read/delivery and
   // must dispose failure branches before rejection; the slot joins its root.
-  post<T>(cap: MusicCoverUploadCapability, start: () => Promise<{ value: T; retired: Promise<void> }>): Promise<T> {
+  post<T>(cap: MusicCoverUploadCapability, start: (fail: () => void) => Promise<{ value: T; retired: Promise<void> }>): Promise<T> {
     if (!isMiniMaxMusicCoverUpload(cap, this.phase)) musicCoverUnavailable(403);
     const ticket = this.ticket(false, true);
     let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
@@ -176,7 +176,8 @@ export class MiniMaxMusicCoverControl {
       await this.slot(ticket);
       try {
         this.operation.signal.throwIfAborted();
-        const outcome = await start(); resolve(outcome.value); await outcome.retired;
+        const outcome = await start(() => reject(new Error("music cover inactive transport failed")));
+        resolve(outcome.value); await outcome.retired;
       } catch (error) {
         if ((error as { cleanupFailed?: unknown })?.cleanupFailed === true) this.cleanupFailed = true;
         reject(new Error("music cover inactive transport failed"));

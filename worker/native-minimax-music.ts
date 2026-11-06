@@ -127,9 +127,10 @@ const coverCleanup = () => Object.assign(new Error("music cover response cleanup
 
 // Register the ORIGINAL reader before headers, including failure-only disposal.
 // Default readers may cancel but may never acquire an unqualified backing.
-function ownCoverResponse(response: Response) {
+function ownCoverResponse(response: Response, reportFailure: () => void = () => undefined) {
   if (!response.body) return undefined;
   if (response.body.locked || response.bodyUsed) return { blocked: true as const };
+  const body = response.body;
   let byob: ReadableStreamBYOBReader | undefined, regular: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try { byob = response.body.getReader({ mode: "byob" }); }
   catch { try { regular = response.body.getReader(); } catch { return { blocked: true as const }; } }
@@ -142,18 +143,24 @@ function ownCoverResponse(response: Response) {
       catch { cleanupFailed = true; resolve(); }
     }
     return first;
-  }, releaseLock() { try { reader.releaseLock(); } catch { unlockFailed = true; throw coverCleanup(); } } });
+  }, releaseLock() {
+    try { reader.releaseLock(); if (body.locked) throw coverCleanup(); }
+    catch { unlockFailed = true; throw coverCleanup(); }
+  } });
   const retired = owner.retired.then(() => {
     byob = undefined; regular = undefined; reader = undefined!; first = undefined;
     if (cleanupFailed) throw coverCleanup();
   }, async () => {
     // An unproved lock release cannot retire the physical slot or allocation.
-    if (unlockFailed) await new Promise<void>(() => undefined);
+    if (unlockFailed) { try { reportFailure(); } catch { /* observer cannot retire ownership */ } await new Promise<void>(() => undefined); }
     throw coverCleanup();
   });
   void retired.catch(() => undefined);
   return { blocked: false as const, byob: !!byob,
-    read: (window: Uint8Array<ArrayBuffer>) => owner.read(() => byob ? byob.read(window) : Promise.reject(coverFailure())),
+    read: (window: Uint8Array<ArrayBuffer>) => owner.read(() => {
+      try { return byob ? byob.read(window).then(value => value, () => { throw coverFailure(); }) : Promise.reject(coverFailure()); }
+      catch { return Promise.reject(coverFailure()); }
+    }),
     retire(kind: "eof" | "cancel") { void owner.retire(kind).catch(() => undefined); return retired; }, retired };
 }
 
@@ -164,14 +171,16 @@ export async function disposeMiniMaxMusicCoverResponse(response: Response): Prom
   else if (input) await input.retire("cancel");
 }
 
-export async function readNativeMiniMaxMusicCover(response: Response, successor: MusicCoverResponseCapability, signal: AbortSignal) {
+export async function readNativeMiniMaxMusicCover(response: Response, successor: MusicCoverResponseCapability, signal: AbortSignal,
+  reportFailure: () => void = () => undefined) {
   const release = consumeMiniMaxMusicCoverResponse(successor);
   let input: ReturnType<typeof ownCoverResponse>, scanner: MiniMaxMusicCoverJson | undefined;
   let eof = false, handed = false;
+  const failPublic = () => { try { reportFailure(); } catch { /* observer cannot skip cleanup */ } };
   const abort = () => { if (input && !input.blocked) void input.retire("cancel").catch(() => undefined); };
   try {
-    input = ownCoverResponse(response);
-    if (input?.blocked) await new Promise<void>(() => undefined);
+    input = ownCoverResponse(response, failPublic);
+    if (input?.blocked) { failPublic(); await new Promise<void>(() => undefined); }
     if (!input || input.blocked) throw coverFailure();
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) { abort(); signal.throwIfAborted(); }
@@ -218,11 +227,13 @@ export async function readNativeMiniMaxMusicCover(response: Response, successor:
     const output = coverHexDelivery(audio, signal, release);
     handed = true;
     return { ...output, usage: { tokens: null, outcome: "success" as const }, reads, wire };
-  } catch (error) {
+  } catch {
+    failPublic(); // Public rejection does not release the physical root.
     if (input && !input.blocked) {
       try { await input.retire(eof ? "eof" : "cancel"); } catch { throw coverCleanup(); }
     }
-    throw error === signal.reason ? error : coverFailure();
+    signal.throwIfAborted();
+    throw coverFailure();
   } finally {
     scanner?.discard(); signal.removeEventListener("abort", abort);
     if (!handed) release();

@@ -102,7 +102,8 @@ test("failed transfer disposes unread response and keeps original 96 MiB until F
   });
   try {
     await entry(entered, flow); assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 96 * MiB);
-    held.resolve(); await assert.rejects(flow.result); await flow.retired; assert.equal(bodyBudgetCharged(), 0);
+    await assert.rejects(flow.result); assert.equal(bodyBudgetCharged(), 96 * MiB);
+    held.resolve(); await flow.retired; assert.equal(bodyBudgetCharged(), 0);
   } finally { held.resolve(); await cleanup(f, flow); }
 });
 
@@ -166,5 +167,41 @@ test("PRIMITIVE reserved POST ticket is one-use, hard/soft ceilings 17/13; no re
       assert.equal(owner.snapshot().ordinary, soft ? 13 : 17);
     });
     try { await flow.result; await flow.retired; } finally { await cleanup(f, flow); }
+  }
+});
+
+test("genuine successor consumption and upload transfer are independently single-use", async () => {
+  const f = await begin(), flow = runMiniMaxMusicCoverControls(f.sealed, async owner => {
+    const cap = claimMiniMaxMusicCoverUpload(owner.phase);
+    assert.throws(() => new MusicCoverUploadSource(cap, { ...owner.phase }));
+    const source = new MusicCoverUploadSource(cap, owner.phase);
+    await drain(source.body); await source.retired;
+    assert.equal(source.snapshot().references, 0);
+    const successor = transferMiniMaxMusicCoverResponse(cap);
+    assert.equal(bodyBudgetCharged(), 96 * MiB);
+    assert.throws(() => transferMiniMaxMusicCoverResponse(cap), { code: "used" });
+    const release = consumeMiniMaxMusicCoverResponse(successor);
+    assert.throws(() => consumeMiniMaxMusicCoverResponse(successor), { code: "used" });
+    release(); release(); assert.equal(bodyBudgetCharged(), 32 * MiB);
+  });
+  try { await flow.result; await flow.retired; } finally { await cleanup(f, flow); }
+});
+
+test("synchronous/asynchronous transport causes are sanitized before held FIRST discard", async t => {
+  const original = MusicCoverUploadSource.prototype.disposeSource;
+  for (const asynchronous of [false, true]) {
+    const entered = Promise.withResolvers(), held = Promise.withResolvers(); let source;
+    MusicCoverUploadSource.prototype.disposeSource = async function() { source = this; await original.call(this); entered.resolve(); await held.promise; };
+    const f = await begin(), raw = new Error("synthetic transport", { cause: { retained: new Uint8Array(100000) } });
+    const flow = runInactiveMiniMaxMusicCoverUpload(f.sealed, () => {
+      if (asynchronous) return Promise.reject(raw); throw raw;
+    });
+    try {
+      await assert.rejects(flow.result, error => error !== raw && error.cause === undefined && error.message === "music cover inactive transport failed");
+      await entered.promise;
+      assert.equal(bodyBudgetCharged(), 96 * MiB); assert.equal(flow.snapshot().ordinaryActive, 1);
+      assert.equal(Object.values(source).includes(raw), false); assert.equal(Object.values(source).includes(raw.cause), false);
+      held.resolve(); await flow.retired; assert.equal(flow.snapshot().cleanupFailed, false);
+    } finally { held.resolve(); await cleanup(f, flow); MusicCoverUploadSource.prototype.disposeSource = original; }
   }
 });

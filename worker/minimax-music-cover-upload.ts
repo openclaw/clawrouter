@@ -8,6 +8,10 @@ import { disposeMiniMaxMusicCoverResponse, readNativeMiniMaxMusicCover } from ".
 const destination = "https://api.minimax.io/v1/music_generation";
 const failed = () => new Error("inactive music cover transport failed");
 const cleanupError = () => Object.assign(new Error("music cover upload cleanup failed"), { cleanupFailed: true });
+function cleanupFlag(error: unknown): boolean {
+  try { return error instanceof Error && Object.getOwnPropertyDescriptor(error, "cleanupFailed")?.value === true; }
+  catch { return false; }
+}
 export const musicCoverUploadLimits = Object.freeze({ backing: 16384, inventoryKiB: Object.freeze([128, 32, 32, 64, 64, 64, 48, 8]),
   assignedKiB: 440, unavailableKiB: 15944, uploadMiB: 16, controlsMiB: 32, responseMiB: 64,
   liveBytes: 100331648, margin: 331648 });
@@ -55,7 +59,7 @@ export class MusicCoverUploadSource {
         });
         const physical = this.pending;
         void physical.then(() => { if (this.sourceClosed || this.discarded) void this.close(); }, () => { void this.discard(); });
-        try { void this.produce(controller).then(resolve, reject); } catch (error) { reject(error); }
+        try { void this.produce(controller).then(resolve, () => reject(failed())); } catch { reject(failed()); }
         return physical;
       },
       cancel: () => this.discard(),
@@ -114,7 +118,7 @@ export function runInactiveMiniMaxMusicCoverUpload(input: SealedMusicCoverInput,
   transport: (url: string, init: RequestInit) => Promise<Response>) {
   return runMiniMaxMusicCoverControls(input, async owner => {
     const phase = owner.phase, cap = claimMiniMaxMusicCoverUpload(phase), signal = owner.operation.signal;
-    return owner.post(cap, async () => {
+    return owner.post(cap, async reportFailure => {
       const upload = new MusicCoverUploadSource(cap, phase);
       let response: Response | undefined, disposal: Promise<void> | undefined, cleanupFailed = false;
       const discardResponse = () => {
@@ -133,9 +137,11 @@ export function runInactiveMiniMaxMusicCoverUpload(input: SealedMusicCoverInput,
       void actual.catch(() => undefined);
       try {
         signal.throwIfAborted();
-        resolve(transport(destination, { method: "POST", redirect: "manual", signal, body: upload.body,
-          headers: { "content-type": "application/json", accept: "application/json", "content-length": String(upload.length) } }));
-      } catch (error) { reject(error); }
+        // Normalize before the owned promise can retain any rejection graph.
+        void transport(destination, { method: "POST", redirect: "manual", signal, body: upload.body,
+          headers: { "content-type": "application/json", accept: "application/json", "content-length": String(upload.length) } })
+          .then(resolve, () => reject(failed()));
+      } catch { reject(failed()); }
       try {
         response = await actual; actual = undefined;
         if (signal.aborted) abort();
@@ -143,15 +149,17 @@ export function runInactiveMiniMaxMusicCoverUpload(input: SealedMusicCoverInput,
         signal.throwIfAborted();
         const successor = transferMiniMaxMusicCoverResponse(cap);
         const original = response!; response = undefined;
-        const output = await readNativeMiniMaxMusicCover(original, successor, signal);
+        const output = await readNativeMiniMaxMusicCover(original, successor, signal, reportFailure);
         signal.removeEventListener("abort", abort);
         return { value: output.response, retired: output.retired };
       } catch (error) {
+        const failedCleanup = cleanupFlag(error); error = undefined;
+        reportFailure();
         // Disposal starts BEFORE joins and does not depend on transfer success.
         abort();
         try { await upload.discard(); } catch { cleanupFailed = true; }
         await discardResponse(); await disposal;
-        if (cleanupFailed || (error as { cleanupFailed?: unknown })?.cleanupFailed === true) throw cleanupError();
+        if (cleanupFailed || failedCleanup) throw cleanupError();
         throw failed();
       } finally { signal.removeEventListener("abort", abort); actual = undefined; response = undefined; disposal = undefined; }
     });

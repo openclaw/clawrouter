@@ -67,7 +67,12 @@ output retirement. Control completion joins that slot; input closure joins
 control completion. Disposal starts before these joins and never waits for a
 successful split. Early headers do not release capacity. Original pending reads,
 FIRST cancellation (including rejection) and unlock remain owned. Cleanup failure
-is separate from the primary protocol result. Stalled cleanup retains capacity.
+is separate from the primary protocol result. Synchronous/asynchronous fetch and
+read exceptions are normalized before entering owned promises. Cleanup joins
+retain only a bounded failure flag, not an original exception/cause graph.
+A failed unlock or a still-locked body retains the root, POST slot and charge;
+rejected cancellation with a proved unlock can retire. Public rejection does not
+wait for physical cleanup. Stalled cleanup retains capacity.
 The original deadline covers parsing and unclaimed output.
 
 Platform-native HTTP frames, copies, internal pumps and socket storage remain an
@@ -106,7 +111,10 @@ The isolated Workerd fixture exercises the same source passed to actual fetch,
 with two streamed 50M inputs, maximum response metadata/audio/wire, exact upload
 bytes and one provider POST. It observes held source pull/early headers, atomic
 split/reference clearing, failed split, original read/FIRST cancellation and
-unlock, late response, output EOF/cancel, deadline and full-pool contention.
+unlock, late response, output EOF/cancel, deadline and full-pool contention. Separate isolated cases
+prove locked-after-unlock-failure retention before and after transfer. Those
+fixtures terminate their own runtime after observing retained ownership; runtime
+disposal is not claimed as a successful application cleanup acknowledgment.
 The 8192/8193 response cases are controlled owned-reader calls after observed
 HTTP EOF, not 8192 native-transport reads. Maximum phases are cumulative
 reservation evidence, not simultaneous measured-heap evidence.
