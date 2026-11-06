@@ -26,6 +26,8 @@
 
 - Bound Access GitHub identity evidence before accumulation and parsing, retire original response readers on every outcome, and prevent limits, cleanup failures or caller aborts from falling back to other authentication. Preserve clean-unknown assignment retention and valid-empty revocation.
 
+- Bound generic soft-budget status requests and JSON observations, joining original response reads, FIRST cancellation and unlock without delaying provider dispatch. Preserve partial replies, exhaustion-cache classification and the existing delivery grace period.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.

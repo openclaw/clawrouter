@@ -25,6 +25,12 @@ function assertInlineCreateCalls(state, { lookup = false, unsent = false } = {})
     : [...(lookup ? ["managed_lookup"] : []), "managed_admit", "dispatch", "managed_bind", "managed_observe"]);
   assert.deepEqual(state.exchanges, [{ kind: "create", ordinary: unsent ? 13 : lookup ? 16 : 15, mandatory: unsent ? 2 : 3 }]);
 }
+function heldCallFailure(t, error, attempt, posts) {
+  const code = error?.cause?.code ?? error?.code, syscall = error?.cause?.syscall;
+  t.diagnostic(JSON.stringify({ phase: "held-call-rejected", attempt, posts,
+    code: ["EPIPE", "ECONNRESET", "UND_ERR_SOCKET", "ABORT_ERR"].includes(code) ? code : "other",
+    syscall: ["write", "read", "connect"].includes(syscall) ? syscall : "other" }));
+}
 async function isolated(directory, router, upstream) {
   const require = createRequire(import.meta.resolve("wrangler/package.json"));
   const { Miniflare, convertV4MiniflareOptions } = require("miniflare"), { build } = require("esbuild");
@@ -132,11 +138,25 @@ MiniMaxVideoOperation.prototype.fetch=function(start,mandatory=false,...rest){co
 },mandatory,...rest);};
 MiniMaxVideoOperation.prototype.providerFetch=function(start){const row=counters(this),a=active;
  if(a?.mode==='inline-late')this.track(gate(a,'execution-abort').then(()=>this.executionOperation.cancel(Error('controlled execution abort'))));
- return providerFetch.call(this,async signal=>{row.ordinary++;if(a)a.providerAttempts=(a.providerAttempts??0)+1;const response=await start(signal);if(a?.mode==='inline-late'){hold(response.body,a);a.ready.resolve();await gate(a,'arrival');}return a?measure(response,a):response;});};
+ return providerFetch.call(this,async signal=>{row.ordinary++;if(a)a.providerAttempts=(a.providerAttempts??0)+1;const response=await start(signal);if(a?.mode==='inline-late'){hold(response.body,a);a.readyReason??='response';a.ready.resolve();await gate(a,'arrival');}return a?measure(response,a):response;});};
 const ownerFinish=MiniMaxVideoOperation.prototype.finish;
 MiniMaxVideoOperation.prototype.finish=function(){const a=active;return ownerFinish.call(this).catch(e=>{if(a)a.cleanupFailure=e.code??e.name;throw e;});};
 function fresh(mode){return active={mode,status:null,error:null,results:0,reads:0,cancels:0,unlocks:0,releases:0,maxBacking:0,actions:[],exchanges:[],controls:[],candidates:0,controlMaxValues:0,
  cleanup:false,readRetired:false,ready:deferred(),abort:new AbortController()};}
+function heldObservation(a,request,stage){if(!a.attempt)return;
+ console.log(JSON.stringify({phase:'held-observation',attempt:a.attempt,stage,readyReason:a.readyReason??'pending',
+  reads:a.reads,nativeReads:a.nativeReads??0,firstNativeRead:a.firstNativeRead??'pending',results:a.results,status:a.status,
+  error:typeof a.error==='string'&&/^[a-z][a-z0-9_]{0,63}$/i.test(a.error)?a.error:a.error==null?null:'other',
+  bodyUsed:request.bodyUsed,locked:request.body?.locked??false,callerAborted:request.signal.aborted,controlAborted:a.abort.signal.aborted,providerAttempts:a.providerAttempts??0}));
+}
+function observeHeldRead(a,request){if(!a.attempt||!request.body)return;const get=request.body.getReader.bind(request.body);let first=true;
+ request.body.getReader=options=>{const reader=get(options),read=reader.read.bind(reader);
+  reader.read=(...args)=>{a.nativeReads=(a.nativeReads??0)+1;const pending=read(...args);
+   if(first){first=false;void pending.then(()=>{a.firstNativeRead='fulfilled';heldObservation(a,request,'first-native-read');},()=>{a.firstNativeRead='rejected';heldObservation(a,request,'first-native-read');});}
+   return pending;
+  };return reader;
+ };
+}
 async function paddedControl(response,a){
  if(!response.body||!response.headers.get('content-type')?.includes('application/json'))return response;
  const value=await response.json();
@@ -162,7 +182,7 @@ const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,statu
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
 const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
-crypto.subtle.digest=async function(algorithm,data){const result=await nativeDigest(algorithm,data),a=active;if(a?.mode==='inline-hash-reject'&&data.byteLength>1024*1024)throw Error('controlled hash rejection');if(a?.mode==='inline-hash'&&data.byteLength>1024*1024){a.ready.resolve();await gate(a,'hash');}return result;};
+crypto.subtle.digest=async function(algorithm,data){const result=await nativeDigest(algorithm,data),a=active;if(a?.mode==='inline-hash-reject'&&data.byteLength>1024*1024)throw Error('controlled hash rejection');if(a?.mode==='inline-hash'&&data.byteLength>1024*1024){a.readyReason??='hash';a.ready.resolve();await gate(a,'hash');}return result;};
 const registerUpload=MiniMaxVideoOperation.prototype.registerUpload;
 MiniMaxVideoOperation.prototype.registerUpload=function(upload){const a=active;if(!a?.mode.startsWith('inline-upload'))return registerUpload.call(this,upload);
  const originalUpload={...upload},reader=originalUpload.body.getReader();a.source=originalUpload.body;let first=true,cancel,controller,stopped=false;
@@ -172,14 +192,14 @@ MiniMaxVideoOperation.prototype.registerUpload=function(upload){const a=active;i
  const input=inputRetirement({cancel(reason){return cancel??=(async()=>{a.cancels++;try{await reader.cancel(reason);}catch(error){a.cancelRejected=true;throw error;}finally{await gate(a,'cleanup');a.cleanup=true;if(a.mode==='inline-upload-reject')throw Error('held upload cleanup rejection');}})();},releaseLock(){a.unlocks++;reader.releaseLock();}});
  const retired=Promise.allSettled([originalUpload.retired,input.retired]).then(()=>cancel);void retired.catch(()=>{});
  const discard=()=>{stopped=true;try{controller?.error(Error('discarded'));}catch{}void originalUpload.discard().catch(()=>{});void input.retire('cancel').catch(()=>{});return retired;};
- const body=new ReadableStream({start(c){controller=c;},async pull(c){try{const result=await input.read(async()=>{a.reads++;try{return await reader.read();}finally{if(first&&a.reads===holdRead){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}});if(stopped)return;if(result.done){await input.retire('eof');c.close();}else{a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);c.enqueue(result.value);}}catch(e){if(!stopped)c.error(e);}},cancel:discard},{highWaterMark:0});
+ const body=new ReadableStream({start(c){controller=c;},async pull(c){try{const result=await input.read(async()=>{a.reads++;try{return await reader.read();}finally{if(first&&a.reads===holdRead){first=false;a.readyReason??='first-read';a.ready.resolve();await gate(a,'read');a.readRetired=true;}}});if(stopped)return;if(result.done){await input.retire('eof');c.close();}else{a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);c.enqueue(result.value);}}catch(e){if(!stopped)c.error(e);}},cancel:discard},{highWaterMark:0});
  Object.assign(upload,{body,retired,discard});return registerUpload.call(this,upload);
 };
 
 function hold(source,a){a.source=source;const get=source.getReader.bind(source);let first=true,cancel;
  source.getReader=options=>{const reader=get(options);return {
   async read(...args){a.reads++;try{const result=await reader.read(...args);if(result.value)a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);return result;}
-   finally{if(first){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}},
+   finally{if(first){first=false;a.readyReason??='first-read';a.ready.resolve();await gate(a,'read');a.readRetired=true;}}},
   cancel(reason){return cancel??=(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{await gate(a,'cleanup');a.cleanup=true;if(a.mode==='cleanup-reject')throw Error('synthetic cleanup rejection');}})();},
   releaseLock(){reader.releaseLock();a.unlocks++;}
  };};
@@ -316,6 +336,9 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
  const target=u.searchParams.get('target');if(!target?.startsWith('/v1/'))return new Response(null,{status:400});
  const headers=new Headers(request.headers);headers.set('authorization','Bearer clawrouter-live-fixture-fixture-secret');
  const a=fresh(u.searchParams.get('mode')??'normal');
+ const attempt=u.searchParams.get('attempt');if(u.pathname==='/held'&&/^(GLOBAL|CN):(upload|inline-hash|inline-upload|inline-upload-reject|inline-late):[1-5]$/.test(attempt??'')){
+  a.attempt=attempt;heldObservation(a,request,'entry');observeHeldRead(a,request);
+ }
  if(request.body&&a.mode.startsWith('inline-raw')){const get=request.body.getReader.bind(request.body);let empty=Number(u.searchParams.get('empty')??0),eof=false;const total=Number(u.searchParams.get('total')??0),fragment=Number(u.searchParams.get('fragment')??16384);
  request.body.getReader=options=>{const r=get(options);return {async read(view){a.inputReads=(a.inputReads??0)+1;let part;
  if(eof)part={done:a.inputReads>=total,value:view.subarray(0,0)};
@@ -335,8 +358,8 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
  if(['upload','inline-header-held'].includes(a.mode))hold(request.body,a);
  const routed=new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:a.abort.signal});
  ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('controlled caller cancellation'))));
- ctx.waitUntil(worker.fetch(routed,controlled(env,a),ctx).then(async r=>{a.status=r.status;try{const b=await r.json();a.error=b.error?.code??null;}catch{}a.results++;a.ready.resolve();}).catch(e=>{a.error=e.code??e.name;a.results++;a.ready.resolve();}));
- await a.ready.promise;return Response.json(state());
+ ctx.waitUntil(worker.fetch(routed,controlled(env,a),ctx).then(async r=>{a.status=r.status;try{const b=await r.json();a.error=b.error?.code??null;}catch{}a.results++;a.readyReason??='result';a.ready.resolve();}).catch(e=>{a.error=e.code??e.name;a.results++;a.readyReason??='exception';a.ready.resolve();}));
+ await a.ready.promise;heldObservation(a,request,'before-return');return Response.json(state());
 },queue:worker.queue};
 `;
 const upstream = (origin, jwk) => String.raw`
@@ -484,7 +507,7 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
   t.after(async () => { io.releaseAll(); await runtime.dispose(); });
   const request = (path, init) => runtime.dispatchFetch("https://router.example" + path, { ...init, redirect: "manual" });
   const json = async path => { const response = await request(path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
-  const call = (target, body, headers = {}, kind = "call", mode = "") => request("/" + kind + "?mode=" + mode + "&target=" + encodeURIComponent(target), {
+  const call = (target, body, headers = {}, kind = "call", mode = "", attempt = "") => request("/" + kind + "?mode=" + mode + "&target=" + encodeURIComponent(target) + (attempt ? "&attempt=" + attempt : ""), {
     ...(body == null ? {} : { method: "POST", body: typeof body === "string" || body instanceof Uint8Array ? body : JSON.stringify(body) }), headers: { "content-type": "application/json", ...headers } });
   const idle = async () => { let state; for (let i = 0; i < 100; i++) { state = await json("/state"); if (!state.charged) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
   const native = "/v1/native/minimax/v1/video_generation";
@@ -599,11 +622,15 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
   }
 
   let state;
-  for (const mode of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"]) {
+  for (const [ordinal, mode] of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"].entries()) {
     await json("/setup?inline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
     const posts = io.counts.post, started = mode.startsWith("inline-upload") ? io.nextPost() : undefined;
-    t.diagnostic(JSON.stringify({ phase: "held-request", mode, postsBefore: posts }));
-    const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
+    const attempt = "GLOBAL:" + mode + ":" + (ordinal + 1);
+    t.diagnostic(JSON.stringify({ phase: "held-request", mode, attempt, postsBefore: posts }));
+    let response;
+    try { response = await call(native, lastBody, {}, "held", mode, attempt); }
+    catch (error) { heldCallFailure(t, error, attempt, io.counts.post); throw error; }
+    state = await response.json();
     t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
       charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error, failedControl: state.failedControl }));
     assert.equal(state.charged, 96 * MiB, JSON.stringify(state));
@@ -964,7 +991,7 @@ test("isolated workerd V5 current-CN all six inline models, retired CREATE input
   t.after(async () => { io.releaseAll(); await runtime.dispose(); });
   const request = (path, init) => runtime.dispatchFetch("https://router.example" + path, { ...init, redirect: "manual" });
   const json = async path => { const r = await request(path); assert.equal(r.status, 200, await r.clone().text()); return r.json(); };
-  const call = (target, body, headers = {}, kind = "call", mode = "") => request("/" + kind + "?mode=" + mode + "&target=" + encodeURIComponent(target), {
+  const call = (target, body, headers = {}, kind = "call", mode = "", attempt = "") => request("/" + kind + "?mode=" + mode + "&target=" + encodeURIComponent(target) + (attempt ? "&attempt=" + attempt : ""), {
     ...(body == null ? {} : { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }), headers: { "content-type": "application/json", ...headers } });
   const idle = async () => { let state; for (let i = 0; i < 100; i++) { state = await json("/state"); if (!state.charged) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
   const native = "/v1/native/minimax/v1/video_generation", manifestPath = "/v1/proxy/minimax/video";
@@ -1058,11 +1085,15 @@ test("isolated workerd V5 current-CN all six inline models, retired CREATE input
     for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
     assert.equal(state.results, 1); assert.ok(state.status >= 400); assert.equal(io.counts.post, posts); assert.equal(state.providerAttempts, 0); io.release(mode + "/abort"); await idle();
   }
-  for (const mode of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"]) {
+  for (const [ordinal, mode] of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"].entries()) {
     await json("/setup?cninline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
     const posts = io.counts.post, started = mode.startsWith("inline-upload") ? io.nextPost() : undefined;
-    t.diagnostic(JSON.stringify({ phase: "held-request", mode, postsBefore: posts }));
-    const response = await call(native, lastBody, {}, "held", mode); let state = await response.json();
+    const attempt = "CN:" + mode + ":" + (ordinal + 1);
+    t.diagnostic(JSON.stringify({ phase: "held-request", mode, attempt, postsBefore: posts }));
+    let response;
+    try { response = await call(native, lastBody, {}, "held", mode, attempt); }
+    catch (error) { heldCallFailure(t, error, attempt, io.counts.post); throw error; }
+    let state = await response.json();
     t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
       charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error, failedControl: state.failedControl }));
     assert.equal(state.charged, 96 * MiB, JSON.stringify(state));
