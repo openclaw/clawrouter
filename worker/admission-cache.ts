@@ -4,7 +4,7 @@ import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
-import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, waitForOtherRequest, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { HotCache, fenceSharedHotCache, hotCacheAcquiredAt, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, sharedHotCacheFence, type CachePublication, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
@@ -36,20 +36,19 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
   if (cached && safeEqual(request.secretSha256, cached.value.credential!.credential.secretSha256.toLowerCase())) {
     const selection = request.selection ? localSelection(env, cached.value, request.selection) : undefined;
     if (!request.selection || selection) {
-      if (!cached.fresh) admissions.revalidate(key, config, () => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }));
       rememberSelection(key, request, selection);
+      if (!cached.fresh) admissions.revalidate(key, config, publication => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }, publication));
       return { admission: { ...cached.value, ...(selection ? { selection } : {}) }, cache: cached.fresh ? "hit" : "stale" };
     }
   }
-  prefetchRememberedCredential(env, key, request);
   const failover = !!request.selection?.excludedKeys?.length;
   // A burst of cold requests for one key shares the first lookup: the rest wait
   // for its snapshot, re-verify their own secret and select locally. Leadership
   // is claimed before the colo read, or a burst landing during that read would
   // bypass coalescing and each call the authority.
-  const leader = failover ? undefined : inflightMisses.get(key);
+  const leader = failover ? undefined : admissions.publication(key);
   if (leader) {
-    await waitForOtherRequest(() => leader.settled);
+    await admissions.waitForPublication(key, config);
     const joined = admissions.peek(key, config);
     if (joined && safeEqual(request.secretSha256, joined.value.credential!.credential.secretSha256.toLowerCase())) {
       const selection = request.selection ? localSelection(env, joined.value, request.selection) : undefined;
@@ -59,41 +58,38 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
       }
     }
   }
-  const owns = !failover && !leader;
-  const marker = { settled: false };
-  if (owns) inflightMisses.set(key, marker);
+  const publication = admissions.beginPublication(key);
   try {
+    prefetchRememberedCredential(env, key, request);
     // Another isolate in this location may have fetched it moments ago.
-    const shared = failover ? undefined : await coloGet<AdmissionResult>("admission", key, config);
-    if (shared && cacheable(shared.value, request.secretSha256)) {
+    const shared = failover || !publication ? undefined : await coloGet<AdmissionResult>("admission", key, config);
+    if (shared && admissions.ownsPublication(key, publication) && shared.fetchedAt > sharedHotCacheFence() && cacheable(shared.value, request.secretSha256)) {
       applyPendingRuntime(shared.value);
-      admissions.set(key, shared.value, config, expiryOf(shared.value), shared.fetchedAt);
+      admissions.publish(key, publication, shared.value, config, expiryOf(shared.value), shared.fetchedAt);
       const selection = request.selection ? localSelection(env, shared.value, request.selection) : undefined;
       if (!request.selection || selection) {
-        if (hotCacheNow() - shared.fetchedAt >= config.freshMs) admissions.revalidate(key, config, () => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }));
         rememberSelection(key, request, selection);
+        admissions.endPublication(key, publication);
+        if (hotCacheNow() - shared.fetchedAt >= config.freshMs) admissions.revalidate(key, config, next => load(env, config, { ...request, selection: request.selection && { ...request.selection, excludedKeys: undefined }, snapshot: request.selection ? "only" : undefined }, next));
         return { admission: { ...shared.value, ...(selection ? { selection } : {}) }, cache: "colo" };
       }
     }
-    const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined });
-    if (loaded.cacheable) rememberSelection(key, request, loaded.value.selection);
-    if (loaded.cacheable) admissions.set(key, withoutSelection(loaded.value), config, loaded.expiresAt);
+    const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined }, publication);
+    if (loaded.cacheable && admissions.ownsPublication(key, publication)) rememberSelection(key, request, loaded.value.selection);
+    if (loaded.cacheable) admissions.publish(key, publication, withoutSelection(loaded.value), config, loaded.expiresAt, loaded.storedAt);
     // A wrong secret must not evict the key owner's entry; only an outcome
     // observed with the matching secret (revoked, disabled, missing) does.
-    else if (!loaded.value.credential || safeEqual(request.secretSha256, loaded.value.credential.credential.secretSha256.toLowerCase())) admissions.delete(key);
+    else if (!loaded.value.credential || safeEqual(request.secretSha256, loaded.value.credential.credential.secretSha256.toLowerCase())) admissions.discardPublished(key, publication);
     return { admission: loaded.value, cache: "miss" };
   }
-  finally { marker.settled = true; if (owns && inflightMisses.get(key) === marker) inflightMisses.delete(key); }
+  finally { admissions.endPublication(key, publication); }
 }
 
-// Concurrent misses wait on this flag with their own timers, never on the
-// leader's promise (see waitForOtherRequest).
-const inflightMisses = new Map<string, { settled: boolean }>();
-
-async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest) {
+async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest, publication: CachePublication | undefined) {
   // While feedback is pending, ask for an authorized snapshot rather than
   // incrementing an authority selection that may already be locally ineligible.
   const deferred = request.snapshot === "select" && !!request.selection && pendingRuntime.size > 0;
+  const storedAt = hotCacheAcquiredAt();
   const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", deferred ? { ...request, snapshot: "only" } : request);
   const overlaid = applyPendingRuntime(value);
   const ok = config.maxAgeMs > 0 && cacheable(value, request.secretSha256);
@@ -102,8 +98,8 @@ async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRe
     if (selection) value.selection = selection;
   }
   // Publish the secretless snapshot for other isolates in this location.
-  if (ok) coloPut("admission", cacheKey(request), withoutSelection(value), hotCacheNow(), config);
-  return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: ok, expiresAt: expiryOf(value) };
+  if (ok && admissions.ownsPublication(cacheKey(request), publication) && storedAt > sharedHotCacheFence()) coloPut("admission", cacheKey(request), withoutSelection(value), storedAt, config);
+  return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: ok, expiresAt: expiryOf(value), storedAt };
 }
 
 function expiryOf(value: AdmissionResult): number {
@@ -267,4 +263,6 @@ export function applyLocalGrantRuntime(key: string, state: GrantRuntimeState): v
 /** Same-isolate invalidation after a mutation; other isolates converge by max age. */
 export function invalidateAdmissions(predicate: (admission: AdmissionResult) => boolean = () => true): void {
   admissions.deleteWhere((_key, admission) => predicate(admission));
+  selectionHints.clear();
+  fenceSharedHotCache();
 }

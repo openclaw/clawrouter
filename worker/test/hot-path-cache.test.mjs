@@ -611,3 +611,85 @@ test('a request drains only its own background work, bounded by its own timer', 
   t.mock.timers.tick(1); await drain;
   assert.equal(finished, true, 'the drain ends at its own bound even though the work never settles');
 });
+
+for (const clockShift of [0, -120_000]) test(`a late admission cannot republish hints or colo after invalidation (clock ${clockShift})`, async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const get = f.env.ACCESS_CONTROL.get; let first = true;
+  f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+    const response = await stub.fetch(url, init);
+    if (new URL(url).pathname === '/admission/resolve' && first) { first = false; entered.resolve(); await release.promise; }
+    return response;
+  } }; };
+  const old = f.request();
+  try {
+    await entered.promise;
+    time.advance(clockShift); clearHotCaches(); fenceSharedHotCache();
+    f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+    assert.equal((await f.request()).status, 403, 'new request progresses without old I/O');
+  } finally { release.resolve(); await (await old).text(); await Promise.all(f.pending); }
+  assert.equal(colo.stats.puts, 0, 'invalidated completion cannot start a shared publication');
+  time.advance(61_000); f.reset();
+  assert.equal((await f.send()).response.status, 403);
+  assert.equal(f.ownerCalls, 0, 'old completion cannot recreate the remembered credential hint');
+});
+
+test('already-issued late colo put retains acquisition time across equal/rollback invalidation', async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache, sharedHotCacheFence } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), put = globalThis.caches.default.put;
+  let fetchedAt;
+  globalThis.caches.default.put = async (url, response) => {
+    const text = await response.text(); fetchedAt = JSON.parse(text).fetchedAt; entered.resolve(); await release.promise;
+    return put(url, new Response(text));
+  };
+  const response = await f.request(); await response.text();
+  try {
+    await entered.promise; time.advance(-120_000); clearHotCaches(); fenceSharedHotCache();
+    assert.ok(fetchedAt <= sharedHotCacheFence());
+    f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  } finally { release.resolve(); await Promise.all(f.pending); }
+  assert.equal(colo.stats.puts, 1, 'the original physical put really completes late');
+  f.reset(); assert.equal((await f.send()).response.status, 403);
+  assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, 'late entry is fenced, not adopted');
+});
+
+test('invalidation during a held colo read prevents adoption and drains coalesced writes normally', async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send(); clearHotCaches();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), match = globalThis.caches.default.match;
+  globalThis.caches.default.match = async url => { const response = await match(url); entered.resolve(); await release.promise; return response; };
+  const pending = f.request();
+  try {
+    await entered.promise; time.advance(1); clearHotCaches(); fenceSharedHotCache();
+    f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  } finally { release.resolve(); }
+  const response = await pending; assert.equal(response.status, 403); await response.text(); await Promise.all(f.pending);
+  assert.ok(colo.stats.hits > 0, 'a REAL cached response was held before invalidation');
+  const rows = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
+  assert.equal(rows[0].selected_count, 1, 'the earlier successful selection write was not discarded');
+});
+
+test('cache invalidation preserves pending runtime, selection and cursor writes', async t => {
+  const f = await fixture();await f.put(keyA, grant());await f.put(keyB, grant());
+  f.policy.grantRouting = { strategy: 'round_robin', stickiness: 'none' };await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
+  const { flushSelections } = await import('../admission-cache.ts');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }, { headers: {
+    'anthropic-ratelimit-unified-5h-utilization': '0.25',
+    'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + 3600),
+  } }));
+  await (await f.request()).text();await (await f.request()).text();
+  clearHotCaches();fenceSharedHotCache();await flushSelections(f.env);
+  t.mock.timers.tick(1);await Promise.all(f.pending);
+  const rows = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
+  assert.equal(rows.reduce((sum, row) => sum + row.selected_count, 0), 2);
+  assert.ok(f.calls.includes('/grant-pools/feedback'));
+  assert.ok(f.calls.includes('/grant-pools/record'));
+});

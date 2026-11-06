@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fence in-flight hot-cache and admission publications after local invalidation, including pending-only credential versions evicted by upstream 401/403. Keep original snapshot age and preserve coalesced runtime/counter writes.
+
 - Bound Access JWT and JWKS admission before decoding, parsing and key import; join original fetch, reader, cancellation and crypto retirement across one deadline, and prevent operational denials from falling back to other authentication. Broader session/evidence allocation remains separate.
 
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.

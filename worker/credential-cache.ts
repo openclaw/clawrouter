@@ -37,5 +37,5 @@ export function prefetchGrantCredentials(env: Env, key: string, grant: UpstreamG
 
 /** Drop every cached version of a grant (upstream 401/403, credential failure, revoke). */
 export function evictGrantCredentials(key: string): void {
-  credentials.deleteWhere(id => id.startsWith(`${key}\n`));
+  credentials.deleteKeys(id => id.startsWith(`${key}\n`));
 }
