@@ -84,10 +84,15 @@ export function requireCompleteResponse(result) {
   return result;
 }
 
-export async function nativePins(env, fetcher = fetch) {
-  if (!env.OPENAI_API_KEY || !env.ANTHROPIC_API_KEY) throw new Error('native_credentials_missing');
+export async function nativePins(env, fetcher = fetch, selected = Object.keys(nativeModels)) {
+  if (!Array.isArray(selected) || !selected.length || new Set(selected).size !== selected.length
+    || selected.some(id => !Object.hasOwn(nativeModels, id))) throw new Error('native_model_unknown');
+  if (selected.some(id => !env[nativeModels[id].provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'])) {
+    throw new Error('native_credentials_missing');
+  }
   const pins = {};
-  for (const [id, entry] of Object.entries(nativeModels)) {
+  for (const id of selected) {
+    const entry = nativeModels[id];
     const request = nativeRequest(id, { messages: [], max_tokens: 4096 }, env);
     const origin = entry.provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
     const response = await fetcher(`${origin}/v1/models/${entry.upstream}`, { headers: request.headers, signal: AbortSignal.timeout(30000) });

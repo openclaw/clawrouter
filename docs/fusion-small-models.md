@@ -386,3 +386,47 @@ The Copilot catalog-identity task was removed from the original corpus; the
 Cerebras redirect-mode and MiniMax regional-availability tasks were removed
 from the fresh corpus because their original visible tests reject the known
 repair. Earlier scores involving those tasks are not reliable comparisons.
+
+## Native planner/editor comparison
+
+Use the existing repository agent with two fixed-model controls and one
+architect policy. The architect spends one call on a strong-model source plan;
+the cheap model executes the remaining actions. The plan consumes one of the
+same total calls available to each control. All calls and failed attempts count
+against the trial and campaign budgets. This is an experimental policy, not a
+claim of improvement.
+
+Run from a committed task checkout with qualified workload receipts and an
+explicit JSON configuration. Only credentials for the selected models are
+required. Supply credentials through the existing secret injector; do not put
+them in configuration files.
+
+```sh
+node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
+```
+
+The configuration must contain every field below. Set `priorCostMicros` to the
+campaign's accumulated spend and unresolved reservations before starting.
+
+```json
+{
+  "cheap": "openai/gpt-6-luna",
+  "strong": "openai/gpt-6.1-sol",
+  "maxCalls": 12,
+  "outputTokens": 8192,
+  "deadlineMs": 300000,
+  "trialBudgetMicros": 1000000,
+  "campaignBudgetMicros": 100000000,
+  "priorCostMicros": 0
+}
+```
+
+`pair.json` records exact source and dataset digests, declared splits, model
+pins, both controls, action metadata, acceptance counts, elapsed time and actual
+usage-based charges. It excludes prompts, completions and generated source.
+An unknown charge retains its reservation and stops the campaign. Provider
+refusal also stops the campaign, without retry or model fallback.
+
+The [Aider architect/editor work](https://aider.chat/2024/09/26/architect.html)
+is the rationale for separating reasoning from edits. Validate this model pair
+on fresh tasks before treating a development improvement as a useful result.
