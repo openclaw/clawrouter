@@ -135,3 +135,24 @@ test('known-cost output truncation fails its trial without skipping the other co
     assert.ok(state.calls.every(call => typeof call.costMicros === 'number'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('a routed pair attributes router and selected worker calls and excludes training text', async () => {
+  const { root, options } = await fixture();
+  try {
+    const state = await runPairBenchmark({ ...options, grade, policy: 'routed', routerExamples: [
+      { taskId: 'training-a', instruction: 'private training sentinel one', worker: 'cheap' },
+      { taskId: 'training-b', instruction: 'private training sentinel two', worker: 'strong' },
+    ], fetcher: async (url, request) => {
+      if (url.includes('/v1/models/')) return success(url, request);
+      const sent = JSON.parse(request.body);
+      return Response.json({ model: sent.model, usage: { prompt_tokens: 20, completion_tokens: 10 },
+        choices: [{ finish_reason: 'stop', message: { content: '{"worker":"cheap"}' } }] });
+    }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+      await invoke(id, roles.strong, body, signal); return repaired();
+    } });
+    const routed = state.calls.filter(call => call.trialId.endsWith(':routed'));
+    assert.deepEqual(routed.map(call => call.model), [config.cheap, config.cheap]);
+    assert.equal(state.records.at(-1).routerChoice, 'cheap');
+    assert.ok(!JSON.stringify(state).includes('sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

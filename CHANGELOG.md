@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an experimental few-shot Fusion routing comparison with training/evaluation overlap checks and shared router/worker budgets.
+
 - Add an opt-in, budget-capped native model-pair benchmark with fixed controls and a strong-planner/cheap-editor policy.
 
 - Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.

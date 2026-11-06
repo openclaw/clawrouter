@@ -406,3 +406,23 @@ refusal also stops the campaign, without retry or model fallback.
 The [Aider architect/editor work](https://aider.chat/2024/09/26/architect.html)
 is the rationale for separating reasoning from edits. Validate this model pair
 on fresh tasks before treating a development improvement as a useful result.
+
+### Few-shot routing on fresh tasks
+
+An optional fifth argument selects the routed policy instead of the architect:
+
+```sh
+node scripts/fusion-pair-benchmark.mjs qualification.json fresh-tasks.json pair-config.json output-directory training.json
+```
+
+`training.json` is an array of `{ "taskId": "...", "instruction": "...", "worker": "cheap" }`
+examples; `worker` is `cheap` or `strong`. Build labels from development-only
+control results. The runner rejects task-ID or exact normalized instruction
+overlap with evaluation tasks. This check does not detect semantic duplicates;
+curate the split independently. Keep failed and successful development outcomes.
+
+The cheap model selects a worker before repair begins. Its call consumes one of
+the shared call allowance and its tokens, price and latency count in the same
+trial. Evaluation scores are never sent to the router. The checkpoint retains
+the training digest and selected worker, not training texts or model messages.
+This prompted router is a baseline for learned routing; it has no trained weights.

@@ -1,6 +1,7 @@
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { runRoutedAgent, validateRoutingExamples, routerInstruction } from './fusion-fewshot-router.mjs';
 import { runAgent, SpendLedger, toolErrorCode } from './fusion-agent-benchmark.mjs';
 import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
@@ -10,7 +11,7 @@ import { loadTasks, verify, hash, command } from './fusion-workloads.mjs';
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
-const strategies = ['cheap', 'strong', 'architect'];
+const strategies = ['cheap', 'strong', 'architect', 'routed'];
 
 export function validatePair(config, taskCount) {
   if (JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(Object.keys(pairDefaults).sort())
@@ -21,36 +22,40 @@ export function validatePair(config, taskCount) {
     if (!Number.isSafeInteger(config[key]) || config[key] < min || config[key] > max) throw new Error(`invalid_${key}`);
   }
   if (!Number.isSafeInteger(taskCount) || taskCount < 1
-    || config.priorCostMicros + taskCount * strategies.length * config.trialBudgetMicros > config.campaignBudgetMicros) {
+    || config.priorCostMicros + taskCount * 3 * config.trialBudgetMicros > config.campaignBudgetMicros) {
     throw new Error('campaign_budget_exceeded');
   }
 }
 
 export function pairModel(strategy, role, config) {
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
-  return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
+  return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) || (strategy === 'routed' && role === roles.strong) ? config.strong : config.cheap;
 }
 
 // One planner call is deducted from the same total call allowance as each control.
 export function pairExecution(strategy, config) {
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   return { strategy: strategy === 'architect' ? 'planned' : 'strong',
-    settings: { maxTurns: config.maxCalls - Number(strategy === 'architect'),
+    settings: { maxTurns: config.maxCalls - Number(['architect', 'routed'].includes(strategy)),
       outputTokens: config.outputTokens, deadlineMs: config.deadlineMs } };
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  env = process.env, fetcher = fetch, agent = runAgent, grade = verify, preflight = nativePins }) {
+  policy = 'architect', routerExamples, env = process.env, fetcher = fetch, agent = runAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   const tasks = await loadTasks(taskManifest);
   validatePair(config, tasks.length);
+  if (!['architect', 'routed'].includes(policy)) throw new Error('invalid_pair_policy');
+  const trainingDigest = policy === 'routed' ? validateRoutingExamples(routerExamples, tasks) : null;
+  const trialStrategies = ['cheap', 'strong', policy];
   const rawQualification = await readFile(qualificationPath);
   const receipts = validateLocalQualification(tasks, JSON.parse(rawQualification));
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: 'native-pair-repository', sourceSha, config,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
-    strategies, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
+    strategies: trialStrategies, policy, trainingDigest,
+    ...(policy === 'routed' ? { routerInstructionDigest: hash(routerInstruction) } : {}), complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
       'Published tariffs applied to reported usage; unknown charges retain their full reservation.'] };
@@ -104,14 +109,16 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     for (const [index, task] of tasks.entries()) {
       const receipt = receipts.find(row => row.taskId === task.id);
       // Rotate arm order to avoid always giving one arm the warmest caches.
-      for (let offset = 0; offset < strategies.length; offset++) {
-        const strategy = strategies[(index + offset) % strategies.length], trialId = `${task.id}:${strategy}`;
+      for (let offset = 0; offset < trialStrategies.length; offset++) {
+        const strategy = trialStrategies[(index + offset) % trialStrategies.length], trialId = `${task.id}:${strategy}`;
         const start = performance.now(), execution = pairExecution(strategy, config);
         const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running' };
         state.records.push(row);
         await save();
         try {
-          const result = await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(strategy));
+          const result = strategy === 'routed'
+            ? await runRoutedAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), agent, routerExamples)
+            : await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(strategy));
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
@@ -139,11 +146,12 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [qualificationPath, taskManifest, configPath, out] = process.argv.slice(2);
+  const [qualificationPath, taskManifest, configPath, out, routerTrainingPath] = process.argv.slice(2);
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const routerExamples = routerTrainingPath ? JSON.parse(await readFile(routerTrainingPath, 'utf8')) : undefined;
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha }).catch(() => {
+  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, routerExamples, policy: routerExamples ? 'routed' : 'architect' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }
