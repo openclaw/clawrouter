@@ -914,13 +914,29 @@ test('cache invalidation preserves pending runtime, selection and cursor writes'
   const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
   const { flushSelections } = await import('../admission-cache.ts');
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  let draining;
+  const drain = () => draining ??= (async () => {
+    let done = false, failed = false, failure;
+    const observed = Promise.all(f.pending).then(() => { done = true; }, error => { done = true; failed = true; failure = error; });
+    // Yield complete turns so actual promise chains settle before the next
+    // facade poll. Stay below both facade bounds; expiry is not settlement.
+    for (let i = 0; i < 32 && !done; i++) {
+      t.mock.timers.tick(16);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(done, true, 'original request/background work must settle within bounded mock-clock progress');
+    await observed;
+    if (failed) throw failure;
+    assert.equal(pendingBackgroundWork(), null, 'actual registrations retired, not merely their facades');
+  })();
+  t.after(drain);
   t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }, { headers: {
     'anthropic-ratelimit-unified-5h-utilization': '0.25',
     'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + 3600),
   } }));
   await (await f.request()).text();await (await f.request()).text();
   clearHotCaches();fenceSharedHotCache();await flushSelections(f.env);
-  t.mock.timers.tick(1);for(let i=0;i<4;i++)await Promise.resolve();t.mock.timers.tick(2);await Promise.all(f.pending);
+  await drain();
   const rows = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
   assert.equal(rows.reduce((sum, row) => sum + row.selected_count, 0), 2);
   assert.ok(f.calls.includes('/grant-pools/feedback'));
