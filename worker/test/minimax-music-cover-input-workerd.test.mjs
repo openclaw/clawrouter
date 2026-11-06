@@ -56,7 +56,12 @@ export default {async fetch(request,env,context){
   a.result=true;ready();await gate(mode,'delivery');await a.op.discard();
  },error=>{a.code=error.code;a.result=true;ready();}).catch(()=>{}));
  context.waitUntil(a.op.retired.then(()=>{a.retired=true;},error=>{a.cleanupCode=error.code;a.retired=true;}));
- await entered;return Response.json({...snapshot(),limits:musicCoverInputLimits});
+ // Returning headers while the ORIGINAL request-body read is held can close
+ // the client's still-writing HTTP upload. Keep this exchange alive; the
+ // separate state probe observes prompt operation failure and physical custody.
+ if(['read','cancel-reject','hash','hash-reject'].includes(mode))await a.op.retired.catch(()=>{});
+ else await entered;
+ return Response.json({...snapshot(),limits:musicCoverInputLimits});
 }};`;
 
 async function barriers(t) {
@@ -129,7 +134,10 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
     control.release(mode, "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.unlocks, 1);
   }
   for (const mode of ["read", "cancel-reject", "hash", "hash-reject"]) {
-    let state = await start(mode, 2); assert.equal(state.charged, 96 * 1024 * 1024);
+    let startFailure;
+    const started = start(mode, 2); void started.catch(error => { startFailure = error; });
+    let state = await until(s => { if (startFailure) throw startFailure; return s.mode === mode && (s.readHeld || s.hashHeld || s.result); });
+    assert.equal(state.charged, 96 * 1024 * 1024);
     assert.equal(mode.startsWith("hash") ? state.hashHeld : state.readHeld, true);
     control.release(mode, "abort"); state = await until(s => s.result); assert.equal(state.code, "cancelled");
     assert.equal(state.retired, false); assert.equal(state.charged, 96 * 1024 * 1024);
@@ -142,6 +150,7 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
     }
     state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.locked, false); assert.equal(state.unlocks, 1);
     assert.equal(state.cleanupCode, mode === "cancel-reject" ? "cleanup" : undefined);
+    assert.equal((await started).retired, true);
   }
   for (const [mode, bytes, options] of [["padding", 2, { audio: "AAB=" }], ["trailing", 2, { suffix: "x" }],
     ["utf8", 2, { malformed: true }], ["overflow", 50_000_001, {}], ["backing", 2, {}], ["reads8193", 2, {}],
