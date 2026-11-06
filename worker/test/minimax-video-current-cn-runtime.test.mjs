@@ -3,10 +3,10 @@ import test from "node:test";
 import { setup, actor, grantKey, native, poll, videoInput, submitted, mp4 } from "./minimax-video-runtime-fixture.mjs";
 import { inlineImage, uri } from "./minimax-video-inline-fixture.mjs";
 import { miniMaxCurrentCnVideoBinding, miniMaxVideoBinding, miniMaxFrozenVideoModels, miniMaxT2VModels } from "../../shared/minimax-video-binding.ts";
-import { inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, secretlessGrant } from "../grant-credentials.ts";
-import { managedFileBase } from "../managed-files.ts";
-import { prepareMiniMaxVideo, prepareMiniMaxVideoFile, isMiniMaxVideoOrigin } from "../minimax-video.ts";
-import { bodyBudgetCharged } from "../body-budget.ts";
+const { inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, secretlessGrant } = await import("../grant-credentials.ts");
+const { managedFileBase } = await import("../managed-files.ts");
+const { prepareMiniMaxVideo, prepareMiniMaxVideoFile, isMiniMaxVideoOrigin } = await import("../minimax-video.ts");
+const { bodyBudgetCharged } = await import("../body-budget.ts");
 const origin = "https://api.minimax.cn";
 async function ready(t, options = {}) {
   const f = await setup(t, { models: miniMaxFrozenVideoModels, ...options }); await f.put({}, miniMaxCurrentCnVideoBinding()); return f;
