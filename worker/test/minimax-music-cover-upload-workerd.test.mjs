@@ -59,7 +59,7 @@ function ownObserved(response,a){
    return part;
   },cancel(reason){if(!cancellation){let resolve,reject;cancellation=new Promise((yes,no)=>{resolve=yes;reject=no;});
    Promise.resolve().then(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{
-    if(['read','read-reject','read-error','late','split-fail'].includes(a.mode)){a.cancelHeld=true;await gate(a.mode,'cleanup');}
+    if(['read','read-reject','read-error','late','split-fail'].includes(a.mode)){a.cancelHeld=true;await a.responseCleanupGate;}
     if(a.mode==='read-reject')throw Error('synthetic FIRST response cancel rejection');
    }}).then(resolve,reject);}return cancellation;
   },releaseLock(){a.unlockAttempts++;if(a.mode==='unlock'||a.mode==='unlock-pre'){a.resolveUnlock();throw Error('synthetic pre-unlock failure');}a.unlocks++;reader.releaseLock();}
@@ -80,7 +80,12 @@ export default {async fetch(request,env,context){
  if(url.pathname==='/state')return Response.json(state());
  if(url.pathname==='/unlock-observed'){await active.unlockObserved;return Response.json(state());}
  if(url.pathname==='/contend'){const lease=new BodyLease();try{return Response.json({admitted:lease.grow(1024*1024),charged:bodyBudgetCharged()});}finally{lease.release();}}
- if(url.pathname==='/abort'){active?.controller.abort('fixture abort');return Response.json({ok:true});}
+ if(url.pathname==='/abort'){
+  // Cancellation creates physical continuations in this probe's context. Keep
+  // it alive; /start independently observes and asserts the retirement outcome.
+  if(active?.flow)context.waitUntil(active.flow.retired.catch(()=>{}));
+  active?.controller.abort('fixture abort');return Response.json({ok:true});
+ }
  if(url.pathname!=='/start')return new Response(null,{status:404});
  if(active&&!active.retired)return new Response(null,{status:409});
  const a=active={mode:url.searchParams.get('mode')??'normal',audio:Number(url.searchParams.get('audio')??3),controller:new AbortController(),
@@ -92,6 +97,9 @@ export default {async fetch(request,env,context){
   const sealed=await input.result;
   // Own fixture cleanup I/O in /start, before the separate /abort callback.
   if(a.mode==='upload-reject'){a.uploadCleanupGate=gate(a.mode,'cleanup');void a.uploadCleanupGate.catch(()=>{});}
+  if(['read','read-reject','read-error','late','split-fail'].includes(a.mode)){
+   a.responseCleanupGate=gate(a.mode,'cleanup');void a.responseCleanupGate.catch(()=>{});
+  }
   a.flow=runInactiveMiniMaxMusicCoverUpload(sealed,async(url,init)=>{
    if(url!=='https://api.minimax.io/v1/music_generation'||init.method!=='POST'||init.redirect!=='manual')throw Error('fixed destination');
    a.declaredUploadLength=Number(new Headers(init.headers).get('content-length'));
@@ -283,7 +291,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     try {
       if (nextMode === "late") { await wait(s => s.headers); await call("abort"); release("/late/late"); }
       else if (nextMode !== "split-fail" && nextMode !== "read-error") { await wait(s => s.readHeld); await call("abort"); }
-      await wait(s => s.cancelHeld); const heldState = await call("state");
+      await wait(s => s.cancelHeld && arrived.has("/" + nextMode + "/cleanup")); const heldState = await call("state");
       assert.equal(heldState.charged, 96 * 1024 * 1024); assert.equal(heldState.locked, true); assert.equal(heldState.cancels, 1);
       if (nextMode === "late" || nextMode === "split-fail") assert.equal(heldState.reads, 0);
       assert.equal(heldState.done, true);
