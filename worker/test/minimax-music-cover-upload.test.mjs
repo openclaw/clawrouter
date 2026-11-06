@@ -7,7 +7,7 @@ const { runInactiveMiniMaxMusicCoverUpload, MusicCoverUploadSource, musicCoverUp
 const { runMiniMaxMusicCoverControls } = await import("../minimax-music-cover-control.ts");
 const { MiniMaxMusicCoverJson, musicCoverResponseLimits } = await import("../minimax-music.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
-const MiB = 1024 * 1024, tick = () => new Promise(resolve => setImmediate(resolve));
+const MiB = 1024 * 1024;
 const destination = "https://api.minimax.io/v1/music_generation";
 const envelope = audio => '{"base_resp":{"status_code":0},"data":{"status":2,"audio":"' + audio + '"}}';
 function bytes(text, size = 1024) {
@@ -29,6 +29,10 @@ async function begin(route = "native", deadline = 30000) {
 }
 async function drain(body) { const reader = body.getReader(); let text = ""; try { for (;;) { const p = await reader.read(); if (p.done) return text;
   assert.ok(p.value.buffer.byteLength <= 16384); text += new TextDecoder().decode(p.value); } } finally { reader.releaseLock(); } }
+async function entry(entered, flow) {
+  await Promise.race([entered.promise, flow.result.then(() => { throw Error("fixture completed before held boundary"); },
+    () => { throw Error("fixture rejected before held boundary"); })]);
+}
 async function cleanup(f, flow) { f.controller.abort(); await flow?.retired.catch(() => {}); await f.input.discard().catch(() => {}); assert.equal(bodyBudgetCharged(), 0); }
 
 test("inactive serializer binds sealed bytes/scalars and transfers 96 = 32 + 64 without a second acquire", async () => {
@@ -78,7 +82,7 @@ test("same dispatched source: early headers wait for held LAST pull, cleared ref
     return response;
   });
   try {
-    await entered.promise; assert.equal(posted, 1); assert.equal(reads, 0); assert.equal(bodyBudgetCharged(), 96 * MiB);
+    await entry(entered, flow); assert.equal(posted, 1); assert.equal(reads, 0); assert.equal(bodyBudgetCharged(), 96 * MiB);
     assert.equal(source.snapshot().pending, true); held.resolve();
     const response = await flow.result; await upload;
     assert.equal(source.snapshot().references, 0); assert.equal(source.snapshot().pending, false);
@@ -97,7 +101,7 @@ test("failed transfer disposes unread response and keeps original 96 MiB until F
       async cancel(reason) { cancels++; await reader.cancel(reason); entered.resolve(); await held.promise; }, releaseLock: () => reader.releaseLock() }; }; return r;
   });
   try {
-    await entered.promise; assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 96 * MiB);
+    await entry(entered, flow); assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 96 * MiB);
     held.resolve(); await assert.rejects(flow.result); await flow.retired; assert.equal(bodyBudgetCharged(), 0);
   } finally { held.resolve(); await cleanup(f, flow); }
 });

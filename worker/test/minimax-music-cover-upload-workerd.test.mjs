@@ -134,7 +134,12 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   const held = new Map(), arrived = new Set(), released = new Set(), clients = new Set(), errors = [];
   let mode = "normal", size = 5, audio = 3, posts = 0, uploaded = 0, uploadEnded = false, uploadValid = true;
   const release = key => { released.add(key); held.get(key)?.end("ok"); held.delete(key); };
-  const releaseAll = () => { for (const [key,response] of held) { released.add(key); response.end("ok"); } held.clear(); };
+  const releaseAll = () => {
+    // Open future arrivals too: failure can precede entry into a physical gate.
+    for (const mode of ["early", "upload-reject", "read", "read-reject", "late", "split-fail", "unclaimed"])
+      for (const phase of ["upload", "cleanup", "read", "late", "delivery"]) released.add("/" + mode + "/" + phase);
+    for (const response of held.values()) response.end("ok"); held.clear();
+  };
   const server = createServer((request, response) => {
     if (request.url.startsWith("/gate/")) {
       const key = request.url.slice(5); arrived.add(key); if (released.has(key)) response.end("ok"); else held.set(key, response); return;

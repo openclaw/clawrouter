@@ -133,7 +133,7 @@ function ownCoverResponse(response: Response) {
   let byob: ReadableStreamBYOBReader | undefined, regular: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try { byob = response.body.getReader({ mode: "byob" }); }
   catch { try { regular = response.body.getReader(); } catch { return { blocked: true as const }; } }
-  let reader = byob ?? regular!, first: Promise<void> | undefined, cleanupFailed = false;
+  let reader = byob ?? regular!, first: Promise<void> | undefined, cleanupFailed = false, unlockFailed = false;
   const owner = inputRetirement({ cancel() {
     if (!first) {
       let resolve!: () => void;
@@ -142,11 +142,15 @@ function ownCoverResponse(response: Response) {
       catch { cleanupFailed = true; resolve(); }
     }
     return first;
-  }, releaseLock() { reader.releaseLock(); } });
+  }, releaseLock() { try { reader.releaseLock(); } catch { unlockFailed = true; throw coverCleanup(); } } });
   const retired = owner.retired.then(() => {
     byob = undefined; regular = undefined; reader = undefined!; first = undefined;
     if (cleanupFailed) throw coverCleanup();
-  }, () => { throw coverCleanup(); });
+  }, async () => {
+    // An unproved lock release cannot retire the physical slot or allocation.
+    if (unlockFailed) await new Promise<void>(() => undefined);
+    throw coverCleanup();
+  });
   void retired.catch(() => undefined);
   return { blocked: false as const, byob: !!byob,
     read: (window: Uint8Array<ArrayBuffer>) => owner.read(() => byob ? byob.read(window) : Promise.reject(coverFailure())),
