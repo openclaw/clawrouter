@@ -23,7 +23,7 @@ MusicCoverUploadSource.prototype.produce=async function(controller){
 MusicCoverUploadSource.prototype.disposeSource=async function(){
  const a=active;if(a)a.discards++;
  await dispose.call(this);
- if(a?.mode==='upload-reject'){a.cancelHeld=true;await gate(a.mode,'cleanup');throw Error('synthetic FIRST upload discard rejection');}
+ if(a?.mode==='upload-reject'){a.cancelHeld=true;await a.uploadCleanupGate;throw Error('synthetic FIRST upload discard rejection');}
 };
 BodyLease.prototype.splitCharges=function(left,right){
  const a=active;if(a){a.splitBefore=bodyBudgetCharged();a.splitReferences=a.source?.snapshot().references;a.splits++;
@@ -90,6 +90,8 @@ export default {async fetch(request,env,context){
   route:url.searchParams.get('route')==='manifest'?'manifest':'native',contentType:'application/json'});
  try{
   const sealed=await input.result;
+  // Own fixture cleanup I/O in /start, before the separate /abort callback.
+  if(a.mode==='upload-reject'){a.uploadCleanupGate=gate(a.mode,'cleanup');void a.uploadCleanupGate.catch(()=>{});}
   a.flow=runInactiveMiniMaxMusicCoverUpload(sealed,async(url,init)=>{
    if(url!=='https://api.minimax.io/v1/music_generation'||init.method!=='POST'||init.redirect!=='manual')throw Error('fixed destination');
    a.declaredUploadLength=Number(new Headers(init.headers).get('content-length'));
@@ -267,7 +269,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
       assert.equal(s.reads, 0); assert.equal(s.charged, 96 * 1024 * 1024);
       assert.equal(s.source.pending, true);
       if (nextMode === "upload-reject") {
-        await call("abort"); await wait(s => s.cancelHeld);
+        await call("abort"); await wait(s => s.cancelHeld && arrived.has("/upload-reject/cleanup"));
         assert.equal((await call("state")).charged, 96 * 1024 * 1024);
         release("/upload-reject/cleanup"); assert.equal((await call("state")).charged, 96 * 1024 * 1024);
       }
