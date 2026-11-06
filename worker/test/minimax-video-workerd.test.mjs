@@ -153,7 +153,7 @@ async function paddedControl(response,a){
 
 const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,locator:active.locator,error:active.error,results:active.results,
  reads:active.reads,cancels:active.cancels,unlocks:active.unlocks,materializations:active.materializations??0,inputReads:active.inputReads??0,inputCancels:active.inputCancels??0,inputUnlocks:active.inputUnlocks??0,inputMaxBacking:active.inputMaxBacking??0,releases:active.releases,maxBacking:active.maxBacking,actions:active.actions,
- failedControl:active.failedControl,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
+ failedControl:active.failedControl,cancelRejected:active.cancelRejected??false,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
 const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
@@ -164,7 +164,7 @@ MiniMaxVideoOperation.prototype.registerUpload=function(upload){const a=active;i
  // The pinned fetch drain targets256KiB. Let two batches traverse the fixture's
  // frontend/upstream hops before holding a read; server entry is STILL awaited.
  const holdRead=2*256*1024/16384+1;
- const input=inputRetirement({cancel(reason){return cancel??=(async()=>{a.cancels++;await reader.cancel(reason);await gate(a,'cleanup');a.cleanup=true;if(a.mode==='inline-upload-reject')throw Error('held upload cleanup rejection');})();},releaseLock(){a.unlocks++;reader.releaseLock();}});
+ const input=inputRetirement({cancel(reason){return cancel??=(async()=>{a.cancels++;try{await reader.cancel(reason);}catch(error){a.cancelRejected=true;throw error;}finally{await gate(a,'cleanup');a.cleanup=true;if(a.mode==='inline-upload-reject')throw Error('held upload cleanup rejection');}})();},releaseLock(){a.unlocks++;reader.releaseLock();}});
  const retired=Promise.allSettled([originalUpload.retired,input.retired]).then(()=>cancel);void retired.catch(()=>{});
  const discard=()=>{stopped=true;try{controller?.error(Error('discarded'));}catch{}void originalUpload.discard().catch(()=>{});void input.retire('cancel').catch(()=>{});return retired;};
  const body=new ReadableStream({start(c){controller=c;},async pull(c){try{const result=await input.read(async()=>{a.reads++;try{return await reader.read();}finally{if(first&&a.reads===holdRead){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}});if(stopped)return;if(result.done){await input.retire('eof');c.close();}else{a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);c.enqueue(result.value);}}catch(e){if(!stopped)c.error(e);}},cancel:discard},{highWaterMark:0});
@@ -613,7 +613,7 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
       assert.equal(state.cancels, 1); assert.equal(state.locked, true);
       io.release(mode + "/cleanup");
       for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.cleanup) break; await delay(10); }
-      assert.equal(state.cleanup, true); assert.equal(state.charged, 96 * MiB); assert.equal(state.locked, true);
+      assert.equal(state.cleanup, true, JSON.stringify(state)); assert.equal(state.charged, 96 * MiB); assert.equal(state.locked, true);
       io.release(mode + "/read");
     }
     state = await idle(); assert.equal(state.releases, 1);
