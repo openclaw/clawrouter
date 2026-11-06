@@ -153,7 +153,7 @@ async function paddedControl(response,a){
 
 const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,locator:active.locator,error:active.error,results:active.results,
  reads:active.reads,cancels:active.cancels,unlocks:active.unlocks,materializations:active.materializations??0,inputReads:active.inputReads??0,inputCancels:active.inputCancels??0,inputUnlocks:active.inputUnlocks??0,inputMaxBacking:active.inputMaxBacking??0,releases:active.releases,maxBacking:active.maxBacking,actions:active.actions,
- cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
+ failedControl:active.failedControl,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
 const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
@@ -182,6 +182,7 @@ function hold(source,a){a.source=source;const get=source.getReader.bind(source);
 function controlled(env,a){const grants=env.GRANT_CREDENTIALS,authority=env.ACCESS_CONTROL;return {...env,
  GRANT_CREDENTIALS:{idFromName:n=>grants.idFromName(n),get:id=>{const stub=grants.get(id);return {async fetch(input,init){
   const path=new URL(input).pathname;a.controls.push('grant:'+path);if(path==='/materialize')a.materializations=(a.materializations??0)+1;const response=await stub.fetch(input,init);
+  if(!response.ok)a.failedControl={owner:'grant',path,status:response.status};
   if(path==='/responses/control')measure(response,a);
   if(path==='/responses/control'&&['poll-read','file-read','cleanup-reject','late'].includes(a.mode)){
    if(a.mode!=='file-read'||JSON.parse(init.body).file?.action==='download'){hold(response.body,a);if(a.mode==='late'){a.ready.resolve();await gate(a,'arrival');}}
@@ -190,6 +191,7 @@ function controlled(env,a){const grants=env.GRANT_CREDENTIALS,authority=env.ACCE
  ACCESS_CONTROL:{idFromName:n=>authority.idFromName(n),get:id=>{const stub=authority.get(id);return {async fetch(input,init){
   const path=new URL(input).pathname,packet=JSON.parse(init.body);a.controls.push('authority:'+path);if(path==='/responses-background')a.actions.push(packet.action);
   const response=await stub.fetch(input,init);
+  if(!response.ok)a.failedControl={owner:'authority',path,status:response.status};
   if(path==='/authorization/snapshot'&&['inline-revoke','inline-rotate','inline-freeze-held'].includes(a.mode)&&(a.snapshots=(a.snapshots??0)+1)===3){
    if(a.mode==='inline-freeze-held'){hold(response.body,a);const headers=new Headers(response.headers);headers.set('content-type','text/plain');return new Response(response.body,{status:response.status,headers});}
    a.ready.resolve();await gate(a,'authority');
@@ -578,30 +580,17 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
     io.release(mode + "/abort"); await idle();
   }
 
-  // Reachable maximum controls and maximum input/lifecycle under ONE owner.
-  io.mode("maximum");
-  await json("/setup?inline=1"); const pool = await json("/maximum-pool?inline=1");
-  const input = { ...lastBody, prompt: "x".repeat(2000) }, text = JSON.stringify(input);
-  const nonimage = Buffer.byteLength(text) - input.first_frame_image.split(",")[1].length;
-  const maximum = await call(native, text + " ".repeat(65536 - nonimage), { "idempotency-key": "inline-max" }, "max-held", "combined-inline");
-  let state = await maximum.json(); assert.equal(state.status, 200, JSON.stringify(state));
-  assert.equal(state.charged, 96 * MiB); assert.equal(state.candidates, pool.candidates); assert.equal(state.controlMaxValues, 512);
-  assert.equal(state.exchanges.length, 1); assert.ok(state.exchanges[0].ordinary <= 16); assert.ok(state.exchanges[0].mandatory <= 5);
-  assert.equal(state.exchanges[0].ordinary + state.exchanges[0].mandatory, state.controls.length + 1);
-  assertInlineCreateCalls(state, { lookup: true });
-  assert.equal(state.nativeBytes, MiB); assert.ok(state.nativeMaxBacking <= 16384); assert.equal(state.releases, 0);
-  assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
-  io.release("combined-inline/output"); state = await idle(); assert.equal(state.releases, 1);
-
+  let state;
   for (const mode of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"]) {
     await json("/setup?inline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
     const posts = io.counts.post, started = mode.startsWith("inline-upload") ? io.nextPost() : undefined;
     const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
     t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
-      charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error }));
+      charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error, failedControl: state.failedControl }));
+    assert.equal(state.charged, 96 * MiB, JSON.stringify(state));
     if (started) { await started; assert.equal(io.counts.post, posts + 1, JSON.stringify(state));
       t.diagnostic(JSON.stringify({ phase: "actual-post-started", mode, posts: io.counts.post })); io.replyEarly(); }
-    assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
+    if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
     if (mode === "inline-late") io.release(mode + "/execution-abort");
     for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
     assert.equal(state.results, 1, JSON.stringify(state)); assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); assert.equal(state.releases, 0);
@@ -663,5 +652,22 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
     const denied = await mutation; assert.equal(denied.status, 403, await denied.clone().text()); await denied.text();
     assert.deepEqual(await json("/fixture/pin?mode=" + mode), original);
   }
+  // Run the capacity-filling pool LAST: setup replaces the primary grant but
+  // does not clear the other genuine pool records. All maximum assertions remain.
+  // Reachable maximum controls and maximum input/lifecycle under ONE owner.
+  io.mode("maximum");
+  await json("/setup?inline=1"); const pool = await json("/maximum-pool?inline=1");
+  const input = { ...lastBody, prompt: "x".repeat(2000) }, text = JSON.stringify(input);
+  const nonimage = Buffer.byteLength(text) - input.first_frame_image.split(",")[1].length;
+  const maximum = await call(native, text + " ".repeat(65536 - nonimage), { "idempotency-key": "inline-max" }, "max-held", "combined-inline");
+  state = await maximum.json(); assert.equal(state.status, 200, JSON.stringify(state));
+  assert.equal(state.charged, 96 * MiB); assert.equal(state.candidates, pool.candidates); assert.equal(state.controlMaxValues, 512);
+  assert.equal(state.exchanges.length, 1); assert.ok(state.exchanges[0].ordinary <= 16); assert.ok(state.exchanges[0].mandatory <= 5);
+  assert.equal(state.exchanges[0].ordinary + state.exchanges[0].mandatory, state.controls.length + 1);
+  assertInlineCreateCalls(state, { lookup: true });
+  assert.equal(state.nativeBytes, MiB); assert.ok(state.nativeMaxBacking <= 16384); assert.equal(state.releases, 0);
+  assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+  io.release("combined-inline/output"); state = await idle(); assert.equal(state.releases, 1);
+
   assert.ok(last); assert.ok(lastLocator);
 });
