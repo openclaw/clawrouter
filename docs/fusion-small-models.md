@@ -183,3 +183,22 @@ generation-loop deadline is checked before each call; fixture qualification is
 separate. Invalid or failed candidates count against their policy. Transport,
 identity, usage or infrastructure failures stop the campaign without retry.
 These tasks test generation and verification mechanics, not repository repair.
+
+The first run (2026-11-06, source
+`51f0a281526f8c562cbeb8a06e7fe13a8b75a643`, corpus
+`1360aa974eb4a3dd2799ee17bb19402e6f4cede0557d93fa47f7c709d841f02b`)
+completed all 24 calls at zero API spend using the same Qwen model pins above.
+
+| Policy | Solved / 8 | Wrong accepted | Replay calls | Replay tokens |
+| --- | ---: | ---: | ---: | ---: |
+| 4B first draft | 4 | 4 | 8 | 2,626 |
+| Up to two 4B drafts, public-test selection | 4 | 2 | 10 | 3,334 |
+| Tiny then 4B, public-test selection | 4 | 2 | 16 | 4,648 |
+
+The tiny model solved none of the tasks. Even hindsight selection across the
+two 4B samples solved only four: no selector could recover an additional win
+from this pool. Public checks rejected two wrong answers, but still accepted
+two others that failed withheld cases. More samples and the tiny first stage
+did not improve correctness. Improve worker capability and test coverage before
+adding orchestration. A later output-limit handling fix does not affect these
+results: no candidate in this complete run hit the output limit.
