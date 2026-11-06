@@ -91,7 +91,7 @@ function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "
     if (raw !== undefined) { for (let offset = 0; offset < raw.length; offset += 256) yield encoder.encode(raw.slice(offset, offset + 256)); return; }
     yield encoder.encode(prefix);
     if (malformed) { yield new Uint8Array([0xff]); return; }
-    if (audio !== undefined) yield encoder.encode(audio);
+    if (audio !== undefined) { for (let offset = 0; offset < audio.length; offset += 256) yield encoder.encode(audio.slice(offset, offset + 256)); }
     else {
       let count = Math.floor(bytes / 3) * 4;
       while (count) { const take = Math.min(16384, count); yield encoder.encode("A".repeat(take)); count -= take; }
@@ -102,7 +102,10 @@ function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "
     if (suffix) yield encoder.encode(suffix);
   }
   const iterator = pieces();
-  return new ReadableStream({ pull(c) { const next = iterator.next(); if (next.done) c.close(); else c.enqueue(next.value); }, cancel() { iterator.return(); } }, { highWaterMark: 0 });
+  const length = raw !== undefined ? Buffer.byteLength(raw) : malformed ? Buffer.byteLength(prefix) + 1
+    : Buffer.byteLength(prefix + tail + suffix) + padding + (audio !== undefined ? Buffer.byteLength(audio) : Math.ceil(bytes / 3) * 4);
+  const body = new ReadableStream({ pull(c) { const next = iterator.next(); if (next.done) c.close(); else c.enqueue(next.value); }, cancel() { iterator.return(); } }, { highWaterMark: 0 });
+  return { body, length };
 }
 function zeroHash(bytes) {
   const hash = createHash("sha256"), part = Buffer.alloc(16384);
@@ -126,9 +129,22 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path, { signal: t.signal }); assert.equal(response.status, 200); return response.json(); };
   const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
   const start = async (mode, bytes, options = {}, signal = t.signal) => {
-    const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode + "&route=" + (options.route ?? "native"),
-      { method: "POST", headers: { "content-type": "application/json" }, body: input(bytes, options), duplex: "half", signal });
-    assert.equal(response.status, 200); return response.json();
+    const upload = input(bytes, options);
+    try {
+      // Known incremental length avoids Undici's trailing chunked terminator
+      // write after an intentional early input cancellation. Bytes stay streamed.
+      const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode + "&route=" + (options.route ?? "native"),
+        { method: "POST", headers: { "content-type": "application/json", "content-length": String(upload.length) }, body: upload.body, duplex: "half", signal });
+      assert.equal(response.status, 200); return response.json();
+    } catch (error) {
+      if (signal.aborted && error === signal.reason) throw error;
+      let state;
+      try {
+        const observed = await call("/state");
+        state = Object.fromEntries(["mode", "phase", "result", "retired", "code", "cleanupCode", "charged", "locked", "readCalls", "nativeReads", "nativeEof", "wire", "nonAudio", "digestStarted", "cancels", "unlocks"].map(key => [key, observed[key]]));
+      } catch { state = { unavailable: true }; }
+      throw new Error("fixture HTTP input failure " + JSON.stringify({ mode, state }), { cause: error });
+    }
   };
   for (const mode of ["maximum", "manifest"]) {
     const route = mode === "manifest" ? "manifest" : "native";
