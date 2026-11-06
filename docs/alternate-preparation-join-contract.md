@@ -52,12 +52,22 @@ queues one abort microtask while the signal is active. The proxy's final await
 then yields before the outside check. The void observer may already be settled;
 this is a final-await continuation interval, not a pending native-read claim.
 
-The fixed route must return 502 `provider_unavailable`, one `client_error` event
-and original-ID settlement without alternate dispatch. A separate fixture
-instance removes only the unique outside fence through an in-memory bundler
-hook and must expose the original 429. Shared production source is never changed.
-The no-abort rejection control retains 429; successful failover, disabled failover
-and uncertain alternate invocation retain their existing accounting behavior.
+Both final-await instances observe the actual registered public-route handler's
+returned response in the originating request. The same diagnostic wrapper
+captures its status, consumes that original small body once, distinguishes body
+fulfillment/rejection and joins existing request-local background observers before
+returning a bounded diagnostic envelope. Diagnostic transport is separate from
+routed status; outer socket failures remain unexpected test failures.
+
+The fixed handler must return actual 502 with a fulfilled `provider_unavailable`
+body, one `client_error` event and original-ID settlement without alternate
+dispatch. A separate fixture instance removes only the unique outside fence
+through an in-memory bundler hook and must observe actual returned 429, recording
+its body's outcome separately. This does not claim wire delivery of an aborted
+429 body. Shared production source is never changed. Ordinary held, no-abort,
+successful, disabled and uncertain cases retain direct HTTP responses and their
+existing accounting assertions. The initial socket failure's specific instance
+and cause remain unproven; amended evidence qualifies this new observation boundary.
 
 Authored cases and syntax checks are not execution proof. Final-head hosted
 Worker/Workerd, normal CI/security and all actual consumers must qualify before

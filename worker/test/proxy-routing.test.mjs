@@ -104,7 +104,7 @@ for (const abortAtJoin of [false, true]) test(
     const response = await f.request({}, {}, "/v1/responses", caller.signal);
     assert.equal(response.status, abortAtJoin ? 502 : 429);
     const body = JSON.parse(await f.consume(response));
-    assert.deepEqual(body, abortAtJoin ? { error: { code: "provider_unavailable", message: "upstream request to provider openai failed" } } : { error: "original rejection" });
+    assert.deepEqual(body, abortAtJoin ? { error: { code: "provider_unavailable", message: "upstream request to provider openai failed", type: "server_error", param: null } } : { error: "original rejection" });
     assert.equal(observed, 1); assert.equal(interceptions, 1); assert.equal(activeWhenQueued, true); assert.equal(caller.signal.aborted, abortAtJoin);
     assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
     assert.equal(f.events[0].status, "client_error"); assert.equal(f.events[0].actual_cost_micros, 0);

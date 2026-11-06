@@ -109,8 +109,11 @@ export default {async fetch(request,bindings,ctx){const u=new URL(request.url),i
  if(u.pathname!=='/v1/responses')return new Response(null,{status:404});
  // Small incoming body is consumed before readiness barriers. The diagnostic
  // HTTP client stays connected; only the ORIGINAL routed signal is aborted.
- const body=await request.text(),caller=new AbortController(),env=environment(bindings,a);
- const track=p=>{a.background++;const observed=Promise.resolve(p).then(()=>{a.background--;},()=>{a.background--;a.backgroundFailed=true;});ctx.waitUntil(observed);};
+ const body=await request.text(),caller=new AbortController(),env=environment(bindings,a),localBackground=[];
+ const instance=u.searchParams.get('instance')==='omitted'?'omitted':'fixed';
+ const label=phase=>console.log('alternate-final-await',JSON.stringify({instance,case:id,phase}));
+ const track=p=>{a.background++;const observed=Promise.resolve(p).then(()=>{a.background--;},()=>{a.background--;a.backgroundFailed=true;});
+  if(a.finalAbort)localBackground.push(observed);ctx.waitUntil(observed);};
  if(a.held)track(gate(id,'abort').then(()=>{a.aborted=true;caller.abort(Error('fixture caller abort'));}));
  const originalWait=HttpOperation.prototype.wait;
  HttpOperation.prototype.wait=function(pending,...args){
@@ -130,7 +133,19 @@ export default {async fetch(request,bindings,ctx){const u=new URL(request.url),i
  a.active=true;
  try{
   const routed=new Request('https://router.example/v1/responses',{method:'POST',headers:request.headers,body,signal:caller.signal});
-  const response=await worker.fetch(routed,env,{waitUntil:track});a.outward=true;a.status=response.status;return response;
+  const response=await worker.fetch(routed,env,{waitUntil:track});a.outward=true;a.status=response.status;
+  if(!a.finalAbort)return response;
+  // BOTH instances observe the ACTUAL public handler response in its originating
+  // context. An already-errored 429 body need not survive the outer HTTP bridge.
+  const routedStatus=response.status;label('routed-response-receipt');
+  let text,bodyOutcome='fulfilled',errorCode=null,jsonParsed=false;
+  try{text=await response.text();}catch{bodyOutcome='rejected';}
+  if(bodyOutcome==='fulfilled'){try{const value=JSON.parse(text);jsonParsed=true;
+   if(value?.error?.code==='provider_unavailable')errorCode='provider_unavailable';}catch{}}
+  text=undefined;label('body-settled');
+  // Only request-local void observers are retained; no promise crosses requests.
+  while(localBackground.length)await Promise.all(localBackground.splice(0));
+  return Response.json({fixture:'alternate-final-await',instance,case:id,phase:'body-settled',routedStatus,bodyOutcome,errorCode,jsonParsed});
  }finally{globalThis.fetch=raw;HttpOperation.prototype.wait=originalWait;}
 },queue:worker.queue};`.replace('__CASES__', JSON.stringify(cases));
 
@@ -194,17 +209,26 @@ test('public alternate preparation joins held resolution/rejection and fences th
     const origin = 'http://127.0.0.1:' + server.address().port;
     const upstream = `export default {fetch(request){const u=new URL(request.url);if(u.origin!=='https://alternate-gate.example')throw Error('unexpected egress');return fetch(${JSON.stringify(origin)}+u.pathname,request);}};`;
     runtime = await startWorkerdFixture(directory, router, upstream, { preventEviction: true });
-    const call = (path, options, variant = false) => {
-      const pending = runtime.dispatchFetch('https://router.example' + path, { ...options, signal: controller.signal }).then(async r => {
-        let text; try { text = await r.text(); } catch (error) { if (!variant || r.status !== 429) throw error; }
-        return { status: r.status, text };
+    const call = (path, options) => {
+      const url = new URL('https://router.example' + path), id = url.searchParams.get('case');
+      const instance = url.searchParams.get('instance') === 'omitted' ? 'omitted' : 'fixed';
+      const diagnostic = url.pathname === '/v1/responses' && id === 'final-await';
+      let phase = 'dispatch-started';
+      if (diagnostic) t.diagnostic(JSON.stringify({ instance, case: id, phase }));
+      const pending = runtime.dispatchFetch(url.href, { ...options, signal: controller.signal }).then(async r => {
+        phase = 'diagnostic-headers-received';
+        if (diagnostic) t.diagnostic(JSON.stringify({ instance, case: id, phase }));
+        return { status: r.status, text: await r.text() };
+      }).catch(error => {
+        t.diagnostic(JSON.stringify({ instance, case: Object.hasOwn(cases, id) ? id : 'control', phase }));
+        throw error; // Every unexpected outer transport failure retains identity.
       });
       pending.catch(() => {}); clients.push(pending); return pending;
     };
     json = async path => { const r = await call(path); assert.equal(r.status, 200); return JSON.parse(r.text); };
-    const request = (id, variant = false) => call('/v1/responses?case=' + id, { method: 'POST', headers: {
+    const request = (id, variant = false) => call('/v1/responses?case=' + id + '&instance=' + (variant ? 'omitted' : 'fixed'), { method: 'POST', headers: {
       authorization: 'Bearer clawrouter-live-fixture-fixture-secret', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'openai/gpt-6-astra', input: 'fixture', stream: false }) }, variant);
+      body: JSON.stringify({ model: 'openai/gpt-6-astra', input: 'fixture', stream: false }) });
     for (const [id, mode] of Object.entries(cases)) {
       assert.equal((await json('/setup?case=' + id)).ready, true); visited.push(id);
       const started = request(id);
@@ -229,8 +253,15 @@ test('public alternate preparation joins held resolution/rejection and fences th
       }
       const response = await started;
       const expected = mode.held || mode.finalAbort || mode.uncertain ? 502 : id === 'success-control' ? 200 : 429;
-      assert.equal(response.status, expected, id);
-      if (expected === 502) assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
+      if (mode.finalAbort) {
+        assert.equal(response.status, 200, 'diagnostic transport, not routed status');
+        const observed = JSON.parse(response.text);
+        assert.deepEqual(observed, { fixture: 'alternate-final-await', instance: 'fixed', case: id, phase: 'body-settled',
+          routedStatus: 502, bodyOutcome: 'fulfilled', errorCode: 'provider_unavailable', jsonParsed: true });
+      } else {
+        assert.equal(response.status, expected, id);
+        if (expected === 502) assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
+      }
       if (expected === 429) assert.deepEqual(JSON.parse(response.text), { error: 'original rejection' });
       await drain(); const s = await json('/state?case=' + id), sql = await json('/sql?case=' + id);
       assert.equal(s.provider, id === 'success-control' || mode.uncertain ? 2 : 1);
@@ -252,9 +283,20 @@ test('public alternate preparation joins held resolution/rejection and fences th
     runtime = await withoutOutsideFence(directory, upstream);
     assert.equal((await json('/setup?case=final-await')).ready, true); visited.push('final-await');
     const response = await request('final-await', true);
-    assert.equal(response.status, 429, 'omitting ONLY the outside fence leaks the original rejection');
+    assert.equal(response.status, 200, 'diagnostic transport, not routed status');
+    const observed = JSON.parse(response.text);
+    assert.equal(observed.fixture, 'alternate-final-await'); assert.equal(observed.instance, 'omitted');
+    assert.equal(observed.case, 'final-await'); assert.equal(observed.phase, 'body-settled');
+    assert.equal(observed.routedStatus, 429, 'omitting ONLY the fence returns an ACTUAL routed 429');
+    assert.ok(['fulfilled', 'rejected'].includes(observed.bodyOutcome));
+    t.diagnostic(JSON.stringify({ instance: 'omitted', case: 'final-await', phase: 'body-settled', routedStatus: observed.routedStatus, bodyOutcome: observed.bodyOutcome }));
     await drain(); const s = await json('/state?case=final-await'), sql = await json('/sql?case=final-await');
     assert.equal(s.waitObserved, 1); assert.equal(s.interceptions, 1); assert.equal(s.activeWhenQueued, true); assert.equal(s.originalStatus, 429); assert.equal(s.aborted, true); assert.equal(s.provider, 1); assert.equal(s.alternates, 1);
     assert.equal(sql.usage.length, 1); assert.equal(sql.usage[0].status, 'client_error');
+    assert.equal(s.events, 1); assert.equal(s.ingested, true); assert.equal(sql.usage[0].id, s.eventId); assert.equal(sql.budgets.length, 2);
+    for (const budget of sql.budgets) {
+      assert.equal(budget.rows.length, 1); const row = budget.rows[0];
+      assert.equal(row.reservation_id, budget.expected); assert.equal(row.settled, 1); assert.equal(row.reserved_micros, 0);
+    }
   } catch (error) { primary = error; throw error; }
 });
