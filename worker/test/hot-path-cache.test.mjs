@@ -432,7 +432,7 @@ test('overflow creates no flush timer and retains coalesced counters and local f
   const timer = globalThis.setTimeout;
   t.mock.method(globalThis, 'setTimeout', (...args) => { if (args[1] === 431) timers++; return timer(...args); });
   const response = await f.request(); assert.equal(response.status, 200); await response.text(); await Promise.all(f.pending);
-  const state = { status: 'cooldown', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'rate_limit', cooldownUntil: new Date(Date.now() + 60_000).toISOString() };
+  const state = { status: 'cooldown', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'rate_limited', cooldownUntil: new Date(Date.now() + 60_000).toISOString(), grantRevision: null, windows: [] };
   queueGrantRuntime(f.env, keyA, state);
   assert.equal(timers, 0, 'denied schedule creates no timer');
   assert.equal(f.calls.includes('/grant-pools/record'), false); assert.equal(f.calls.includes('/grant-pools/feedback'), false);
@@ -447,7 +447,7 @@ test('overflow creates no flush timer and retains coalesced counters and local f
 test('synchronous timer failure retains unstarted feedback and an old schedule cannot clear its successor', async t => {
   const { queueGrantRuntime, flushSelections, setCoalesceWindowMs } = await import('../admission-cache.ts');
   const f = await fixture(); await f.put(keyA, grant());
-  const state = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null };
+  const state = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null, grantRevision: null, windows: [] };
   const timers = [], originalTimer = globalThis.setTimeout; let fail = true;
   setCoalesceWindowMs(431); t.after(() => setCoalesceWindowMs(0));
   t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
@@ -483,7 +483,7 @@ test('a settling flush cannot delete newer feedback retained while registration 
     }
     catch (error) { entered.reject(error); throw error; }
   } }; };
-  const old = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null };
+    const old = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null, grantRevision: null, windows: [] };
   const newer = { ...old, observedAt: new Date(Date.now() + 1).toISOString() };
   const mark = backgroundMark(); queueGrantRuntime(f.env, keyA, old);
   const arrivalFacade = pendingBackgroundWork(mark); assert.ok(arrivalFacade, 'scheduled flush must register a cohort');
@@ -501,7 +501,7 @@ test('cache-disabled feedback remains foreground even when background admission 
   const { queueGrantRuntime } = await import('../admission-cache.ts');
   const f = await fixture({ CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0' }); await f.put(keyA, grant()); f.reset();
   const held = heldRegistrations(t);
-  const actual = queueGrantRuntime(f.env, keyA, { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null });
+  const actual = queueGrantRuntime(f.env, keyA, { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null, grantRevision: null, windows: [] });
   assert.ok(actual); await actual;
   assert.equal(f.calls.filter(path => path === '/grant-pools/feedback').length, 1);
   await held.release();
