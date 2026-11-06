@@ -27,14 +27,14 @@ export class PolicyBindingIndexObject extends Owner {
 const CASES=__CASES__,states=new Map(),raw=globalThis.fetch.bind(globalThis);
 const names=['credentials','policies','users','bindings'],paths=['/credentials/list','/policies/list','/users/list','/list'];
 const view=a=>({id:a.id,scope:a.scope,mode:a.mode,lists:a.lists,rereads:a.rereads,mutations:a.mutations,failed:a.failed,secondary:a.secondary,
- committed:a.committed,outward:a.outward,status:a.status,background:a.background,backgroundFailed:a.backgroundFailed});
+ committed:a.committed,outward:a.outward,status:a.status,background:a.background,backgroundFailed:a.backgroundFailed,ownerFailure:a.ownerFailure});
 const gate=async(a,label)=>{const r=await raw('https://cold-import.example/gate/'+a.id+'/'+label);if(!r.ok)throw Error('fixture gate failed');await r.text();};
 function fail(a,kind){a.failed=true;if(kind==='safe')throw new HttpError(409,'fixture_safe','safe fixture denial');
  if(kind==='undefined')throw undefined;throw Error('PRIVATE_IMPORT_SENTINEL');}
 async function setup(env,id){
  if(states.has(id))return states.get(id);
  const definition=CASES[id];if(!definition)throw Error('unknown case');
- const a={id,...definition,lists:[0,0,0,0],rereads:[0,0,0,0],mutations:0,failed:false,secondary:false,committed:false,outward:false,status:null,background:0,backgroundFailed:false};
+ const a={id,...definition,lists:[0,0,0,0],rereads:[0,0,0,0],mutations:0,failed:false,secondary:false,committed:false,outward:false,status:null,background:0,backgroundFailed:false,ownerFailure:null};
  const stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings-'+id));a.stub=stub;
  const email='owner@example.com',policy={enabled:true,generation:'v1',providers:['openai'],tenantId:'fixture',monthlyBudgetMicros:null,requestCostMicros:1000,
   retainRequestContent:false,grantRouting:{strategy:'priority',eligibleGrants:{}}};
@@ -62,7 +62,12 @@ async function setup(env,id){
     if(index===1&&['safe','undefined','generic'].includes(a.mode)){a.secondary=true;throw Error('SECOND_IMPORT_SENTINEL');}
    }else if(index===2&&a.mode==='final-reread')fail(a,'generic');
   }
-  const response=await stub.fetch(input,init);
+  let response;
+  try{response=await stub.fetch(input,init);}catch(error){
+   a.ownerFailure??={stage:index===-1?'initializer-or-control':names[index],kind:['Error','TypeError'].includes(error?.name)?error.name:'other',
+    requestContext:typeof error?.message==='string'&&/different request|I\/O.*context/i.test(error.message)};
+   throw error;
+  }
   if(path==='/users/initialize-all'&&a.mode==='initializer-ack'){
    a.committed=true;await response.body.cancel();fail(a,'generic');
   }
@@ -144,12 +149,14 @@ test('public admin and personal credential mutations join real cold imports befo
       const early = started.then(() => { throw Error('public credential request completed before held imports'); }, error => { throw error; });
       early.catch(() => {});
       const wait = async predicate => {
+        let last;
         for (let n = 0; n < 1000; n++) {
           const s = await Promise.race([early, json('/state?case=' + id)]);
+          last = s;
           if (predicate(s)) return s;
           await Promise.race([early, delay(10)]);
         }
-        assert.fail('bounded cold import arrival expired: ' + id);
+        assert.fail('bounded cold import arrival expired: ' + JSON.stringify(last));
       };
       if (mode.startsWith('invalid-')) {
         const response = await started; assert.equal(response.status, mode === 'invalid-body' ? 400 : 401);
