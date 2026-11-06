@@ -4,6 +4,8 @@
 
 - Add explicit current-CN MiniMax video attestation for `api.minimax.cn`, limited to the original two text-to-video models and original-job files. Legacy CN and global bindings keep their destinations; re-attestation invalidates old jobs. Public declarations, native-client activation and live credential portability remain separate.
 
+- Add a local-only repository repair benchmark with pinned model routing, bounded actions, explicit context failures and coder-to-general handoff comparisons.
+
 - Add explicit global six-model MiniMax video authority for the four frozen required-first-frame models, with pre-secret model membership, exact discovery identity and original-job controls after image retirement. Existing V1/V2 permissions and capacity profiles remain unchanged; declarations and native-client activation stay separate.
 
 - Add explicitly re-attested global Hailuo first-frame input for the two qualified models, with incremental full-size inline decoding, content-bound idempotency, pre-secret input authority and joined upload/hash/response retirement under the existing operational reservation. Public activation and platform-native transport allocation qualification remain separate.

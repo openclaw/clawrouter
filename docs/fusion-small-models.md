@@ -202,3 +202,36 @@ two others that failed withheld cases. More samples and the tiny first stage
 did not improve correctness. Improve worker capability and test coverage before
 adding orchestration. A later output-limit handling fix does not affect these
 results: no candidate in this complete run hit the output limit.
+
+## Local repository repairs
+
+`scripts/fusion-local-repository.mjs` runs the existing repository action harness
+against the four development tasks in `validation-workloads.json`. It compares
+a general local model, a coding local model, and a coder-to-general handoff.
+Each arm gets at most eight actions, 1,536 output tokens per call, a 32,768-token
+context and three minutes. The handoff uses the existing early-submit or
+two-thirds-turn transfer rule. Task order rotates the three arms.
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-local-repository.mjs \
+  /path/to/transfer-qualification.json /path/to/fresh-results \
+  qwen3:4b-instruct-2507-q4_K_M qwen2.5-coder:3b-instruct-q4_K_M
+```
+
+Run from a clean committed checkout. Qualification must match each task digest,
+have a passing oracle and failing broken baseline, and identify cached immutable
+Docker images. The runner does not download models, images or dependencies.
+The local transport validates both model identities before execution and checks
+their digests again afterward. It never invokes a paid provider. Role labels
+inside the reused harness map explicitly to these local model pins.
+
+A conservative input-byte bound rejects oversized contexts before dispatch.
+Truncation, context limits and trial deadlines produce unsuccessful trial rows;
+transport, identity, usage and infrastructure failures stop the campaign. There
+is no fallback after a safety notice. Reports distinguish attempted actions from
+dispatched requests, retain tokens and finite action outcomes, and omit prompts,
+completions and patches. The same isolated acceptance grader checks every arm.
+
+These are previously used development tasks, not a new holdout. Equal turn caps
+do not imply equal token, latency or compute costs. Use the measured totals and
+error categories to decide whether a larger fresh-task comparison is warranted.
