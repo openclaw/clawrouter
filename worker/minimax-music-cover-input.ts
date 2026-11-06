@@ -1,8 +1,9 @@
 import { BodyLease } from "./body-budget.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
+import { qualifyMusicCoverWave, type MusicCoverWaveFormat } from "./minimax-music-cover-audio.ts";
 
-// Inactive, application-owned intake/hash foundation. This is neither audio
-// qualification nor an authority, provider request or transport implementation.
+// Private, application-owned intake/hash foundation. The original entry is
+// opaque; the additive WAVE entry attests only its local partial format profile.
 const KiB = 1024, MiB = 1024 * KiB;
 export const musicCoverInputLimits = Object.freeze({
   decoded: 50_000_000, wire: 66_732_204, nonAudio: 64 * KiB,
@@ -36,6 +37,7 @@ export interface MusicCoverInputMetadata {
 // No bytes, writer, caller reconstructible permission or dispatch API escapes.
 export interface SealedMusicCoverInput { readonly kind: "minimax-cover-input.v1" }
 const sealedOwners = new WeakMap<SealedMusicCoverInput, CoverInputOwner>();
+const waveOwners = new WeakMap<CoverInputOwner, { readonly format: MusicCoverWaveFormat; sha256: string }>();
 
 // Only the control owner consumes this bridge. No bytes or allocatable lease
 // escape; its root is installed synchronously before any control work exists.
@@ -249,8 +251,10 @@ class CoverInputOwner {
   private rejectRetired!: (error: Error) => void;
   readonly retired = new Promise<void>((resolve, reject) => { this.resolveRetired = resolve; this.rejectRetired = reject; });
   private readonly abort = () => this.stop("cancelled");
+  private readonly wave: boolean;
 
-  constructor(source: MusicCoverInputSource) {
+  constructor(source: MusicCoverInputSource, wave = false) {
+    this.wave = wave;
     void this.result.catch(() => undefined); void this.retired.catch(() => undefined);
     if (!this.lease.grow(48 * MiB)) { this.fail("capacity"); this.phase = "retired"; this.resolveRetired(); return; }
     this.signal = source.signal;
@@ -342,6 +346,9 @@ class CoverInputOwner {
       this.bytes = value.bytes;
       const plan = value.plan; value = undefined;
       this.check();
+      // The writer/parser and ORIGINAL reader have retired. Borrow the same
+      // populated bytes; no format copy or caller-settable attestation exists.
+      if (this.wave) waveOwners.set(this, { format: qualifyMusicCoverWave(this.bytes), sha256: "" });
       this.phase = "hash"; this.digestStarted = true;
       // WebCrypto owns its snapshot. Pass the populated original view directly;
       // no slice, encoded archive, manual crypto or abort-race copy.
@@ -351,6 +358,8 @@ class CoverInputOwner {
       if (hash.byteLength !== 32 || hash.buffer.byteLength !== 32) throw failure("hash");
       let sha256 = ""; for (let i = 0; i < hash.length; i++) sha256 += hash[i].toString(16).padStart(2, "0");
       this.metadata = Object.freeze({ ...plan, bytes: this.bytes.length, sha256 });
+      const wave = waveOwners.get(this);
+      if (wave) { wave.sha256 = sha256; Object.freeze(wave); }
       const sealed: SealedMusicCoverInput = Object.freeze({ kind: "minimax-cover-input.v1" });
       sealedOwners.set(sealed, this);
       this.phase = "sealed"; this.settled = true; this.resolveResult(sealed);
@@ -370,6 +379,7 @@ class CoverInputOwner {
     try { this.reader?.releaseLock(); } catch { this.cleanupFailed = true; }
     this.reader = undefined; this.pending = undefined; this.digest = undefined;
     this.bytes = undefined; this.metadata = undefined;
+    waveOwners.delete(this);
     if (this.upload) uploadOwners.delete(this.upload);
     this.upload = undefined;
     if (this.timer !== undefined) clearTimeout(this.timer);
@@ -438,12 +448,27 @@ class CoverInputOwner {
   snapshot() { return Object.freeze({ phase: this.phase, reads: this.reads, wire: this.wire, nonAudio: this.nonAudio,
     maxBacking: this.maxBacking, maxFeed: this.maxFeed, digestStarted: this.digestStarted,
     claimed: this.claimed, cleanupFailed: this.cleanupFailed }); }
+  qualifiedWave(): boolean {
+    const wave = waveOwners.get(this);
+    return !!wave && !!this.metadata && wave.sha256 === this.metadata.sha256 && wave.format.bytes === this.metadata.bytes
+      && !this.stopped && !this.digest && Date.now() < this.deadlineAt && (this.phase === "sealed" || this.phase === "control");
+  }
 }
 
 export function beginMiniMaxMusicCoverInput(source: MusicCoverInputSource): MusicCoverInputOperation {
   const owner = new CoverInputOwner(source);
   return Object.freeze({ result: owner.result, retired: owner.retired,
     discard: () => owner.discard(), snapshot: () => owner.snapshot() });
+}
+// Additive: the original opaque entry retains its original acceptance contract.
+export function beginMiniMaxMusicCoverWaveInput(source: MusicCoverInputSource): MusicCoverInputOperation {
+  const owner = new CoverInputOwner(source, true);
+  return Object.freeze({ result: owner.result, retired: owner.retired,
+    discard: () => owner.discard(), snapshot: () => owner.snapshot() });
+}
+export function isMiniMaxMusicCoverWave(value: SealedMusicCoverInput | MusicCoverControlPhase): boolean {
+  const owner = sealedOwners.get(value as SealedMusicCoverInput) ?? phaseOwners.get(value as MusicCoverControlPhase);
+  return owner?.qualifiedWave() === true;
 }
 export function claimMiniMaxMusicCoverInput(input: SealedMusicCoverInput): MusicCoverInputMetadata {
   const owner = sealedOwners.get(input); if (!owner) throw failure("used");

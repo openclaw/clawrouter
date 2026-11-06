@@ -26,7 +26,22 @@ interface Ticket {
   response?: Response;
   cancellation?: Promise<void>;
   released: boolean;
+  succeeded?: boolean;
 }
+export interface MusicCoverFinalRead { readonly kind: "music-cover-final-read.v1" }
+export interface MusicCoverPreparedPost { readonly kind: "music-cover-prepared-post.v1" }
+interface PreparedPost {
+  owner: MiniMaxMusicCoverControl;
+  cap: MusicCoverUploadCapability;
+  execute: () => void;
+  result: Promise<unknown>;
+  physical: Promise<void>;
+  ticket?: Ticket;
+  discard: () => Promise<void>;
+  retired: Promise<void>;
+  used: boolean;
+}
+const preparedPosts = new WeakMap<MusicCoverPreparedPost, PreparedPost>();
 type Snapshot = Readonly<{ ordinary: number; mandatory: number; ordinaryActive: number; mandatoryActive: number;
   closed: boolean; cleanupFailed: boolean; ownershipBlocked: boolean; postAttempts: number }>;
 
@@ -50,13 +65,18 @@ export class MiniMaxMusicCoverControl {
   private cleanupFailed = false;
   private ownershipBlocked = false;
   private closing?: Promise<void>;
+  private ordinarySealed = false;
+  private finalRead?: { token: MusicCoverFinalRead; index: number };
+  private prepared?: MusicCoverPreparedPost;
+  private decision?: () => void;
   private readonly abort = () => {
     for (const ticket of this.tickets) if (!ticket.mandatory && ticket.input)
       void ticket.input.retire("cancel", "cover control stopped").catch(() => { this.cleanupFailed = true; });
   };
-  constructor(token: symbol, phase: MusicCoverControlPhase) {
+  constructor(token: symbol, phase: MusicCoverControlPhase, decision?: () => void) {
     if (token !== ownerToken) musicCoverUnavailable();
     this.controlPhase = phase;
+    this.decision = decision;
     this.activeOperation = new HttpOperation(phase.signal, Math.max(0, phase.deadlineAt - Date.now()));
     this.operation.signal.addEventListener("abort", this.abort, { once: true });
     genuine.add(this);
@@ -67,7 +87,7 @@ export class MiniMaxMusicCoverControl {
     if (this.ordinary > this.ordinaryLimit) musicCoverUnavailable();
   }
   private ticket(mandatory: boolean, post = false): Ticket {
-    if (this.closed || this.ownershipBlocked || post && (mandatory || this.postAttempts)
+    if (this.closed || this.ownershipBlocked || !mandatory && this.ordinarySealed || post && (mandatory || this.postAttempts)
       || (mandatory ? this.mandatory >= 10 : this.ordinary >= this.ordinaryLimit + (post ? 1 : this.postAttempts))) musicCoverUnavailable();
     if (post) this.postAttempts++;
     if (mandatory) this.mandatory++; else this.ordinary++;
@@ -130,6 +150,7 @@ export class MiniMaxMusicCoverControl {
         const value = await readSearchJson(ticket.response, active, "control", input => { ticket.input = input; });
         if (!ticket.response.ok) musicCoverUnavailable(ticket.response.status);
         await ticket.input!.retired;
+        ticket.succeeded = true;
         resolve(value as T);
       } catch (error) {
         const status = error instanceof HttpError && error.status >= 400 && error.status <= 599 ? error.status : 503;
@@ -187,10 +208,65 @@ export class MiniMaxMusicCoverControl {
     })();
     return result;
   }
+  // Preparation owns an UNPULLED source before the final authority wait. The
+  // capsule is custody only; a separate exact-ticket handoff must authorize it.
+  preparePost<T>(cap: MusicCoverUploadCapability, start: (fail: () => void) => Promise<{ value: T; retired: Promise<void> }>,
+    discard: () => Promise<void>, retired: Promise<void>): MusicCoverPreparedPost {
+    if (this.prepared || this.ordinarySealed || !isMiniMaxMusicCoverUpload(cap, this.phase)) musicCoverUnavailable(403);
+    const capsule: MusicCoverPreparedPost = Object.freeze({ kind: "music-cover-prepared-post.v1" });
+    let resolve!: (value: unknown) => void, reject!: (error: Error) => void, retire!: () => void;
+    const result = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; });
+    const physical = new Promise<void>(yes => { retire = yes; });
+    void result.catch(() => undefined);
+    const prepared: PreparedPost = { owner: this, cap, result, physical, discard, retired, used: false, execute: () => {
+      void (async () => {
+        try {
+          const output = await start(() => reject(new Error("music cover transport failed")));
+          resolve(output.value); await output.retired;
+        } catch (error) {
+          if ((error as { cleanupFailed?: unknown })?.cleanupFailed === true) this.cleanupFailed = true;
+          reject(new Error("music cover transport failed"));
+        } finally { this.release(prepared.ticket!); retire(); }
+      })();
+    } };
+    preparedPosts.set(capsule, prepared);
+    this.prepared = capsule; void retired.catch(() => undefined); return capsule;
+  }
+  markFinalOwnerRead(): MusicCoverFinalRead {
+    if (this.finalRead || this.ordinarySealed || this.active[0] || this.queues[0].length) musicCoverUnavailable();
+    const token: MusicCoverFinalRead = Object.freeze({ kind: "music-cover-final-read.v1" });
+    this.finalRead = { token, index: this.tickets.length }; return token;
+  }
+  tryPostHandoff<T>(capsule: MusicCoverPreparedPost, final: MusicCoverFinalRead, validate: () => void, invoked: () => void): Promise<T> {
+    const prepared = preparedPosts.get(capsule), fence = this.finalRead;
+    const last = fence && this.tickets[fence.index];
+    if (!prepared || prepared.owner !== this || prepared.used || this.prepared !== capsule
+      || !fence || fence.token !== final || this.tickets.length !== fence.index + 1 || !last?.succeeded || !last.released
+      || last.mandatory || this.active[0] || this.queues[0].length || this.operation.signal.aborted
+      || Date.now() >= this.phase.deadlineAt || !isMiniMaxMusicCoverUpload(prepared.cap, this.phase)) musicCoverUnavailable(403);
+    validate(); // Synchronous original owner/format/coverage checks only.
+    const ticket = this.ticket(false, true);
+    this.active[0] = true; prepared.used = true; prepared.ticket = ticket;
+    ticket.work = prepared.physical;
+    // Registration and terminal admission fencing precede invocation. There is
+    // no queued slot, preparation or await after the exact owner-read receipt.
+    invoked(); this.sealOrdinary();
+    prepared.execute();
+    return prepared.result as Promise<T>;
+  }
+  sealOrdinary(): void {
+    if (this.ordinarySealed) return;
+    this.ordinarySealed = true;
+    const prepared = this.prepared && preparedPosts.get(this.prepared);
+    if (prepared && !prepared.used) void prepared.discard().catch(() => { this.cleanupFailed = true; });
+    this.decision?.(); this.decision = undefined;
+  }
   async retireOrdinary(): Promise<void> {
-    // The bounded snapshot is at most sixteen fixed ticket references. No new
+    // The bounded snapshot is at most seventeen fixed ordinary references. No new
     // operation may be introduced by finalization; late ACKs keep their IDs.
     for (const ticket of this.tickets) if (!ticket.mandatory) await ticket.work;
+    const prepared = this.prepared && preparedPosts.get(this.prepared);
+    if (prepared) { try { await prepared.retired; } catch { this.cleanupFailed = true; } }
     if (this.ownershipBlocked) await new Promise<void>(() => undefined);
   }
   cancel(): void { this.activeOperation?.cancel("cover control stopped"); }
@@ -218,6 +294,8 @@ export class MiniMaxMusicCoverControl {
         ticket.cancellation = undefined; ticket.work = undefined;
       }
       retireMusicCoverVerification(this); genuine.delete(this);
+      if (this.prepared) preparedPosts.delete(this.prepared);
+      this.prepared = undefined; this.finalRead = undefined; this.decision = undefined;
       this.controlPhase = undefined; this.activeOperation = undefined;
       if (this.cleanupFailed) musicCoverUnavailable();
     })();
@@ -226,6 +304,39 @@ export class MiniMaxMusicCoverControl {
   snapshot(): Snapshot { return Object.freeze({ ordinary: this.ordinary, mandatory: this.mandatory,
     ordinaryActive: Number(this.active[0]), mandatoryActive: Number(this.active[1]), closed: this.closed,
     cleanupFailed: this.cleanupFailed, ownershipBlocked: this.ownershipBlocked, postAttempts: this.postAttempts }); }
+}
+
+// One registered finalizer waits for the terminal dispatch decision, never an
+// initially empty ticket list. Public delivery does not join either retirement.
+export function runMiniMaxMusicCoverComposition<T>(input: SealedMusicCoverInput,
+  work: (owner: MiniMaxMusicCoverControl, installFinalizer: (finish: () => Promise<void>) => void) => Promise<T>) {
+  let resolve!: () => void, reject!: (error: Error) => void, decide!: () => void;
+  let owner: MiniMaxMusicCoverControl | undefined, finalizer: (() => Promise<void>) | undefined;
+  const retired = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void retired.catch(() => undefined);
+  const decision = new Promise<void>(yes => { decide = yes; });
+  const phase = claimMiniMaxMusicCoverControl(input, retired, () => owner?.cancel());
+  owner = new MiniMaxMusicCoverControl(ownerToken, phase, decide);
+  const current = owner;
+  const finalization = decision.then(async () => {
+    await current.retireOrdinary();
+    try { await finalizer?.(); } finally { finalizer = undefined; }
+  });
+  void finalization.catch(() => undefined);
+  const physical = Promise.resolve().then(() => work(current, finish => {
+    if (finalizer || current.snapshot().postAttempts) musicCoverUnavailable();
+    finalizer = finish;
+  }));
+  const result = current.operation.wait(physical);
+  void result.catch(() => undefined);
+  const seal = () => current.sealOrdinary();
+  void physical.then(seal, seal).then(async () => {
+    let failed = false;
+    try { await finalization; } catch { failed = true; }
+    try { await current.finish(); } catch { failed = true; }
+    if (failed) reject(new Error("cover composition cleanup failed")); else resolve();
+  });
+  return Object.freeze({ result, retired, snapshot: () => current.snapshot() });
 }
 
 export function runMiniMaxMusicCoverControls<T>(input: SealedMusicCoverInput, work: (owner: MiniMaxMusicCoverControl) => Promise<T>) {
