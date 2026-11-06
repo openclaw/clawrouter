@@ -38,7 +38,7 @@ test('adapter sends the same action schema through loopback with fixed limits', 
 test('grounded sampling is explicit and does not change legacy requests', async () => {
   let options;
   await localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
-    signal: new AbortController().signal, seed: 4, profile: 'grounded',
+    signal: new AbortController().signal, seed: 4, profile: 'checked',
     fetcher: async (_url, request) => { options = JSON.parse(request.body).options; return response(pins[0].model); } });
   for (const [key, value] of Object.entries(groundedSampling)) assert.equal(options[key], value);
   assert.equal(options.seed, 4); assert.equal(options.num_predict, 1536);
@@ -133,5 +133,20 @@ test('context-limited trials are recorded without pretending that a request was 
     assert.equal(dispatched, 0); assert.equal(result.complete, true);
     assert.ok(result.records.every(row => row.outcome === 'context_limit' && row.calls === 0 && !row.usageIncomplete));
     assert.ok(result.calls.every(row => !row.dispatched && row.inputTokens === 0));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('checked scoring requires both the public gate and hidden acceptance', async () => {
+  const { root, options } = await fixture(); let calls = 0;
+  try {
+    const result = await runLocalRepository({ ...options, profile: 'checked',
+      agent: async (_task, _image, _strategy, _id, config) => {
+        assert.equal(config.requireReproducer, true);
+        return { files: [], publicPassed: true, reproducerQualified: true,
+          probePassed: calls++ === 0, outcome: 'verified' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.deepEqual(result.records.map(row => row.score), [1, 0, 0]);
+    assert.ok(result.records.every(row => row.graderPassed));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

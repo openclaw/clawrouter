@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an experimental local Fusion reproduction gate with isolated probes, frozen checks, and explicit acceptance accounting.
+
 - Add an opt-in grounded local Fusion repair scaffold with bounded current-source views and observed edit anchors, preserving the original benchmark profile.
 
 - Add internal product-offer compatibility resolution using the existing grant, model, endpoint, and lifecycle checks without switching routing or discovery.

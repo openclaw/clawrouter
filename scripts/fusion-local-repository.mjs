@@ -38,7 +38,7 @@ export function validateLocalQualification(tasks, qualification) {
 }
 
 export async function localActionRequest({ endpoint, model, pin, body, signal, seed, profile = 'legacy', fetcher = fetch, onDispatch = async () => {} }) {
-  if (!['legacy', 'grounded'].includes(profile)) throw new Error('invalid_local_profile');
+  if (!['legacy', 'grounded', 'checked'].includes(profile)) throw new Error('invalid_local_profile');
   const base = localEndpoint(endpoint);
   if (model !== pin.model || !Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1
     || body.max_tokens > localRepositorySettings.outputTokens || !Array.isArray(body.messages)
@@ -52,11 +52,11 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
   await onDispatch();
   let response;
   try { response = await fetcher(base + '/api/chat', { method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(profile === 'grounded' ? 120000 : 60000)]),
+    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(profile !== 'legacy' ? 120000 : 60000)]),
     body: JSON.stringify({ model, stream: false, keep_alive: '5m', ...(pin.thinking ? { think: false } : {}),
       format: body.response_format.json_schema.schema, messages: body.messages,
       options: { num_predict: body.max_tokens, num_ctx: localRepositorySettings.contextTokens,
-        ...(profile === 'grounded' ? groundedSampling : { temperature: localRepositorySettings.temperature }), seed } }) }); }
+        ...(profile !== 'legacy' ? groundedSampling : { temperature: localRepositorySettings.temperature }), seed } }) }); }
   catch (error) { if (signal.aborted) throw new Error('provider_local_deadline'); throw error; }
   if (!response.ok) throw new Error('local_transport_failed');
   const value = await response.json(), content = value.message?.content;
@@ -77,8 +77,8 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
     if (result.stdout.toString().trim() !== image) throw new Error('local_image_missing');
   }, preflight = localGenerator }) {
   localEndpoint(endpoint);
-  if (!['legacy', 'grounded'].includes(profile)) throw new Error('invalid_local_profile');
-  const execute = agent ?? (profile === 'grounded' ? runGroundedAgent : runAgent);
+  if (!['legacy', 'grounded', 'checked'].includes(profile)) throw new Error('invalid_local_profile');
+  const execute = agent ?? (profile !== 'legacy' ? runGroundedAgent : runAgent);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   const tasks = await loadTasks(taskManifest ?? resolve(repo, 'benchmarks/fusion/validation-workloads.json'));
   const rawQualification = await readFile(qualificationPath), qualification = JSON.parse(rawQualification);
@@ -90,12 +90,13 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
   const state = { version: 1, kind: 'local-repository-development', sourceSha, profile,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts,
     modelPins: local.pins, settings: { ...localRepositorySettings,
-      ...(profile === 'grounded' ? groundedSampling : {}), requestTimeoutMs: profile === 'grounded' ? 120000 : 60000 }, apiSpendMicros: 0,
+      ...(profile !== 'legacy' ? groundedSampling : {}), requestTimeoutMs: profile !== 'legacy' ? 120000 : 60000 }, apiSpendMicros: 0,
     maxCalls: tasks.length * strategies.length * localRepositorySettings.maxTurns,
     complete: false, calls: [], records: [],
     limitations: ['Previously used development repository tasks; not an unseen holdout.',
       'Same action harness and turn/context limits across arms; token and compute cost can differ.',
-      'The handoff arm uses the existing two-thirds-turn or early-submit transfer rule.',
+      profile === 'checked' ? 'Handoff switches from reproduction to repair after a failing assertion; at most three reproduction actions.'
+        : 'The handoff arm uses the existing two-thirds-turn or early-submit transfer rule.',
       'Zero paid API spend excludes local compute, power, downloads and test execution.'] };
   const checkpoint = async () => {
     await writeFile(resolve(out, 'local-repository.json.tmp'), JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
@@ -133,7 +134,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
       let result, graded, outcome;
       try {
         result = await execute(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
-          { ...localRepositorySettings, deadlineMs: Math.min(localRepositorySettings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
+          { ...localRepositorySettings, requireReproducer: profile === 'checked', deadlineMs: Math.min(localRepositorySettings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
         graded = await grade(task, receipt.image, result.files, repo);
         if (graded.valid !== true || typeof graded.passed !== 'boolean') throw new Error('invalid_local_grade');
         outcome = result.outcome;
@@ -141,14 +142,18 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         if (!['provider_context_limit', 'provider_truncated', 'provider_local_deadline'].includes(error.message)) throw error;
         outcome = { provider_context_limit: 'context_limit', provider_truncated: 'truncated', provider_local_deadline: 'deadline' }[error.message];
       }
-      const passed = graded?.passed === true && graded.tests === receipt.oracleTests && graded.skipped === receipt.oracleSkipped;
+      const passed = graded?.passed === true && graded.tests === receipt.oracleTests && graded.skipped === receipt.oracleSkipped
+        && (profile !== 'checked' || (result?.reproducerQualified === true && result.probePassed === true && result.publicPassed === true));
       state.records.push({ caseId: task.id, strategy, score: passed ? 1 : 0, outcome,
         calls: trialCalls.filter(row => row.dispatched).length, attempts: trialCalls.length,
         inputTokens: trialCalls.reduce((sum, row) => sum + (row.inputTokens ?? 0), 0),
         outputTokens: trialCalls.reduce((sum, row) => sum + (row.outputTokens ?? 0), 0),
         usageIncomplete: trialCalls.some(row => row.inputTokens === null),
         patchDigest: result?.patchDigest ?? null, actions: result?.actions ?? [], invalidActions: result?.invalidActions ?? 0,
-        handoffUsed: result?.handoffUsed ?? false, graderDigest: graded?.digest ?? null,
+        handoffUsed: result?.handoffUsed ?? false,
+        ...(profile === 'checked' ? { reproducerQualified: result?.reproducerQualified ?? false, probePassed: result?.probePassed ?? false,
+          graderPassed: graded?.passed ?? false } : {}),
+        graderDigest: graded?.digest ?? null,
         graderTests: graded?.tests ?? null, graderSkipped: graded?.skipped ?? null, elapsedMs: Math.round(performance.now() - started) });
       await checkpoint(); console.log(JSON.stringify({ caseId: task.id, strategy, score: passed ? 1 : 0,
         calls: trialCalls.filter(row => row.dispatched).length, attempts: trialCalls.length }));
