@@ -95,7 +95,7 @@ import {planBudgetReservation} from './worker/accounting.ts';
 import {setHotCacheClock} from './worker/hot-cache.ts';
 import {readSoftStatus} from './worker/soft-budget-response.ts';
 import {admitSoftStatusRequest} from './worker/soft-budget-json.ts';
-const nativeFetch=globalThis.fetch.bind(globalThis),rows=new Map();let initialized,cacheClock,background=0;
+const nativeFetch=globalThis.fetch.bind(globalThis),rows=new Map();let initialized,cacheClock,background=0,dispatchPhase='none';
 const policy=name=>({enabled:true,generation:'g1',providers:['anthropic'],models:['anthropic/claude-sonnet-5'],tenantId:'fixture',budgetScope:'policy',budgetMode:'soft',
  monthlyBudgetMicros:name==='zero'?0:100000,dailyBudgetMicros:100000,weeklyBudgetMicros:100000,requestCostMicros:1,retainRequestContent:false,
  grantRouting:{eligibleGrants:{anthropic:['soft']},environmentFallback:false,failover:false}});
@@ -104,7 +104,8 @@ const plans=name=>planBudgetReservation({policyId:name,policy:policy(name)},'llm
 const barrier=(id,phase)=>nativeFetch('https://soft-gate.example/barrier/'+id+'/'+phase).then(async r=>{if(!r.ok)throw Error('barrier failure');await r.text();});
 globalThis.fetch=(input,init)=>{
  if(String(input)==='https://api.anthropic.com/v1/messages'){
-  const id=JSON.parse(init.body).metadata.user_id,row=rows.get(id);row.provider++;row.providerBeforeStatus=row.starts===0;
+  dispatchPhase='body-parse';const id=JSON.parse(init.body).metadata.user_id;dispatchPhase='row-lookup';
+  const row=rows.get(id);row.provider++;row.providerBeforeStatus=row.starts===0;dispatchPhase='invoke';
  }
  return nativeFetch(input,init);
 };
@@ -127,7 +128,7 @@ function instrument(response,row,mode){
  };
  return response;
 }
-const snapshot=()=>({background,rows:Object.fromEntries(rows)});
+const snapshot=()=>({background,dispatchPhase,rows:Object.fromEntries(rows)});
 export default {async fetch(request,bindings,context){
  const env={...bindings},url=new URL(request.url),name=url.searchParams.get('case')??'healthy',id=url.searchParams.get('id')??name;
  cacheClock??=Date.now();setHotCacheClock(()=>cacheClock); // Cache clock only; auth/HTTP clocks keep advancing.
@@ -290,7 +291,10 @@ test('actual public soft status keeps four owners, cache classification and post
       return fetch(ORIGIN+'/provider/'+id,{method:'POST',body:JSON.stringify(body),headers:{'content-type':'application/json'},redirect:'manual'});
     }};`.replaceAll('ORIGIN', JSON.stringify(io.origin));
     runtime = await startWorkerdFixture(directory, script, upstream, { hotCache: true, preventEviction: true });
-    const healthy = await send('healthy').work; assert.equal(healthy.status, 200); await drain('healthy');
+    const healthy = await send('healthy').work;
+    if(healthy.status!==200){let code='non-json';try{const value=JSON.parse(healthy.body);if(/^[a-z_]{1,64}$/.test(value?.error?.code??''))code=value.error.code;}catch{}
+      const s=await state();t.diagnostic(JSON.stringify({phase:'healthy-public',status:healthy.status,code,dispatchPhase:s.dispatchPhase,row:s.rows.healthy}));}
+    assert.equal(healthy.status, 200); await drain('healthy');
     let r = (await state()).rows.healthy;
     assert.equal(r.providerBeforeStatus, true); assert.equal(r.provider, 1); assert.equal(r.starts, 4); assert.equal(r.reserves, 0); assert.equal(r.dispatches, 0);
     assert.equal(r.charges, 4); assert.equal(r.checkRegistered, 1); assert.equal(r.checkSettled, true); assert.equal(r.byob, true); assert.equal(r.unlocked, true);
