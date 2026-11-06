@@ -12,26 +12,27 @@ test('source windows are bounded and explicit inspection reaches later lines', (
   assert.ok(views[0].endLine - views[0].startLine < 160);
 });
 
-test('edits must match an observed unique source anchor', () => {
+test('numbered edits require current observed lines and reject stale views', () => {
   const task = { editPaths: ['worker/example.ts'] };
   const files = [{ path: task.editPaths[0], content: 'const x = false;\nconst y = false;' }];
-  const views = [{ path: task.editPaths[0], content: 'const x = false;' }];
-  const action = { path: task.editPaths[0], search: 'const x = false;', replace: 'const x = true;' };
+  const views = [{ path: task.editPaths[0], content: 'const x = false;', startLine: 1, endLine: 1 }];
+  const action = { path: task.editPaths[0], line: 1, endLine: 1, replace: 'const x = true;' };
   assert.match(groundedEdits(task, files, views, action)[0].content, /x = true/);
-  assert.throws(() => groundedEdits(task, files, views, { ...action, search: 'const y = false;' }), /unseen_edit/);
-  assert.throws(() => groundedEdits(task, files, views, { ...action, search: 'false' }), /search_must_match_once/);
+  assert.throws(() => groundedEdits(task, files, views, { ...action, line: 2, endLine: 2 }), /unseen_edit/);
+  assert.throws(() => groundedEdits(task, files, views, { ...action, replace: 'const x = false;' }), /unchanged_edit/);
+  assert.throws(() => groundedEdits(task, [{ ...files[0], content: 'const x = 2;\nconst y = false;' }], views, action), /unseen_edit/);
 });
 
 test('handoff sees actual edited source and never acceptance files', async () => {
   const task = { instruction: 'Set enabled to true.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'], hiddenTests: ['worker/test/hidden.test.mjs'] };
   let source = 'export const enabled = false;', closed = false, invocation = 0;
-  const action = (kind, extra = {}) => ({ action: kind, path: '', line: 0, search: '', replace: '', query: '', ...extra });
+  const action = (kind, extra = {}) => ({ action: kind, path: '', line: 0, endLine: 0, replace: '', query: '', ...extra });
   const result = await runGroundedAgent(task, 'unused', 'handoff', 'trial', { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000 },
     async (_id, model, body) => {
       assert.ok(!JSON.stringify(body).includes('hidden.test'));
       if (invocation === 0) { assert.equal(model, models.strong); assert.ok(JSON.stringify(body).includes('enabled = false')); }
       if (invocation === 2) { assert.equal(model, models.critic); assert.ok(JSON.stringify(body).includes('enabled = true')); }
-      const value = invocation++ === 0 ? action('edit', { path: task.editPaths[0], search: source, replace: 'export const enabled = true;' }) : action('finish');
+      const value = invocation++ === 0 ? action('edit', { path: task.editPaths[0], line: 1, endLine: 1, replace: 'export const enabled = true;' }) : action('finish');
       return { choices: [{ message: { content: JSON.stringify(value) }, finish_reason: 'stop' }] };
     }, undefined, {
       makeSandbox: async () => ({ close: async () => { closed = true; } }),
@@ -42,4 +43,19 @@ test('handoff sees actual edited source and never acceptance files', async () =>
   assert.equal(invocation, 3); assert.equal(result.handoffUsed, true); assert.equal(result.outcome, 'submitted');
   assert.equal(result.invalidActions, 0); assert.equal(result.files[0].content, 'export const enabled = true;');
   assert.equal(closed, true);
+});
+
+test('an expired action deadline still allows bounded final patch collection', async () => {
+  let calls = 0, finalTimeout;
+  const task = { instruction: 'Fix.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  const result = await runGroundedAgent(task, 'unused', 'strong', 'trial', { maxTurns: 2, outputTokens: 1536, deadlineMs: 1 },
+    async () => { throw new Error('must not call expired model'); }, undefined, {
+      makeSandbox: async () => ({ close: async () => {} }),
+      read: async (_box, paths, timeout) => {
+        if (calls++ === 0) await new Promise(resolve => setTimeout(resolve, 10));
+        else finalTimeout = timeout;
+        return paths.map(path => ({ path, content: 'export const value = 1;' }));
+      },
+    });
+  assert.equal(result.outcome, 'deadline'); assert.equal(finalTimeout, 10000);
 });

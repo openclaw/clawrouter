@@ -1,13 +1,13 @@
-import { hash, sandbox, readSource, writeFiles, check, probe } from './fusion-workloads.mjs';
-import { replaceEdits, toolErrorCode } from './fusion-agent-benchmark.mjs';
+import { hash, sandbox, readSource, writeFiles, check, probe, validateEdits } from './fusion-workloads.mjs';
+import { toolErrorCode } from './fusion-agent-benchmark.mjs';
 import { requireCompleteResponse } from './fusion-native-provider.mjs';
 import { models } from './fusion-benchmark-accounting.mjs';
 
 const schema = { type: 'object', additionalProperties: false,
-  required: ['action', 'path', 'line', 'search', 'replace', 'query'], properties: {
+  required: ['action', 'path', 'line', 'endLine', 'replace', 'query'], properties: {
     action: { type: 'string', enum: ['inspect', 'edit', 'probe', 'finish'] },
-    path: { type: 'string' }, line: { type: 'integer', minimum: 0 },
-    search: { type: 'string' }, replace: { type: 'string' }, query: { type: 'string' },
+    path: { type: 'string' }, line: { type: 'integer', minimum: 0 }, endLine: { type: 'integer', minimum: 0 },
+    replace: { type: 'string' }, query: { type: 'string' },
   } };
 const ignoredWords = new Set('with that this from when have every only into same does should must preserve existing request response model native current other field value'.split(' '));
 
@@ -40,16 +40,25 @@ export function sourceWindows(files, instruction, selection = null, maxBytes = 1
 }
 
 export function groundedEdits(task, files, views, action) {
-  if (typeof action.search !== 'string' || !action.search || typeof action.replace !== 'string'
-    || Buffer.byteLength(action.replace) > 8000
-    || !views.some(view => view.path === action.path && view.content.includes(action.search))) throw new Error('unseen_edit');
-  return replaceEdits(task, files, [{ path: action.path, search: action.search, replace: action.replace }]);
+  if (!Number.isSafeInteger(action.line) || !Number.isSafeInteger(action.endLine) || action.line < 1
+    || action.endLine < action.line || typeof action.replace !== 'string' || Buffer.byteLength(action.replace) > 8000
+    || !views.some(view => view.path === action.path && action.line >= view.startLine && action.endLine <= view.endLine)) throw new Error('unseen_edit');
+  const file = files.find(file => file.path === action.path);
+  if (!file || !task.editPaths.includes(action.path)) throw new Error('unseen_edit');
+  const lines = file.content.split('\n');
+  const view = views.find(view => view.path === action.path && action.line >= view.startLine && action.endLine <= view.endLine);
+  const search = lines.slice(action.line - 1, action.endLine).join('\n');
+  const observed = view.content.split('\n').slice(action.line - view.startLine, action.endLine - view.startLine + 1).join('\n');
+  if (observed !== search) throw new Error('unseen_edit');
+  if (search === action.replace) throw new Error('unchanged_edit');
+  const content = [...lines.slice(0, action.line - 1), action.replace, ...lines.slice(action.endLine)].join('\n');
+  return validateEdits(task, files.map(row => row.path === action.path ? { path: row.path, content } : row));
 }
 
 const instructions = `Repair the reported repository bug. Current source excerpts are supplied on every turn. Make the smallest correct change; preserve unrelated behavior.
-Return one JSON action. edit: copy an EXACT short unique substring from the supplied source into search, and its corrected text into replace; path must be an editable file. Do not invent anchors or rewrite entire functions unnecessarily.
+Return one JSON action. edit: choose the inclusive line and endLine from the numbered source, and put ONLY their corrected replacement text into replace; path must be an editable file. Replace as few lines as possible. Do not include line-number prefixes in replacement text or rewrite entire functions unnecessarily.
 inspect: choose a listed path and either a line number or literal query to see another source window. probe: query contains a Node ES module that imports the source and asserts the reported behavior; it executes in an isolated repository. finish: submit the current repair.
-Set unused strings to empty and unused line to 0. The source is already read for you. Do not emit notes, explanations or copies of the full file.
+Set unused strings to empty and unused line/endLine to 0. The source is already read for you. Do not emit notes, explanations or copies of the full file.
 Visible tests pass even on the broken baseline: their success does not prove the issue fixed. Use an executable probe of the reported invariant where possible. Final acceptance tests are unavailable.`;
 
 export async function runGroundedAgent(task, image, strategy, trialId, config, invoke, _engine,
@@ -78,7 +87,9 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const views = sourceWindows(readable, task.instruction, selection);
       const messages = [{ role: 'system', content: instructions }, { role: 'user', content: JSON.stringify({
         issue: task.instruction, editable: task.editPaths, visibleTests: task.visibleTests,
-        currentSource: views, testExamples, recentActions: actions.slice(-4), lastToolResult: feedback.slice(-4000),
+        currentSource: views.map(({ content, ...view }) => ({ ...view,
+          numberedSource: content.split('\n').map((line, index) => `${view.startLine + index}|${line}`).join('\n') })),
+        testExamples, recentActions: actions.slice(-4), lastToolResult: feedback.slice(-4000),
       }) }];
       const response = await invoke(trialId, handoffUsed ? models.critic : models.strong,
         { messages, max_tokens: config.outputTokens, response_format: { type: 'json_schema',
@@ -100,8 +111,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
           const result = await test(box, task.visibleTests, remaining()); publicPassed = result.passed;
           feedback = `Edit applied. Visible tests passed: ${publicPassed}. ${result.feedback.slice(-3500)}`;
           // Keep the edited location visible, including after a handoff.
-          selection = { path: action.path, line: files.find(file => file.path === action.path).content.slice(0,
-            files.find(file => file.path === action.path).content.indexOf(action.search)).split('\n').length, query: '' };
+          selection = { path: action.path, line: action.line, query: '' };
         } else if (action.action === 'probe') {
           const result = await runProbe(box, action.query, remaining());
           feedback = `Behavior probe passed: ${result.passed}. ${result.feedback.slice(-3500)}`;
@@ -115,13 +125,15 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
         } else throw new Error('invalid_action');
       } catch (error) {
         if (deadline.aborted) { outcome = 'deadline'; break; }
-        event.status = error.message === 'unseen_edit' ? 'unseen_edit' : toolErrorCode(error);
+        event.status = ['unseen_edit', 'unchanged_edit'].includes(error.message) ? error.message : toolErrorCode(error);
         // Infrastructure failures stop the campaign; model tool mistakes can recover.
         if (['command_failed', 'command_timeout', 'command_output_limit', 'execution_failed'].includes(event.status)) throw error;
         invalidActions++; feedback = `Action rejected: ${event.status}. Use the actual source excerpt; inspect another location if needed.`;
       }
     }
-    const files = await read(box, task.editPaths, remaining());
+    // Grading/cleanup is outside the action deadline. Keep final collection
+    // bounded without turning an ordinary expired trial into a campaign abort.
+    const files = await read(box, task.editPaths, 10000);
     return { files, patchDigest: hash(JSON.stringify(files)), actions, turns, outcome, handoffUsed, invalidActions, publicPassed };
   } finally { await box.close(); }
 }

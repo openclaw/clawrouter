@@ -281,8 +281,8 @@ Freeze that policy before a fresh-task evaluation; keep production Fusion opt-in
 ### Grounded repair scaffold
 
 Append `grounded` to the local repository command to use a compact repair
-interface. It supplies current source windows on every turn, requires edits to
-match observed unique source text, and gives the next worker the current edited
+interface. It supplies numbered current source windows on every turn, requires
+line replacements to match observed current source, and gives the next worker the current edited
 source with bounded tool feedback. `inspect` selects another window; `probe`
 runs in the same isolated environment. The original `legacy` profile remains
 the default. Both profiles use the same model, action, output and deadline caps.
