@@ -1,4 +1,5 @@
 import { miniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
+import { miniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import { minimaxImageBinding, readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { normalizeVertexAnthropicBinding, vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
@@ -437,7 +438,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request, {}), "invalid_upstream_grant", "revocation metadata");
-    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body), { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role });
+    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body), { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else if (!action && request.method === "PUT") {
     const mode = new URL(request.url).searchParams.get("mode");
@@ -475,6 +476,13 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
       throw new HttpError(400, "invalid_minimax_search_authorization", "Search authorization must name its TokenPlan region or null");
     delete body.minimaxSearchAuthorization;
     const minimaxSearch = searchIntent == null ? searchIntent : miniMaxSearchBinding(searchIntent === "minimax-global-tokenplan-search" ? "global" : "cn");
+    if (["minimaxVideoBinding", "minimaxVideoIntent", "videoActor", "videoAttestation"].some(field => Object.hasOwn(body, field)))
+      throw new HttpError(400, "invalid_minimax_video_authorization", "Use explicit video authorization");
+    const videoIntent = body.minimaxVideoAuthorization;
+    if (videoIntent !== undefined && videoIntent !== null && videoIntent !== "minimax-global-video" && videoIntent !== "minimax-cn-video")
+      throw new HttpError(400, "invalid_minimax_video_authorization", "Video authorization must name its region or null");
+    delete body.minimaxVideoAuthorization;
+    const minimaxVideo = videoIntent == null ? videoIntent : miniMaxVideoBinding(videoIntent === "minimax-global-video" ? "global" : "cn");
     const minimaxImage = body.minimaxImageAuthorization;
     if (minimaxImage !== undefined && minimaxImage !== null && minimaxImage !== "minimax-global-image")
       throw new HttpError(400, "invalid_minimax_image_authorization", "Image authorization must be minimax-global-image or null");
@@ -486,7 +494,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant) && !vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     grant = await putGrantCredentials(env, key, normalizeGrant(body, existing, !!vertexPrivateKey), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage, minimaxSearch, { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role });
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage, minimaxSearch, { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role }, minimaxVideo, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));

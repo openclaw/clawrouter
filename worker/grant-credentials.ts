@@ -1,7 +1,9 @@
+import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import { miniMaxSearchDenied, miniMaxSearchOwnerBinding, miniMaxSearchProjection, mutateMiniMaxSearchBinding } from "./minimax-search-credential.ts";
 import { searchJsonBytes, searchControlHeader, searchControlVersion, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import type { SearchGrantAttestation, MusicGrantAttestation } from "./authority-contracts.ts";
+import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
+import { mutateMiniMaxVideoBinding, miniMaxVideoDenied, miniMaxVideoProjection, miniMaxVideoIdentity } from "./minimax-video-credential.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { CopilotCatalogFlow } from "./copilot-catalog-flow.ts";
 import { CopilotAccountFlow, assertCopilotAccountRecord } from "./copilot-account-flow.ts";
@@ -230,6 +232,7 @@ export class GrantCredentialObject implements DurableObject {
           const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
           const { prepareResponseControl, assertControlDeadline, assertResponseControlRetention, responseControlRetentionProtocol } = await import("./responses-control-dispatch.ts");
           const { assertControlCallerLive, authorizeResponseControl } = await import("./response-control-authorization.ts");
+          const { assertManagedDispatch } = await import("./managed-dispatch.ts");
           assertControlDeadline(input);
           if (input.deadline !== undefined) {
             preparation.stop("complete");
@@ -240,18 +243,18 @@ export class GrantCredentialObject implements DurableObject {
           // legacy KV, adopts another lineage, or reselects a pool account.
           if (!record || !canonicalRecord(record) || record.grantKey !== input.owner.grantKey
             || record.providerId !== input.owner.providerId || record.lineage !== input.owner.lineage
-            || record.enabled !== true || record.revokedAt || record.status !== "active" || !record.kind) {
+            || record.enabled !== true || record.revokedAt || record.status !== "active" || !record.kind
+            || input.protocol === "minimax.video" && (record.poolSyncPending || !miniMaxVideoProjection(metadataGrant(record)))) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential is unavailable or changed");
           }
           const outbound = await preparation.wait(prepareResponseControl(this.env, input, materializedGrant(metadataGrant(record), record)));
-          await preparation.wait(authorizeResponseControl(this.env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input)));
+          await preparation.wait(authorizeResponseControl(this.env, input.authorization, input.owner, preparation.signal, responseControlRetentionProtocol(input), undefined, undefined, undefined, input.protocol === "minimax.video"));
           preparation.signal.throwIfAborted();
           assertControlDeadline(input);
           assertControlCallerLive(input.authorization);
           if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
           }
-          const { assertManagedDispatch } = await import("./managed-dispatch.ts");
           assertResponseControlRetention(this.env, input);
           assertManagedDispatch(input.protocol, outbound);
           // Start egress before releasing the serialized credential check, but
@@ -304,11 +307,14 @@ export class GrantCredentialObject implements DurableObject {
         let current = await this.state.storage.get<CredentialRecord>("credential");
         if (current) nextCredentialGeneration(current.generation);
         const musicMutation = input.nativeMediaIntent?.operation === "minimax.music" || musicMutationRecord(current);
+        const videoMutation = input.minimaxVideoIntent !== undefined || !!current?.minimaxVideoBinding;
+        if (videoMutation && (!input.videoActor || input.provenance
+          || current && (!canonicalRecord(current) || current.grantKey !== input.key || current.poolSyncPending))) miniMaxVideoDenied();
         if (musicMutation && (!input.musicActor || input.provenance
           || current && (!canonicalRecord(current) || current.grantKey !== input.key || current.poolSyncPending))) musicMutationDenied();
         let attachment: GrantAttachmentSnapshot;
         let previous: UpstreamGrant | null;
-        if (musicMutation || input.minimaxSearchIntent !== undefined || current?.minimaxSearchBinding) {
+        if (videoMutation || musicMutation || input.minimaxSearchIntent !== undefined || current?.minimaxSearchBinding) {
           // Search never repairs or adopts a legacy/pending attachment on the
           // way to attestation. The original record must already be canonical.
           if (current && !canonicalRecord(current)) miniMaxSearchDenied();
@@ -358,6 +364,8 @@ export class GrantCredentialObject implements DurableObject {
           !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
         mutateMiniMaxSearchBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxSearchIntent,
           !!input.searchActor && !replace && input.preserveUnspecifiedSecrets && input.provenance !== "clawrouter_oauth" && !current?.revokedAt);
+        mutateMiniMaxVideoBinding(record, current, input.provenance === "clawrouter_oauth" ? null : input.minimaxVideoIntent,
+          !!input.videoActor && !replace && input.preserveUnspecifiedSecrets && !input.provenance && !current?.revokedAt);
         if (record.refreshToken) await claimRefreshOwnership(this.env, input.key, record.refreshToken, { current: current?.refreshToken === record.refreshToken && (!current.refreshAttempt || input.grant.refreshToken === undefined) });
         const freshAuthority = !current || record.refreshToken !== current.refreshToken;
         record.credentialProvenance = freshAuthority ? input.provenance ?? "imported" : current?.credentialProvenance ?? "imported";
@@ -390,6 +398,10 @@ export class GrantCredentialObject implements DurableObject {
           replace ? "replace" : "preserve", { preserve: input.preserveUnspecifiedSecrets, intent: input.nativeMediaIntent ?? null,
             specified: input.nativeMediaIntent !== undefined }) : undefined;
         if (musicProof && searchProof && JSON.stringify(musicProof.actor) !== JSON.stringify(searchProof.actor)) musicMutationDenied();
+        const videoProof = videoMutation ? await videoMutationProof(input.videoActor!, input.key, current, record, attachment,
+          replace ? "replace" : "preserve", { preserve: input.preserveUnspecifiedSecrets,
+            specified: input.minimaxVideoIntent !== undefined, intent: input.minimaxVideoIntent }) : undefined;
+        if (videoProof && [musicProof, searchProof].some(proof => proof && JSON.stringify(proof.actor) !== JSON.stringify(videoProof.actor))) miniMaxVideoDenied();
         const grant = metadataGrant(record);
         // Admission reserves capacity without removing the old attachment. A
         // failed store leaves indexed pending work for this owner to reconcile.
@@ -397,7 +409,13 @@ export class GrantCredentialObject implements DurableObject {
         // Only this explicit commit may acknowledge the reservation; later
         // refreshes and legacy imports cannot complete a failed account write.
         record.poolAdmissionRevision = admitted.revision;
-        if (musicProof) {
+        if (videoProof) {
+          const expected: VideoGrantAttestation = { ...videoProof, admissionRevision: admitted.revision };
+          searchJsonBytes(expected);
+          const reply = await authorityCall<VideoGrantAttestation>(this.env, "/grant-video/authorize", expected);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(expected)) miniMaxVideoDenied();
+        } else if (musicProof) {
           // This also covers an explicit switch to Search: the complete result
           // and both intents were prepared before the SAME last SQL role check.
           const expected: MusicGrantAttestation = { ...musicProof, admissionRevision: admitted.revision };
@@ -420,9 +438,13 @@ export class GrantCredentialObject implements DurableObject {
         return json({ grant });
       }
       if (path === "/inspect") {
-        const input = request.body ? await readJson<{ wanOriginal?: true; searchOriginal?: true }>(request).catch(() => ({} as { wanOriginal?: true; searchOriginal?: true })) : {};
+        const input = request.body ? await readJson<{ wanOriginal?: true; searchOriginal?: true; videoOriginal?: true }>(request).catch(() => ({} as { wanOriginal?: true; searchOriginal?: true; videoOriginal?: true })) : {};
         let record = await this.state.storage.get<CredentialRecord>("credential");
         if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
+        if (input.videoOriginal) {
+          if (!canonicalRecord(record) || record.poolSyncPending || !miniMaxVideoProjection(metadataGrant(record))) miniMaxVideoDenied();
+          const grant = metadataGrant(record); searchJsonBytes({ grant }); return json({ grant });
+        }
         if (input.searchOriginal) {
           if (!canonicalRecord(record) || !miniMaxSearchOwnerBinding(record) || !miniMaxSearchProjection(metadataGrant(record))) miniMaxSearchDenied();
           const grant = metadataGrant(record); searchJsonBytes({ grant }); return json({ grant });
@@ -466,7 +488,7 @@ export class GrantCredentialObject implements DurableObject {
         return json(result);
       }
       if (path === "/revoke") {
-        const { key, metadata, searchActor, musicActor } = await readJson<{ key: string; metadata?: GrantRevokeMetadata; searchActor?: PutRequest["searchActor"]; musicActor?: PutRequest["musicActor"] }>(request);
+        const { key, metadata, searchActor, musicActor, videoActor } = await readJson<{ key: string; metadata?: GrantRevokeMetadata; searchActor?: PutRequest["searchActor"]; musicActor?: PutRequest["musicActor"]; videoActor?: PutRequest["videoActor"] }>(request);
         await this.minimaxDevice.invalidate();
         await this.copilotDevice.invalidate();
         await this.copilotAccount.invalidate();
@@ -474,6 +496,8 @@ export class GrantCredentialObject implements DurableObject {
         // An unavailable index must not block deleting an owner's secrets.
         const current = await this.state.storage.get<CredentialRecord>("credential");
         const musicMutation = musicMutationRecord(current);
+        const videoMutation = !!current?.minimaxVideoBinding;
+        if (videoMutation && (!videoActor || !current || !canonicalRecord(current) || current.grantKey !== key || current.poolSyncPending)) miniMaxVideoDenied();
         if (musicMutation && (!musicActor || !current || !canonicalRecord(current) || current.grantKey !== key || current.poolSyncPending)) musicMutationDenied();
         const legacy = !current || !current.metadata || current.enabled === undefined ? await legacyGrantMetadata(this.env, key, true) : null;
         // Old owner identity wins over KV and hints. Prepare missing metadata
@@ -488,7 +512,22 @@ export class GrantCredentialObject implements DurableObject {
         const record = current?.revokedAt
           ? { ...current, metadata: current.metadata ?? stripLegacySecrets(previous) as UpstreamGrant, lineage: current.lineage ?? crypto.randomUUID(), poolSyncPending: true }
           : revokedRecord(key, current ? previous : { ...previous, ...metadata }, generation);
-        if (musicMutation) {
+        if (videoMutation) {
+          // Retain the private intent on the existing revoked record so repeat
+          // revocation still requires SQL authority. Every projection is NULL.
+          record.minimaxVideoBinding = current!.minimaxVideoBinding;
+          if (musicMutation) record.minimaxMusicTombstone = true;
+          if ([musicActor, searchActor].some(actor => actor && JSON.stringify(actor) !== JSON.stringify(videoActor))) miniMaxVideoDenied();
+          const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
+          if (attachment.pending || attachment.generation !== current!.generation) miniMaxVideoDenied();
+          const prepared = await videoMutationProof(videoActor!, key, current, record, attachment,
+            current!.revokedAt ? "tombstone" : "revoke", { preserve: false, specified: true, intent: null });
+          const proof: VideoGrantAttestation = { ...prepared, admissionRevision: attachment.revision };
+          searchJsonBytes(proof);
+          const reply = await authorityCall<VideoGrantAttestation>(this.env, "/grant-video/authorize", proof);
+          searchJsonBytes(reply);
+          if (JSON.stringify(reply) !== JSON.stringify(proof)) miniMaxVideoDenied();
+        } else if (musicMutation) {
           record.minimaxMusicTombstone = true;
           const attachment = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
           if (attachment.pending || attachment.generation !== current!.generation) musicMutationDenied();
@@ -553,7 +592,7 @@ export class GrantCredentialObject implements DurableObject {
       updatedAt: now, createdAt: current?.createdAt ?? now, poolSyncPending: true, revokedAt: null,
       metadata: { provider: "minimax", kind: "oauth", enabled: true, priority: input.priority, weight: input.weight,
         createdAt: current?.createdAt ?? now, updatedAt: now },
-      nativeMediaBinding: null, minimaxSearchBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null,
+      nativeMediaBinding: null, minimaxSearchBinding: null, minimaxVideoBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null,
     };
     const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", {
       key, generation: current?.generation ?? 0, revision: attachment.revision, provider: "minimax", status: "reauth_required",
@@ -657,6 +696,16 @@ export class GrantCredentialObject implements DurableObject {
         || record.expiresAt && (!Number.isFinite(Date.parse(record.expiresAt)) || Date.parse(record.expiresAt) <= Date.now()))
         throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner revision is unavailable");
       return { grant: materializedGrant(metadataGrant(record), record) };
+    }
+    if (input.operation === "minimax.video") {
+      const record = await this.state.storage.get<CredentialRecord>("credential");
+      if (!record || !canonicalRecord(record) || record.poolSyncPending || record.grantKey !== input.key || input.providerId !== "minimax"
+        || record.generation !== input.expectedGeneration || record.generation !== input.grant.credentialGeneration
+        || record.lineage !== input.grant.credentialLineage || input.force || input.legacy || input.refresh || record.refreshAttempt
+        || !miniMaxVideoProjection(metadataGrant(record)) || miniMaxVideoIdentity(metadataGrant(record)) !== miniMaxVideoIdentity(input.grant)) miniMaxVideoDenied();
+      searchJsonBytes(record);
+      const grant = materializedGrant(metadataGrant(record), record); searchJsonBytes({ grant });
+      return { grant };
     }
     if (input.operation === "minimax.search") {
       const record = await this.state.storage.get<CredentialRecord>("credential");
@@ -1079,6 +1128,22 @@ function musicMutationDenied(): never {
   throw new HttpError(403, "minimax_music_admin_required", "Current Music mutation authority is required");
 }
 
+async function videoMutationProof(actor: NonNullable<PutRequest["videoActor"]>, key: string,
+  current: CredentialRecord | undefined, record: CredentialRecord, attachment: GrantAttachmentSnapshot,
+  mode: VideoGrantAttestation["mode"], intent: { preserve: boolean; specified: boolean; intent: PutRequest["minimaxVideoIntent"] },
+): Promise<Omit<VideoGrantAttestation, "admissionRevision">> {
+  // Reuse the qualified complete-result fingerprint, then domain-separate and
+  // bind both the old video intent and exact requested/new video authority.
+  const prepared = await musicMutationProof(actor, key, current, record, attachment, mode,
+    { preserve: intent.preserve, specified: true, intent: record.nativeMediaBinding ?? null });
+  const domain = "clawrouter.minimax-video-mutation.v1" as const;
+  const mutation = { ...prepared, domain, originalVideoBinding: current?.minimaxVideoBinding ?? null,
+    binding: record.minimaxVideoBinding ?? null, ...intent };
+  searchJsonBytes(mutation);
+  const digest = await sha256Hex(JSON.stringify(mutation));
+  return { ...prepared, domain, digest };
+}
+
 async function musicMutationProof(actor: NonNullable<PutRequest["musicActor"]>, key: string,
   current: CredentialRecord | undefined, record: CredentialRecord, attachment: GrantAttachmentSnapshot,
   mode: MusicGrantAttestation["mode"], intent: { preserve: boolean; specified: boolean; intent: PutRequest["nativeMediaIntent"] },
@@ -1303,12 +1368,12 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/inspect", search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search)).grant;
+export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/inspect", video ? { videoOriginal: true } : search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search, video)).grant;
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent, minimaxSearchIntent, searchActor, musicActor })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], minimaxVideoIntent?: PutRequest["minimaxVideoIntent"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, provenance, nativeMediaIntent, minimaxAnthropicIntent, vertexAnthropicIntent, vertexPrivateKey, minimaxImageIntent, minimaxSearchIntent, searchActor, musicActor, minimaxVideoIntent, videoActor })).grant;
 }
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
@@ -1326,8 +1391,9 @@ export async function materializeGrantCredentials(
   operation?: MaterializeRequest["operation"],
   wan?: WanManagedOperation,
   search?: MiniMaxSearchOperation,
+  video?: MiniMaxVideoOperation,
 ): Promise<UpstreamGrant> {
-  const legacy = !wan && !search && hasRawCredential(grant) ? grant : null;
+  const legacy = !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
     key,
     grant,
@@ -1338,17 +1404,17 @@ export async function materializeGrantCredentials(
     expectedGeneration: grant.credentialGeneration ?? null,
     operation,
     ...(wan ? { wanOriginal: true } : {}),
-  }, signal, wan, search)).grant;
+  }, signal, wan, search, video)).grant;
 }
 
-export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"]): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata, searchActor, musicActor })).grant;
+export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata, searchActor, musicActor, videoActor })).grant;
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
   const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
-  for (const name of ["musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
-  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxSearchBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
+  for (const name of ["videoActor", "videoAttestation", "minimaxVideoIntent", "musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxDeviceAttempt", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey"]) delete (safe as Record<string, unknown>)[name];
+  return projection ? { ...safe, ...projection } : { ...safe, nativeMediaBinding: null, minimaxSearchBinding: null, minimaxVideoBinding: null, minimaxImageBinding: null, minimaxAnthropicBinding: null, vertexAnthropicBinding: null };
 }
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {
@@ -1430,8 +1496,9 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<T> {
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
+  if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
@@ -1484,7 +1551,7 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
 function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  const secrets = new Set(["videoActor", "videoAttestation", "minimaxVideoIntent", "musicActor", "musicAttestation", "minimaxMusicTombstone", "minimaxVideoBinding", "minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding", "vertexPrivateKey", "vertexServiceAccountPrivateKey", "accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
   return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 

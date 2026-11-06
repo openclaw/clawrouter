@@ -1,3 +1,4 @@
+import { videoControlVersion, videoUnavailable, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { authorityCall } from "./authority.ts";
 import { searchControlVersion, searchUnavailable, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
@@ -27,16 +28,19 @@ export function proxyAdmission(identity: AuthorizedIdentity): AdmissionResult | 
 export function proxySessionHash(identity: AuthorizedIdentity): string | undefined { return sessionHashes.get(identity); }
 export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
-export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached", search?: MiniMaxSearchOperation): Promise<AuthorizedIdentity | Response> {
+export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached", search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<AuthorizedIdentity | Response> {
   const admissionStart = performance.now();
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
   const secretSha256 = await sha256Hex(parsed.secret);
   const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
   const admissionRequest = { credentialId: parsed.kid, secretSha256, providers, allConnections, selection: selection ? { ...selection, sessionHash } : undefined };
-  const { admission, cache } = search
+  const { admission, cache } = video
+    ? { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", { ...admissionRequest, video: videoControlVersion }, "policy-bindings", video.operation.signal, undefined, undefined, video), cache: "off" as const }
+    : search
     ? { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", { ...admissionRequest, search: searchControlVersion }, "policy-bindings", search.operation.signal, undefined, search), cache: "off" as const }
     : await resolveAdmission(env, admissionRequest, freshness);
+  if (video && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable)) videoUnavailable();
   if (search && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable)) searchUnavailable();
   const credentialEntry = admission.credential;
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);

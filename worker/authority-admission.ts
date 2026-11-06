@@ -1,3 +1,5 @@
+import { videoControlVersion, videoJsonBytes, videoUnavailable } from "./minimax-video-operation.ts";
+import { miniMaxT2VModels } from "../shared/minimax-video-binding.ts";
 import { searchControlVersion, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant } from "./types";
@@ -14,7 +16,7 @@ export interface AdmissionSelection {
 }
 // "select" also returns the pool snapshot after selecting; "only" returns the
 // snapshot without selecting or touching counters (stale-cache refresh).
-export interface AdmissionRequest { search?: typeof searchControlVersion; selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
+export interface AdmissionRequest { video?: typeof videoControlVersion; search?: typeof searchControlVersion; selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
 export interface AdmissionPool { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; unavailable?: true }
 export interface AdmissionPoolCandidate { key: string; grant: UpstreamGrant | null }
 // Secretless routing state for isolate-local selection: projections, counters,
@@ -59,8 +61,15 @@ interface AdmissionStore {
 export async function resolveAdmission(env: Env, input: AdmissionRequest, store: AdmissionStore): Promise<AdmissionResult> {
   // Use the same import fences as the single-purpose resolvers. Every KV
   // await is followed by guarded initialization and a canonical reread.
-  const search = input.search === searchControlVersion;
-  if (search) { searchJsonBytes(input); if (input.allConnections || input.snapshot || input.providers?.length !== 1 || input.selection?.providerId !== "minimax" || input.selection.model != null || input.selection.capability !== "search.web") searchUnavailable(); }
+  const video = input.video === videoControlVersion;
+  const search = input.search === searchControlVersion || video;
+  if (video) {
+    videoJsonBytes(input);
+    if (input.search || input.allConnections || input.snapshot || input.providers?.length !== 1 || input.providers[0].id !== "minimax"
+      || input.selection && (input.selection.providerId !== "minimax" || input.selection.capability !== "media.predict"
+        || !(miniMaxT2VModels as readonly unknown[]).includes(input.selection.model))) videoUnavailable();
+  }
+  if (search && !video) { searchJsonBytes(input); if (input.allConnections || input.snapshot || input.providers?.length !== 1 || input.selection?.providerId !== "minimax" || input.selection.model != null || input.selection.capability !== "search.web") searchUnavailable(); }
   let credential = store.getCredential(input.credentialId);
   if (!search && !credential && !store.hasMeta("credentials_global_initialized")) {
     const value = await env.POLICY_KV.get<Record<string, unknown>>(`credentials/${input.credentialId}`, "json") ?? await genuineLegacyKey(env, input.credentialId);

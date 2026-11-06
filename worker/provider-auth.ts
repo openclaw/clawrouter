@@ -1,4 +1,5 @@
 import { miniMaxSearchProjection, miniMaxSearchRequirement } from "./minimax-search-credential.ts";
+import { miniMaxVideoProjection, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
 import { miniMaxImageProjection, miniMaxImageRequirement } from "./minimax-image-credential.ts";
 import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { isQualifiedVertexModelLocation } from "./vertex-model-eligibility.ts";
@@ -28,6 +29,8 @@ export function openRouterPcmRequirement(requirement: Pick<GrantRequirement, "pr
 }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.endpoint.lifecycle?.protocol === "minimax.video" && (!miniMaxVideoRequirement(requirement)
+    || !miniMaxVideoProjection(grant) || transportForGrant(requirement.provider, grant) !== null)) return false;
   if (requirement.endpoint.request_format === "minimax.search" && (!miniMaxSearchRequirement(requirement)
     || !miniMaxSearchProjection(grant) || grant?.minimaxSearchBinding?.origin !== requirement.provider.base_urls.default)) return false;
   if (requirement.endpoint.request_format === "minimax.music" && (!miniMaxMusicRequirement(requirement)

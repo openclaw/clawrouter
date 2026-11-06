@@ -1,3 +1,4 @@
+import { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { planBudgetReservation } from "./accounting.ts";
 import type { BackgroundAdmission } from "./background-store.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
@@ -16,11 +17,11 @@ export class HttpBackground {
   private readonly env: Env;
   readonly scope: string;
   readonly admission: BackgroundAdmission;
-  private readonly wan?: WanManagedOperation;
-  private constructor(env: Env, scope: string, admission: BackgroundAdmission, wan?: WanManagedOperation) { this.env = env; this.scope = scope; this.admission = admission; this.wan = wan; }
+  private readonly wan?: WanManagedOperation | MiniMaxVideoOperation;
+  private constructor(env: Env, scope: string, admission: BackgroundAdmission, wan?: WanManagedOperation | MiniMaxVideoOperation) { this.env = env; this.scope = scope; this.admission = admission; this.wan = wan; }
 
   static async prepare(request: Request, env: Env, auth: AuthorizedIdentity, owner: ContinuationOwner, facts: AccountingFacts,
-    connection: ProviderConnection, pathParams: Record<string, string>, headers: Headers, stream: boolean, wan?: WanManagedOperation): Promise<HttpBackground> {
+    connection: ProviderConnection, pathParams: Record<string, string>, headers: Headers, stream: boolean, wan?: WanManagedOperation | MiniMaxVideoOperation): Promise<HttpBackground> {
     const admittedAt = Date.now(), scope = await continuationScope(auth);
     const admission: BackgroundAdmission = {
       id: randomId("bg"), admittedAt, owner, facts,
@@ -53,10 +54,10 @@ export class HttpBackground {
   }
 }
 
-export async function backgroundCall<T>(env: Env, scope: string, body: unknown, wan?: WanManagedOperation): Promise<T> {
+export async function backgroundCall<T>(env: Env, scope: string, body: unknown, wan?: WanManagedOperation | MiniMaxVideoOperation): Promise<T> {
   if (wan) {
     const action = (body as { action?: unknown }).action;
-    const mandatory = action === "dispatch" || action === "managed_bind" || action === "managed_observe" || action === "observe" || action === "freeze";
+    const mandatory = action === "dispatch" || action === "managed_bind" || action === "managed_observe" || wan instanceof MiniMaxVideoOperation && action === "managed_files" || action === "observe" || action === "freeze";
     try {
       return await wan.controlJson<T>(body, (text, signal) => {
         const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(scope));

@@ -42,3 +42,9 @@ export interface MusicGrantAttestation extends SearchGrantAttestation {
   scope: ["policies" | "tenants", string, string];
   mode: "preserve" | "replace" | "revoke" | "tombstone";
 }
+
+export interface VideoGrantAttestation extends SearchGrantAttestation {
+  domain: "clawrouter.minimax-video-mutation.v1";
+  scope: MusicGrantAttestation["scope"];
+  mode: MusicGrantAttestation["mode"];
+}

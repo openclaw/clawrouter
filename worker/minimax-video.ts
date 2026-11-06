@@ -1,10 +1,13 @@
-import type { ManagedObservation } from "./managed-lifecycle-types.ts";
+import type { ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
+import { readVideoJson, readVideoFileBytes } from "./minimax-video-operation.ts";
+import type { InputRetirement } from "./input-retirement.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const miniMaxVideoProtocol = "minimax.video";
 export const miniMaxVideoModels = ["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast", "MiniMax-Hailuo-02", "I2V-01-Director", "I2V-01-live", "I2V-01"] as const;
 export const miniMaxVideoOrigins = { global: "https://api.minimax.io", cn: "https://api.minimaxi.com" } as const;
-const maxJson = 1024 * 1024, encoder = new TextEncoder();
+const maxJson = 1024 * 1024;
+type RegisterInput = ManagedReadContext["registerInput"];
 type Json = Record<string, unknown>;
 export function validateMiniMaxMediaId(value: unknown): string {
   const id = typeof value === "number" && Number.isSafeInteger(value) ? String(value) : value;
@@ -47,8 +50,8 @@ export function observeMiniMaxVideo(value: unknown, action: "create" | "retrieve
   return { id, nativeStatus: status, terminal, body,
     ...(action === "create" && terminal === null ? { followUp: "retrieve" as const } : {}) };
 }
-export async function readMiniMaxVideo(response: Response, action: "create" | "retrieve", expectedId: string | undefined, signal: AbortSignal): Promise<ManagedObservation> {
-  return observeMiniMaxVideo(await readJson(response, signal), action, expectedId);
+export async function readMiniMaxVideo(response: Response, action: "create" | "retrieve", expectedId: string | undefined, signal: AbortSignal, register?: RegisterInput): Promise<ManagedObservation> {
+  return observeMiniMaxVideo(await readJson(response, signal, "native", register), action, expectedId);
 }
 export function miniMaxVideoFiles(observation: ManagedObservation): readonly { id: string; mimeType: "video/mp4" }[] {
   if (observation.terminal !== "succeeded") return [];
@@ -62,8 +65,8 @@ export function prepareMiniMaxVideoFile(action: string, selectedOrigin: string, 
     query: new URLSearchParams({ file_id: validateMiniMaxMediaId(fileId) }),
     headers: new Headers({ accept: action === "metadata" ? "application/json" : "video/mp4, application/octet-stream" }) };
 }
-export async function readMiniMaxVideoFileState(response: Response, expectedFileId: string, signal: AbortSignal) {
-  const body = await readJson(response, signal), file = object(body.file), id = validateMiniMaxMediaId(file.file_id);
+export async function readMiniMaxVideoFileState(response: Response, expectedFileId: string, signal: AbortSignal, register?: RegisterInput) {
+  const body = await readJson(response, signal, "metadata", register), file = object(body.file), id = validateMiniMaxMediaId(file.file_id);
   if (object(body.base_resp).status_code !== 0 || id !== validateMiniMaxMediaId(expectedFileId)
     || file.purpose !== "video_generation" || file.bytes !== undefined && (!Number.isSafeInteger(file.bytes) || Number(file.bytes) < 0)) fail("file_metadata");
   // download_url is only an expiring hint; credentials stay at the API origin.
@@ -71,21 +74,39 @@ export async function readMiniMaxVideoFileState(response: Response, expectedFile
   return { id, status: "active" as const, byteSize: typeof file.bytes === "number" && file.bytes > 0 ? file.bytes : null,
     body: { ...body, file: safeFile } };
 }
-export async function readMiniMaxVideoFile(response: Response, maxBytes: number, signal: AbortSignal): Promise<Uint8Array> {
+export async function readMiniMaxVideoFile(response: Response, maxBytes: number, signal: AbortSignal, register?: RegisterInput): Promise<Uint8Array> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 16 || maxBytes > 16 * 1024 * 1024) fail("file_limit");
-  const bytes = await readBytes(response, ["video/mp4", "application/octet-stream", "application/json"], maxBytes, signal);
+  const bytes = await readVideoFileBytes(response, maxBytes, signal, register);
   // The primary retrieve_content schema labels binary as application/json.
   // Never accept a JSON error or HTML as video under that misleading MIME.
   if (bytes.length < 16 || String.fromCharCode(...bytes.subarray(4, 8)) !== "ftyp") fail("mp4");
-  const boxSize = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
-  if (boxSize < 16 || boxSize > bytes.length) fail("mp4");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0, boxes = 0;
+  while (offset < bytes.length) {
+    if (++boxes > 8192 || bytes.length - offset < 8) fail("mp4");
+    let size = view.getUint32(offset), header = 8;
+    for (let i = offset + 4; i < offset + 8; i++) if (bytes[i] < 32 || bytes[i] > 126) fail("mp4");
+    if (size === 1) {
+      if (bytes.length - offset < 16) fail("mp4");
+      const high = view.getUint32(offset + 8), low = view.getUint32(offset + 12);
+      if (high !== 0) fail("mp4"); size = low; header = 16;
+    } else if (size === 0) size = bytes.length - offset;
+    if (size < header || offset === 0 && size < 16 || size > bytes.length - offset) fail("mp4");
+    offset += size;
+  }
+  // Structural box completeness is not a playable-media or codec claim.
   return bytes;
 }
 export function parseMiniMaxMediaJson(text: string): Json {
-  if (encoder.encode(text).length > maxJson) fail("json_limit");
+  let wireBytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i), next = text.charCodeAt(i + 1);
+    wireBytes += c < 128 ? 1 : c < 2048 ? 2 : c >= 0xd800 && c <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? (i++, 4) : 3;
+    if (wireBytes > maxJson) fail("json_limit");
+  }
   // Preserve int64 IDs before JSON.parse can round them. Only object-key
   // number tokens named task_id/file_id are normalized; string content is inert.
-  let result = "", copied = 0;
+  const parts: string[] = []; let copied = 0, replacements = 0, units = 0;
   for (let index = 0; index < text.length; index++) {
     if (text[index] !== '"') continue;
     const start = index++;
@@ -100,34 +121,25 @@ export function parseMiniMaxMediaJson(text: string): Json {
     const first = cursor; while (/[0-9]/.test(text[cursor] ?? "") && cursor < text.length) cursor++;
     if (cursor === first || !/[\s,}\]]/.test(text[cursor] ?? "")) continue;
     const raw = text.slice(first, cursor); validateMiniMaxMediaId(raw);
-    result += text.slice(copied, first) + JSON.stringify(raw); copied = cursor; index = cursor - 1;
+    if (++replacements > 4096 || (units += first - copied + raw.length + 2) > maxJson + 8192) fail("json_limit");
+    parts.push(text.slice(copied, first), `"${raw}"`); copied = cursor; index = cursor - 1;
   }
-  try { return object(JSON.parse(result + text.slice(copied))); } catch { fail("json"); }
+  if (units + text.length - copied > maxJson + 8192) fail("json_limit");
+  parts.push(text.slice(copied));
+  try { return object(JSON.parse(parts.join(""))); } catch { fail("json"); }
 }
-async function readJson(response: Response, signal: AbortSignal): Promise<Json> {
-  const bytes = await readBytes(response, ["application/json"], maxJson, signal);
-  try { return parseMiniMaxMediaJson(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { fail("json"); }
-}
-async function readBytes(response: Response, mimes: string[], limit: number, signal: AbortSignal): Promise<Uint8Array> {
-  const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase(), length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range") || !mime || !mimes.includes(mime)
-    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limit)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
-  }
-  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-  const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true }); let size = 0;
+async function readJson(response: Response, signal: AbortSignal, profile: "native" | "metadata", register?: RegisterInput): Promise<Json> {
+  let input: InputRetirement | undefined;
   try {
-    signal.throwIfAborted();
-    for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
-      size += chunk.value.byteLength; if (size > limit) fail("size"); chunks.push(chunk.value);
-    }
-    if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
-    const bytes = new Uint8Array(size); let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-    return bytes;
-  } catch { void reader.cancel().catch(() => undefined); fail("response"); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+    return object(await readVideoJson(response, signal, profile, (owner, source) => {
+      input = owner;
+      if (!(source instanceof Response)) fail("response");
+      register?.(owner, source);
+    }, parseMiniMaxMediaJson));
+  } catch {
+    if (!register) await input?.retired.catch(() => undefined);
+    fail("response");
+  }
 }
 function imageReference(value: unknown): void {
   if (typeof value !== "string" || value.length > 12 * 1024 * 1024) fail("image");

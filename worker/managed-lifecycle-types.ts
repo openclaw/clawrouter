@@ -105,6 +105,10 @@ export interface ManagedFileState {
   body: Record<string, unknown>;
 }
 export interface ManagedFilePaths { id: string; metadata?: string; download: string }
+export interface ManagedFileReadContext {
+  signal: AbortSignal;
+  registerInput: NonNullable<ManagedReadContext["registerInput"]>;
+}
 // Source-owned wrappers expose this through managedFileAdapter(protocol).
 // These methods parse/prepare only; the scoped runtime owns all authority/I/O.
 interface ManagedFileAdapterBase {
@@ -117,11 +121,11 @@ interface ManagedFileAdapterBase {
   identify(action: ManagedFileAction, pathParams: Record<string, string>, query: URLSearchParams): string;
   control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
     file: ManagedFileDescriptor, selectedBaseUrl: string, state?: ManagedFileState): ManagedControl;
-  readFile(response: Response, file: ManagedFileDescriptor, maxBytes: number): Promise<Uint8Array>;
+  readFile(response: Response, file: ManagedFileDescriptor, maxBytes: number, context?: ManagedFileReadContext): Promise<Uint8Array>;
   rewrite(body: Record<string, unknown>, paths: readonly ManagedFilePaths[]): Record<string, unknown>;
 }
 export type ManagedFileAdapter = ManagedFileAdapterBase & (
-  { mode?: "metadata"; readState(response: Response, file: ManagedFileDescriptor): Promise<ManagedFileState> }
+  { mode?: "metadata"; readState(response: Response, file: ManagedFileDescriptor, context?: ManagedFileReadContext): Promise<ManagedFileState> }
   // Availability comes from the original succeeded job and bound descriptor.
   // This mode neither manufactures metadata nor follows a response-supplied URL.
   | { mode: "download_only"; readState?: never }
