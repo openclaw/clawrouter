@@ -208,6 +208,44 @@ test("MiniMax music warm admission cannot borrow replaced original authority or 
   assert.equal(f.sent.length, 0); assert.equal(f.materializations, 0); assert.equal(bodyBudgetCharged(), 0);
 });
 
+for (const manifest of [false, true]) for (const change of ["price", "caller"])
+test(`MiniMax music expired ${manifest ? "manifest" : "native"} hint cannot prefetch before fresh ${change} admission`, { timeout: 5000 }, async t => {
+  const f = await setup(t);
+  overrideHotCacheConfig({ maxAgeMs: 60000, freshMs: 60000 });
+  t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED));
+  const body = musicBody(false, manifest ? musicModel : "music-2.6");
+  const seed = await f.request(manifest, body);
+  assert.equal(seed.status, 200, await seed.clone().text()); await seed.text(); await f.drain();
+  assert.equal(f.sent.length, 1); assert.equal(f.materializations, 1);
+  // Direct authority mutation models another isolate: do not run the frontend
+  // admin route or clear its admission, credential cache or selection hints.
+  if (change === "price") await f.authority("/policies/put", { policyId: "fixture", policy: { ...f.policy, requestCostMicros: null } });
+  else {
+    const mutation = await f.authority("/credentials/mutate", { credentialId: "fixture", scope: "admin", actor: musicAdmin, operation: "revoke" });
+    assert.equal((await mutation.json()).outcome, "updated");
+  }
+  f.advance(61000); // Expire admission without clearing the remembered selection.
+  f.sent.length = 0; f.materializations = 0;
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), get = f.env.ACCESS_CONTROL.get;
+  let held = 0;
+  f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+    const response = await stub.fetch(url, init);
+    if (new URL(url).pathname === "/admission/resolve") { held++; entered.resolve(); await release.promise; }
+    return response;
+  } }; };
+  const pending = f.request(manifest, body);
+  let response;
+  try {
+    await entered.promise; assert.equal(held, 1);
+    assert.equal(f.materializations, 0, "expired Music hint must not read a secret while fresh admission is held");
+    assert.equal(f.sent.length, 0);
+  } finally { release.resolve(); response = await pending; await response.clone().text(); await f.drain(); }
+  assert.equal(response.status, change === "price" ? 400 : 403, await response.clone().text());
+  if (change === "price") assert.equal((await response.json()).error.code, "pricing_required");
+  else await response.text();
+  await f.drain(); assert.equal(f.materializations, 0); assert.equal(f.sent.length, 0); assert.equal(bodyBudgetCharged(), 0);
+});
+
 for (const model of musicModels) for (const manifest of [false, true]) for (const stream of [false, true])
   test(`MiniMax music ${model} ${manifest ? "manifest" : "native"} stream=${stream} exact original wire`, async t => {
     const f = await setup(t), upstream = model.slice("minimax/".length), body = musicBody(stream, upstream);
