@@ -72,11 +72,14 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
   const actions = [];
   const checked = config.requireReproducer === true;
   let reproducer = null, probePassed = false;
+  const probeModules = task.editPaths.map((path, index) => ({ binding: `source${index}`, path: `./${path}` }));
+  const probePrelude = ['import assert from "node:assert/strict";',
+    ...probeModules.map(({ binding, path }) => `import * as ${binding} from ${JSON.stringify(path)};`)].join('\n');
   const isolatedProbe = async (files, source) => {
     const isolated = await makeSandbox(image);
     try {
       if (files) await write(isolated, files, remaining());
-      return await runProbe(isolated, source, remaining());
+      return await runProbe(isolated, probePrelude + '\n' + source, remaining());
     } finally { await isolated.close(); }
   };
   try {
@@ -98,14 +101,15 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const views = sourceWindows(readable, task.instruction, selection);
       const phaseInstructions = !checked ? '' : reproducer
         ? '\nRepair phase: the frozen reproduction below fails with an assertion on the original source. Use inspect or edit. Each edit reruns it in a fresh sandbox. Submission is automatic only when the reproduction and visible tests both pass. Do not change the reproduction.'
-        : '\nReproduction phase: use inspect or probe only. Write a Node ES module importing the affected source and node:assert/strict. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. You have at most three actions to reproduce the bug; do not edit or finish.';
+        : '\nReproduction phase: use inspect or probe only. The sandbox already imports assert from node:assert/strict and each editable module as source0, source1, etc. Write only executable JavaScript in query, using assert and those module namespaces; no imports, TypeScript types or shell commands are needed. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. You have at most three actions to reproduce the bug; do not edit or finish.';
       const actionSchema = !checked ? schema : { ...schema, properties: { ...schema.properties,
         action: { type: 'string', enum: reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
       const messages = [{ role: 'system', content: instructions + phaseInstructions }, { role: 'user', content: JSON.stringify({
         issue: task.instruction, editable: task.editPaths, visibleTests: task.visibleTests,
         currentSource: views.map(({ content, ...view }) => ({ ...view,
           numberedSource: content.split('\n').map((line, index) => `${view.startLine + index}|${line}`).join('\n') })),
-        testExamples, ...(checked ? { phase: reproducer ? 'repair' : 'reproduce', reproduction: reproducer } : {}),
+        testExamples, ...(checked ? { phase: reproducer ? 'repair' : 'reproduce', probeModules,
+          probePrelude, reproduction: reproducer } : {}),
         recentActions: actions.slice(-4), lastToolResult: feedback.slice(-4000),
       }) }];
       const response = await invoke(trialId, handoffUsed ? models.critic : models.strong,

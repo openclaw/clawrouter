@@ -66,13 +66,14 @@ test('an expired action deadline still allows bounded final patch collection', a
 test('checked handoff isolates probes and repairs against the same failing reproduction', async () => {
   const task = { instruction: 'Set enabled to true.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
   const boxes = [], seenProbes = [], roles = [];
-  const reproducer = 'import assert from "node:assert/strict"; assert.equal(enabled, true);';
+  const reproducer = 'assert.equal(source0.enabled, true);';
   let call = 0;
   const result = await runGroundedAgent(task, 'image', 'handoff', 'trial',
     { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000, requireReproducer: true },
     async (_id, role, body) => {
       roles.push(role);
       const message = JSON.parse(body.messages[1].content);
+      assert.deepEqual(message.probeModules, [{ binding: 'source0', path: './worker/example.ts' }]);
       const action = { action: 'probe', path: '', line: 0, endLine: 0, query: reproducer, replace: '' };
       if (call++ === 1) {
         assert.equal(message.phase, 'repair'); assert.equal(message.reproduction, reproducer);
@@ -92,7 +93,10 @@ test('checked handoff isolates probes and repairs against the same failing repro
       },
     });
   assert.deepEqual(roles, [models.strong, models.critic]);
-  assert.deepEqual(seenProbes, [reproducer, reproducer]);
+  assert.equal(seenProbes.length, 2); assert.equal(seenProbes[0], seenProbes[1]);
+  assert.ok(seenProbes[0].includes('import assert from "node:assert/strict";'));
+  assert.ok(seenProbes[0].includes('import * as source0 from "./worker/example.ts";'));
+  assert.ok(seenProbes[0].endsWith(reproducer));
   assert.equal(result.outcome, 'verified'); assert.equal(result.reproducerQualified, true);
   assert.equal(result.probePassed, true); assert.equal(result.files[0].content, 'export const enabled = true;');
   assert.ok(boxes.every(box => box.closed));

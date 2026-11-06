@@ -314,7 +314,9 @@ control on new tasks, with total model calls and tokens included.
 
 Use `checked` in place of `grounded` to require a failing reproduction before
 editing. The first worker gets at most three actions to inspect or produce a
-Node assertion of the reported behavior. A passing probe, import failure or
+Node assertion of the reported behavior. The harness supplies `assert` and
+each editable module as `source0`, `source1`, and so on; the model writes the
+JavaScript check body. A passing probe, import failure or
 syntax error does not qualify. Each probe executes in a fresh disposable
 sandbox; its writes cannot change the repair workspace.
 
