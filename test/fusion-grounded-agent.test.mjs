@@ -236,13 +236,13 @@ test('workers can inspect declared source dependencies but cannot edit them', as
 });
 
 
-test('oversized working memory cannot enter the next model context', async () => {
+for (const invalidMemory of ['', ' ', 'x'.repeat(2001)]) test(`invalid working memory of length ${invalidMemory.length} cannot enter the next model context`, async () => {
   let calls = 0;
   const result = await runGroundedAgent({ instruction: 'Fix.', editPaths: ['worker/example.ts'], visibleTests: [] },
     'image', 'strong', 'trial', { maxTurns: 2, outputTokens: 1536, deadlineMs: 10000 },
     async (_id, _role, body) => {
       assert.equal(JSON.parse(body.messages[1].content).workingMemory, '');
-      const action = calls++ === 0 ? { action: 'finish', memory: 'x'.repeat(2001) } : { action: 'finish', memory: '' };
+      const action = calls++ === 0 ? { action: 'finish', memory: invalidMemory } : { action: 'finish', memory: 'Completed.' };
       return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
     }, undefined, {
       makeSandbox: async () => ({ close: async () => {} }),

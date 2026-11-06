@@ -370,7 +370,7 @@ source roots remain excluded. Dependencies are read-only; only the original
 editable paths accept changes. The action schema lists readable paths so an
 agent does not have to guess which navigation requests the harness permits.
 
-Grounded workers retain a bounded working summary between turns and across a
+Grounded workers retain a nonempty bounded working summary between turns and across a
 handoff. The notes are untrusted, limited to 2000 characters and 4096 bytes,
 and excluded from benchmark reports. This preserves discoveries without
 retaining full transcripts or rereading each dependency on every turn.

@@ -6,7 +6,7 @@ import { models } from './fusion-benchmark-accounting.mjs';
 
 const schema = { type: 'object', additionalProperties: false,
   required: ['action', 'path', 'line', 'endLine', 'replace', 'query', 'memory'], properties: {
-    memory: { type: 'string', maxLength: 2000 },
+    memory: { type: 'string', minLength: 1, maxLength: 2000 },
     action: { type: 'string', enum: ['inspect', 'edit', 'probe', 'finish'] },
     path: { type: 'string' }, line: { type: 'integer', minimum: 0 }, endLine: { type: 'integer', minimum: 0 },
     replace: { type: 'string' }, query: { type: 'string' },
@@ -76,7 +76,7 @@ export function groundedEdits(task, files, views, action) {
 const instructions = `Repair the reported repository bug. Current source excerpts are supplied on every turn. Make the smallest correct change; preserve unrelated behavior.
 Return one JSON action. edit: choose the inclusive line and endLine from the numbered source, and put ONLY their corrected replacement text into replace; path must be an editable file. Replace as few lines as possible. Do not include line-number prefixes in replacement text or rewrite entire functions unnecessarily.
 inspect: choose a listed readable path and either a line number or literal query to see another source window. Declared source dependencies are read-only; edits still require an editable path. probe: query contains a Node ES module that imports the source and asserts the reported behavior; it executes in an isolated repository. finish: submit the current repair.
-memory: preserve a concise working summary of facts learned, files inspected, and the next step (at most 2000 characters). Use workingMemory to continue rather than rediscovering earlier work. Working notes can be wrong; verify against source. Never copy full source into memory. Set unused strings to empty and unused line/endLine to 0. The source is already read for you. Do not emit notes, explanations or copies of the full file.
+memory: every action must preserve a nonempty, concise working summary of facts learned, files inspected, and the next step (at most 2000 characters). Use workingMemory to continue rather than rediscovering earlier work. Working notes can be wrong; verify against source. Never copy full source into memory. Set other unused strings to empty and unused line/endLine to 0; memory must not be empty. The source is already read for you. Do not emit notes, explanations or copies of the full file.
 Visible tests pass even on the broken baseline: their success does not prove the issue fixed. Use an executable probe of the reported invariant where possible. Final acceptance tests are unavailable.`;
 
 export async function runGroundedAgent(task, image, strategy, trialId, config, invoke, _engine,
@@ -152,9 +152,9 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       let action;
       try { action = JSON.parse(response.choices[0].message.content); }
       catch { actions.push({ turn: turns + 1, action: 'invalid_json', status: 'rejected' }); invalidActions++; feedback = 'Invalid JSON. Return one action object.'; continue; }
-      if (action?.memory !== undefined && (typeof action.memory !== 'string' || action.memory.length > 2000 || Buffer.byteLength(action.memory) > 4096)) {
+      if (action?.memory !== undefined && (typeof action.memory !== 'string' || !action.memory.trim() || action.memory.length > 2000 || Buffer.byteLength(action.memory) > 4096)) {
         actions.push({ turn: turns + 1, action: 'invalid_memory', status: 'rejected' });
-        invalidActions++; feedback = 'Working memory must be a short string, at most 2000 characters and 4096 bytes.'; continue;
+        invalidActions++; feedback = 'Working memory must be nonempty, at most 2000 characters and 4096 bytes; summarize known facts and the next step.'; continue;
       }
       if (typeof action?.memory === 'string') workingMemory = action.memory;
       const event = { turn: turns + 1, action: ['inspect', 'edit', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
