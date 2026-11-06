@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in, budget-capped native model-pair benchmark with fixed controls and a strong-planner/cheap-editor policy.
+
 - Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.
 
 - Include both fixed-model controls in local Fusion function-smoke summaries so mixed policies can be compared against the stronger baseline.

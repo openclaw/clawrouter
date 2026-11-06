@@ -89,3 +89,14 @@ test('HTTP error diagnostics retain only finite labels, never echoed content', (
     ['service_tier unsupported', 'service_tier'],
   ]) assert.equal(nativeErrorMetadata({ error: { message } }).errorHint, hint);
 });
+
+test('selected-model preflight requires only the selected providers', async () => {
+  const pair = ['openai/gpt-6-luna', 'openai/gpt-6.1-sol'], calls = [];
+  const pins = await nativePins({ OPENAI_API_KEY: 'synthetic-openai' }, async url => {
+    calls.push(url); return Response.json({ id: url.split('/').at(-1) });
+  }, pair);
+  assert.deepEqual(Object.keys(pins), pair);
+  assert.equal(calls.length, 2);
+  await assert.rejects(nativePins({}, async () => {}, pair), /credentials_missing/);
+  await assert.rejects(nativePins(env, async () => {}, ['unknown']), /model_unknown/);
+});
