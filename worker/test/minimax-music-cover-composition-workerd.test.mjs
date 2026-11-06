@@ -278,7 +278,10 @@ test("private authorized cover actual Workerd: WAVE custody, original authority,
       response.writeHead(200, { "content-type": "application/json", "content-length": String(p.length + expectedAudio * 2 + s.length) });
       const write = async value => {
         if (response.destroyed) return false;
-        if (!response.write(value)) await new Promise(resolve => { response.once("drain", resolve); response.once("close", resolve); });
+        if (!response.write(value)) await new Promise(resolve => {
+          const complete = () => { response.off("drain", complete); response.off("close", complete); resolve(); };
+          response.once("drain", complete); response.once("close", complete);
+        });
         return !response.destroyed;
       };
       if (!await write(p)) return;
@@ -312,8 +315,8 @@ test("private authorized cover actual Workerd: WAVE custody, original authority,
     const r = await runtime.dispatchFetch("https://router.example/fixture/" + path);
     assert.equal(r.status, 200, await r.clone().text()); return r.json();
   };
-  const attest = async (key = "synthetic-cover-original") => {
-    const r = await runtime.dispatchFetch("https://router.example/v1/admin/upstream-grants/policies/fixture/cover", {
+  const attest = async (key = "synthetic-cover-original", replace = false) => {
+    const r = await runtime.dispatchFetch("https://router.example/v1/admin/upstream-grants/policies/fixture/cover" + (replace ? "?mode=replace" : ""), {
       method: "PUT", headers: { ...access.headers, "content-type": "application/json" }, body: JSON.stringify({ provider: "minimax", kind: "api_key", enabled: true,
         accountId: "cover-account", credential: key, nativeMediaAuthorization: "minimax-global-music-cover-inline-audio" }) });
     assert.equal(r.status, 200, await r.clone().text()); await r.body.cancel();
@@ -396,7 +399,7 @@ test("private authorized cover actual Workerd: WAVE custody, original authority,
     assert.equal(event.cost_basis, value.post ? "policy_fixed" : "not_dispatched");
   }
   for (const m of ["rotate", "revoke", "coverage"]) {
-    const client = start(m);
+    const client = start(m); let primary;
     try {
       await wait(value => value.held); assert.equal((await call("contend")).allowed, false);
       if (m === "coverage") await call("user?budget=daily");
@@ -407,7 +410,14 @@ test("private authorized cover actual Workerd: WAVE custody, original authority,
       }
       release("/" + m + "/policy"); const value = await client.pending;
       retired(value); assert.ok(value.code); assert.equal(value.post, 0); assert.equal(posts, client.before);
-    } finally { release("/" + m + "/policy"); await client.pending; await call("user"); await attest(); }
+    } catch (error) { primary = error; }
+    finally {
+      release("/" + m + "/policy");
+      for (const cleanup of [() => client.pending, () => call("user"), () => attest(undefined, m === "revoke")]) {
+        try { await cleanup(); } catch (error) { primary = primary ? new AggregateError([primary, error]) : error; }
+      }
+    }
+    if (primary) throw primary;
   }
   const unclaimed = start("unclaimed");
   try {

@@ -41,7 +41,7 @@ test("inactive serializer binds sealed bytes/scalars and transfers 96 = 32 + 64 
     const flow = runInactiveMiniMaxMusicCoverUpload(f.sealed, async (url, init) => {
       posts++; assert.equal(url, destination); assert.equal(init.redirect, "manual");
       assert.equal(bodyBudgetCharged(), 96 * MiB); uploaded = await drain(init.body);
-      assert.equal(Buffer.byteLength(uploaded), Number(init.headers["content-length"])); return reply();
+      assert.equal(Buffer.byteLength(uploaded), Number(new Headers(init.headers).get("content-length"))); return reply();
     });
     try {
       const response = await flow.result;
