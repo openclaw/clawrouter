@@ -1,4 +1,4 @@
-import { miniMaxT2VModels, readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { isMiniMaxVideoModel, readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import type { GrantRequirement } from "./provider-auth.ts";
@@ -43,7 +43,8 @@ export function miniMaxVideoProjection(grant: UpstreamGrant | null | undefined):
 export function miniMaxVideoRequirement({ provider, endpoint, model, mode }: GrantRequirement): boolean {
   const scheme = provider.auth.schemes.find(row => row.type !== "oauth");
   return provider.id === "minimax" && ["https://api.minimax.io", "https://api.minimaxi.com"].includes(provider.base_urls.default)
-    && mode === "http" && typeof model === "string" && (miniMaxT2VModels as readonly string[]).includes(model)
+    && mode === "http" && isMiniMaxVideoModel(model)
+    && provider.models.filter(card => card.upstream === model).length === 1
     && endpoint.lifecycle?.protocol === "minimax.video" && !endpoint.lifecycle.cancel && !endpoint.lifecycle.result
     && provider.capabilities.some(row => row.id === "media.predict" && row.endpoint === endpoint.id)
     && endpoint.request_format === "minimax.video_create" && endpoint.response_format === "minimax.video"

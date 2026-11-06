@@ -1,6 +1,6 @@
-import { assertMiniMaxVideoInlineOwner } from "./minimax-video-inline.ts";
+import { assertMiniMaxVideoInlineOwner, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import { readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { miniMaxVideoBindingModel, miniMaxVideoRequiresInline, readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import { validateBudgetReservation } from "./accounting.ts";
 import { resolveConnection } from "./authority.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
@@ -19,7 +19,8 @@ import { HttpError, sha256Hex } from "./utils.ts";
 
 export async function revalidateMiniMaxVideoOwner(env: Env, auth: AuthorizedIdentity, requirement: GrantRequirement,
   key: string, grant: UpstreamGrant, operation: MiniMaxVideoOperation): Promise<UpstreamGrant> {
-  if (!miniMaxVideoRequirement(requirement)) miniMaxVideoDenied();
+  if (!miniMaxVideoRequirement(requirement) || !miniMaxVideoBindingModel(grant.minimaxVideoBinding, requirement.model)
+    || miniMaxVideoRequiresInline(requirement.model) && !hasMiniMaxVideoInline(operation)) miniMaxVideoDenied();
   const model = requirement.provider.models.find(row => row.upstream === requirement.model && row.capabilities.includes("media.predict"));
   if (!model) miniMaxVideoDenied();
   const inputContext = [auth.credentialId, auth.principalId, auth.policyId, auth.policy.tenantId,
@@ -44,7 +45,8 @@ export async function revalidateMiniMaxVideoOwner(env: Env, auth: AuthorizedIden
   // All policy and pricing awaits precede this original-owner read.
   const current = await inspectGrantCredentials(env, key, signal, undefined, undefined, operation);
   signal.throwIfAborted(); assertControlCallerLive(caller);
-  if (miniMaxVideoIdentity(current) !== original || !filterGrantCandidates("minimax", [{ key, grant: current, runtimeState: null }],
+  if (miniMaxVideoIdentity(current) !== original || !miniMaxVideoBindingModel(current.minimaxVideoBinding, requirement.model)
+    || miniMaxVideoRequiresInline(requirement.model) && !hasMiniMaxVideoInline(operation) || !filterGrantCandidates("minimax", [{ key, grant: current, runtimeState: null }],
     new Set(), grantRoutingPolicy(policy.grantRouting), key, requirement, Date.now()).available.length) miniMaxVideoDenied();
   assertMiniMaxVideoInlineOwner(operation, readMiniMaxVideoBinding(current.minimaxVideoBinding), inputContext, [key, miniMaxVideoIdentity(current)]);
   operation.setCurrentConnection(connection);
@@ -57,7 +59,8 @@ export function prepareMiniMaxVideoDispatch(env: Env, auth: AuthorizedIdentity, 
   const requirement = { provider: selection.provider, endpoint: selection.endpoint, mode: "http" as const,
     model: selection.model?.upstream, managedLifecycle: true };
   const grant = upstream.grant, key = upstream.grantKey, binding = readMiniMaxVideoBinding(grant?.minimaxVideoBinding);
-  if (!grant || !key || !binding || !miniMaxVideoRequirement(requirement) || upstream.transport !== null
+  if (!grant || !key || !binding || !miniMaxVideoRequirement(requirement)
+    || !miniMaxVideoBindingModel(binding, requirement.model) || upstream.transport !== null
     || upstream.baseUrl !== binding.origin || destination.href !== `${binding.origin}/v1/video_generation`
     || upstream.query.size || Object.keys(selection.pathParams).length || selection.capability !== "media.predict"
     || !miniMaxApiKeySecret(grant) || headers.get("authorization") !== `Bearer ${miniMaxApiKeySecret(grant)}`) miniMaxVideoDenied();
@@ -67,7 +70,7 @@ export function prepareMiniMaxVideoDispatch(env: Env, auth: AuthorizedIdentity, 
 // Appended only to the existing Hailuo route digest. No new durable authority field.
 export async function miniMaxVideoRouteComponent(grant: UpstreamGrant | null, key: string | null, model: string | undefined): Promise<unknown[]> {
   const binding = readMiniMaxVideoBinding(grant?.minimaxVideoBinding), secret = grant && miniMaxApiKeySecret(grant);
-  if (!grant || !key || !binding || !secret || !binding.models.some(value => value === model)) miniMaxVideoDenied();
+  if (!grant || !key || !binding || !secret || !miniMaxVideoBindingModel(binding, model)) miniMaxVideoDenied();
   const identity = miniMaxVideoIdentity(grant);
   videoJsonBytes([key, identity, model, secret]);
   return ["clawrouter.minimax-video-route.v1", key, identity, model, await sha256Hex(secret)];

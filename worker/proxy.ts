@@ -1,7 +1,7 @@
-import { readMiniMaxVideoInput, bindMiniMaxVideoInline } from "./minimax-video-inline.ts";
+import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
 import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
-import { miniMaxT2VModels } from "../shared/minimax-video-binding.ts";
+import { isMiniMaxVideoModel, miniMaxVideoRequiresInline } from "../shared/minimax-video-binding.ts";
 import { prepareMiniMaxVideoDispatch } from "./minimax-video-dispatch.ts";
 import { MiniMaxSearchOperation, readSearchJson, assertSearchHeaders } from "./minimax-search-operation.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
@@ -671,7 +671,8 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
       if (model) miniMaxVideoDenied();
       model = candidate;
     }
-    if (!model || !(miniMaxT2VModels as readonly string[]).includes(model.upstream)
+    if (!model || !isMiniMaxVideoModel(model.upstream)
+      || miniMaxVideoRequiresInline(model.upstream) && !hasMiniMaxVideoInline(owner)
       || !model.capabilities.includes("media.predict") || !modelSupportsEndpoint(provider, model, endpoint)) miniMaxVideoDenied();
     input.model = model.upstream;
     const selection: ProxySelection = { provider, endpoint, model, capability: "media.predict", body: input,

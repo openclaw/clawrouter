@@ -1,9 +1,11 @@
 # MiniMax global inline first frame
 
 The private runtime accepts one inline PNG, JPEG or static WebP first frame for
-MiniMax-Hailuo-2.3 and MiniMax-Hailuo-02. Public declarations and native-client
-activation remain separate. Fast, the three legacy I2V models, CN input, URLs,
-uploaded handles, source fetching and remote cancellation remain closed.
+explicitly attested global models. V2 retains MiniMax-Hailuo-2.3 and
+MiniMax-Hailuo-02 only. Separate V3 authority adds the four frozen required-frame
+models below. Public declarations and native-client activation remain separate.
+CN input, URLs, uploaded handles, source fetching and remote cancellation remain
+closed.
 
 An enabled current Access administrator must explicitly attest
 `minimax-global-video-inline-first-frame`. This produces the closed
@@ -13,6 +15,41 @@ never upgrades a binding. Existing owner mutation hashing, pool admission,
 current SQL authorization, generation/lineage changes and authoritative null
 projections apply to the complete binding. The freshness check is not an atomic
 transaction across owners.
+
+## Explicit six-model authority
+
+`minimax-global-video-six-model-inline-first-frame` is a separate current-admin
+intent. It produces the closed global `clawrouter.minimax-video.v3` binding,
+with the same `inline-first-frame.v1` byte profile and exactly the original two
+models plus these four:
+
+| Exact upstream model | Required first frame | Shape |
+| --- | --- | --- |
+| MiniMax-Hailuo-2.3-Fast | Yes | 768P at 6/10 seconds; 1080P at 6 seconds |
+| I2V-01-Director | Yes | 720P at 6 seconds |
+| I2V-01-live | Yes | 720P at 6 seconds |
+| I2V-01 | Yes | 720P at 6 seconds |
+
+Their prompt is optional; a supplied prompt must be a string of at most 2000
+UTF-16 units. Camera instructions remain prompt text, with no new field.
+V1/V2 constructors, normalization and permissions do not expand. Re-attestation
+changes lineage through the existing complete mutation proof; imports remain
+unqualified. No account access, live availability or vendor price is implied.
+
+A pure selected-binding/model predicate gates discovery, selection and control.
+Discovery resolves one exact declared upstream card while retaining the router
+ID for offers and policy matching. Missing, duplicate or foreign cards deny;
+there is no prefix stripping or alias fallback. CREATE additionally requires the
+private inline capability before materialization and at final owner revalidation.
+The four new models cannot use T2V or a caller-supplied capability flag.
+
+POLL, collector and FILE requests do not need the retired CREATE image. They use
+the private original job, requested version, current binding/generation, route
+digest and current policy. No image is persisted and a job grants no CREATE
+permission. Original T2V digest bytes and V2 inline behavior stay unchanged.
+The V3 tests include 24 full-size format/model/route combinations, restarted
+owner collection/file access, cross-job/version denials and reachable maximum
+controls. These are application ownership tests, not native-platform heap proof.
 
 The frontend selects the declared route before intake. The original proxy-key
 authorization precedes the first read. Incremental intake accepts at most
@@ -39,7 +76,7 @@ there is no added `.slice()` snapshot. Changed content or effective scalars
 under an existing idempotency key conflict. T2V digest bytes are unchanged.
 
 Current policy and pricing checks precede materialization. The inline GLOBAL
-V2 check runs inside original-owner revalidation before secret materialization,
+V2/V3 binding and selected-model check runs inside original-owner revalidation before secret materialization,
 then repeats on the fresh original generation/lineage/account/binding before
 the sole POST. No caller boolean, reconstructed body or private catalog reply
 can mint the input capability. Unknown hard-USD admission remains closed;

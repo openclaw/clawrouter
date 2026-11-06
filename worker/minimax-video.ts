@@ -23,7 +23,7 @@ export function prepareMiniMaxInlineVideoScalars(value: unknown) {
 }
 function prepareVideoShape(region: keyof typeof miniMaxVideoOrigins, value: unknown, ownedInline: boolean) {
   const body = object(value);
-  if (ownedInline && (Object.hasOwn(body, "first_frame_image") || !["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-02"].includes(String(body.model)))) fail("inline_model");
+  if (ownedInline && (Object.hasOwn(body, "first_frame_image") || !(miniMaxVideoModels as readonly string[]).includes(String(body.model)))) fail("inline_model");
   if (Object.keys(body).some(key => !["model", "prompt", "duration", "resolution", "first_frame_image"].includes(key))
     || typeof body.model !== "string" || !(miniMaxVideoModels as readonly string[]).includes(body.model)) fail("model_or_fields");
   const imageMode = ownedInline || body.first_frame_image !== undefined, legacy = body.model.startsWith("I2V-");
