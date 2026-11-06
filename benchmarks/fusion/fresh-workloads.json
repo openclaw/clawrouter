@@ -18,22 +18,20 @@
       "instruction": "StepFun standard OpenAI-compatible Chat reports usage.cached_tokens as a subset of inclusive prompt_tokens. Recognize this field only when trusted provider context is stepfun or stepfun-cn and both request and response formats are openai.chat_completions. Thread the same context through JSON and cumulative SSE usage extraction. Preserve inclusive input totals, existing cache-evidence conflict validation, and every other provider and format; response model names alone must not grant this interpretation."
     },
     {
-      "id": "abliteration-server-credential",
+      "id": "cerebras-worker-redirect-mode",
       "split": "development",
-      "base": "4458c6b0ef3962ab1d60ae3043ce2c0a2950e7d6",
-      "oracle": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
+      "base": "e47ecdedd4da93bb665431b81f698668468dc8ea",
+      "oracle": "b1a1d3cad82802e86e36bd2439cec9e22e310241",
       "editPaths": [
-        "worker/provider-auth.ts",
-        "worker/providers.ts"
+        "worker/cerebras-model-catalog.ts"
       ],
       "visibleTests": [
-        "worker/test/hosted-provider-contracts.test.mjs"
+        "worker/test/cerebras-model-catalog.test.mjs"
       ],
       "hiddenTests": [
-        "worker/test/abliteration-credential-runtime.test.mjs",
-        "worker/test/hosted-provider-contracts.test.mjs"
+        "worker/test/cerebras-model-catalog.test.mjs"
       ],
-      "instruction": "Abliteration server authentication must recognize its canonical ABLIT_KEY while retaining compatibility with ABLITERATION_API_KEY. Prefer the canonical key when both are configured, accept either server key for readiness and operation configuration, and preserve account-owner credential selection and runtime binding. Do not require both names or change unrelated provider authentication."
+      "instruction": "Cerebras public model-catalog request construction uses a redirect mode that Cloudflare Workers do not support. Use the supported explicit manual redirect mode for the canonical catalog request; downstream catalog processing must remain responsible for rejecting redirects. Preserve GET, JSON Accept headers, omitted credentials, AbortSignal, canonical origin restrictions, model filtering and error behavior."
     },
     {
       "id": "google-audio-pricing-context",
