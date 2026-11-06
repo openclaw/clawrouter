@@ -64,13 +64,15 @@ Visible tests pass even on the broken baseline: their success does not prove the
 
 export async function runGroundedAgent(task, image, strategy, trialId, config, invoke, _engine,
   { makeSandbox = sandbox, read = readSource, write = writeFiles, test = check, runProbe = probe } = {}) {
-  if (!['strong', 'handoff'].includes(strategy)) throw new Error('invalid_grounded_strategy');
+  if (!['strong', 'handoff', 'review'].includes(strategy)) throw new Error('invalid_grounded_strategy');
+  if (strategy === 'review' && config.requireReproducer !== true) throw new Error('review_requires_reproducer');
   const box = await makeSandbox(image), started = performance.now();
   const deadline = AbortSignal.timeout(config.deadlineMs), remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   let selection = null, feedback = 'No edits yet. Inspect the source and repair the reported behavior.', handoffUsed = false;
   let outcome = 'turn_limit', publicPassed = false, invalidActions = 0, turns = 0;
   const actions = [];
   const checked = config.requireReproducer === true;
+  let reviewing = false, reviewed = false;
   let reproducer = null, probePassed = false;
   const probeModules = task.editPaths.map((path, index) => ({ binding: `source${index}`, path: `./${path}` }));
   // Global bindings avoid duplicate lexical declarations if a worker still
@@ -101,16 +103,17 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const readable = [...files, ...extra];
       if (selection) readable.sort((a, b) => Number(b.path === selection.path) - Number(a.path === selection.path));
       const views = sourceWindows(readable, task.instruction, selection);
-      const phaseInstructions = !checked ? '' : reproducer
+      const phaseInstructions = !checked ? '' : reviewing
+        ? '\nIndependent review phase: the first worker produced this candidate. Its frozen test and visible tests pass, but those tests can be incomplete or wrong. Review the ENTIRE issue independently, including every stated boundary and behavior that must be preserved. Use inspect or edit to correct omissions. Use finish only when the candidate satisfies the full issue. Do not treat a passing self-authored test as proof of correctness.' : reproducer
         ? '\nRepair phase: the frozen reproduction below fails with an assertion on the original source. Use inspect or edit. Each edit reruns it in a fresh sandbox. Submission is automatic only when the reproduction and visible tests both pass. Do not change the reproduction.'
         : '\nReproduction phase: use inspect or probe only. The sandbox already imports assert from node:assert/strict and each editable module as source0, source1, etc. Write only executable JavaScript in query, using assert and those module namespaces; no imports, TypeScript types or shell commands are needed. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. You have at most three actions to reproduce the bug; do not edit or finish.';
       const actionSchema = !checked ? schema : { ...schema, properties: { ...schema.properties,
-        action: { type: 'string', enum: reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
+        action: { type: 'string', enum: reviewing ? ['inspect', 'edit', 'finish'] : reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
       const messages = [{ role: 'system', content: instructions + phaseInstructions }, { role: 'user', content: JSON.stringify({
         issue: task.instruction, editable: task.editPaths, visibleTests: task.visibleTests,
         currentSource: views.map(({ content, ...view }) => ({ ...view,
           numberedSource: content.split('\n').map((line, index) => `${view.startLine + index}|${line}`).join('\n') })),
-        testExamples, ...(checked ? { phase: reproducer ? 'repair' : 'reproduce', probeModules,
+        testExamples, ...(checked ? { phase: reviewing ? 'review' : reproducer ? 'repair' : 'reproduce', probeModules,
           probePrelude, reproduction: reproducer } : {}),
         recentActions: actions.slice(-4), lastToolResult: feedback.slice(-4000),
       }) }];
@@ -124,7 +127,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const event = { turn: turns + 1, action: ['inspect', 'edit', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);
       try {
-        if (checked && !(reproducer ? ['inspect', 'edit'] : ['inspect', 'probe']).includes(action.action)) throw new Error('invalid_action');
+        if (checked && !(reviewing ? ['inspect', 'edit', 'finish'] : reproducer ? ['inspect', 'edit'] : ['inspect', 'probe']).includes(action.action)) throw new Error('invalid_action');
         if (action.action === 'inspect') {
           if (![...task.editPaths, ...task.visibleTests].includes(action.path) || !Number.isSafeInteger(action.line)
             || action.line < 0 || typeof action.query !== 'string' || action.query.length > 200) throw new Error('invalid_read_paths');
@@ -141,7 +144,13 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
             probePassed = result.passed;
             feedback += ` Frozen reproduction passed: ${probePassed}. ${result.feedback.slice(-2000)}`;
             event.passed = probePassed;
-            if (probePassed && publicPassed) { outcome = 'verified'; turns++; break; }
+            if (probePassed && publicPassed) {
+              if (strategy === 'review' && !reviewing) {
+                reviewing = true; handoffUsed = true;
+                actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
+                feedback += ' Candidate checks pass. Independent review of the full issue is required before submission.';
+              } else { reviewed = reviewing; outcome = 'verified'; turns++; break; }
+            }
           }
         } else if (action.action === 'probe') {
           const result = checked ? await isolatedProbe(null, action.query) : await runProbe(box, action.query, remaining());
@@ -160,7 +169,12 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
           }
         } else if (action.action === 'finish') {
           const result = await test(box, task.visibleTests, remaining()); publicPassed = result.passed;
-          if (strategy === 'handoff' && !handoffUsed) {
+          if (reviewing) {
+            const checkedProbe = await isolatedProbe(await read(box, task.editPaths, remaining()), reproducer);
+            probePassed = checkedProbe.passed;
+            if (publicPassed && probePassed) { reviewed = true; outcome = 'verified'; turns++; break; }
+            feedback = 'Review submission rejected: visible tests and the frozen reproduction must both pass.';
+          } else if (strategy === 'handoff' && !handoffUsed) {
             handoffUsed = true; actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
             feedback = 'The first worker submitted. Independently inspect current source and verify the bug is fixed.';
           } else { outcome = 'submitted'; turns++; break; }
@@ -177,6 +191,6 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
     // bounded without turning an ordinary expired trial into a campaign abort.
     const files = await read(box, task.editPaths, 10000);
     return { files, patchDigest: hash(JSON.stringify(files)), actions, turns, outcome, handoffUsed, invalidActions, publicPassed,
-      ...(checked ? { reproducerQualified: reproducer !== null, probePassed } : {}) };
+      ...(checked ? { reproducerQualified: reproducer !== null, probePassed, ...(strategy === 'review' ? { reviewed } : {}) } : {}) };
   } finally { await box.close(); }
 }

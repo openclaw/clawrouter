@@ -126,3 +126,45 @@ test('checked repair rejects premature finish, passing probes and runtime errors
   assert.equal(result.outcome, 'no_reproducer'); assert.equal(result.handoffUsed, false);
   assert.equal(result.reproducerQualified, false); assert.equal(result.probePassed, false);
 });
+
+for (const repair of [false, true]) test(`independent review ${repair ? 'repairs an omitted invariant' : 'accepts a correct candidate'} before submission`, async () => {
+  const task = { instruction: 'Enable the feature and preserve the existing flag.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  const roles = [], phases = [], boxes = [];
+  let invocation = 0;
+  const result = await runGroundedAgent(task, 'image', 'review', 'trial',
+    { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000, requireReproducer: true },
+    async (_id, role, body) => {
+      roles.push(role); phases.push(JSON.parse(body.messages[1].content).phase);
+      const action = { action: 'probe', path: '', line: 0, endLine: 0, query: 'assert.equal(source0.enabled, true)', replace: '' };
+      if (invocation === 1) Object.assign(action, { action: 'edit', path: task.editPaths[0], line: 1, endLine: 2,
+        replace: `export const enabled = true;\nexport const preserved = ${!repair};` });
+      if (invocation === 2) {
+        assert.match(body.messages[0].content, /ENTIRE issue/);
+        Object.assign(action, repair
+          ? { action: 'edit', path: task.editPaths[0], line: 2, endLine: 2, replace: 'export const preserved = true;' }
+          : { action: 'finish' });
+      }
+      invocation++;
+      return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => {
+        const box = { source: 'export const enabled = false;\nexport const preserved = true;', closed: false,
+          close: async () => { box.closed = true; } }; boxes.push(box); return box;
+      },
+      read: async (box, paths) => paths.map(path => ({ path, content: path === task.editPaths[0] ? box.source : 'visible test' })),
+      write: async (box, files) => { box.source = files[0].content; },
+      test: async () => ({ passed: true, feedback: '' }),
+      runProbe: async box => ({ passed: box.source.includes('enabled = true'),
+        assertionFailed: !box.source.includes('enabled = true'), feedback: '' }),
+    });
+  assert.deepEqual(roles, [models.strong, models.strong, models.critic]);
+  assert.deepEqual(phases, ['reproduce', 'repair', 'review']);
+  assert.equal(result.reviewed, true); assert.equal(result.outcome, 'verified');
+  assert.match(result.files[0].content, /preserved = true/);
+  assert.ok(boxes.every(box => box.closed));
+});
+
+test('independent review requires the checked interface before allocating a sandbox', async () => {
+  await assert.rejects(runGroundedAgent({}, 'image', 'review', 'trial', {}, async () => {}, undefined,
+    { makeSandbox: async () => { throw Error('must not allocate'); } }), /review_requires_reproducer/);
+});
