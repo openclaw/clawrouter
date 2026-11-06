@@ -34,7 +34,16 @@ export async function credentialMutationResponse(request: Request, env: Env, res
     ...(profileIntent ? { copilotPublicIdentity: body.copilotPublicIdentity === null ? null : normalizeCopilotPublicIdentity(body.copilotPublicIdentity) } : {}) };
   // Close legacy imports before the owner checks collisions, holdings and quotas.
   // Imported snapshots never overwrite writes made while these reads are pending.
-  await Promise.all([listCredentials(env), listPolicies(env), listUsers(env), ...(scope === "personal" ? [listBindings(env)] : [])]);
+  let failed = false, firstFailure: unknown;
+  const observe = (pending: Promise<unknown>): Promise<void> => pending.then(() => {}, error => {
+    if (!failed) { failed = true; firstFailure = error; }
+  });
+  // Observe each import immediately and discard its list. A failed sibling must
+  // not let this request finish while another logical import is still running.
+  const imports = [observe(listCredentials(env)), observe(listPolicies(env)), observe(listUsers(env))];
+  if (scope === "personal") imports.push(observe(listBindings(env)));
+  await Promise.all(imports);
+  if (failed) throw firstFailure;
   const result = await authorityCall<CredentialMutationResult>(env, "/credentials/mutate", mutation);
   if (result.outcome === "invalid") throw new HttpError(result.status, result.code, result.message);
   if (result.outcome !== "updated") {

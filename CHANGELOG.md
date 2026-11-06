@@ -30,6 +30,8 @@
 
 - Bound the seventeen generic authority acknowledgments to their exact protocol strings and join original fetch, response reads, FIRST cancellation and unlock. Preserve specialized transports and advisory catches; an invoked mutation with a lost acknowledgment remains uncertain and is never replayed.
 
+- Join every concurrent cold credential import before returning its first failure or issuing a mutation. Preserve admin/personal hydration and original error identity without retrying or rolling back completed imports.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
