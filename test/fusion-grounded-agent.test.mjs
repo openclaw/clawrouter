@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sourceWindows, groundedEdits, runGroundedAgent } from '../scripts/fusion-grounded-agent.mjs';
+import { sourceWindows, sourceDependencies, groundedEdits, runGroundedAgent } from '../scripts/fusion-grounded-agent.mjs';
 import { models } from '../scripts/fusion-benchmark-accounting.mjs';
 
 test('source windows are bounded and explicit inspection reaches later lines', () => {
@@ -191,4 +191,44 @@ test('independent reviewer rescues a three-action author failure within the shar
     });
   assert.deepEqual(roles, [models.strong, models.strong, models.strong, models.critic, models.critic]);
   assert.equal(result.turns, 5); assert.equal(result.reviewed, true); assert.equal(result.outcome, 'verified');
+});
+
+test('source dependency discovery is bounded to static source imports outside test paths', () => {
+  const files = [{ path: 'worker/example.ts', content: `
+    import { helper } from "./helper.ts";
+    import type { Shared } from "../shared/types.ts";
+    import "./test/hidden.test.mjs";
+    import "../../private/secret.ts";
+    import "./credentials.json";
+    import "./hidden.ts";
+  ` }];
+  assert.deepEqual(sourceDependencies(files, { hiddenTests: ['worker/hidden.ts'] }), ['worker/helper.ts', 'shared/types.ts']);
+  const many = [{ path: 'worker/example.ts', content: Array.from({length: 40}, (_, i) => `import "./helper${i}.ts";`).join('\n') }];
+  assert.equal(sourceDependencies(many, {}).length, 32);
+});
+
+test('workers can inspect declared source dependencies but cannot edit them', async () => {
+  const task = { instruction: 'Fix enabled.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'], hiddenTests: ['worker/test/hidden.test.mjs'] };
+  const sources = { 'worker/example.ts': 'import { enabled } from "./helper.ts";', 'worker/helper.ts': 'export const enabled = true;' };
+  let calls = 0, writes = 0;
+  const result = await runGroundedAgent(task, 'image', 'strong', 'trial', { maxTurns: 3, outputTokens: 1536, deadlineMs: 10000 },
+    async (_id, _role, body) => {
+      const message = JSON.parse(body.messages[1].content);
+      assert.ok(message.readable.includes('worker/helper.ts'));
+      assert.ok(body.response_format.json_schema.schema.properties.path.enum.includes('worker/helper.ts'));
+      assert.ok(!message.readable.includes(task.hiddenTests[0]));
+      const action = { action: 'inspect', path: 'worker/helper.ts', line: 1, endLine: 1, replace: '', query: '' };
+      if (calls === 1) {
+        assert.ok(message.currentSource.some(view => view.path === 'worker/helper.ts' && view.numberedSource.includes('enabled = true')));
+        Object.assign(action, { action: 'edit', replace: 'export const enabled = false;' });
+      }
+      if (calls === 2) action.action = 'finish';
+      calls++;
+      return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => ({ close: async () => {} }),
+      read: async (_box, paths) => paths.map(path => ({ path, content: sources[path] ?? '' })),
+      write: async () => { writes++; }, test: async () => ({ passed: true, feedback: '' }),
+    });
+  assert.equal(writes, 0); assert.equal(result.invalidActions, 1); assert.equal(result.actions[1].status, 'unseen_edit');
 });
