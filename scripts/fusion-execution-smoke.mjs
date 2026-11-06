@@ -80,14 +80,14 @@ export function summarizeExecution(tasks, records, models) {
     if (byKey.has(key)) throw new Error('duplicate_execution_record');
     byKey.set(key, row);
   }
-  return ['small-single', 'small-two-verified', 'tiny-small-verified'].map(policy => {
+  return ['small-single', 'small-two-verified', 'tiny-small-verified', 'tiny-single'].map(policy => {
     let solved = 0, abstained = 0, falseAcceptance = 0, calls = 0, tokens = 0, selectionChecks = 0;
     for (const task of tasks) {
-      const small = byKey.get(`${task.id}:${models[1]}:0`);
-      const candidates = policy === 'small-single' ? [small] : policy === 'small-two-verified'
-        ? [small, byKey.get(`${task.id}:${models[1]}:1`)] : [byKey.get(`${task.id}:${models[0]}:0`), small];
+      const tiny = byKey.get(`${task.id}:${models[0]}:0`), small = byKey.get(`${task.id}:${models[1]}:0`);
+      const candidates = policy === 'tiny-single' ? [tiny] : policy === 'small-single' ? [small] : policy === 'small-two-verified'
+        ? [small, byKey.get(`${task.id}:${models[1]}:1`)] : [tiny, small];
       if (candidates.some(row => !row)) throw new Error('incomplete_execution_records');
-      const verified = policy !== 'small-single';
+      const verified = policy !== 'small-single' && policy !== 'tiny-single';
       // Retry policies stop after the first public pass. Hidden outcomes cannot
       // influence selection or save calls in this replay.
       const chosenIndex = verified ? candidates.findIndex(row => row.status === 'valid' && row.publicPassed) : 0;

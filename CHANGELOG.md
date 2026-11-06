@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Include both fixed-model controls in local Fusion function-smoke summaries so mixed policies can be compared against the stronger baseline.
+
 - Add an experimental local Fusion reproduction gate with isolated probes, frozen checks, and explicit acceptance accounting.
 
 - Add an opt-in grounded local Fusion repair scaffold with bounded current-source views and observed edit anchors, preserving the original benchmark profile.
