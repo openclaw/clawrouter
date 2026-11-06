@@ -566,6 +566,7 @@ test("injected native partial input holds the owned read and rejected FIRST clea
     try { await Promise.race([readArrival, failure, new Promise((_, reject) => { timer = setTimeout(() => reject(Error("partial input did not enter")), 5000); })]); }
     finally { clearTimeout(timer); }
     let s = await started;
+    assert.equal(s.results, 0); assert.equal(s.readRetired, false);
     assert.equal(s.partialSameBody, true); assert.equal(s.partialNativeFulfilled, true); assert.equal(s.reads, 1);
     assert.equal(s.partialBytes, 1024); assert.equal(s.partialRemaining, input.length - 1024); assert.ok(s.partialRemaining > 0);
     assert.equal(s.locked, true); assert.equal(s.charged, 96 * MiB); assert.equal(s.releases, 0); assert.equal(io.counts.post, posts);
