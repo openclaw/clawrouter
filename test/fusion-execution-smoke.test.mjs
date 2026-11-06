@@ -76,6 +76,16 @@ test('transport failure checkpoints without persisting generated source or raw e
   } finally { await rm(parent, { recursive: true, force: true }); }
 });
 
+test('candidate output overflow fails that candidate, closes its container, and does not hide infrastructure errors', async () => {
+  for (const reason of ['command_output_limit', 'command_timeout']) {
+    let calls = 0, closed = 0;
+    const makeBox = async () => ({ exec: async () => { if (++calls > 1) throw Error(reason); }, close: async () => { closed++; } });
+    if (reason === 'command_output_limit') assert.deepEqual(await gradeCandidate('unused', 'unused', [], makeBox), { passed: false, outcome: 'output_limit' });
+    else await assert.rejects(gradeCandidate('unused', 'unused', [], makeBox), /command_timeout/);
+    assert.equal(closed, 1);
+  }
+});
+
 test('local generator refuses cloud identities and stops on a failed HTTP request', async () => {
   await assert.rejects(localGenerator(['x:cloud', 'y']), /two_local/);
   await assert.rejects(localGenerator(['x', 'y'], 'https://example.test'), /local_endpoint/);
@@ -91,4 +101,5 @@ test('Docker qualification distinguishes weak public passes from hidden failures
   assert.equal((await gradeCandidate(image, 'export default x=>x;', examples)).passed, true);
   assert.equal((await gradeCandidate(image, 'export default ()=>{while(true){}};', examples)).outcome, 'timeout');
   assert.equal((await gradeCandidate(image, 'export default ()=>process.stdout.write(JSON.stringify({passed:true}));', examples)).passed, false);
+  assert.equal((await gradeCandidate(image, 'export default ()=>{process.stdout.write("x".repeat(300000));return 1;};', examples)).outcome, 'output_limit');
 });

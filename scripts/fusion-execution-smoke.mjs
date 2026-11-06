@@ -25,8 +25,14 @@ export async function gradeCandidate(image, code, examples, makeSandbox = sandbo
 const inputs=${JSON.stringify(examples.map(row => row.args))};
 const values=inputs.map(args=>{const value=fn(...args);if(value===undefined||value?.then)throw Error('invalid result');return {value,args};});
 process.stdout.write(JSON.stringify(values));`;
-    const result = await box.exec(['timeout', '--signal=KILL', '4s', 'node', '--input-type=module'],
-      { input: script, allowFailure: true, timeout: 6000, maxBytes: 262144 });
+    let result;
+    try {
+      result = await box.exec(['timeout', '--signal=KILL', '4s', 'node', '--input-type=module'],
+        { input: script, allowFailure: true, timeout: 6000, maxBytes: 262144 });
+    } catch (error) {
+      if (error.message === 'command_output_limit') return { passed: false, outcome: 'output_limit' };
+      throw error;
+    }
     if ([125, 126, 127].includes(result.code)) throw new Error('sandbox_execution_unavailable');
     if (result.code !== 0) return { passed: false, outcome: result.code === 137 ? 'timeout' : 'execution_error' };
     let values;
