@@ -233,13 +233,24 @@ test(`MiniMax music expired ${manifest ? "manifest" : "native"} hint cannot pref
     if (new URL(url).pathname === "/admission/resolve") { held++; entered.resolve(); await release.promise; }
     return response;
   } }; };
-  const pending = f.request(manifest, body);
+  const controller = new AbortController();
+  const abort = () => { release.resolve(); controller.abort(t.signal.reason); entered.reject(t.signal.reason); };
+  t.signal.addEventListener("abort", abort, { once: true });
+  t.after(() => { release.resolve(); t.signal.removeEventListener("abort", abort); });
+  // Register cleanup before starting I/O. A request that never enters admission
+  // must fail the fixture instead of leaving its barrier unreachable.
+  const pending = f.request(manifest, body, { signal: controller.signal });
   let response;
   try {
-    await entered.promise; assert.equal(held, 1);
+    await Promise.race([entered.promise, pending.then(() => { throw new Error("request completed before fresh admission entered"); })]);
+    assert.equal(held, 1);
     assert.equal(f.materializations, 0, "expired Music hint must not read a secret while fresh admission is held");
     assert.equal(f.sent.length, 0);
-  } finally { release.resolve(); response = await pending; await response.clone().text(); await f.drain(); }
+  } finally {
+    release.resolve();
+    try { response = await pending; await response.clone().text(); }
+    finally { await f.drain(); t.signal.removeEventListener("abort", abort); }
+  }
   assert.equal(response.status, change === "price" ? 400 : 403, await response.clone().text());
   if (change === "price") assert.equal((await response.json()).error.code, "pricing_required");
   else await response.text();

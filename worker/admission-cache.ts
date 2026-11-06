@@ -132,10 +132,11 @@ function prefetchRememberedCredential(env: Env, key: string, request: CachedAdmi
   // Only the secret that earned the hint may start an owner call.
   if (!hint || !safeEqual(request.secretSha256, hint.secretSha256)) return;
   const provider = snapshot.providers.find(item => item.id === request.selection!.providerId);
-  // Vertex exchange and MiniMax image secret reads follow foreground budget
+  // Vertex exchange and MiniMax image/music secret reads follow foreground budget
   // and operation-specific authority checks, never speculative prefetch.
   if (!provider || provider.id === "anthropic-vertex"
-    || provider.id === "minimax" && provider.endpoints.some(endpoint => endpoint.id === request.selection!.endpointId && endpoint.request_format === "minimax.images")) return;
+    || provider.id === "minimax" && provider.endpoints.some(endpoint => endpoint.id === request.selection!.endpointId
+      && (endpoint.request_format === "minimax.images" || endpoint.request_format === "minimax.music"))) return;
   prefetchGrantCredentials(env, hint.key, hint.grant, () => materializeGrantCredentials(env, hint.key, hint.grant, provider.id, provider.auth.refresh, false));
 }
 

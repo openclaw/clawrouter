@@ -7,6 +7,14 @@ The registered `minimax.music` request/response pair supports global MiniMax
 explicit MP3, 44100 Hz, 256000 bitrate and hex settings. Production declarations,
 snapshots and the actual client bridge are separate qualification work.
 
+Music secret reads do not use remembered-grant speculative prefetch. When an
+admission snapshot expires, its retained selection hint cannot start a secret
+read before fresh admission, monetary preflight and Music owner authorization.
+This includes price changes and caller revocation made in another isolate.
+Ordinary-provider prefetch is unchanged. The bundled MiniMax declaration is
+Chat-only; this guard closes a latent declared-Music composition defect, without
+claiming a deployed incident or provider egress.
+
 ## Original credential authority
 
 An administrator can explicitly set `nativeMediaAuthorization` to
