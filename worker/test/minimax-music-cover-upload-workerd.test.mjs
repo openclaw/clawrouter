@@ -297,6 +297,8 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
       assert.equal(heldState.done, true);
       release("/" + nextMode + "/cleanup");
       if (["read", "read-reject"].includes(nextMode)) { assert.equal((await call("state")).charged, 96 * 1024 * 1024); release("/" + nextMode + "/read"); }
+      // Observe the ORIGINAL unlock boundary before waiting on the client join.
+      await wait(s => s.unlockAttempts > 0);
       const done = await client.promise; check(done); assert.equal(done.error, "transport"); assert.equal(done.unlocks, 1);
       assert.equal(done.cleanupError, nextMode === "read-reject" ? "control_cleanup" : undefined);
     } finally { release("/" + nextMode + "/late"); release("/" + nextMode + "/cleanup"); release("/" + nextMode + "/read"); await client.promise; }
