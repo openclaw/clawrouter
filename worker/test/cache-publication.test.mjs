@@ -125,3 +125,13 @@ test('an old stale refresh cannot overwrite a later load', async () => {
   // Read before restoring the clock would also be fresh; retain its same source clock.
   setHotCacheClock(() => now);assert.equal(cache.peek('k', config).value, 'replacement');setHotCacheClock();
 });
+
+test('an admitted foreign stored timestamp raises the rollback fence without renewing age', () => {
+  let now = 500;setHotCacheClock(() => now);resetSharedHotCacheFence();
+  const cache = new HotCache(4), publication = cache.beginPublication('foreign');
+  assert.equal(publication.acquiredAt, 500);now = 1000;
+  assert.equal(cache.publish('foreign', publication, 'snapshot', config, Infinity, 900), true);
+  cache.endPublication('foreign', publication);assert.equal(cache.entries.get('foreign').storedAt, 900);
+  now = 600;cache.clear();fenceSharedHotCache();assert.equal(sharedHotCacheFence(), 900);
+  now = 1000;assert.ok(900 <= sharedHotCacheFence());setHotCacheClock();resetSharedHotCacheFence();
+});

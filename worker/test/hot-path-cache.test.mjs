@@ -612,6 +612,35 @@ test('a request drains only its own background work, bounded by its own timer', 
   assert.equal(finished, true, 'the drain ends at its own bound even though the work never settles');
 });
 
+// Register release/drain before starting an operation. Node reports an original
+// assertion and any cleanup-hook failure separately; neither is suppressed.
+function ownCacheBarrier(t, release, fixture) {
+  const work = [];
+  t.after(async () => {
+    release.resolve();
+    const errors = [];
+    for (const result of await Promise.allSettled(work)) {
+      if (result.status === 'rejected') errors.push(result.reason);
+      else if (result.value instanceof Response && !result.value.bodyUsed) {
+        try { await result.value.arrayBuffer(); } catch (error) { errors.push(error); }
+      }
+    }
+    for (const result of await Promise.allSettled(fixture.pending)) if (result.status === 'rejected') errors.push(result.reason);
+    if (errors.length) throw new AggregateError(errors, 'cache barrier client/background cleanup failed');
+  });
+  return start => { const pending = Promise.resolve().then(start); work.push(pending); return pending; };
+}
+async function cacheBarrierArrival(arrival, originating, phase) {
+  let timer;
+  const bound = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`expected ${phase} barrier did not arrive`)), 2000); });
+  // A colo put belongs to background publication and can start after foreground
+  // completion. A foreground barrier cannot: completion there is a fixture error.
+  const terminal = originating.then(() => phase === 'background colo put'
+    ? new Promise(() => {}) : Promise.reject(new Error(`request completed before ${phase} barrier`)));
+  try { await Promise.race([arrival, terminal, bound]); }
+  finally { clearTimeout(timer); }
+}
+
 for (const clockShift of [0, -120_000]) test(`a late admission cannot republish hints or colo after invalidation (clock ${clockShift})`, async t => {
   const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
   const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
@@ -623,9 +652,9 @@ for (const clockShift of [0, -120_000]) test(`a late admission cannot republish 
     if (new URL(url).pathname === '/admission/resolve' && first) { first = false; entered.resolve(); await release.promise; }
     return response;
   } }; };
-  const old = f.request();
+  const start = ownCacheBarrier(t, release, f), old = start(() => f.request());
   try {
-    await entered.promise;
+    await cacheBarrierArrival(entered.promise, old, 'foreground admission');
     time.advance(clockShift); clearHotCaches(); fenceSharedHotCache();
     f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
     assert.equal((await f.request()).status, 403, 'new request progresses without old I/O');
@@ -646,9 +675,10 @@ test('already-issued late colo put retains acquisition time across equal/rollbac
     const text = await response.text(); fetchedAt = JSON.parse(text).fetchedAt; entered.resolve(); await release.promise;
     return put(url, new Response(text));
   };
-  const response = await f.request(); await response.text();
+  const start = ownCacheBarrier(t, release, f), originating = start(() => f.request());
+  const response = await originating; await response.text();
   try {
-    await entered.promise; time.advance(-120_000); clearHotCaches(); fenceSharedHotCache();
+    await cacheBarrierArrival(entered.promise, originating, 'background colo put'); time.advance(-120_000); clearHotCaches(); fenceSharedHotCache();
     assert.ok(fetchedAt <= sharedHotCacheFence());
     f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
   } finally { release.resolve(); await Promise.all(f.pending); }
@@ -664,9 +694,9 @@ test('invalidation during a held colo read prevents adoption and drains coalesce
   await f.send(); clearHotCaches();
   const entered = Promise.withResolvers(), release = Promise.withResolvers(), match = globalThis.caches.default.match;
   globalThis.caches.default.match = async url => { const response = await match(url); entered.resolve(); await release.promise; return response; };
-  const pending = f.request();
+  const start = ownCacheBarrier(t, release, f), pending = start(() => f.request());
   try {
-    await entered.promise; time.advance(1); clearHotCaches(); fenceSharedHotCache();
+    await cacheBarrierArrival(entered.promise, pending, 'foreground colo read'); time.advance(1); clearHotCaches(); fenceSharedHotCache();
     f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
   } finally { release.resolve(); }
   const response = await pending; assert.equal(response.status, 403); await response.text(); await Promise.all(f.pending);

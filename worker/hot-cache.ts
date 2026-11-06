@@ -112,6 +112,9 @@ export class HotCache<V> {
   private store(key: string, value: V, config: HotCacheConfig, expiresAt: number, storedAt: number): void {
     if (!config.maxAgeMs) return;
     if (expiresAt <= storedAt) { this.entries.delete(key); return; }
+    // A foreign colo timestamp may exceed this isolate's acquisition clock.
+    // Observe it before publication so a later rollback cannot lower the fence.
+    if (Number.isFinite(storedAt)) issuedWatermark = Math.max(issuedWatermark, storedAt);
     this.entries.delete(key);
     this.entries.set(key, { value, storedAt, expiresAt });
     while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value!);

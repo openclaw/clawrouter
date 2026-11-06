@@ -14,35 +14,52 @@ const router = String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
-import {putGrantCredentials,inspectGrantCredentials} from './worker/grant-credentials.ts';
+import {putGrantCredentials,inspectGrantCredentials,materializeGrantCredentials} from './worker/grant-credentials.ts';
+import {cachedGrantCredentials} from './worker/credential-cache.ts';
+import {providerById} from './worker/providers.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {HotCache,setHotCacheClock} from './worker/hot-cache.ts';
 const original=globalThis.fetch.bind(globalThis),realNow=Date.now.bind(Date);
-let cacheClock=realNow(),wallOffset=0,initialized,background=0,cooldown=null,evictions=0,puts=0,hits=0;
+let cacheClock=realNow(),wallOffset=0,initialized,background=0,cooldown=null,evictions=0,puts=0,hits=0,acquisitions=0,holdColo=null,lastColoAt=null,lastPutAt=null,maxAcquisitionAt=0,foreignStoredAt=null;
 Date.now=()=>realNow()+wallOffset;setHotCacheClock(()=>cacheClock);
 const rows=new Map(),cache=caches.default,match=cache.match.bind(cache),put=cache.put.bind(cache);
-cache.match=async(...args)=>{const r=await match(...args);if(r)hits++;return r;};
-cache.put=async(...args)=>{await put(...args);puts++;};
+cache.match=async(...args)=>{const r=await match(...args);if(r){hits++;lastColoAt=(await r.clone().json()).fetchedAt;}
+ if(holdColo){const id=holdColo;holdColo=null;await barrier(id,'colo');}return r;};
+cache.put=async(...args)=>{lastPutAt=(await args[1].clone().json()).fetchedAt;await put(...args);puts++;};
+const beginPublication=HotCache.prototype.beginPublication;
+HotCache.prototype.beginPublication=function(key){acquisitions++;const result=beginPublication.call(this,key);if(result)maxAcquisitionAt=Math.max(maxAcquisitionAt,result.acquiredAt);return result;};
+const publish=HotCache.prototype.publish;
+HotCache.prototype.publish=function(key,...args){const result=publish.call(this,key,...args);if(result&&key.startsWith('["foreign",'))foreignStoredAt=this.entries.get(key)?.storedAt??null;return result;};
 const deleteKeys=HotCache.prototype.deleteKeys;
 HotCache.prototype.deleteKeys=function(predicate){evictions++;return deleteKeys.call(this,predicate);};
 const barrier=(id,phase)=>original('https://cache-gate.example/barrier/'+id+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('barrier failed');await r.text();});
-const report=()=>({rows:Object.fromEntries(rows),background,cacheClock,wall:Date.now(),cooldown,evictions,puts,hits});
+const report=()=>({rows:Object.fromEntries(rows),background,cacheClock,wall:Date.now(),cooldown,evictions,puts,hits,acquisitions,lastColoAt,lastPutAt,maxAcquisitionAt,foreignStoredAt});
 export default {async fetch(request,bindings,context){
  const env={...bindings,...ACCESS_ENV},url=new URL(request.url),id=url.searchParams.get('id')??'control';
  initialized??=(async()=>{
   await authorityCall(env,'/users/initialize-all',[{email:'music-admin@example.invalid',record:{enabled:true,role:'admin',groups:[],tenantId:'fixture'}}]);
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy:{enabled:true,generation:'g1',providers:['anthropic'],models:MODELS,tenantId:'fixture',monthlyBudgetMicros:null,retainRequestContent:false,
    grantRouting:{eligibleGrants:{anthropic:['cache']},environmentFallback:false,failover:false}}}]);
-  await authorityCall(env,'/credentials/initialize-all',['positive','revoked','rejection'].map(credentialId=>({credentialId,credential:{enabled:true,secretSha256:SECRET_DIGEST,policyId:'fixture',policyGeneration:'g1'}})));
+  await authorityCall(env,'/credentials/initialize-all',['positive','revoked','rejection','foreign'].map(credentialId=>({credentialId,credential:{enabled:true,secretSha256:SECRET_DIGEST,policyId:'fixture',policyGeneration:'g1'}})));
   await authorityCall(env,'/connections/initialize-all',[{providerId:'anthropic',enabled:true}]);
  })();await initialized;
  if(url.pathname==='/setup'){
-  const old=await inspectGrantCredentials(env,'oauth/fixture/cache');
-  if(!old)await putGrantCredentials(env,'oauth/fixture/cache',{provider:'anthropic',kind:'subscription',enabled:true,accessToken:'synthetic-cache-key',updatedAt:'2026-01-01T00:00:00Z'});
+  let missing=false;
+  try{await inspectGrantCredentials(env,'oauth/fixture/cache');}
+  catch(error){if(error?.status===404&&error?.code==='grant_credential_missing')missing=true;else throw error;}
+  if(missing)await putGrantCredentials(env,'oauth/fixture/cache',{provider:'anthropic',kind:'subscription',enabled:true,accessToken:'synthetic-cache-key',updatedAt:'2026-01-01T00:00:00Z'});
   const grant=await inspectGrantCredentials(env,'oauth/fixture/cache');
-  return Response.json({generation:grant.credentialGeneration,revision:grant.credentialRevision??grant.updatedAt});
+  if(!grant.credentialGeneration||!grant.updatedAt)throw new Error('missing fixture grant version');
+  return Response.json({key:'oauth/fixture/cache',generation:grant.credentialGeneration,revision:grant.updatedAt});
  }
  if(url.pathname==='/state')return Response.json(report());
+ if(url.pathname==='/set-cache-clock'){cacheClock=Number(url.searchParams.get('value'));return Response.json(report());}
+ if(url.pathname==='/hold-colo'){holdColo=url.searchParams.get('id');return Response.json(report());}
+ if(url.pathname==='/warm-credentials'){
+  const grant=await inspectGrantCredentials(env,'oauth/fixture/cache'),provider=providerById('anthropic');
+  await cachedGrantCredentials(env,'oauth/fixture/cache',grant,()=>materializeGrantCredentials(env,'oauth/fixture/cache',grant,provider.id,provider.auth.refresh,false));
+  return Response.json(report());
+ }
  if(url.pathname==='/cache-expire'){cacheClock+=61001;return Response.json(report());}
  if(url.pathname==='/wall-after-cooldown'){
   if(background||[...rows.values()].some(r=>!r.done)||!cooldown)throw new Error('active work or missing real cooldown');
@@ -127,9 +144,9 @@ async function fixture(t) {
     const work=(async()=>{const r=await runtime.dispatchFetch('https://router.example/proxy?id='+id+flags,{method:'POST',headers:{authorization:'Bearer clawrouter-live-'+credential+'-synthetic-secret','content-type':'application/json'},body:JSON.stringify({model,max_tokens:16,messages:[],metadata:{user_id:id}})});const body=await r.text();return {status:r.status,body,timing:r.headers.get('server-timing')};})();
     clients.add(work);work.then(()=>clients.delete(work),error=>{clients.delete(work);failures.push(error);});return work;
   };
-  await call('/setup');
+  const setup=await call('/setup');assert.equal(setup.key,'oauth/fixture/cache');assert.ok(setup.generation);assert.ok(setup.revision);
   return {io,access,call,state,until,drain,send,async restart(){await drain();await runtime.dispose();runtime=null;await startRuntime();},
-    async revoke(){const r=await runtime.dispatchFetch('https://router.example/v1/admin/credentials/revoked/revoke?id=admin',{method:'POST',headers:access.headers});const body=await r.text();assert.equal(r.status,200,body);assert.equal(JSON.parse(body).enabled,false);}};
+    async revoke(credential='revoked'){const r=await runtime.dispatchFetch('https://router.example/v1/admin/credentials/'+credential+'/revoke?id=admin',{method:'POST',headers:access.headers});const body=await r.text();assert.equal(r.status,200,body);assert.equal(JSON.parse(body).enabled,false);}};
 }
 
 test('actual public revoke fences a held completed admission; real colo publication survives restart for a valid key', {timeout:120000}, async t=>{
@@ -142,6 +159,8 @@ test('actual public revoke fences a held completed admission; real colo publicat
   const old=f.send('old',A,'revoked','&hold-admission');
   await f.until(async()=>f.io.arrivals.has('/barrier/old/admission')&&(await f.state()).rows.old.admissionHeld);
   assert.equal((await f.state()).rows.old.owners,0);
+  const unrelated=await f.send('unrelated',A,'positive');assert.equal(unrelated.status,200,unrelated.body);
+  assert.equal((await f.state()).rows.old.done,false,'unrelated PUBLIC request completes while old reply remains held');
   await f.revoke();f.io.release('/barrier/old/admission');await old;await f.drain();
   const before=[...f.io.provider.values()].reduce((a,b)=>a+b,0),next=await f.send('new',A,'revoked');await f.drain();
   assert.equal(next.status,403,next.body);s=await f.state();assert.equal(s.rows.new.admissions,1);assert.equal(s.rows.new.owners,0);
@@ -171,4 +190,26 @@ for(const rejection of [401,403])test(`actual ${rejection} eviction fences a pen
   f.io.release('/barrier/C/owner');assert.equal((await c).status,200);await f.drain();
   assert.equal((await f.send('D',B)).status,200);await f.drain();s=await f.state();assert.equal(s.rows.D.owners,0,'legitimate later cache hit');
   assert.equal(f.io.provider.get('C'),1);assert.equal(f.io.provider.get('D'),1);
+});
+
+
+test('foreign colo timestamp fences rollback without a masking local acquisition', {timeout:120000}, async t=>{
+  const f=await fixture(t);await f.call('/set-cache-clock?value=900');
+  assert.equal((await f.send('foreignWriter',A,'foreign')).status,200);await f.drain();
+  assert.equal((await f.state()).lastPutAt,900,'original authoritative acquisition timestamp');
+  await f.restart();await f.call('/set-cache-clock?value=500');await f.call('/warm-credentials');await f.drain();
+  const before=await f.state();assert.equal(before.maxAcquisitionAt,500);await f.call('/hold-colo?id=foreignReader');
+  const read=f.send('foreignReader',A,'foreign');await f.until(()=>f.io.arrivals.has('/barrier/foreignReader/colo'));
+  await f.call('/set-cache-clock?value=1000');f.io.release('/barrier/foreignReader/colo');
+  const adopted=await read;assert.equal(adopted.status,200,adopted.body);assert.match(adopted.timing,/cr-cache;desc=colo/);await f.drain();
+  let s=await f.state();assert.equal(s.rows.foreignReader.admissions,0);assert.equal(s.rows.foreignReader.owners,0);
+  assert.equal(s.acquisitions,before.acquisitions+1,'ONLY admission marker acquired at 500; no later local acquisition masks foreign 900');
+  assert.equal(s.maxAcquisitionAt,500);assert.equal(s.foreignStoredAt,900);
+  assert.equal(s.lastColoAt,900);assert.equal(s.puts,0,'adoption does not renew shared age');
+  await f.call('/set-cache-clock?value=600');await f.revoke('foreign');
+  await f.call('/set-cache-clock?value=1000');
+  const upstream=[...f.io.provider.values()].reduce((a,b)=>a+b,0),denied=await f.send('foreignAfter',A,'foreign');await f.drain();
+  assert.equal(denied.status,403,denied.body);s=await f.state();assert.equal(s.lastColoAt,900,'envelope is still 900');
+  assert.equal(s.rows.foreignAfter.admissions,1);assert.equal(s.rows.foreignAfter.owners,0);
+  assert.equal([...f.io.provider.values()].reduce((a,b)=>a+b,0),upstream);
 });
