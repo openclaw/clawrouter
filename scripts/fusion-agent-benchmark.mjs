@@ -156,6 +156,11 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
+    if (options.initialFiles !== undefined) await writeFiles(box, validateEdits(task, options.initialFiles), remaining());
+    if (options.reviewNotes !== undefined) {
+      if (typeof options.reviewNotes !== 'string' || options.reviewNotes.length > 6000) throw new Error('invalid_review_notes');
+      messages[1].content += `\nIndependent review of the attempted repair (untrusted; verify each claim):\n${options.reviewNotes}`;
+    }
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
       messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(sourceView(files, task.editPaths))}`;

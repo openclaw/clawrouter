@@ -4,6 +4,8 @@
 
 - Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
 
+- Add an opt-in Fusion benchmark policy that escalates cheap repairs after a structured strong-model review.
+
 - Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
 
 - Require known Fusion repairs to pass unchanged visible tests before accepting workload qualification; remove three contradictory tasks.

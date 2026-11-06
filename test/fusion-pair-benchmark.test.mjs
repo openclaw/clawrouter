@@ -171,3 +171,28 @@ test('source preload applies equally to every comparison arm and rejects invalid
     assert.equal(state.preloadSource, true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('review policy keeps both controls and maps the cheap author and strong reviewer', async () => {
+  const { root, options } = await fixture();
+  try {
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'unknown' }), /invalid_pair_policy/);
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'review', config: { ...config, maxCalls: 2 } }), /review_requires_three_calls/);
+    const state = await runPairBenchmark({ ...options, policy: 'review', grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        const value = JSON.parse(request.body);
+        if (value.response_format?.json_schema?.name !== 'repair_review') return success(url, request);
+        return Response.json({ model: value.model, usage: { prompt_tokens: 20, completion_tokens: 30 },
+          choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ decision: 'accept', findings: '' }) } }] });
+      }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      } });
+    assert.deepEqual(state.strategies, ['cheap', 'strong', 'review']);
+    assert.equal(state.preloadSource, true);
+    assert.deepEqual(state.records.map(row => row.score), [1, 1, 1]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.cheap, config.strong]);
+    assert.equal(state.records[2].reviewAccepted, true);
+    assert.equal(pairExecution('review', config).settings.maxTurns, config.maxCalls);
+    assert.equal(pairModel('review', roles.cheap, config), config.cheap);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

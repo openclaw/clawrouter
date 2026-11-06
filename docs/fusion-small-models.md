@@ -444,3 +444,19 @@ same bounded initial editable source. The default remains tool-driven source
 inspection. Reports record the setting. A handoff receives a fresh source
 snapshot; compare against preloaded fixed controls before attributing savings
 to multiple models rather than avoided file-reading calls.
+
+### Review-gated repair experiment
+
+The opt-in `runReviewCascade` harness starts with a preloaded cheap repair,
+then requests one structured strong-model review. An accepted repair must also
+pass visible tests. A rejected repair seeds a fresh strong worker with the
+candidate files and untrusted review notes. The reviewer does not see acceptance
+tests. All phases share the declared call ceiling and deadline; malformed
+reviews and provider refusals stop the trial. Reports retain a review digest,
+not review text. This is a benchmark policy, not a production routing default.
+
+Select this policy in the paired runner with `FUSION_PAIR_POLICY=review`.
+It preloads source for both fixed controls and the review policy automatically.
+Use an explicit configuration with at least three total calls; 24 allows a
+12-call cheap attempt, one review and up to 11 strong repair calls. All three
+arms receive the same total call ceiling.
