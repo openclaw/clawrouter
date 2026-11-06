@@ -1,3 +1,5 @@
+import { bindingSupportsOperation, transportForGrant, type ProviderBindingRequirement } from "../shared/provider-bindings.ts";
+export { transportForGrant } from "../shared/provider-bindings.ts";
 import { readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { miniMaxVideoBindingModel } from "../shared/minimax-video-binding.ts";
 import { miniMaxSearchProjection, miniMaxSearchRequirement } from "./minimax-search-credential.ts";
@@ -11,15 +13,10 @@ import { isModelDiscovery } from "./model-discovery.ts";
 import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
-import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
+import type { AuthScheme, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
 import { envValue, HttpError } from "./utils.ts";
 
-export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
-  if (!grant?.kind) return null;
-  return provider.auth.grantTransports[grant.kind] ?? null;
-}
-
-export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean; managedLifecycle?: boolean }
+export interface GrantRequirement extends ProviderBindingRequirement { model?: string | null }
 
 // This one opaque PCM profile is qualified only for an original owned API key.
 export function openRouterPcmModel(provider: CompiledProvider, modelId?: string | null): boolean {
@@ -83,19 +80,10 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
     || grant.credentialStore !== "durable_object" || !grant.credentialLineage || !Number.isSafeInteger(grant.credentialGeneration))) return false;
   if (requirement.endpoint.request_format === "minimax.speech" && grant && !miniMaxMediaProjection(grant)) return false;
   if (isModelDiscovery(requirement.endpoint) && grant?.kind !== "api_key") return false;
-  if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
   if (requirement.endpoint.request_format === "openai.standalone_search" && grant && grant.kind !== "api_key") return false;
   if (requirement.endpoint.request_format === "openai.moderations" && grant && grant.kind !== "api_key") return false;
   if (requirement.endpoint.request_format === "openai.responses_input_tokens" && grant && grant.kind !== "api_key") return false;
-  const transport = transportForGrant(requirement.provider, grant);
-  if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
-  if (requirement.responsesLifecycle || requirement.managedLifecycle) {
-    const lifecycle = requirement.managedLifecycle ? requirement.endpoint.lifecycle : requirement.endpoint.responsesLifecycle;
-    if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel, "result" in lifecycle ? lifecycle.result : undefined,
-      ...(requirement.managedLifecycle ? [requirement.endpoint.lifecycle?.files?.metadata, requirement.endpoint.lifecycle?.files?.download] : [])].filter((id): id is string => typeof id === "string").every(id =>
-      requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
-  }
-  return requirement.mode === "http" || (["openai.responses", "openai.realtime"].includes(requirement.endpoint.websocket ?? "") && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"));
+  return bindingSupportsOperation(requirement, grant);
 }
 
 // Catalogs inspect credential metadata; dispatch repeats these checks after the
