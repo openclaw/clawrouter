@@ -202,3 +202,78 @@ two others that failed withheld cases. More samples and the tiny first stage
 did not improve correctness. Improve worker capability and test coverage before
 adding orchestration. A later output-limit handling fix does not affect these
 results: no candidate in this complete run hit the output limit.
+
+## Local repository repairs
+
+`scripts/fusion-local-repository.mjs` runs the existing repository action harness
+against the four development tasks in `validation-workloads.json`. It compares
+a general local model, a coding local model, and a coder-to-general handoff.
+Each arm gets at most eight actions, 1,536 output tokens per call, a 32,768-token
+context and three minutes. The handoff uses the existing early-submit or
+two-thirds-turn transfer rule. Task order rotates the three arms.
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-local-repository.mjs \
+  /path/to/transfer-qualification.json /path/to/fresh-results \
+  qwen3:4b-instruct-2507-q4_K_M qwen2.5-coder:3b-instruct-q4_K_M
+```
+
+Run from a clean committed checkout. Qualification must match each task digest,
+have a passing oracle and failing broken baseline, and identify cached immutable
+Docker images. A passing repair must execute the same test and skipped-test
+counts as the qualified oracle. The runner does not download models, images or dependencies.
+The local transport validates both model identities before execution and checks
+their digests again afterward. It never invokes a paid provider. Role labels
+inside the reused harness map explicitly to these local model pins.
+
+A conservative input-byte bound rejects oversized contexts before dispatch.
+Truncation, context limits and trial deadlines produce unsuccessful trial rows;
+transport, identity, usage and infrastructure failures stop the campaign. There
+is no fallback after a safety notice. Reports distinguish attempted actions from
+dispatched requests, retain tokens and finite action outcomes, and omit prompts,
+completions and patches. The same isolated acceptance grader checks every arm.
+
+These are previously used development tasks, not a new holdout. Equal turn caps
+do not imply equal token, latency or compute costs. Use the measured totals and
+error categories to decide whether a larger fresh-task comparison is warranted.
+
+### Coding-specialist results, 2026-11-06
+
+Both runs used source `7a578df60b3efb30ca6a76e0c2f62a64ffb55712`, the
+same 4B pin above, and `qwen2.5-coder:3b-instruct-q4_K_M` pinned to
+`f72c60cabf6237b07f6e632b2c48d533cef25eda2efbd34bed21c5e9c01e6225`.
+The function corpus was unchanged from the first execution run.
+
+| Function policy | Solved / 8 | Calls | Tokens |
+| --- | ---: | ---: | ---: |
+| Coder 3B first draft | 2 | 8 | 2,197 |
+| General 4B first draft | 4 | 8 | 2,626 |
+| General 4B public-test retry | 4 | 10 | 3,334 |
+| Coder then general, public-test selection | 4 | 13 | 3,984 |
+
+The two verified policies each accepted two incorrect answers and abstained on
+two cases. Hindsight selection across all generated candidates still solved
+only four. The coding specialist added no unique solved cases. The complete
+screen used 24 actual calls and 7,375 tokens; table rows replay overlapping
+candidates and must not be summed as campaign spend.
+
+| Repository arm | Solved / 4 | Dispatched calls | Tokens | Trial outcomes |
+| --- | ---: | ---: | ---: | --- |
+| General 4B | 0 | 14 | 43,715 | One truncated, two context limits, one turn limit |
+| Coder 3B | 0 | 32 | 50,445 | Four turn limits |
+| Coder-to-general handoff | 0 | 26 | 49,915 | Two truncated, one context limit, one turn limit |
+
+All twelve repository trials completed recording. There were 75 attempted
+actions, 72 dispatched calls and 144,075 reported tokens, with no unknown
+usage. Three actions were rejected before dispatch by the context limit. Both
+campaigns used zero paid API inference; local compute and downloads still cost
+resources.
+
+These results do not establish that the models cannot repair repositories.
+The fixed harness exposed repeated non-matching edits, insufficient output
+space and conservative context limits. They do establish that this pool and
+handoff do not justify a paid expansion yet. Next, compare an unchanged
+baseline against a scaffold that requires source inspection before editing,
+uses bounded source ranges and preserves compact state across handoff. Measure
+valid edits, executable probes and limit failures as well as final solves.
+Freeze that policy before a fresh-task evaluation; keep production Fusion opt-in.
