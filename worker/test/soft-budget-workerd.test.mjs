@@ -137,7 +137,7 @@ export default {async fetch(request,bindings,context){
   await authorityCall(env,'/policies/initialize-all',CASES.map(name=>({policyId:name,policy:policy(name)})));
   await authorityCall(env,'/credentials/initialize-all',CASES.map(name=>({credentialId:name.replaceAll('-','_'),credential:{enabled:true,secretSha256:DIGEST,policyId:name,policyGeneration:'g1'}})));
   await authorityCall(env,'/connections/initialize-all',[connection]);
-  await putGrantCredentials(env,'oauth/fixture/soft',{provider:'anthropic',kind:'subscription',enabled:true,accessToken:'synthetic-soft-key',updatedAt:'2026-01-01T00:00:00Z'});
+  await putGrantCredentials(env,'oauth/tenants/fixture/soft',{provider:'anthropic',kind:'subscription',enabled:true,accessToken:'synthetic-soft-key',updatedAt:'2026-01-01T00:00:00Z'});
  })();await initialized;
  if(url.pathname==='/state')return Response.json(snapshot());
  if(url.pathname==='/seed'){
