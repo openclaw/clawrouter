@@ -2,8 +2,8 @@ import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
-import { admitAccessBase64, accessBase64Bytes, accessBase64Size, accessDenial, accessJwtParts, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
-import { readAccessJwks } from "./access-response.ts";
+import { admitAccessBase64, accessBase64Bytes, accessBase64Size, accessDenial, accessEvidenceLimits, accessJwtParts, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
+import { readAccessEvidence, readAccessJwks } from "./access-response.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
@@ -30,8 +30,16 @@ const verifiedIdentities = new WeakMap<AuthorizedIdentity, AccessVerification>()
 export function accessIdentityVerification(identity: AuthorizedIdentity): AccessVerification | undefined { return verifiedIdentities.get(identity); }
 
 export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
-  return (await cloudflareAccessSession(request, env)) ?? localSession(request, env);
+  currentCaller(request);
+  const access = await cloudflareAccessSession(request, env);
+  currentCaller(request);
+  if (access) return access;
+  const local = await localSession(request, env);
+  currentCaller(request);
+  return local;
 }
+
+function currentCaller(request: Request): void { if (request.signal.aborted) throw accessDenial("deadline"); }
 
 async function cloudflareAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
   const headers = request.headers;
@@ -48,7 +56,11 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   const rules = await listAssignmentRules(env);
   const hasGithubRules = rules.some((rule) => rule.enabled && ["github_org", "github_team"].includes(rule.kind));
   const evidence = hasGithubRules ? await verifiedGithubEvidence(request, email) : undefined;
+  currentCaller(request);
   if (!user.record.assignmentState || evidence) user = (await reconcileUserAssignments(user, rules, env, evidence, !!evidence)).user;
+  // Reconciliation is not interruptible or rolled back. Its completed mutation
+  // never permits publication to an original caller which has since aborted.
+  currentCaller(request);
   if (user.record.enabled === false) return null;
   const session: AccessSession = {
     authenticated: true,
@@ -61,6 +73,7 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
     contentRetentionDisabled: user.record.contentRetentionDisabled ?? false,
     budgetOverrides: user.record.budgetOverrides,
   };
+  currentCaller(request);
   verifiedSessions.set(session, Object.freeze({ kind: "cloudflare_access", email, expiresAtMs: payload.exp! * 1000 }));
   return session;
 }
@@ -112,6 +125,7 @@ export async function sessionPolicies(session: AccessSession, env: Env): Promise
 
 export async function authorizeAdmin(request: Request, env: Env): Promise<AccessSession | Response> {
   const session = await verifiedAccessSession(request, env);
+  currentCaller(request);
   if (session) {
     if (session.role !== "admin") return errorResponse("access_admin_required", "administrator access is required", 403);
     if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
@@ -119,7 +133,9 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
   }
   const token = parseBearer(request.headers);
   const expected = env.CLAWROUTER_ADMIN_TOKEN_SHA256?.toLowerCase();
-  if (!token || !expected || !safeEqual(await sha256Hex(token), expected)) return errorResponse("admin_unauthorized", "administrator authentication required", 401);
+  const actual = token && expected ? await sha256Hex(token) : null;
+  currentCaller(request);
+  if (!actual || !expected || !safeEqual(actual, expected)) return errorResponse("admin_unauthorized", "administrator authentication required", 401);
   return {
     authenticated: true,
     auth: "admin_token",
@@ -144,17 +160,32 @@ function adminRole(email: string, env: Env): boolean {
 }
 
 async function verifiedGithubEvidence(request: Request, email: string) {
-  const cookie = request.headers.get("cookie");
-  if (!cookie) return undefined;
-  const url = new URL("/cdn-cgi/access/get-identity", request.url);
+  // Independent evidence deadline, started before URL/header preparation. An
+  // evidence timeout is UNKNOWN only after successful physical retirement.
+  const deadlineAt = Date.now() + 30_000, deadline = fetchTimeoutSignal(request.signal), bounded = new AbortController();
+  const cancel = () => bounded.abort(accessDenial("deadline"));
+  if (deadline.aborted) cancel(); else deadline.addEventListener("abort", cancel, { once: true });
+  const operation = new HttpOperation(bounded.signal);
   try {
-    const response = await fetch(url, { headers: { accept: "application/json", cookie }, redirect: "manual", signal: fetchTimeoutSignal(request.signal) });
-    if (!response.ok) return undefined;
-    const body = await response.text();
-    if (body.length > 64 * 1024) return undefined;
-    return assignmentEvidenceFromAccessIdentity(JSON.parse(body), email);
-  } catch {
+    currentCaller(request);
+    const cookie = request.headers.get("cookie");
+    // Header values are byte strings. Admit originals before outbound copies or
+    // URL construction; the fixed path can never forward the cookie elsewhere.
+    if (request.url.length > accessEvidenceLimits.url || cookie && cookie.length > accessEvidenceLimits.cookie) throw accessDenial("limit");
+    if (!cookie || deadline.aborted || Date.now() >= deadlineAt) return undefined;
+    const url = new URL("/cdn-cgi/access/get-identity", request.url).href;
+    const value = await readAccessEvidence(url, cookie, operation);
+    currentCaller(request);
+    if (deadline.aborted || Date.now() >= deadlineAt) return undefined;
+    return assignmentEvidenceFromAccessIdentity(value, email);
+  } catch (error) {
+    // A timeout must not erase separately observed cleanup failure. Raw caller
+    // or transport properties cannot forge this private denial classification.
+    if (isAccessDenial(error) && (error.code === "access_limit" || error.code === "access_cleanup")) throw error;
+    currentCaller(request);
     return undefined;
+  } finally {
+    deadline.removeEventListener("abort", cancel); operation.stop("complete");
   }
 }
 

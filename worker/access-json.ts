@@ -13,6 +13,7 @@ const invalid = (): never => { throw new SyntaxError("invalid Access JSON or enc
 const limit = (): never => { throw accessDenial("limit"); };
 export const accessLimits = Object.freeze({ jwt: 16384, header: 2048, payload: 8192, signature: 1024,
   jwks: 262144, jwk: 8192, keys: 32, backing: 16384, reads: 8192, headers: 32, headerBytes: 4096 });
+export const accessEvidenceLimits = Object.freeze({ wire: 262144, text: 65536, cookie: 32768, url: 16384, orgs: 128, teams: 256 });
 
 // PRESENT assertions are bounded before split, normalization or configuration
 // fallback. Malformed bounded credentials retain ordinary invalid-JWT behavior.
@@ -54,11 +55,12 @@ export function accessBase64Bytes(value: string, maximum: number): Uint8Array<Ar
   return bytes;
 }
 
-type Profile = "header" | "payload" | "jwks";
+type Profile = "header" | "payload" | "jwks" | "evidence";
 const profiles = {
   header: { wire: 2048, depth: 4, values: 64, containers: 8, members: 32, entries: 16, units: 2048, string: 2048 },
   payload: { wire: 8192, depth: 8, values: 512, containers: 64, members: 256, entries: 128, units: 8192, string: 8192 },
   jwks: { wire: 262144, depth: 8, values: 4096, containers: 256, members: 2048, entries: 1024, units: 65536, string: 4096 },
+  evidence: { wire: 262144, depth: 8, values: 4096, containers: 256, members: 2048, entries: 1024, units: 65536, string: 1024 },
 } as const;
 
 function utf8Length(text: string, start = 0, end = text.length): number {
@@ -76,8 +78,9 @@ function utf8Length(text: string, start = 0, end = text.length): number {
 // occurrences, including duplicate/discarded members, count before JSON.parse.
 export function parseAccessJson(text: string, profile: Profile): unknown {
   const p = profiles[profile];
+  if (profile === "evidence" && text.length > accessEvidenceLimits.text) limit();
   if (text.length > p.wire || utf8Length(text) > p.wire) limit();
-  let at = 0, values = 0, containers = 0, members = 0, entries = 0, units = 0, rows = 0, audiences = 0;
+  let at = 0, values = 0, containers = 0, members = 0, entries = 0, units = 0, rows = 0, audiences = 0, orgs = 0, teams = 0;
   const space = () => { while (at < text.length) { const c = text.charCodeAt(at); if (c !== 32 && c !== 9 && c !== 10 && c !== 13) break; at++; } };
   const string = (maximum: number, retain: boolean, binaryMaximum?: number): string => {
     if (text[at++] !== '"') invalid();
@@ -127,6 +130,8 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
           if (++entries > p.entries) limit();
           const row = profile === "jwks" && rootMember && key === "keys";
           if (row && ++rows > accessLimits.keys || profile === "payload" && rootMember && key === "aud" && ++audiences > 32) limit();
+          if (profile === "evidence" && rootMember && (key === "orgs" && ++orgs > accessEvidenceLimits.orgs
+            || key === "teams" && ++teams > accessEvidenceLimits.teams)) limit();
           value(depth + 1, key, false, row, insideJwk || jwkRow);
         }
         space(); if (text[at] === close) break;
@@ -134,8 +139,8 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
       }
       at++;
     } else if (c === '"') {
-      const maximum = key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
-        : profile === "payload" && key === "email" ? 320 : p.string;
+      const maximum = profile !== "evidence" && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
+        : (profile === "payload" || profile === "evidence") && key === "email" ? 320 : p.string;
       // Every n/e occurrence counts before JSON.parse can discard duplicates.
       string(maximum, false, insideJwk && key === "n" ? 1024 : insideJwk && key === "e" ? 8 : undefined);
     } else if (c === "t" || c === "f" || c === "n") {
