@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, command, verify } from './fusion-workloads.mjs';
 import { runAgent } from './fusion-agent-benchmark.mjs';
+import { runGroundedAgent } from './fusion-grounded-agent.mjs';
 import { models as roles } from './fusion-benchmark-accounting.mjs';
 import { localEndpoint } from './fusion-selector-smoke.mjs';
 import { localGenerator } from './fusion-execution-smoke.mjs';
@@ -10,6 +11,8 @@ import { localGenerator } from './fusion-execution-smoke.mjs';
 export const localRepositorySettings = Object.freeze({ maxTurns: 8, outputTokens: 1536,
   contextTokens: 32768, deadlineMs: 180000, campaignDeadlineMs: 1200000, temperature: 0, seed: 42000 });
 const strategies = ['general', 'coder', 'handoff'];
+export const groundedSampling = Object.freeze({ temperature: 0.7, top_p: 0.8, top_k: 20,
+  min_p: 0, presence_penalty: 1.5, repeat_penalty: 1 });
 
 export function localRoutes(strategy, pins) {
   if (!strategies.includes(strategy) || pins.length !== 2 || pins[0].model === pins[1].model) throw new Error('invalid_local_strategy');
@@ -34,7 +37,8 @@ export function validateLocalQualification(tasks, qualification) {
   });
 }
 
-export async function localActionRequest({ endpoint, model, pin, body, signal, seed, fetcher = fetch, onDispatch = async () => {} }) {
+export async function localActionRequest({ endpoint, model, pin, body, signal, seed, profile = 'legacy', fetcher = fetch, onDispatch = async () => {} }) {
+  if (!['legacy', 'grounded'].includes(profile)) throw new Error('invalid_local_profile');
   const base = localEndpoint(endpoint);
   if (model !== pin.model || !Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1
     || body.max_tokens > localRepositorySettings.outputTokens || !Array.isArray(body.messages)
@@ -48,11 +52,11 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
   await onDispatch();
   let response;
   try { response = await fetcher(base + '/api/chat', { method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
+    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(profile === 'grounded' ? 120000 : 60000)]),
     body: JSON.stringify({ model, stream: false, keep_alive: '5m', ...(pin.thinking ? { think: false } : {}),
       format: body.response_format.json_schema.schema, messages: body.messages,
       options: { num_predict: body.max_tokens, num_ctx: localRepositorySettings.contextTokens,
-        temperature: localRepositorySettings.temperature, seed } }) }); }
+        ...(profile === 'grounded' ? groundedSampling : { temperature: localRepositorySettings.temperature }), seed } }) }); }
   catch (error) { if (signal.aborted) throw new Error('provider_local_deadline'); throw error; }
   if (!response.ok) throw new Error('local_transport_failed');
   const value = await response.json(), content = value.message?.content;
@@ -67,23 +71,26 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
 }
 
 export async function runLocalRepository({ repo, qualificationPath, out, sourceSha,
-  models, endpoint = 'http://127.0.0.1:11435', fetcher = fetch,
-  agent = runAgent, grade = verify, inspectImage = async image => {
+  models, endpoint = 'http://127.0.0.1:11435', fetcher = fetch, profile = 'legacy', taskManifest,
+  agent, grade = verify, inspectImage = async image => {
     const result = await command('docker', ['image', 'inspect', '--format={{.Id}}', image]);
     if (result.stdout.toString().trim() !== image) throw new Error('local_image_missing');
   }, preflight = localGenerator }) {
   localEndpoint(endpoint);
+  if (!['legacy', 'grounded'].includes(profile)) throw new Error('invalid_local_profile');
+  const execute = agent ?? (profile === 'grounded' ? runGroundedAgent : runAgent);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  const tasks = await loadTasks(resolve(repo, 'benchmarks/fusion/validation-workloads.json'));
+  const tasks = await loadTasks(taskManifest ?? resolve(repo, 'benchmarks/fusion/validation-workloads.json'));
   const rawQualification = await readFile(qualificationPath), qualification = JSON.parse(rawQualification);
   const receipts = validateLocalQualification(tasks, qualification);
   for (const receipt of receipts) await inspectImage(receipt.image);
   const local = await preflight(models, endpoint, fetcher);
   if (local.pins.length !== 2) throw new Error('two_local_models_required');
   await mkdir(out, { mode: 0o700 });
-  const state = { version: 1, kind: 'local-repository-development', sourceSha,
+  const state = { version: 1, kind: 'local-repository-development', sourceSha, profile,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts,
-    modelPins: local.pins, settings: localRepositorySettings, apiSpendMicros: 0,
+    modelPins: local.pins, settings: { ...localRepositorySettings,
+      ...(profile === 'grounded' ? groundedSampling : {}), requestTimeoutMs: profile === 'grounded' ? 120000 : 60000 }, apiSpendMicros: 0,
     maxCalls: tasks.length * strategies.length * localRepositorySettings.maxTurns,
     complete: false, calls: [], records: [],
     limitations: ['Previously used development repository tasks; not an unseen holdout.',
@@ -111,7 +118,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         trialCalls.push(call); state.calls.push(call); await checkpoint();
         const callStarted = performance.now();
         try {
-          const generated = await localActionRequest({ endpoint, model, pin, body, signal,
+          const generated = await localActionRequest({ endpoint, model, pin, body, signal, profile,
             seed: localRepositorySettings.seed + index, fetcher,
             onDispatch: async () => { call.dispatched = true; await checkpoint(); } });
           const { result, ...metadata } = generated; Object.assign(call, metadata, { status: 'complete', elapsedMs: Math.round(performance.now() - callStarted) });
@@ -125,7 +132,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
       };
       let result, graded, outcome;
       try {
-        result = await agent(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
+        result = await execute(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
           { ...localRepositorySettings, deadlineMs: Math.min(localRepositorySettings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
         graded = await grade(task, receipt.image, result.files, repo);
         if (graded.valid !== true || typeof graded.passed !== 'boolean') throw new Error('invalid_local_grade');
@@ -165,10 +172,11 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [qualificationPath, out, general, coder] = process.argv.slice(2);
+  const [qualificationPath, out, general, coder, profile = 'legacy', taskManifest] = process.argv.slice(2);
   Promise.resolve().then(async () => {
     const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
     if (process.env.GITHUB_SHA !== sourceSha || (await command('git', ['status', '--porcelain'])).stdout.length) throw new Error('clean_exact_source_required');
-    await runLocalRepository({ repo: process.cwd(), qualificationPath, out, sourceSha, models: [general, coder], endpoint: process.env.FUSION_OLLAMA_URL });
+    await runLocalRepository({ repo: process.cwd(), qualificationPath, out, sourceSha, models: [general, coder],
+      endpoint: process.env.FUSION_OLLAMA_URL, profile, taskManifest });
   }).catch(() => { console.error('Local repository campaign incomplete; inspect its content-free checkpoint.'); process.exitCode = 1; });
 }

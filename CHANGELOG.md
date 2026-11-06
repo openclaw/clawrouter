@@ -4,6 +4,10 @@
 
 - Bound Access GitHub identity evidence before accumulation and parsing, retire original response readers on every outcome, and prevent limits, cleanup failures or caller aborts from falling back to other authentication. Preserve clean-unknown assignment retention and valid-empty revocation.
 
+- Add an opt-in grounded local Fusion repair scaffold with bounded current-source views and observed edit anchors, preserving the original benchmark profile.
+
+- Add internal product-offer compatibility resolution using the existing grant, model, endpoint, and lifecycle checks without switching routing or discovery.
+
 - Fence in-flight hot-cache and admission publications after local invalidation, including pending-only credential versions evicted by upstream 401/403. Keep original snapshot age and preserve coalesced runtime/counter writes.
 
 - Bound Access JWT and JWKS admission before decoding, parsing and key import; join original fetch, reader, cancellation and crypto retirement across one deadline, and prevent operational denials from falling back to other authentication. Broader session/evidence allocation remains separate.
