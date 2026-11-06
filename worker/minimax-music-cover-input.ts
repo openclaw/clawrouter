@@ -14,7 +14,7 @@ export const musicCoverInputLimits = Object.freeze({
 type Failure = "capacity" | "invalid" | "cancelled" | "deadline" | "hash" | "cleanup" | "used";
 type Phase = "intake" | "hash" | "sealed" | "retired";
 const failure = (code: Failure) => Object.assign(new Error("music cover input " + code), { code });
-const invalid = (): never => { throw failure("invalid"); };
+function invalid(): never { throw failure("invalid"); }
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 export interface MusicCoverInputSource {
@@ -290,7 +290,8 @@ class CoverInputOwner {
         const part = await this.pending; this.pending = undefined;
         this.check();
         if (part.value) {
-          if (!(part.value instanceof Uint8Array) || part.value.buffer.byteLength > musicCoverInputLimits.backing) invalid();
+          if (!(part.value instanceof Uint8Array) || !(part.value.buffer instanceof ArrayBuffer)
+            || part.value.buffer.byteLength > musicCoverInputLimits.backing) invalid();
           this.maxBacking = Math.max(this.maxBacking, part.value.buffer.byteLength);
           for (let offset = 0; offset < part.value.byteLength; offset += musicCoverInputLimits.feed) {
             const feed = part.value.subarray(offset, Math.min(part.value.byteLength, offset + musicCoverInputLimits.feed));

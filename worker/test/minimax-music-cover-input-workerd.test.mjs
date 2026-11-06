@@ -72,12 +72,13 @@ async function barriers(t) {
   return { origin: "http://127.0.0.1:" + server.address().port, release };
 }
 
-function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "", malformed = false } = {}) {
+function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "", malformed = false, raw } = {}) {
   const encoder = new TextEncoder(), plan = { prompt: maximum ? "s".repeat(300) : "Synthetic style", ...(maximum ? { lyrics: "🎵".repeat(930) } : {}), model: "music-cover" };
   const prefix = (route === "manifest" ? '{"body":' : "") + '{"audio_base64":"';
   const tail = '",' + JSON.stringify(plan).slice(1) + (route === "manifest" ? "}" : "");
   let padding = maximum ? 65536 - encoder.encode(prefix + tail).length : 0;
   function* pieces() {
+    if (raw !== undefined) { for (let offset = 0; offset < raw.length; offset += 256) yield encoder.encode(raw.slice(offset, offset + 256)); return; }
     yield encoder.encode(prefix);
     if (malformed) { yield new Uint8Array([0xff]); return; }
     if (audio !== undefined) yield encoder.encode(audio);
@@ -105,7 +106,7 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   const control = await barriers(t);
   const upstream = `export default {fetch(request){if(new URL(request.url).hostname!=='cover-gate.example')throw Error('no provider calls');return fetch(${JSON.stringify(control.origin)}+new URL(request.url).pathname,{redirect:'manual'});}};`;
   const runtime = await startWorkerdFixture(temporary, router, upstream);
-  const modes = ["maximum", "manifest", "read", "cancel-reject", "hash", "hash-reject", "reads8192", "reads8193", "backing", "padding", "trailing", "overflow", "utf8"];
+  const modes = ["maximum", "manifest", "read", "cancel-reject", "hash", "hash-reject", "reads8192", "reads8193", "backing", "padding", "trailing", "overflow", "utf8", "tokens", "scalar", "escapes"];
   t.after(async () => { for (const mode of modes) for (const phase of ["abort", "read", "cleanup", "hash", "delivery"]) control.release(mode, phase); await runtime.dispose(); });
   const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path); assert.equal(response.status, 200); return response.json(); };
   const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
@@ -143,7 +144,9 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
     assert.equal(state.cleanupCode, mode === "cancel-reject" ? "cleanup" : undefined);
   }
   for (const [mode, bytes, options] of [["padding", 2, { audio: "AAB=" }], ["trailing", 2, { suffix: "x" }],
-    ["utf8", 2, { malformed: true }], ["overflow", 50_000_001, {}], ["backing", 2, {}], ["reads8193", 2, {}]]) {
+    ["utf8", 2, { malformed: true }], ["overflow", 50_000_001, {}], ["backing", 2, {}], ["reads8193", 2, {}],
+    ["tokens", 2, { raw: '{"audio_base64":' + "[".repeat(256) }],
+    ["scalar", 2, { raw: '{"audio_base64":"AAA=","model":"music-cover","prompt":"Synthetic style","lyrics":"' + "\\u0001".repeat(1000) + '"}' }]]) {
     let state = await start(mode, bytes, options); state = await until(s => s.retired);
     assert.equal(state.code, "invalid", JSON.stringify(state)); assert.equal(state.digestStarted, false); assert.equal(state.charged, 0);
     assert.equal(state.locked, false); assert.equal(state.unlocks, 1); assert.equal(state.cancels, 1);
@@ -151,4 +154,6 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   }
   let state = await start("reads8192", 2); assert.equal(state.value.bytes, 2); assert.equal(state.reads, 8192);
   control.release("reads8192", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
+  state = await start("escapes", 2, { audio: "\\u0041\\u0041\\u0041=" }); assert.equal(state.value.bytes, 2);
+  assert.ok(state.nonAudio > 18); control.release("escapes", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
 });
