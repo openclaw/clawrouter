@@ -436,3 +436,153 @@ function musicSse(state: BoundedMusicStream) {
   };
 }
 
+
+// Cover-only unary profile. No tokenizer vector, full HEX string, wire text or
+// second audio copy. Every metadata occurrence is checked before retention.
+export const musicCoverResponseLimits = Object.freeze({ audio: 4 * 1024 * 1024, wire: 8 * 1024 * 1024 + 65536,
+  metadata: 65536, depth: 8, values: 512, containers: 128, members: 256, entries: 256,
+  units: 32768, key: 256, number: 64, feed: 1024, backing: 16384, reads: 8192 });
+type CoverFrame = { kind: "object" | "array"; state: string; path: "root" | "data" | "base" | "other"; key?: string; keys?: Set<string> };
+export class MiniMaxMusicCoverJson {
+  private audio?: Uint8Array<ArrayBuffer> = new Uint8Array(musicCoverResponseLimits.audio);
+  private audioBytes = 0;
+  private nibble = -1;
+  private audioSeen = false;
+  private stack: CoverFrame[] = [];
+  private root = false;
+  private text = "";
+  private metadataBytes = 0;
+  private values = 0;
+  private containers = 0;
+  private members = 0;
+  private entries = 0;
+  private units = 0;
+  private stringUnits = 0;
+  private token: "" | "key" | "string" | "audio" | "number" | "literal" = "";
+  private scalar = "";
+  private escaped = false;
+  private unicode = 0;
+  private sealed = false;
+  push(text: string): void {
+    if (this.sealed || text.length > musicCoverResponseLimits.feed) fail("cover_feed");
+    for (let index = 0; index < text.length; index++) this.character(text[index]);
+  }
+  private metadata(char: string): void {
+    // UTF-16 surrogate units conservatively cost three UTF-8 bytes apiece.
+    const n = char.charCodeAt(0), bytes = n < 128 ? 1 : n < 2048 ? 2 : 3;
+    if (this.metadataBytes + bytes > musicCoverResponseLimits.metadata) fail("cover_metadata");
+    this.metadataBytes += bytes; this.text += char;
+  }
+  private unit(): void {
+    if (++this.units > musicCoverResponseLimits.units || ++this.stringUnits > (this.token === "key" ? 256 : 32768)) fail("cover_string");
+  }
+  private character(char: string): void {
+    if (this.token === "audio") {
+      if (char === '"') {
+        if (this.nibble !== -1 || !this.audioBytes) fail("cover_hex");
+        this.token = ""; this.metadata(char); return;
+      }
+      const code = char.charCodeAt(0), value = code >= 48 && code <= 57 ? code - 48
+        : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
+      if (value < 0 || !this.audio) fail("cover_hex");
+      if (this.nibble < 0) { if (this.audioBytes >= musicCoverResponseLimits.audio) fail("cover_audio"); this.nibble = value; }
+      else { this.audio[this.audioBytes++] = this.nibble * 16 + value; this.nibble = -1; }
+      return;
+    }
+    if (this.token === "key" || this.token === "string") {
+      this.metadata(char);
+      if (this.token === "key") this.scalar += char;
+      if (this.unicode) {
+        if (!/^[0-9a-fA-F]$/.test(char)) fail("cover_escape");
+        if (--this.unicode === 0) this.unit(); return;
+      }
+      if (this.escaped) {
+        this.escaped = false;
+        if (char === "u") this.unicode = 4;
+        else { if (!'"\\/bfnrt'.includes(char)) fail("cover_escape"); this.unit(); }
+        return;
+      }
+      if (char === "\\") { this.escaped = true; return; }
+      if (char === '"') {
+        if (this.token === "key") {
+          const key: string = JSON.parse(this.scalar), frame = this.stack[this.stack.length - 1];
+          if (frame.keys!.has(key)) fail("cover_duplicate");
+          frame.keys!.add(key); frame.key = key; frame.state = "colon";
+          if ((frame.path === "root" || frame.path === "data")
+            && ["error", "url", "audio_url", "audio_base64", "file_id", "file", "task_id"].includes(key)) fail("cover_reference");
+        }
+        this.token = ""; this.scalar = ""; return;
+      }
+      if (char.charCodeAt(0) < 32) fail("cover_string");
+      this.unit(); return;
+    }
+    if (this.token === "number" || this.token === "literal") {
+      if (/[\s,}\]]/.test(char)) { this.scalarEnd(); this.character(char); return; }
+      if (this.scalar.length >= musicCoverResponseLimits.number) fail("cover_number");
+      this.metadata(char); this.scalar += char; return;
+    }
+    if (char === " " || char === "\t" || char === "\n" || char === "\r") { this.metadata(char); return; }
+    const frame = this.stack[this.stack.length - 1];
+    if (frame?.state === "key" || frame?.state === "keyOrEnd") {
+      if (char === "}" && frame.state === "keyOrEnd") { this.close("object", char); return; }
+      if (char !== '"' || ++this.members > musicCoverResponseLimits.members) fail("cover_member");
+      this.metadata(char); this.token = "key"; this.scalar = char; this.stringUnits = 0; return;
+    }
+    if (frame?.state === "colon") {
+      if (char !== ":") fail("cover_colon"); this.metadata(char); frame.state = "value"; return;
+    }
+    if (frame?.state === "commaOrEnd") {
+      if (char === ",") { this.metadata(char); frame.state = frame.kind === "object" ? "key" : "value"; return; }
+      this.close(frame.kind, char); return;
+    }
+    if (frame?.kind === "array" && frame.state === "valueOrEnd" && char === "]") { this.close("array", char); return; }
+    if (!frame && this.root) fail("cover_tail");
+    if (++this.values > musicCoverResponseLimits.values) fail("cover_values");
+    if (frame?.kind === "array" && ++this.entries > musicCoverResponseLimits.entries) fail("cover_entries");
+    let path: CoverFrame["path"] = !frame ? "root" : frame.path === "root" && frame.key === "data" ? "data"
+      : frame.path === "root" && frame.key === "base_resp" ? "base" : "other";
+    const audio = frame?.path === "data" && frame.key === "audio";
+    if (frame) frame.state = "commaOrEnd"; else this.root = true;
+    if ((path === "root" || path === "data" || path === "base") && char !== "{") fail("cover_object");
+    if (audio && char !== '"') fail("cover_hex");
+    this.metadata(char);
+    if (char === "{" || char === "[") {
+      if (++this.containers > musicCoverResponseLimits.containers || this.stack.length >= musicCoverResponseLimits.depth) fail("cover_depth");
+      this.stack.push({ kind: char === "{" ? "object" : "array", state: char === "{" ? "keyOrEnd" : "valueOrEnd",
+        path, ...(char === "{" ? { keys: new Set<string>() } : {}) }); return;
+    }
+    if (char === '"') {
+      this.stringUnits = 0;
+      if (audio) { if (this.audioSeen) fail("cover_duplicate"); this.audioSeen = true; this.token = "audio"; }
+      else this.token = "string";
+      return;
+    }
+    if (char === "-" || char >= "0" && char <= "9") this.token = "number";
+    else if ("tfn".includes(char)) this.token = "literal";
+    else fail("cover_value");
+    this.scalar = char;
+  }
+  private scalarEnd(): void {
+    if (this.token === "number") {
+      if (!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/.test(this.scalar) || !Number.isFinite(Number(this.scalar))) fail("cover_number");
+    } else if (!["true", "false", "null"].includes(this.scalar)) fail("cover_literal");
+    this.token = ""; this.scalar = "";
+  }
+  private close(kind: CoverFrame["kind"], char: string): void {
+    if (char !== (kind === "object" ? "}" : "]")) fail("cover_close");
+    this.metadata(char); this.stack.pop();
+  }
+  finish(): Uint8Array<ArrayBuffer> {
+    if (this.token === "number" || this.token === "literal") this.scalarEnd();
+    if (this.sealed || !this.root || this.token || this.stack.length || !this.audioSeen || !this.audio) fail("cover_incomplete");
+    this.sealed = true;
+    // Only the <=64 KiB, pre-counted metadata envelope reaches JSON.parse.
+    const value = JSON.parse(this.text);
+    if (!mediaObject(value) || !mediaObject(value.base_resp) || value.base_resp.status_code !== 0
+      || !mediaObject(value.data) || value.data.status !== 2) fail("cover_status");
+    const audio = this.audio.subarray(0, this.audioBytes); this.discard(); return audio;
+  }
+  discard(): void { this.audio = undefined; this.text = ""; this.scalar = ""; this.stack = []; this.sealed = true; }
+  snapshot() { return { audioBytes: this.audioBytes, metadataBytes: this.metadataBytes, values: this.values,
+    containers: this.containers, members: this.members, entries: this.entries, units: this.units, tokenVectors: 0 }; }
+}
