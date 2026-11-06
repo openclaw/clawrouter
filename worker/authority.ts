@@ -17,7 +17,7 @@ import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
   UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
 } from "./types";
-import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
+import { captureAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
@@ -49,6 +49,8 @@ export class PolicyBindingIndexObject implements DurableObject {
   private storage: DurableObjectStorage;
   private responses?: Promise<ResponsesScopeStore>;
   private env: Env;
+  // Reconciliation entry order only; unrelated owner routes remain concurrent.
+  private assignmentTail: Promise<void> = Promise.resolve();
 
   constructor(state: DurableObjectState, env: Env) {
     this.env = env;
@@ -109,7 +111,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       });
       if (path === "/users/update-profile") return json(this.updateUserProfile(await readJson<AccessControlUser>(request)));
       if (path === "/users/create") return json(this.createUser(await readJson<AccessControlUser>(request)));
-      if (path === "/users/reconcile-assignments") return json(this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
+      if (path === "/users/reconcile-assignments") return json(await this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
       if (path === "/users/put-bindings") return json(this.putUserBindings(await readJson<UserBindingsRequest>(request)));
       if (path === "/users/list") return json({ initialized: this.hasMeta("users_global_initialized"), users: this.listUsers() });
       if (path === "/policies/resolve") return json(this.resolvePolicies((await readJson<{ policyIds: string[] }>(request)).policyIds));
@@ -304,12 +306,30 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private reconcileUserAssignments(request: AssignmentReconcileRequest) {
-    const user = this.getUser(request.email);
-    if (!user) throw new HttpError(404, "unknown_user", "access user not found");
-    const candidate = withLegacyAssignmentState(user, request.legacy);
-    const result = evaluateUserAssignments(candidate, request.rules, request.evidence, request.force);
-    if (result.changed) this.putUser(result.user);
-    return result;
+    const predecessor = this.assignmentTail;
+    let release!: () => void;
+    this.assignmentTail = new Promise<void>(resolve => { release = resolve; });
+    const actual = (async () => {
+      let snapshot, captured, failed = false, reason: unknown;
+      try {
+        snapshot = captureAssignmentRules(request.rules);
+        captured = { email: request.email, legacy: request.legacy, evidence: request.evidence, force: request.force };
+      } catch (error) { failed = true; reason = error; }
+      // Even a synchronous snapshot failure must not let a successor overtake.
+      await predecessor;
+      if (failed) throw reason;
+      const prepared = await prepareAssignmentRules(snapshot!);
+      const user = this.getUser(captured!.email);
+      if (!user) throw new HttpError(404, "unknown_user", "access user not found");
+      const candidate = withLegacyAssignmentState(user, captured!.legacy);
+      const result = evaluatePreparedUserAssignments(candidate, prepared, captured!.evidence, captured!.force);
+      if (result.changed) this.putUser(result.user);
+      return result;
+    })();
+    // A separate void slot observes every outcome without retaining result/error
+    // graphs in the tail. Never clear a successor's slot from an older completion.
+    void actual.then(() => release(), () => release());
+    return actual;
   }
 
   private putUserBindings(request: UserBindingsRequest): { user: AccessControlUser; bindings: PolicyBinding[] } {
