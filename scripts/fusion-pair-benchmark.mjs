@@ -118,7 +118,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed), status: 'complete' });
         } catch (error) {
           Object.assign(row, { status: 'error', errorCode: toolErrorCode(error) });
-          if (ledger.blocked || error.message.startsWith('provider_')) throw error;
+          if (ledger.blocked || error.message === 'provider_refused' || error.message === 'provider_safety_notice') throw error;
         } finally {
           row.costMicros = ledger.total(trialId);
           row.calls = ledger.attempts.filter(call => call.trialId === trialId).length;

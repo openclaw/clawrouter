@@ -116,3 +116,22 @@ test('provider refusal settles known usage and stops before another model is cal
     assert.equal(typeof state.calls[0].costMicros, 'number');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('known-cost output truncation fails its trial without skipping the other controls', async () => {
+  const { root, options } = await fixture();
+  try {
+    let calls = 0;
+    const state = await runPairBenchmark({ ...options, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        calls++;
+        return Response.json({ model: JSON.parse(request.body).model, usage: { prompt_tokens: 20, completion_tokens: 256 },
+          choices: [{ finish_reason: 'length', message: { content: '{' } }] });
+      }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      } });
+    assert.equal(calls, 3); assert.equal(state.complete, true);
+    assert.ok(state.records.every(row => row.status === 'error' && row.errorCode === 'provider_truncated' && row.score === 0));
+    assert.ok(state.calls.every(call => typeof call.costMicros === 'number'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
