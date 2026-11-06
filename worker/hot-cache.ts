@@ -45,33 +45,46 @@ export function hotCacheNow(): number { return clock(); }
 /** Test hook: inject a clock; call with no argument to restore Date.now. */
 export function setHotCacheClock(next?: () => number): void { clock = next ?? (() => Date.now()); }
 
-// Work that must outlive the current response (stale refreshes, coalesced
-// counters). The Worker entry hands the pending set to ctx.waitUntil. A hung
-// backend call leaves the set after the bound, so later requests never keep
-// extending their waitUntil for it.
+// Registration bounds logical background custody, not platform execution or
+// originating-request I/O lifetime. Facades never release a live registration.
+export const BACKGROUND_WORK_LIMIT = 64;
 export const BACKGROUND_WORK_BOUND_MS = 25_000;
-// A request drains only work registered after its own start, and bounds the wait
-// with a timer created in its own context. Work owned by another request (whose
-// own timers may never fire there, e.g. after a client disconnect) can otherwise
-// pin this request's waitUntil past the platform limit, and Cloudflare then
-// cancels every remaining task of this request, including its usage accounting.
 export const DRAIN_BOUND_MS = 10_000;
 let workSeq = 0;
-const background = new Map<Promise<unknown>, number>();
-export function runInBackground(work: Promise<unknown>): void {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, BACKGROUND_WORK_BOUND_MS); });
-  const tracked: Promise<unknown> = Promise.race([work.catch(() => undefined), bound]).finally(() => { clearTimeout(timer); background.delete(tracked); });
-  background.set(tracked, ++workSeq);
+const background = new Map<number, number>();
+/** Accepted registration, not task success. Overflow never invokes start. */
+export function tryRunInBackground(start: () => unknown): boolean {
+  if (background.size >= BACKGROUND_WORK_LIMIT) return false;
+  const identity = ++workSeq;
+  background.set(identity, performance.now());
+  const settled = () => { background.delete(identity); };
+  try { void Promise.resolve(start()).then(settled, settled); }
+  catch { settled(); }
+  return true;
 }
-/** Mark taken at request entry; pass it to pendingBackgroundWork at the end. */
+/** Scalar sequence boundary, not request identity; interleaved work is included. */
 export function backgroundMark(): number { return workSeq; }
 export function pendingBackgroundWork(since = 0): Promise<unknown> | null {
-  const mine = [...background].filter(([, seq]) => seq > since).map(([work]) => work);
-  if (!mine.length) return null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, DRAIN_BOUND_MS); });
-  return Promise.race([Promise.allSettled(mine), bound]).finally(() => clearTimeout(timer));
+  // Monotonic visibility age, independent of the cache TTL/wall clock. Snapshot
+  // only scalars; the hard bound and polling timers belong to THIS caller.
+  const cohort = [...background].filter(([seq]) => seq > since)
+    .map(([seq, at]) => [seq, at + BACKGROUND_WORK_BOUND_MS] as const);
+  if (!cohort.length) return null;
+  return new Promise<void>(resolve => {
+    let poll: ReturnType<typeof setTimeout> | undefined;
+    let step = 1, finished = false;
+    const finish = () => { finished = true; clearTimeout(bound); clearTimeout(poll); resolve(); };
+    const bound = setTimeout(finish, DRAIN_BOUND_MS);
+    const inspect = () => {
+      if (finished) return;
+      if (cohort.every(([seq, until]) => !background.has(seq) || performance.now() >= until)) finish();
+      else {
+        try { poll = setTimeout(inspect, step); step = Math.min(step * 2, 16); }
+        catch { finish(); } // Best-effort facade only; actual custody is unchanged.
+      }
+    };
+    inspect();
+  });
 }
 
 interface Entry<V> { value: V; storedAt: number; expiresAt: number }
@@ -193,7 +206,7 @@ export class HotCache<V> {
 
   /** Start one background refresh unless a load for this key is already running. */
   revalidate(key: string, config: HotCacheConfig, loader: Loader<V>): void {
-    if (!this.publication(key)) runInBackground(this.load(key, config, loader));
+    if (!this.publication(key)) tryRunInBackground(() => this.load(key, config, loader));
   }
 
   /** Serve fresh entries, serve stale entries while one background refresh runs, else load. */

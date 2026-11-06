@@ -17,7 +17,7 @@ import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./prox
 import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
-import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
+import { hotCacheConfig, registerHotCache, tryRunInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, grantSupports, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
@@ -444,9 +444,11 @@ function scheduleProjectionRepair(env: Env, key: string): void {
   if (!hotCacheConfig(env).maxAgeMs) return;
   const now = Date.now();
   if ((projectionRepairs.get(key) ?? -Infinity) > now - PROJECTION_REPAIR_INTERVAL_MS) return;
-  projectionRepairs.delete(key); projectionRepairs.set(key, now);
-  if (projectionRepairs.size > 1024) projectionRepairs.delete(projectionRepairs.keys().next().value!);
-  runInBackground(reconcileGrantAttachment(env, key));
+  tryRunInBackground(() => {
+    projectionRepairs.delete(key); projectionRepairs.set(key, now);
+    if (projectionRepairs.size > 1024) projectionRepairs.delete(projectionRepairs.keys().next().value!);
+    return reconcileGrantAttachment(env, key);
+  });
 }
 
 export async function refreshStoredGrant(env: Env, key: string, signal?: AbortSignal): Promise<UpstreamGrant> {

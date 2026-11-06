@@ -4,7 +4,7 @@ import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
-import { HotCache, fenceSharedHotCache, hotCacheAcquiredAt, hotCacheConfig, hotCacheNow, registerHotCache, runInBackground, sharedHotCacheFence, type CachePublication, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
+import { HotCache, fenceSharedHotCache, hotCacheAcquiredAt, hotCacheConfig, hotCacheNow, registerHotCache, tryRunInBackground, sharedHotCacheFence, type CachePublication, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
@@ -189,7 +189,7 @@ export function setCoalesceWindowMs(ms: number): void { flushWindowMs = ms; }
 const pendingRuntime = new Map<string, GrantRuntimeState>();
 const pendingSelections = new Map<string, { poolKey: string; key: string; count: number; lastMs: number; cursorKey?: string | null }>();
 const pendingCursors = new Map<string, string>();
-let flushScheduled = false;
+let flushScheduled: object | false = false;
 // Pending counters are writes, not cached state: invalidation never drops them.
 
 function recordSelection(env: Env, poolKey: string, key: string, lastMs: number, cursorKey?: string): void {
@@ -218,8 +218,16 @@ export function queueGrantRuntime(env: Env, key: string, state: GrantRuntimeStat
 
 function scheduleFlush(env: Env): void {
   if (flushScheduled) return;
-  flushScheduled = true;
-  runInBackground(new Promise(resolve => setTimeout(resolve, flushWindowMs)).then(() => flushSelections(env)));
+  tryRunInBackground(() => {
+    const generation = {};
+    flushScheduled = generation;
+    return new Promise<void>(resolve => setTimeout(resolve, flushWindowMs)).then(() => {
+      if (flushScheduled === generation) return flushSelections(env);
+    }).finally(() => {
+      // A manual flush or reentrant registration may have installed a successor.
+      if (flushScheduled === generation) flushScheduled = false;
+    });
+  });
 }
 
 export async function flushSelections(env: Env): Promise<void> {

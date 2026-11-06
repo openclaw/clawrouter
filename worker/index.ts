@@ -64,7 +64,8 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     // Mutations served by this isolate take effect here at once; other isolates
     // converge within the hot-cache max age.
     if (mutatesHotState(request.method, path)) { clearHotCaches(); fenceSharedHotCache(); }
-    // Stale-cache refreshes and coalesced counters registered during this request.
+    // Best-effort facade over a scalar sequence cohort, including interleaved
+    // registrations. Its own timers never join another request's native I/O.
     const background = pendingBackgroundWork(backgroundMark);
     if (background) context.waitUntil(background);
     response = withNativeLocalError(response, path, correlated.requestId);
