@@ -576,6 +576,7 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
   }
 
   // Reachable maximum controls and maximum input/lifecycle under ONE owner.
+  io.mode("maximum");
   await json("/setup?inline=1"); const pool = await json("/maximum-pool?inline=1");
   const input = { ...lastBody, prompt: "x".repeat(2000) }, text = JSON.stringify(input);
   const nonimage = Buffer.byteLength(text) - input.first_frame_image.split(",")[1].length;
@@ -594,10 +595,10 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
     const posts = io.counts.post;
     const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
     if (mode.startsWith("inline-upload")) { assert.equal(io.counts.post, posts + 1); io.replyEarly(); }
-    assert.equal(state.charged, 96 * MiB); if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
+    assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
     if (mode === "inline-late") io.release(mode + "/execution-abort");
     for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
-    assert.equal(state.results, 1, JSON.stringify(state)); assert.equal(state.charged, 96 * MiB); assert.equal(state.releases, 0);
+    assert.equal(state.results, 1, JSON.stringify(state)); assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); assert.equal(state.releases, 0);
     if (mode.startsWith("inline-upload")) {
       assertInlineCreateCalls(state);
       assert.equal(state.status, 200); assert.equal(state.actions.filter(action => action === "managed_bind").length, 1);
