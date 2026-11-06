@@ -20,7 +20,7 @@ async function fixture() {
   await writeFile(taskManifest, JSON.stringify({ version: 1, tasks: [task] }));
   await writeFile(qualificationPath, JSON.stringify({ nodeImage: 'node@sha256:' + 'c'.repeat(64), receipts: [{
     taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'd'.repeat(64), qualified: true,
-    visible: { passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false },
+    visible: { passed: true }, oracleVisible: { valid: true, passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false },
   }] }));
   return { root, options: { repo: root, out: join(root, 'result'), taskManifest, qualificationPath, sourceSha: 'e'.repeat(40), config, env } };
 }
