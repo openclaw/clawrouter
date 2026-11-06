@@ -24,10 +24,14 @@ export function sourceWindows(files, instruction, selection = null, maxBytes = 1
     const lines = file.content.split('\n');
     const scores = lines.map(line => terms.reduce((sum, term) => sum + Number(line.toLowerCase().includes(term)), 0));
     let center = scores.reduce((best, score, index) => score > scores[best] ? index : best, 0);
+    let queryMatched;
     if (selection?.path === file.path) {
       if (selection.query) {
         const match = lines.findIndex(line => line.includes(selection.query));
-        if (match >= 0) center = match;
+        queryMatched = match >= 0;
+        if (!queryMatched) return { path: file.path, totalLines: lines.length,
+          startLine: 0, endLine: 0, content: '', queryMatched: false };
+        center = match;
       } else if (selection.line > 0) center = Math.min(selection.line - 1, lines.length - 1);
     }
     const selected = selection?.path === file.path;
@@ -38,7 +42,8 @@ export function sourceWindows(files, instruction, selection = null, maxBytes = 1
     }
     remaining -= bytes;
     return { path: file.path, totalLines: lines.length, startLine: start + 1,
-      endLine: end, content: lines.slice(start, end).join('\n') };
+      endLine: end, content: lines.slice(start, end).join('\n'),
+      ...(queryMatched === undefined ? {} : { queryMatched }) };
   });
 }
 
@@ -75,7 +80,7 @@ export function groundedEdits(task, files, views, action) {
 
 const instructions = `Repair the reported repository bug. Current source excerpts are supplied on every turn. Make the smallest correct change; preserve unrelated behavior.
 Return one JSON action. edit: choose the inclusive line and endLine from the numbered source, and put ONLY their corrected replacement text into replace; path must be an editable file. Replace as few lines as possible. Do not include line-number prefixes in replacement text or rewrite entire functions unnecessarily.
-inspect: choose a listed readable path and either a line number or literal query to see another source window. Declared source dependencies are read-only; edits still require an editable path. probe: query contains a Node ES module that imports the source and asserts the reported behavior; it executes in an isolated repository. finish: submit the current repair.
+inspect: choose a listed readable path and either a line number or literal query to see another source window. queryMatched false means the literal query was absent: try a shorter literal or a line number. Declared source dependencies are read-only; edits still require an editable path. probe: query contains a Node ES module that imports the source and asserts the reported behavior; it executes in an isolated repository. finish: submit the current repair.
 memory: every action must preserve a nonempty, concise working summary of facts learned, files inspected, and the next step (at most 2000 characters). Use workingMemory to continue rather than rediscovering earlier work. Working notes can be wrong; verify against source. Never copy full source into memory. Set other unused strings to empty and unused line/endLine to 0; memory must not be empty. The source is already read for you. Do not emit notes, explanations or copies of the full file.
 Visible tests pass even on the broken baseline: their success does not prove the issue fixed. Use an executable probe of the reported invariant where possible. Final acceptance tests are unavailable.`;
 
