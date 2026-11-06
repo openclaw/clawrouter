@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.
+
 - Include both fixed-model controls in local Fusion function-smoke summaries so mixed policies can be compared against the stronger baseline.
 
 - Add an experimental local Fusion reproduction gate with isolated probes, frozen checks, and explicit acceptance accounting.

@@ -340,3 +340,20 @@ arms: Qwen3.5 4B used 8 calls and 37,925 tokens; Qwen3 4B used 32 calls and
 had complete usage and zero paid API spend. This negative result motivates a
 verification loop; it does not establish a fusion benefit. Evaluate the new
 policy on development tasks before using the separately qualified fresh set.
+
+### Independent review of a checked candidate
+
+The programmatic grounded agent also accepts `strategy: 'review'` with
+`requireReproducer: true`. The first model reproduces and repairs the issue.
+After its probe and visible tests pass, or after three author actions, the
+second model takes over and reviews the candidate against the complete issue.
+If no reproduction exists, the second model gets up to three actions to create
+one within the shared budget. It can inspect, edit, or finish. A review edit or
+submission reruns the frozen probe and visible tests. Both phases share the
+same turn and deadline limits; `reviewed` stays false until review succeeds.
+
+This is an experimental benchmark strategy, not a production endpoint mode.
+A failing baseline assertion may also fail on correct code, and a passing
+candidate can omit requirements. Independent review adds a check, not a proof.
+Continue scoring with withheld acceptance tests and comparing both fixed-model
+controls; count all author and reviewer calls in cost and latency.
