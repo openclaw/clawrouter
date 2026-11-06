@@ -31,7 +31,7 @@
       "hiddenTests": [
         "worker/test/provider-bedrock-embeddings.test.mjs"
       ],
-      "instruction": "A Titan Multimodal embedding response can contain a message error field alongside an embedding. Reject every non-null, non-undefined message value for the canonical Titan image embedding model, even falsy values. Continue accepting absent/null message fields. Preserve existing handling and token accounting for the other embedding families and invalid responses."
+      "instruction": "A Titan Multimodal embedding response can contain a message error field alongside an embedding. Reject every non-null, non-undefined message value for the canonical Titan image embedding model and every supported alias that resolves to it, even falsy values. Supported regional prefixes and version/throughput suffixes must retain the same message semantics. Continue accepting absent/null message fields. Preserve existing handling and token accounting for the other embedding families and invalid responses."
     },
     {
       "id": "responses-literal-path",

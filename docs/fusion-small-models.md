@@ -357,3 +357,8 @@ A failing baseline assertion may also fail on correct code, and a passing
 candidate can omit requirements. Independent review adds a check, not a proof.
 Continue scoring with withheld acceptance tests and comparing both fixed-model
 controls; count all author and reviewer calls in cost and latency.
+
+The Bedrock development task explicitly includes supported aliases of the
+canonical image model. Earlier runs using the shorter canonical-model wording
+are a different task revision and must not be silently combined with these
+results. Neither revision is an unseen validation task.
