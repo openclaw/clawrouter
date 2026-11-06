@@ -277,3 +277,34 @@ baseline against a scaffold that requires source inspection before editing,
 uses bounded source ranges and preserves compact state across handoff. Measure
 valid edits, executable probes and limit failures as well as final solves.
 Freeze that policy before a fresh-task evaluation; keep production Fusion opt-in.
+
+### Grounded repair scaffold
+
+Append `grounded` to the local repository command to use a compact repair
+interface. It supplies numbered current source windows on every turn, requires
+line replacements to match observed current source, and gives the next worker the current edited
+source with bounded tool feedback. `inspect` selects another window; `probe`
+runs in the same isolated environment. The original `legacy` profile remains
+the default. Both profiles use the same action, output and total trial deadline
+caps. The grounded profile uses explicit sampled non-thinking generation
+(`temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, presence penalty 1.5,
+repeat penalty 1), following the [Qwen3.5 model-card recommendation](https://huggingface.co/Qwen/Qwen3.5-4B).
+Its per-call timeout is 120 seconds inside the unchanged 180-second trial cap;
+legacy retains 60 seconds and greedy generation. Cross-profile comparisons
+therefore measure both interface and sampling changes.
+An optional final argument selects another qualified task manifest; receipt
+digests and oracle test-count checks still apply.
+
+This experiment draws on [Agentless](https://arxiv.org/abs/2407.01489), which
+separates localization, repair and validation, and [Aider's editing
+formats](https://aider.chat/docs/more/edit-formats.html), which separate concise
+edits from full-file output. [SWE-agent's interface
+design](https://swe-agent.com/latest/background/aci/) motivates bounded source
+views. [SWE-Protégé](https://www.cs-pk.com/preprint-swe-protege-meta.pdf) studies
+trained selective expert collaboration; its result does not establish that an
+untrained small model will benefit from a handoff here.
+
+First compare the grounded single-model and handoff arms on the existing
+development tasks. Improvement over the legacy scaffold is a harness gain,
+not evidence of model fusion. Fusion must beat the best grounded fixed-model
+control on new tasks, with total model calls and tokens included.
