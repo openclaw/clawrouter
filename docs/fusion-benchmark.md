@@ -75,3 +75,23 @@ cost-saving flag therefore requires no lost strong-model repair. These are
 observations from the supplied run, not statistical significance, a signed
 attestation, or approval to change production routing. Prior campaign expenses
 remain in the spending ledger but are excluded from per-arm comparisons.
+
+### Declared-scope routing experiment
+
+Set `FUSION_PAIR_POLICY=scope` on the native paired repair runner to replace
+the architect arm with a deterministic selection: one editable source file uses
+the cheap model, while multiple editable files use the strong model. All arms
+receive initial editable source and the same call, time, and spending limits.
+The report records the selected model and charges only calls actually made.
+
+This is a benchmark hypothesis, not a production classifier. It requires the
+caller to provide a trustworthy repair scope before inference; it cannot infer
+that scope from an arbitrary prompt. Freeze the rule before evaluating unseen
+tasks, and compare complete paired cohorts. Passing visible tests or receiving
+a model's approval does not establish correctness; isolated acceptance decides
+the score. The scope policy does not use acceptance outcomes to select models.
+
+`benchmarks/fusion/scope-workloads.json` declares a separate prospective cohort.
+Its `development` schema label does not prove it is unseen: report exposure
+history and source revisions with each run. Qualify all four baseline/oracle
+checks before inference. This option does not change production routing.
