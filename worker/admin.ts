@@ -1,5 +1,5 @@
 import { miniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
-import { miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxSixModelVideoBinding, miniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { miniMaxCurrentCnInlineVideoBinding, miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxSixModelVideoBinding, miniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import { minimaxImageBinding, readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { normalizeVertexAnthropicBinding, vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
@@ -479,10 +479,10 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string, a
     if (["minimaxVideoBinding", "minimaxVideoIntent", "videoActor", "videoAttestation"].some(field => Object.hasOwn(body, field)))
       throw new HttpError(400, "invalid_minimax_video_authorization", "Use explicit video authorization");
     const videoIntent = body.minimaxVideoAuthorization;
-    if (videoIntent !== undefined && videoIntent !== null && videoIntent !== "minimax-global-video" && videoIntent !== "minimax-cn-video" && videoIntent !== "minimax-global-video-inline-first-frame" && videoIntent !== "minimax-global-video-six-model-inline-first-frame" && videoIntent !== "minimax-current-cn-video")
+    if (videoIntent !== undefined && videoIntent !== null && videoIntent !== "minimax-global-video" && videoIntent !== "minimax-cn-video" && videoIntent !== "minimax-global-video-inline-first-frame" && videoIntent !== "minimax-global-video-six-model-inline-first-frame" && videoIntent !== "minimax-current-cn-video" && videoIntent !== "minimax-current-cn-video-six-model-inline-first-frame")
       throw new HttpError(400, "invalid_minimax_video_authorization", "Video authorization must name its region or null");
     delete body.minimaxVideoAuthorization;
-    const minimaxVideo = videoIntent == null ? videoIntent : videoIntent === "minimax-current-cn-video" ? miniMaxCurrentCnVideoBinding() : videoIntent === "minimax-global-video-six-model-inline-first-frame" ? miniMaxSixModelVideoBinding() : videoIntent === "minimax-global-video-inline-first-frame" ? miniMaxInlineVideoBinding() : miniMaxVideoBinding(videoIntent === "minimax-global-video" ? "global" : "cn");
+    const minimaxVideo = videoIntent == null ? videoIntent : videoIntent === "minimax-current-cn-video-six-model-inline-first-frame" ? miniMaxCurrentCnInlineVideoBinding() : videoIntent === "minimax-current-cn-video" ? miniMaxCurrentCnVideoBinding() : videoIntent === "minimax-global-video-six-model-inline-first-frame" ? miniMaxSixModelVideoBinding() : videoIntent === "minimax-global-video-inline-first-frame" ? miniMaxInlineVideoBinding() : miniMaxVideoBinding(videoIntent === "minimax-global-video" ? "global" : "cn");
     const minimaxImage = body.minimaxImageAuthorization;
     if (minimaxImage !== undefined && minimaxImage !== null && minimaxImage !== "minimax-global-image")
       throw new HttpError(400, "invalid_minimax_image_authorization", "Image authorization must be minimax-global-image or null");

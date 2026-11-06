@@ -166,3 +166,45 @@ post-dispatch final-policy refusal occurs before the third inspect and POST:
 13 ordinary calls actually start (the reserved provider ticket is still spent),
 plus dispatch and freeze as two mandatory calls. Fixture assertions compare
 these exact path/action inventories; DO-internal accounting work is excluded.
+
+
+## Explicit current-CN V5 inline authority
+
+The separate administrator intent
+`minimax-current-cn-video-six-model-inline-first-frame` attests the closed
+`clawrouter.minimax-video.v5` tuple: CN, `https://api.minimax.cn`, the exact six
+frozen models, scalar API-key/credential, and `inline-first-frame.v1`.
+Every V5 CREATE requires the private image capability, including Hailuo-2.3/02.
+The owner guard rejects absent V5 state before its legacy no-state return. With
+state, only the exact V2/V3-global-origin or V5-CN-origin/profile pair qualifies.
+Model, frozen context/content hash and original-owner checks remain required
+before materialization and after policy waits before POST.
+
+V1 through V4 serialized bindings, destinations, permissions and digest bytes
+remain unchanged. V4 retains two-model T2V. Re-attestation uses the existing full
+owner mutation digest and last current SQL-admin check; changing the binding
+rotates lineage. No implicit upgrade or old-host retry is allowed. The six-model
+reader returns the complete tuple for V3 and V5, with exact order/field checks.
+The existing consistent-intersection shapes remain: no Hailuo-02 512P or legacy
+I2V 1080P. URLs, uploaded handles and source fetches stay closed.
+
+CREATE input is ephemeral. A fresh owner can poll/collect/download only through
+the original private job, requested version, current binding/route digest and
+policy after that image retires. No image is persisted and a job grants no CREATE
+permission. Control ABI V1, host/file gates and the hash/serializer formats remain
+unchanged.
+
+The 96 MiB application-owned reservation, 16 ordinary + 5 mandatory nonrefundable
+CREATE tickets and 4+1 physical slots are unchanged. The existing 32 MiB ticket
+allowance is 31.5 MiB for 21 calls plus 0.5 MiB descriptors, not 32 calls. Actual
+registered call counts, primitive scheduler independence and phased maximum
+representations remain separate evidence. No native-platform allocation bound,
+producer acknowledgment, live entitlement, credential portability, declaration,
+client activation or deployment is claimed.
+
+V5 synthetic coverage includes 36 full-8-MiB cases (six models, two routes, three
+MIME formats), exact current-CN upload/host, one POST/fixed receipt, content/model
+idempotency, current SQL demotion, original-owner changes across waits, zero-secret
+pricing/input denials, restarted collectors/files, held upload/hash/read/FIRST
+cancel and late/unclaimed output, and maximum same-owner contention. Source and
+authored coverage do not substitute for fresh hosted execution.

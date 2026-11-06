@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxVideoBinding, miniMaxT2VModels, readMiniMaxVideoBinding, miniMaxSixModelVideoBinding, miniMaxFrozenVideoModels, miniMaxVideoBindingModel, miniMaxVideoRequiresInline } from "../../shared/minimax-video-binding.ts";
+import { miniMaxCurrentCnInlineVideoBinding, miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxVideoBinding, miniMaxT2VModels, readMiniMaxVideoBinding, miniMaxSixModelVideoBinding, miniMaxFrozenVideoModels, miniMaxVideoBindingModel, miniMaxVideoRequiresInline } from "../../shared/minimax-video-binding.ts";
 
 for (const region of ["global", "cn"]) {
   test(`Hailuo ${region} binding preserves only explicit regional T2V authority`, () => {
@@ -64,13 +64,32 @@ test("current CN V4 is a separate exact T2V authority without input permission",
   for (const key of Object.keys(value)) { const missing = { ...value }; delete missing[key]; assert.equal(readMiniMaxVideoBinding(missing), null); }
 });
 
-test("V1 V2 V3 serialized authority bytes remain frozen when V4 is added", () => {
+test("V1 V2 V3 V4 serialized authority bytes remain frozen when V5 is added", () => {
   const global = '{"version":"clawrouter.minimax-video.v1","product":"video","region":"global","origin":"https://api.minimax.io","operation":"minimax.video","models":["MiniMax-Hailuo-2.3","MiniMax-Hailuo-02"],"credentialKind":"api_key","credentialSource":"credential"}';
   const cn = global.replace('"region":"global"', '"region":"cn"').replace("https://api.minimax.io", "https://api.minimaxi.com");
   const inline = global.replace("minimax-video.v1", "minimax-video.v2").slice(0, -1) + ',"inputProfile":"inline-first-frame.v1"}';
   const six = inline.replace("minimax-video.v2", "minimax-video.v3").replace('"MiniMax-Hailuo-02"]', '"MiniMax-Hailuo-02","MiniMax-Hailuo-2.3-Fast","I2V-01-Director","I2V-01-live","I2V-01"]');
+  const currentCn = cn.replace("minimax-video.v1", "minimax-video.v4").replace("https://api.minimaxi.com", "https://api.minimax.cn");
   for (const [value, golden] of [[miniMaxVideoBinding("global"), global], [miniMaxVideoBinding("cn"), cn],
-    [miniMaxInlineVideoBinding(), inline], [miniMaxSixModelVideoBinding(), six]]) {
+    [miniMaxInlineVideoBinding(), inline], [miniMaxSixModelVideoBinding(), six], [miniMaxCurrentCnVideoBinding(), currentCn]]) {
     assert.equal(JSON.stringify(value), golden); assert.equal(JSON.stringify(readMiniMaxVideoBinding(JSON.parse(golden))), golden);
   }
+});
+
+
+test("current CN V5 strictly round-trips all six models and the exact private input profile", () => {
+  const value = miniMaxCurrentCnInlineVideoBinding();
+  assert.ok(Object.isFrozen(value)); assert.ok(Object.isFrozen(value.models));
+  assert.deepEqual(readMiniMaxVideoBinding(JSON.parse(JSON.stringify(value))), value);
+  assert.equal(value.version, "clawrouter.minimax-video.v5"); assert.equal(value.region, "cn");
+  assert.equal(value.origin, "https://api.minimax.cn"); assert.equal(value.inputProfile, "inline-first-frame.v1");
+  assert.deepEqual(readMiniMaxVideoBinding(value).models, miniMaxFrozenVideoModels);
+  for (const model of miniMaxFrozenVideoModels) assert.equal(miniMaxVideoBindingModel(value, model), true);
+  for (const patch of [{ version: "clawrouter.minimax-video.v4" }, { region: "global" }, { origin: "https://api.minimax.io" },
+    { origin: "https://api.minimaxi.com" }, { origin: "https://api.minimax.cn/" }, { origin: "https://api.minimax.cn:443" },
+    { models: miniMaxT2VModels }, { models: [...miniMaxFrozenVideoModels].reverse() }, { inputProfile: "url" },
+    { inputProfile: undefined }, { credentialSource: "environment" }, { credentialKind: "oauth" }, { extra: true }])
+    assert.equal(readMiniMaxVideoBinding({ ...value, ...patch }), null);
+  for (const key of Object.keys(value)) { const missing = { ...value }; delete missing[key]; assert.equal(readMiniMaxVideoBinding(missing), null); }
+  assert.equal(readMiniMaxVideoBinding({ ...miniMaxCurrentCnVideoBinding(), inputProfile: value.inputProfile }), null);
 });
