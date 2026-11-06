@@ -92,7 +92,13 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
     const testExamples = sourceWindows(examples, task.instruction, null, 4000);
     for (; turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      if (checked && !reproducer && turns >= 3) { outcome = 'no_reproducer'; break; }
+      if (strategy === 'review' && !handoffUsed && turns >= 3) {
+        handoffUsed = true; reviewing = reproducer !== null;
+        actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
+        feedback = `The first worker exhausted its three-action budget. Independently assess the issue and current candidate. Previous result: ${feedback}`;
+      }
+      const reproductionLimit = strategy === 'review' && handoffUsed ? 6 : 3;
+      if (checked && !reproducer && turns >= reproductionLimit) { outcome = 'no_reproducer'; break; }
       if (!checked && strategy === 'handoff' && !handoffUsed && turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) {
         handoffUsed = true; actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
         feedback = `Independently verify the attempted repair. Previous tool result: ${feedback}`;
@@ -104,9 +110,9 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       if (selection) readable.sort((a, b) => Number(b.path === selection.path) - Number(a.path === selection.path));
       const views = sourceWindows(readable, task.instruction, selection);
       const phaseInstructions = !checked ? '' : reviewing
-        ? '\nIndependent review phase: the first worker produced this candidate. Its frozen test and visible tests pass, but those tests can be incomplete or wrong. Review the ENTIRE issue independently, including every stated boundary and behavior that must be preserved. Use inspect or edit to correct omissions. Use finish only when the candidate satisfies the full issue. Do not treat a passing self-authored test as proof of correctness.' : reproducer
+        ? '\nIndependent review phase: the first worker attempted this candidate. Check the tool results; do not assume its tests pass. Its frozen test and visible tests can be incomplete or wrong. Review the ENTIRE issue independently, including every stated boundary and behavior that must be preserved. Use inspect or edit to correct omissions. Use finish only when the candidate satisfies the full issue. Do not treat a passing self-authored test as proof of correctness.' : reproducer
         ? '\nRepair phase: the frozen reproduction below fails with an assertion on the original source. Use inspect or edit. Each edit reruns it in a fresh sandbox. Submission is automatic only when the reproduction and visible tests both pass. Do not change the reproduction.'
-        : '\nReproduction phase: use inspect or probe only. The sandbox already imports assert from node:assert/strict and each editable module as source0, source1, etc. Write only executable JavaScript in query, using assert and those module namespaces; no imports, TypeScript types or shell commands are needed. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. You have at most three actions to reproduce the bug; do not edit or finish.';
+        : '\nReproduction phase: use inspect or probe only. The sandbox already imports assert from node:assert/strict and each editable module as source0, source1, etc. Write only executable JavaScript in query, using assert and those module namespaces; no imports, TypeScript types or shell commands are needed. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. Each worker has at most three reproduction actions; do not edit or finish.';
       const actionSchema = !checked ? schema : { ...schema, properties: { ...schema.properties,
         action: { type: 'string', enum: reviewing ? ['inspect', 'edit', 'finish'] : reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
       const messages = [{ role: 'system', content: instructions + phaseInstructions }, { role: 'user', content: JSON.stringify({
@@ -159,6 +165,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
           if (checked) {
             if (result.assertionFailed === true) {
               reproducer = action.query;
+              if (strategy === 'review' && handoffUsed) reviewing = true;
               event.status = 'qualified';
               feedback = `Reproduction qualified: it fails with an assertion on original source. Repair the reported behavior. ${result.feedback.slice(-3000)}`;
               if (strategy === 'handoff') {

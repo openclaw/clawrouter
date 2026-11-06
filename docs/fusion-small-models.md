@@ -345,8 +345,10 @@ policy on development tasks before using the separately qualified fresh set.
 
 The programmatic grounded agent also accepts `strategy: 'review'` with
 `requireReproducer: true`. The first model reproduces and repairs the issue.
-After its probe and visible tests pass, the second model reviews the candidate
-against the complete issue. It can inspect, edit, or finish. A review edit or
+After its probe and visible tests pass, or after three author actions, the
+second model takes over and reviews the candidate against the complete issue.
+If no reproduction exists, the second model gets up to three actions to create
+one within the shared budget. It can inspect, edit, or finish. A review edit or
 submission reruns the frozen probe and visible tests. Both phases share the
 same turn and deadline limits; `reviewed` stays false until review succeeds.
 

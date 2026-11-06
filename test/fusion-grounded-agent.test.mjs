@@ -168,3 +168,27 @@ test('independent review requires the checked interface before allocating a sand
   await assert.rejects(runGroundedAgent({}, 'image', 'review', 'trial', {}, async () => {}, undefined,
     { makeSandbox: async () => { throw Error('must not allocate'); } }), /review_requires_reproducer/);
 });
+
+test('independent reviewer rescues a three-action author failure within the shared budget', async () => {
+  const task = { instruction: 'Enable the feature.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  const roles = []; let probes = 0;
+  const result = await runGroundedAgent(task, 'image', 'review', 'trial',
+    { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000, requireReproducer: true },
+    async (_id, role, body) => {
+      roles.push(role);
+      const action = { action: 'probe', path: '', line: 0, endLine: 0, query: 'probe', replace: '' };
+      if (roles.length === 5) {
+        assert.equal(JSON.parse(body.messages[1].content).phase, 'review');
+        Object.assign(action, { action: 'edit', path: task.editPaths[0], line: 1, endLine: 1, replace: 'export const enabled = true;' });
+      }
+      return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => { const box = { source: 'export const enabled = false;', close: async () => {} }; return box; },
+      read: async (box, paths) => paths.map(path => ({ path, content: path === task.editPaths[0] ? box.source : '' })),
+      write: async (box, files) => { box.source = files[0].content; },
+      test: async () => ({ passed: true, feedback: '' }),
+      runProbe: async box => { probes++; return { passed: probes < 4 || box.source.includes('enabled = true'), assertionFailed: probes === 4, feedback: '' }; },
+    });
+  assert.deepEqual(roles, [models.strong, models.strong, models.strong, models.critic, models.critic]);
+  assert.equal(result.turns, 5); assert.equal(result.reviewed, true); assert.equal(result.outcome, 'verified');
+});
