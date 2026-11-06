@@ -280,6 +280,12 @@ Freeze that policy before a fresh-task evaluation; keep production Fusion opt-in
 
 ### Grounded repair scaffold
 
+Function-smoke summaries include both fixed-model controls: `tiny-single` for
+the first pinned model and `small-single` for the second. These are positional
+policy labels; consult the model pins for actual model names and sizes. Compare
+a mixed policy against the stronger control, not only the second model. A mixed
+policy that always accepts the first model has not demonstrated a fusion gain.
+
 Append `grounded` to the local repository command to use a compact repair
 interface. It supplies numbered current source windows on every turn, requires
 line replacements to match observed current source, and gives the next worker the current edited

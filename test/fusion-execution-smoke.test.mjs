@@ -50,6 +50,20 @@ test('policy selection uses public checks only, counts failed attempts, and comp
   assert.throws(() => summarizeExecution(tasks, [{ ...rows[0], status: 'invalid' }, ...rows.slice(1)], models), /invalid/);
 });
 
+test('a mixed policy cannot hide a stronger first-model control', () => {
+  const tasks = [{ id: 'a' }, { id: 'b' }], models = ['first', 'second'];
+  const rows = tasks.flatMap(({ id }, index) => [
+    { caseId: id, model: 'first', sample: 0, publicPassed: true, hiddenPassed: true },
+    ...[0, 1].map(sample => ({ caseId: id, model: 'second', sample, publicPassed: index === 0, hiddenPassed: index === 0 })),
+  ]).map(row => ({ ...row, status: 'valid', inputTokens: 10, outputTokens: 20 }));
+  const policies = summarizeExecution(tasks, rows, models);
+  const first = policies.find(row => row.policy === 'tiny-single');
+  const second = policies.find(row => row.policy === 'small-single');
+  const mixed = policies.find(row => row.policy === 'tiny-small-verified');
+  assert.equal(first.solved, 2); assert.equal(second.solved, 1); assert.equal(mixed.solved, first.solved);
+  assert.equal(first.replayCalls, 2); assert.equal(first.replayTokens, 60); assert.equal(first.selectionChecks, 0);
+});
+
 test('parent grader checks values rather than a child self-reported pass', async () => {
   let closed = 0, invocation = 0;
   const makeBox = output => async () => ({ exec: async () => (++invocation % 2 ? { code: 0 } : { code: 0, stdout: Buffer.from(output) }), close: async () => { closed++; } });
