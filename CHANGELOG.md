@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit global six-model MiniMax video authority for the four frozen required-first-frame models, with pre-secret model membership, exact discovery identity and original-job controls after image retirement. Existing V1/V2 permissions and capacity profiles remain unchanged; declarations and native-client activation stay separate.
+
 - Add explicitly re-attested global Hailuo first-frame input for the two qualified models, with incremental full-size inline decoding, content-bound idempotency, pre-secret input authority and joined upload/hash/response retirement under the existing operational reservation. Public activation and platform-native transport allocation qualification remain separate.
 
 - Add a local Fusion generation screen with isolated execution, withheld grading and paired small-model retry baselines before paid benchmarks.

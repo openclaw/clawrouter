@@ -1,5 +1,5 @@
 import type { BackgroundJob } from "./background-store.ts";
-import { miniMaxT2VModels } from "../shared/minimax-video-binding.ts";
+import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { videoControlVersion, videoJsonBytes } from "./minimax-video-operation.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
@@ -37,7 +37,7 @@ export function videoCollectionAuthorization(job: BackgroundJob): ResponseContro
   if (!managed || managed.protocol !== "minimax.video" || managed.providerId !== "minimax" || job.owner.providerId !== "minimax"
     || event.auth_type !== "proxy_key" || event.provider !== "minimax" || event.capability !== "media.predict"
     || !event.credential_id || !event.principal_id || !event.policy_id || !event.tenant_id || !event.model
-    || !(miniMaxT2VModels as readonly string[]).includes(managed.requestedVersion) || !job.owner.grantKey) denied();
+    || !isMiniMaxVideoModel(managed.requestedVersion) || !job.owner.grantKey) denied();
   const video: VideoCollectionContext = { version: videoControlVersion, credentialId: event.credential_id,
     principalId: event.principal_id, policyId: event.policy_id, tenantId: event.tenant_id,
     policyGeneration: job.owner.policyGeneration, model: event.model, requestedVersion: managed.requestedVersion };
@@ -49,7 +49,7 @@ async function authorizeVideoCollection(env: Env, input: VideoCollectionContext,
   videoJsonBytes(input);
   if (input.version !== videoControlVersion || Object.keys(input).length !== 8 || owner.providerId !== "minimax" || !owner.grantKey
     || input.policyGeneration !== owner.policyGeneration || !input.credentialId || !input.principalId
-    || !(miniMaxT2VModels as readonly string[]).includes(input.requestedVersion)) denied();
+    || !isMiniMaxVideoModel(input.requestedVersion)) denied();
   const snapshot = await authorityCall<AuthorizationSnapshot>(env, "/authorization/snapshot",
     { credentialId: input.credentialId, principalId: input.principalId, policyId: input.policyId, video: videoControlVersion },
     "policy-bindings", signal, undefined, undefined, video);

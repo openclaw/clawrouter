@@ -30,6 +30,9 @@ uncertain-create handling without POST replay, original policy/grant binding,
 reservation/idempotency/outbox and exactly-once terminal settlement.
 
 Text creation supports frozen Hailuo-2.3/02; Fast and I2V models require an image.
+Production permission for the four required-frame models requires separate
+GLOBAL V3 administrator attestation; V1/V2 retain their two-model permissions.
+See [inline authority](minimax-video-inline-contract.md).
 Hailuo 768P supports 6/10 seconds, 1080P only 6. Legacy I2V uses 6 seconds and
 720P. No nearest-value rounding or silent resolution rewrite. The frozen client
 needs these model/mode combinations; source 11.2 owns that correction. The newer

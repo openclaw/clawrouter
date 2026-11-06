@@ -1,3 +1,4 @@
+import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
 import { isPublishedMusicInputSupport } from "../shared/native-capabilities.ts";
 import { readPublishedInputOrigin } from "./published-input-receipt.ts";
@@ -473,7 +474,12 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
       // PCM key authority and Vertex model/location support depend on the
       // selected model even when multiple models share one endpoint.
-      const modelRequirement = model && (provider.id === "anthropic-vertex" || provider.id === "minimax" && ["image-01", "music-2.6", "music-2.6-free", "MiniMax-Hailuo-2.3", "MiniMax-Hailuo-02"].includes(model.upstream) || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
+      const videoModel = model && provider.id === "minimax" && isMiniMaxVideoModel(model.upstream);
+      // Hailuo eligibility consumes exact upstream identity; offers and policy
+      // matching above continue to use the declared router ID.
+      const modelRequirement = model && videoModel
+        ? provider.models.filter(card => card.id === model.id || card.upstream === model.upstream).length === 1 ? model.upstream : undefined
+        : model && (provider.id === "anthropic-vertex" || provider.id === "minimax" && ["image-01", "music-2.6", "music-2.6-free"].includes(model.upstream) || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
       const key = JSON.stringify([matching.map(pool => pool.entry.policyId), modelRequirement ?? null]);
       const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false, modelRequirement };
       if (model === undefined) group.passthrough = true;

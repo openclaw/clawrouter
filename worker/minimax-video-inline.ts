@@ -4,7 +4,7 @@ import { assertVideoHeaders, videoJsonBytes, videoReadLimit, videoUnavailable, v
   type MiniMaxVideoOperation, type VideoUpload } from "./minimax-video-operation.ts";
 import { qualifyMiniMaxFirstFrameBytes, type MiniMaxFirstFrame } from "./minimax-video-first-frame.ts";
 import { prepareMiniMaxInlineVideoScalars } from "./minimax-video.ts";
-import type { MiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { miniMaxVideoBindingModel, type MiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 
 const MiB = 1024 * 1024, imageLimit = 8 * MiB, scalarLimit = 64 * 1024;
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -250,7 +250,8 @@ export function assertMiniMaxVideoInlineOwner(owner: MiniMaxVideoOperation, bind
   const state = states.get(owner); if (!state) return;
   videoJsonBytes(context); videoJsonBytes(identity);
   if (state.released || !state.image || !state.plan || !state.digest || state.used
-    || binding?.version !== "clawrouter.minimax-video.v2" || binding.region !== "global"
+    || !binding || !["clawrouter.minimax-video.v2", "clawrouter.minimax-video.v3"].includes(binding.version)
+    || !miniMaxVideoBindingModel(binding, state.plan.model) || binding.region !== "global"
     || binding.origin !== "https://api.minimax.io" || state.context !== JSON.stringify(context)) videoUnavailable();
   const next = JSON.stringify(identity);
   if (state.authority !== undefined && state.authority !== next) videoUnavailable();

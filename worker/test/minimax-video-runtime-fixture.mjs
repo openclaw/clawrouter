@@ -8,7 +8,7 @@ export { grantKey, videoInput, submitted, completed, metadata, mp4 };
 export const actor = { auth: "cloudflare_access", email: "admin@example.invalid", role: "admin" };
 export const native = "/v1/native/minimax/v1/video_generation", poll = "/v1/native/minimax/v1/query/video_generation?task_id=" + submitted.task_id;
 export async function setup(t, options = {}) {
-  const f = await fixture(t, { providerId: "minimax", fixed: options.fixed === undefined ? 700 : options.fixed, configure: configureVideo });
+  const f = await fixture(t, { providerId: "minimax", fixed: options.fixed === undefined ? 700 : options.fixed, configure: provider => configureVideo(provider, options.models) });
   for (const name of ["ACCESS_CONTROL", "BUDGET_LEDGER", "GRANT_CREDENTIALS", "USAGE_LEDGER"]) {
     const namespace = f.env[name], get = namespace.get.bind(namespace);
     namespace.get = id => { const stub = get(id); return { async fetch(...args) { return syntheticTransport(await stub.fetch(...args)); } }; };
