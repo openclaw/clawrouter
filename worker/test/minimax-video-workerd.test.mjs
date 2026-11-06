@@ -43,11 +43,13 @@ async function isolated(directory, router, upstream) {
 
 async function external(t) {
   let mode = "pending", id = 100, current = "100", earlyReply, postStarted;
-  const held = new Map(), entered = new Map(), released = new Set(), counts = { post: 0, poll: 0, metadata: 0, download: 0, imageBytes: 0, imageDigest: null };
+  const held = new Map(), entered = new Map(), released = new Set(), counts = { post: 0, poll: 0, metadata: 0, download: 0, imageBytes: 0, imageDigest: null, destinations: {} };
   const server = createServer(async (request, response) => {
     if (request.url.startsWith("/gate/")) { entered.get(request.url)?.resolve(); if (released.has(request.url)) response.end("released"); else held.set(request.url, response); return; }
     if (request.headers.authorization) { response.writeHead(400); response.end(); return; }
     const path = new URL(request.url, "http://fixture").pathname;
+    const destination = request.headers["x-fixture-video-origin"] + path;
+    counts.destinations[destination] = (counts.destinations[destination] ?? 0) + 1;
     const base_resp = { status_code: 0, status_msg: "success" }; let value;
     if (path === "/v1/video_generation") {
       counts.post++; current = String(++id); postStarted?.(); postStarted = undefined;
@@ -93,7 +95,7 @@ import {snapshot} from './worker/providers.ts';
 import {configureVideo} from './worker/test/minimax-video-declaration-fixture.mjs';
 import {authorityCall} from './worker/authority.ts';
 import {GrantCredentialObject as BaseGrantCredentialObject,putGrantCredentials,inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
-import {miniMaxVideoBinding,miniMaxInlineVideoBinding,miniMaxSixModelVideoBinding,miniMaxFrozenVideoModels} from './shared/minimax-video-binding.ts';
+import {miniMaxVideoBinding,miniMaxInlineVideoBinding,miniMaxSixModelVideoBinding,miniMaxCurrentCnVideoBinding,miniMaxFrozenVideoModels} from './shared/minimax-video-binding.ts';
 import {inputRetirement} from './worker/input-retirement.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
@@ -130,7 +132,7 @@ MiniMaxVideoOperation.prototype.fetch=function(start,mandatory=false,...rest){co
 },mandatory,...rest);};
 MiniMaxVideoOperation.prototype.providerFetch=function(start){const row=counters(this),a=active;
  if(a?.mode==='inline-late')this.track(gate(a,'execution-abort').then(()=>this.executionOperation.cancel(Error('controlled execution abort'))));
- return providerFetch.call(this,async signal=>{row.ordinary++;const response=await start(signal);if(a?.mode==='inline-late'){hold(response.body,a);a.ready.resolve();await gate(a,'arrival');}return a?measure(response,a):response;});};
+ return providerFetch.call(this,async signal=>{row.ordinary++;if(a)a.providerAttempts=(a.providerAttempts??0)+1;const response=await start(signal);if(a?.mode==='inline-late'){hold(response.body,a);a.ready.resolve();await gate(a,'arrival');}return a?measure(response,a):response;});};
 const ownerFinish=MiniMaxVideoOperation.prototype.finish;
 MiniMaxVideoOperation.prototype.finish=function(){const a=active;return ownerFinish.call(this).catch(e=>{if(a)a.cleanupFailure=e.code??e.name;throw e;});};
 function fresh(mode){return active={mode,status:null,error:null,results:0,reads:0,cancels:0,unlocks:0,releases:0,maxBacking:0,actions:[],exchanges:[],controls:[],candidates:0,controlMaxValues:0,
@@ -156,7 +158,7 @@ async function paddedControl(response,a){
 
 const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,locator:active.locator,error:active.error,results:active.results,
  reads:active.reads,cancels:active.cancels,unlocks:active.unlocks,materializations:active.materializations??0,inputReads:active.inputReads??0,inputCancels:active.inputCancels??0,inputUnlocks:active.inputUnlocks??0,inputMaxBacking:active.inputMaxBacking??0,releases:active.releases,maxBacking:active.maxBacking,actions:active.actions,
- failedControl:active.failedControl,cancelRejected:active.cancelRejected??false,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
+ providerAttempts:active.providerAttempts??0,failedControl:active.failedControl,cancelRejected:active.cancelRejected??false,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
 const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
@@ -195,7 +197,7 @@ function controlled(env,a){const grants=env.GRANT_CREDENTIALS,authority=env.ACCE
   const path=new URL(input).pathname,packet=JSON.parse(init.body);a.controls.push('authority:'+path);if(path==='/responses-background')a.actions.push(packet.action);
   const response=await stub.fetch(input,init);
   if(!response.ok)a.failedControl={owner:'authority',path,status:response.status};
-  if(path==='/authorization/snapshot'&&['inline-revoke','inline-rotate','inline-freeze-held'].includes(a.mode)&&(a.snapshots=(a.snapshots??0)+1)===3){
+  if(path==='/authorization/snapshot'&&['inline-revoke','inline-rotate','inline-freeze-held','cn-revoke','cn-rotate','cn-expire'].includes(a.mode)&&(a.snapshots=(a.snapshots??0)+1)===3){
    if(a.mode==='inline-freeze-held'){hold(response.body,a);const headers=new Headers(response.headers);headers.set('content-type','text/plain');return new Response(response.body,{status:response.status,headers});}
    a.ready.resolve();await gate(a,'authority');
   }
@@ -227,8 +229,8 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   await authorityCall(env,'/policies/put',{policyId:'fixture',policy});
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1',principalId:actor.email}}]);
   await authorityCall(env,'/connections/initialize-all',[{providerId:'minimax',enabled:true,monthlyBudgetMicros:100000}]);
-  await putGrantCredentials(env,key,{provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-video-key',accountId:'synthetic-account',...(u.searchParams.has('import')?{minimaxVideoBinding:u.searchParams.has('six')?miniMaxSixModelVideoBinding():miniMaxInlineVideoBinding()}: {})},false,undefined,
-    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('import')?undefined:u.searchParams.has('six')?miniMaxSixModelVideoBinding():u.searchParams.has('inline')?miniMaxInlineVideoBinding():miniMaxVideoBinding(u.searchParams.get('region')??'global'),actor);
+  await putGrantCredentials(env,key,{provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-video-key',accountId:'synthetic-account',expiresAt:null,...(u.searchParams.has('import')?{minimaxVideoBinding:u.searchParams.has('currentcn')?miniMaxCurrentCnVideoBinding():u.searchParams.has('six')?miniMaxSixModelVideoBinding():miniMaxInlineVideoBinding()}: {})},false,undefined,
+    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('import')?undefined:u.searchParams.has('currentcn')?miniMaxCurrentCnVideoBinding():u.searchParams.has('six')?miniMaxSixModelVideoBinding():u.searchParams.has('inline')?miniMaxInlineVideoBinding():miniMaxVideoBinding(u.searchParams.get('region')??'global'),actor);
   return Response.json({ready:true});
  }
  if(u.pathname==='/maximum-pool'){
@@ -287,6 +289,7 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   const a=fresh('collector'),competing=new BodyLease();let accepted=0,error;
   if(u.searchParams.has('missing'))job.facts=null;
   if(u.searchParams.has('version'))job.managed.requestedVersion=u.searchParams.get('version');
+  if(u.searchParams.has('foreign-owner'))job.owner.grantKey='oauth/fixture/unattested-video';
   if(u.searchParams.has('deny'))await authorityCall(env,'/users/put',{email:actor.email,record:{enabled:false,role:'admin',tenantId:'fixture',groups:[]}});
   try{if(u.searchParams.has('contend')){if(!competing.grow(1024*1024))throw Error('fixture competition');}
    await collectManagedPrediction(controlled(env,a),job,async()=>{accepted++;});
@@ -294,7 +297,9 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   return Response.json({...state(),accepted,error});
  }
  if(u.pathname==='/revoke'){await revokeGrantCredentials(env,key,undefined,undefined,undefined,actor);return Response.json({revoked:true});}
- if(u.pathname==='/rotate'){await putGrantCredentials(env,key,{credential:'synthetic-rotated-video-key'},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('six')?miniMaxSixModelVideoBinding():miniMaxInlineVideoBinding(),actor);return Response.json({rotated:true});}
+ if(u.pathname==='/rotate'){await putGrantCredentials(env,key,{credential:'synthetic-rotated-video-key'},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('currentcn')?miniMaxCurrentCnVideoBinding():u.searchParams.has('six')?miniMaxSixModelVideoBinding():miniMaxInlineVideoBinding(),actor);return Response.json({rotated:true});}
+ if(u.pathname==='/expire'){await putGrantCredentials(env,key,{expiresAt:new Date(Date.now()-1).toISOString()},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,miniMaxCurrentCnVideoBinding(),actor);return Response.json({expired:true});}
+ if(u.pathname==='/reattest-cn'){await putGrantCredentials(env,key,{},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('legacy')?miniMaxVideoBinding('cn'):miniMaxCurrentCnVideoBinding(),actor);return Response.json({attested:true});}
  if(u.pathname==='/metadata-edit'){await putGrantCredentials(env,key,{label:'metadata changed'},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,actor);return Response.json({changed:true});}
  if(u.pathname==='/settle'){const locator=u.searchParams.get('locator');if(!/^[a-f0-9]{64}\.bg_[a-f0-9]{32}$/.test(locator))return new Response(null,{status:400});return env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('http-continuations:'+locator.split('.')[0])).fetch('https://owner/fixture/alarm');}
  if(u.pathname==='/events')return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
@@ -337,8 +342,8 @@ const upstream = (origin, jwk) => String.raw`
 export default {async fetch(request){const u=new URL(request.url);
  if(u.href==='https://music-admin-fixture.cloudflareaccess.com/cdn-cgi/access/certs')return Response.json({keys:[JWK]});
  if(u.origin==='https://video-gates.example')return fetch(ORIGIN+u.pathname,{redirect:'manual',signal:request.signal});
- if(!['https://api.minimax.io','https://api.minimaxi.com'].includes(u.origin)||request.headers.get('authorization')!=='Bearer synthetic-video-key')throw Error('unqualified video destination');
- return fetch(ORIGIN+u.pathname+u.search,{method:request.method,body:request.body,headers:{'content-type':'application/json'},signal:request.signal,redirect:'manual'});
+ if(!['https://api.minimax.io','https://api.minimaxi.com','https://api.minimax.cn'].includes(u.origin)||request.headers.get('authorization')!=='Bearer synthetic-video-key')throw Error('unqualified video destination');
+ return fetch(ORIGIN+u.pathname+u.search,{method:request.method,body:request.body,headers:{'content-type':'application/json','x-fixture-video-origin':u.origin},signal:request.signal,redirect:'manual'});
 }};`.replaceAll('ORIGIN',JSON.stringify(origin)).replace('JWK',JSON.stringify(jwk));
 
 test("isolated workerd Hailuo original owner, restart/file, full charge and physical retirement", { timeout: 180000 }, async t => {
@@ -811,4 +816,137 @@ test("isolated workerd V3 four required-frame models, retired CREATE input and f
   assert.equal(state.nativeBytes, MiB); assert.ok(state.nativeMaxBacking <= 16384); assert.equal(state.releases, 0);
   assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
   io.release("combined-six/output"); state = await idle(); assert.equal(state.releases, 1);
+});
+
+test("actual isolated current-CN V4: exact host after restart, original files, SQL mutation and retirement", { timeout: 120_000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "hailuo-current-cn-")); t.after(() => rm(directory, { recursive: true, force: true }));
+  const io = await external(t), access = await musicAccessFixture(), script = router.replace("ACCESS_ENV", JSON.stringify(access.env));
+  let runtime = await isolated(directory, script, upstream(io.origin, access.jwk));
+  t.after(async () => { io.releaseAll(); await runtime.dispose(); });
+  const request = (path, init) => runtime.dispatchFetch("https://router.example" + path, { ...init, redirect: "manual" });
+  const json = async path => { const r = await request(path); assert.equal(r.status, 200, await r.clone().text()); return r.json(); };
+  const call = (target, body, headers = {}, kind = "call", mode = "") => request("/" + kind + "?mode=" + mode + "&target=" + encodeURIComponent(target), {
+    ...(body == null ? {} : { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }), headers: { "content-type": "application/json", ...headers } });
+  const idle = async () => { let state; for (let i = 0; i < 100; i++) { state = await json("/state"); if (!state.charged) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
+  const native = "/v1/native/minimax/v1/video_generation", manifestPath = "/v1/proxy/minimax/video", origin = "https://api.minimax.cn";
+  await json("/setup?currentcn=1"); io.mode("maximum"); let previousFile, task, filePath;
+  for (const model of hailuoModels) for (const manifest of [false, true]) {
+    const input = videoInput(model), body = manifest ? { body: { ...input, model: "minimax/" + model } } : input;
+    const target = manifest ? manifestPath : native, key = "current-cn-" + model + manifest, posts = io.counts.post;
+    const text = JSON.stringify(body), r = await call(target, text + " ".repeat(65536 - Buffer.byteLength(text)), { "idempotency-key": key });
+    assert.equal(r.status, 200, await r.clone().text()); const locator = r.headers.get("x-clawrouter-background-recovery"); task = (await r.json()).task_id;
+    let state = await idle(); assert.equal(io.counts.post, posts + 1); assert.equal(state.releases, 1); assert.equal(state.nativeBytes, MiB);
+    assert.ok(state.nativeMaxBacking <= 16384); assert.ok(state.exchanges[0].ordinary <= 16); assert.ok(state.exchanges[0].mandatory <= 5);
+    assert.equal(state.exchanges[0].ordinary + state.exchanges[0].mandatory, state.controls.length + 1);
+    await runtime.dispose(); runtime = await isolated(directory, script, upstream(io.origin, access.jwk));
+    const gets = io.counts.poll, wrong = await json("/collect?locator=" + encodeURIComponent(locator) + "&version=" + encodeURIComponent(hailuoModels.find(value => value !== model)));
+    assert.equal(wrong.accepted, 0); assert.ok(wrong.error); assert.equal(io.counts.poll, gets); assert.equal(wrong.charged, 0);
+    const foreignOwner = await json("/collect?locator=" + encodeURIComponent(locator) + "&foreign-owner=1");
+    assert.equal(foreignOwner.accepted, 0); assert.ok(foreignOwner.error); assert.equal(io.counts.poll, gets); assert.equal(foreignOwner.charged, 0);
+    const p = await call((manifest ? "/v1/proxy/minimax/task?task_id=" : "/v1/native/minimax/v1/query/video_generation?task_id=") + task, null);
+    assert.equal(p.status, 200, await p.clone().text()); const completed = await p.json(); await idle(); assert.equal(completed.status, "Success"); filePath = completed.video_url;
+    if (previousFile) {
+      const before = io.counts.metadata + io.counts.download, denied = await call(previousFile, null, { "x-clawrouter-job-id": task });
+      assert.ok(denied.status >= 400); await denied.text(); await idle(); assert.equal(io.counts.metadata + io.counts.download, before);
+    }
+    const metadata = await call("/v1/native/minimax/v1/files/retrieve?file_id=" + task + "1", null, { "x-clawrouter-job-id": task });
+    assert.equal(metadata.status, 200, await metadata.clone().text()); await metadata.text(); await idle();
+    const file = await call(filePath, null, { "x-clawrouter-job-id": task }); if (file.status !== 200) assert.fail(await file.text());
+    assert.equal(file.headers.get("content-type"), "video/mp4"); assert.equal((await json("/state")).charged, 96 * MiB);
+    assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), mp4(16 * MiB)); state = await idle(); assert.equal(state.releases, 1); previousFile = filePath;
+    for (const [value, expected] of [[body, 303], [manifest ? { body: { ...body.body, prompt: "changed" } } : { ...body, prompt: "changed" }, 409]]) {
+      const repeat = await call(target, value, { "idempotency-key": key }); assert.equal(repeat.status, expected, await repeat.clone().text()); await repeat.text(); await idle();
+    }
+    assert.equal(io.counts.post, posts + 1); await json("/settle?locator=" + encodeURIComponent(locator)); let events;
+    for (let i = 0; i < 100; i++) { events = (await json("/events")).events; if (events.length === io.counts.post) break; await delay(10); }
+    assert.equal(events.length, io.counts.post); assert.equal(events.at(-1).cost_basis, "policy_fixed");
+    assert.equal(events.at(-1).actual_cost_micros, 700); assert.equal(events.at(-1).total_tokens, null);
+  }
+  assert.equal(io.counts.post, 4);
+  assert.deepEqual(Object.keys(io.counts.destinations).sort(), ["/v1/video_generation", "/v1/query/video_generation", "/v1/files/retrieve", "/v1/files/retrieve_content"].map(path => origin + path).sort());
+  assert.equal(io.counts.destinations[origin + "/v1/video_generation"], 4);
+  // These are caller-owned returned-body roots, not producer/socket acknowledgments.
+  for (const mode of ["poll-read", "file-read", "cleanup-reject", "late"]) {
+    const target = mode === "file-read" ? filePath : "/v1/native/minimax/v1/query/video_generation?task_id=" + task;
+    const r = await call(target, null, { "x-clawrouter-job-id": task }, "held", mode); let state = await r.json();
+    assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); io.release(mode + "/abort");
+    for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
+    assert.equal(state.results, 1); assert.equal(state.charged, 96 * MiB); assert.equal(state.releases, 0);
+    if (mode === "late") io.release(mode + "/arrival");
+    for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.cancels === 1) break; await delay(10); }
+    assert.equal(state.cancels, 1); assert.equal(state.locked, true); assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+    if (mode === "late") { assert.equal(state.reads, 0); io.release(mode + "/cleanup"); state = await idle(); assert.equal(state.reads, 0); }
+    else {
+      assert.ok(state.reads >= 1); io.release(mode + "/cleanup");
+      for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.cleanup) break; await delay(10); }
+      assert.equal(state.cleanup, true); assert.equal(state.charged, 96 * MiB); assert.equal(state.locked, true);
+      io.release(mode + "/read"); state = await idle(); assert.equal(state.readRetired, true);
+    }
+    assert.equal(state.cleanup, true); assert.equal(state.unlocks, 1); assert.equal(state.releases, 1);
+    if (mode === "cleanup-reject") assert.equal(state.cleanupFailure, "minimax_video_cleanup_failed");
+  }
+  const image = uri(inlineImage("image/png", 1024));
+  for (const manifest of [false, true]) {
+    await json("/setup?currentcn=1"); const posts = io.counts.post;
+    for (const model of miniMaxFrozenVideoModels) {
+      const input = { ...sixModelInput(model), first_frame_image: image };
+      for (const value of hailuoModels.includes(model) ? [input] : [input, sixModelInput(model)]) {
+        const denied = await call(manifest ? manifestPath : native, manifest ? { body: { ...value, model: "minimax/" + model } } : value);
+        assert.ok(denied.status >= 400); await denied.text(); const state = await idle();
+        assert.equal(state.materializations, 0); assert.equal(state.providerAttempts, 0); assert.equal(io.counts.post, posts);
+      }
+    }
+    for (const config of ["import=1", "unpriced=1"]) {
+      await json("/setup?currentcn=1&" + config);
+      const denied = await call(manifest ? manifestPath : native, manifest ? { body: { ...videoInput(), model: "minimax/" + videoInput().model } } : videoInput());
+      assert.ok(denied.status >= 400); await denied.text(); const state = await idle();
+      assert.equal(state.materializations, 0); assert.equal(state.providerAttempts, 0); assert.equal(io.counts.post, posts);
+    }
+  }
+  for (const mode of ["cn-revoke", "cn-rotate", "cn-expire"]) {
+    await json("/setup?currentcn=1"); const posts = io.counts.post;
+    const r = await call(native, videoInput(), {}, "held", mode); let state = await r.json(); assert.equal(state.charged, 96 * MiB);
+    await json(mode === "cn-revoke" ? "/revoke" : mode === "cn-rotate" ? "/rotate?currentcn=1" : "/expire"); io.release(mode + "/authority");
+    for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
+    assert.equal(state.results, 1); assert.ok(state.status >= 400); assert.equal(io.counts.post, posts); assert.equal(state.providerAttempts, 0);
+    io.release(mode + "/abort"); await idle();
+  }
+  // A newly attested host invalidates the original job; it never migrates it.
+  for (const legacy of [true, false]) {
+    await json(legacy ? "/setup?region=cn" : "/setup?currentcn=1"); io.mode("pending");
+    const created = await call(native, videoInput()); assert.equal(created.status, 200, await created.clone().text()); const oldTask = (await created.json()).task_id; await idle();
+    await json(legacy ? "/reattest-cn" : "/reattest-cn?legacy=1"); const gets = io.counts.poll + io.counts.metadata + io.counts.download;
+    const denied = await call("/v1/native/minimax/v1/query/video_generation?task_id=" + oldTask, null);
+    assert.ok(denied.status >= 400); await denied.text(); await idle(); assert.equal(io.counts.poll + io.counts.metadata + io.counts.download, gets);
+  }
+  const put = (mode, body) => request("/v1/admin/upstream-grants/policies/fixture/video-admin-" + mode, {
+    method: "PUT", headers: { ...access.headers, "content-type": "application/json" }, body: JSON.stringify(body) });
+  await json("/fixture/user");
+  const legacy = await put("cn-retained", { provider: "minimax", kind: "api_key", enabled: false, accountId: "synthetic-retained-account",
+    credential: "synthetic-retained-video-key", minimaxVideoAuthorization: "minimax-cn-video" });
+  assert.equal(legacy.status, 200, await legacy.clone().text()); await legacy.text(); const retained = await json("/fixture/pin?mode=cn-retained");
+  for (const mode of ["cn-admin-demote", "cn-admin-disable", "cn-admin-success"]) {
+    await json("/fixture/user");
+    const created = await put(mode, { provider: "minimax", kind: "api_key", enabled: false, accountId: "synthetic-original-account",
+      credential: "synthetic-original-video-key", minimaxVideoAuthorization: "minimax-cn-video" });
+    assert.equal(created.status, 200, await created.clone().text()); await created.text(); const original = await json("/fixture/pin?mode=" + mode);
+    const intent = { enabled: true, minimaxVideoAuthorization: "minimax-current-cn-video" };
+    if (mode.endsWith("success")) {
+      const accepted = await put(mode, intent); assert.equal(accepted.status, 200, await accepted.clone().text()); await accepted.text();
+      const next = await json("/fixture/pin?mode=" + mode); assert.equal(next.binding.version, "clawrouter.minimax-video.v4"); assert.equal(next.binding.origin, origin);
+      assert.equal(Object.hasOwn(next.binding, "inputProfile"), false); assert.equal(next.generation, original.generation + 1); assert.notEqual(next.lineage, original.lineage);
+    } else {
+      await json("/fixture/arm?mode=" + mode); const entered = io.entered(mode + "/pool"), mutation = put(mode, intent);
+      await entered; await json(mode.endsWith("demote") ? "/fixture/user?role=user" : "/fixture/user?enabled=false"); io.release(mode + "/pool");
+      const denied = await mutation; assert.equal(denied.status, 403, await denied.clone().text()); await denied.text();
+      assert.deepEqual(await json("/fixture/pin?mode=" + mode), original); await json("/fixture/user");
+      const retry = await put(mode, intent); assert.equal(retry.status, 403, await retry.clone().text()); await retry.text();
+      assert.deepEqual(await json("/fixture/pin?mode=" + mode), original);
+    }
+    assert.deepEqual(await json("/fixture/pin?mode=cn-retained"), retained);
+  }
+  const forged = await put("cn-forged", { provider: "minimax", kind: "api_key", credential: "synthetic-forged-video-key",
+    minimaxVideoBinding: { version: "clawrouter.minimax-video.v4" }, videoActor: { role: "admin" } });
+  assert.equal(forged.status, 400); await forged.text();
 });

@@ -1,7 +1,7 @@
 import { discardVideoInput } from "./minimax-video-operation.ts";
 import type { ManagedControl, ManagedFileAction, ManagedFileAdapter, ManagedFileDescriptor } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject } from "./managed-media-json.ts";
-import { miniMaxVideoFiles, miniMaxVideoOrigins, observeMiniMaxVideo, prepareMiniMaxVideoFile, readMiniMaxVideoFile,
+import { isMiniMaxVideoOrigin, miniMaxVideoFiles, miniMaxVideoOrigins, observeMiniMaxVideo, prepareMiniMaxVideoFile, readMiniMaxVideoFile,
   readMiniMaxVideoFileState, validateMiniMaxMediaId } from "./minimax-video.ts";
 import type { CompiledEndpoint } from "./types.ts";
 
@@ -12,7 +12,7 @@ function descriptor(file: ManagedFileDescriptor): void {
   validateMiniMaxMediaId(file.id);
   requireFile(file.mimeType === "video/mp4" && Object.keys(file).every(key => key === "id" || key === "mimeType"));
 }
-function origin(value: string): void { requireFile(Object.values(miniMaxVideoOrigins).some(origin => origin === value)); }
+function origin(value: string): void { requireFile(isMiniMaxVideoOrigin(value)); }
 function control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
   file: ManagedFileDescriptor): Pick<ManagedControl, "path" | "query"> {
   descriptor(file);

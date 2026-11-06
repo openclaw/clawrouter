@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { miniMaxInlineVideoBinding, miniMaxVideoBinding, miniMaxT2VModels, readMiniMaxVideoBinding, miniMaxSixModelVideoBinding, miniMaxFrozenVideoModels, miniMaxVideoBindingModel, miniMaxVideoRequiresInline } from "../../shared/minimax-video-binding.ts";
+import { miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxVideoBinding, miniMaxT2VModels, readMiniMaxVideoBinding, miniMaxSixModelVideoBinding, miniMaxFrozenVideoModels, miniMaxVideoBindingModel, miniMaxVideoRequiresInline } from "../../shared/minimax-video-binding.ts";
 
 for (const region of ["global", "cn"]) {
   test(`Hailuo ${region} binding preserves only explicit regional T2V authority`, () => {
@@ -47,4 +47,30 @@ test("GLOBAL V3 is a closed six-model attestation, never an upgrade of V1 or V2"
   }
   for (const model of [null, "I2V-01 ", "minimax/I2V-01", "i2v-01", "MiniMax-Hailuo-H3"])
     assert.equal(miniMaxVideoBindingModel(binding, model), false);
+});
+
+test("current CN V4 is a separate exact T2V authority without input permission", () => {
+  const value = miniMaxCurrentCnVideoBinding();
+  assert.ok(Object.isFrozen(value)); assert.ok(Object.isFrozen(value.models));
+  assert.deepEqual(readMiniMaxVideoBinding(JSON.parse(JSON.stringify(value))), value);
+  assert.equal(value.origin, "https://api.minimax.cn"); assert.equal(value.region, "cn"); assert.equal(Object.hasOwn(value, "inputProfile"), false);
+  for (const patch of [{ version: "clawrouter.minimax-video.v1" }, { region: "global" }, { origin: "https://api.minimaxi.com" },
+    { origin: "https://api.minimax.io" }, { origin: "https://api.minimax.cn/" }, { origin: "https://api.minimax.cn:443" },
+    { origin: "https://api.minimax.cn/anthropic" }, { origin: "https://api.minimax.cn.example" },
+    { inputProfile: "inline-first-frame.v1" }, { models: miniMaxFrozenVideoModels }, { models: [...miniMaxT2VModels].reverse() },
+    { credentialSource: "environment" }, { credentialKind: "oauth" }, { extra: true }])
+    assert.equal(readMiniMaxVideoBinding({ ...value, ...patch }), null);
+  for (const model of miniMaxFrozenVideoModels) assert.equal(miniMaxVideoBindingModel(value, model), miniMaxT2VModels.includes(model));
+  for (const key of Object.keys(value)) { const missing = { ...value }; delete missing[key]; assert.equal(readMiniMaxVideoBinding(missing), null); }
+});
+
+test("V1 V2 V3 serialized authority bytes remain frozen when V4 is added", () => {
+  const global = '{"version":"clawrouter.minimax-video.v1","product":"video","region":"global","origin":"https://api.minimax.io","operation":"minimax.video","models":["MiniMax-Hailuo-2.3","MiniMax-Hailuo-02"],"credentialKind":"api_key","credentialSource":"credential"}';
+  const cn = global.replace('"region":"global"', '"region":"cn"').replace("https://api.minimax.io", "https://api.minimaxi.com");
+  const inline = global.replace("minimax-video.v1", "minimax-video.v2").slice(0, -1) + ',"inputProfile":"inline-first-frame.v1"}';
+  const six = inline.replace("minimax-video.v2", "minimax-video.v3").replace('"MiniMax-Hailuo-02"]', '"MiniMax-Hailuo-02","MiniMax-Hailuo-2.3-Fast","I2V-01-Director","I2V-01-live","I2V-01"]');
+  for (const [value, golden] of [[miniMaxVideoBinding("global"), global], [miniMaxVideoBinding("cn"), cn],
+    [miniMaxInlineVideoBinding(), inline], [miniMaxSixModelVideoBinding(), six]]) {
+    assert.equal(JSON.stringify(value), golden); assert.equal(JSON.stringify(readMiniMaxVideoBinding(JSON.parse(golden))), golden);
+  }
 });

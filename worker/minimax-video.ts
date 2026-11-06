@@ -6,6 +6,11 @@ import { mediaObject } from "./managed-media-json.ts";
 export const miniMaxVideoProtocol = "minimax.video";
 export const miniMaxVideoModels = ["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-2.3-Fast", "MiniMax-Hailuo-02", "I2V-01-Director", "I2V-01-live", "I2V-01"] as const;
 export const miniMaxVideoOrigins = { global: "https://api.minimax.io", cn: "https://api.minimaxi.com" } as const;
+export const miniMaxCurrentCnVideoOrigin = "https://api.minimax.cn";
+// Destination syntax only. The original owner binding selects exactly one host.
+export function isMiniMaxVideoOrigin(value: unknown): boolean {
+  return value === miniMaxVideoOrigins.global || value === miniMaxVideoOrigins.cn || value === miniMaxCurrentCnVideoOrigin;
+}
 const maxJson = 1024 * 1024;
 type RegisterInput = ManagedReadContext["registerInput"];
 type Json = Record<string, unknown>;
@@ -67,7 +72,7 @@ export function miniMaxVideoFiles(observation: ManagedObservation): readonly { i
   return [{ id: validateMiniMaxMediaId(checked.body.file_id), mimeType: "video/mp4" }];
 }
 export function prepareMiniMaxVideoFile(action: string, selectedOrigin: string, fileId: unknown) {
-  if (!(Object.values(miniMaxVideoOrigins) as string[]).includes(selectedOrigin) || !["metadata", "download"].includes(action)) fail("file_control");
+  if (!isMiniMaxVideoOrigin(selectedOrigin) || !["metadata", "download"].includes(action)) fail("file_control");
   return { origin: selectedOrigin, method: "GET", path: action === "metadata" ? "/v1/files/retrieve" : "/v1/files/retrieve_content",
     query: new URLSearchParams({ file_id: validateMiniMaxMediaId(fileId) }),
     headers: new Headers({ accept: action === "metadata" ? "application/json" : "video/mp4, application/octet-stream" }) };
