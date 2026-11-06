@@ -294,7 +294,8 @@ test('actual public soft status keeps four owners, cache classification and post
     runtime = await startWorkerdFixture(directory, script, upstream, { hotCache: true, preventEviction: true });
     const healthy = await send('healthy').work;
     if(healthy.status!==200){let code='non-json';try{const value=JSON.parse(healthy.body);if(/^[a-z_]{1,64}$/.test(value?.error?.code??''))code=value.error.code;}catch{}
-      const s=await state();t.diagnostic(JSON.stringify({phase:'healthy-public',status:healthy.status,code,dispatchPhase:s.dispatchPhase,row:s.rows.healthy}));}
+      let s,stateUnavailable=false;try{s=await state();}catch{stateUnavailable=true;}
+      t.diagnostic(JSON.stringify({phase:'healthy-public',status:healthy.status,code,stateUnavailable,dispatchPhase:s?.dispatchPhase,row:s?.rows.healthy}));}
     assert.equal(healthy.status, 200); await drain('healthy');
     let r = (await state()).rows.healthy;
     assert.equal(r.providerBeforeStatus, true); assert.equal(r.provider, 1); assert.equal(r.starts, 4); assert.equal(r.reserves, 0); assert.equal(r.dispatches, 0);
