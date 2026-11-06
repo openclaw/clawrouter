@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { inlineImage, uri } from "./minimax-video-inline-fixture.mjs";
 import { byteBody, jsonResponse } from "./minimax-search-byte-fixture.mjs";
-import { miniMaxInlineVideoBinding, miniMaxVideoBinding } from "../../shared/minimax-video-binding.ts";
+import { miniMaxCurrentCnInlineVideoBinding, miniMaxCurrentCnVideoBinding, miniMaxSixModelVideoBinding, miniMaxInlineVideoBinding, miniMaxVideoBinding } from "../../shared/minimax-video-binding.ts";
 import { MiniMaxVideoOperation } from "../minimax-video-operation.ts";
 import { BodyLease, bodyBudgetCharged } from "../body-budget.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, assertMiniMaxVideoInlineOwner,
@@ -152,5 +152,30 @@ test("inline public projection remains64KiB after original-file link rewriting",
   try {
     assert.throws(() => owner.publish({ x: "x".repeat(65528), video_url: "/v1/native/minimax/v1/files/retrieve_content?file_id=123" }, 200, { "content-type": "application/json" }));
   } finally { await owner.finish(); }
+  assert.equal(bodyBudgetCharged(), 0);
+});
+
+
+test("V5 rejects absent CREATE state before the legacy no-state return", async () => {
+  const owner = new MiniMaxVideoOperation("create", request("{}"));
+  try {
+    assert.throws(() => assertMiniMaxVideoInlineOwner(owner, miniMaxCurrentCnInlineVideoBinding(), context, ["owner"]));
+    for (const binding of [miniMaxVideoBinding("global"), miniMaxVideoBinding("cn"), miniMaxInlineVideoBinding(), miniMaxSixModelVideoBinding(), miniMaxCurrentCnVideoBinding()])
+      assert.doesNotThrow(() => assertMiniMaxVideoInlineOwner(owner, binding, context, ["owner"]));
+  } finally { await owner.finish(); }
+  assert.equal(bodyBudgetCharged(), 0);
+});
+
+test("V5 private CREATE state requires the exact CN version-region-origin-profile pair", async () => {
+  const value = await prepare(JSON.stringify({ ...scalar, first_frame_image: uri(inlineImage("image/png", 1024)) }));
+  const binding = miniMaxCurrentCnInlineVideoBinding();
+  try {
+    for (const patch of [{ region: "global" }, { origin: "https://api.minimax.io" }, { origin: "https://api.minimaxi.com" },
+      { inputProfile: "url" }, { inputProfile: undefined }, { models: ["foreign"] }, { version: "clawrouter.minimax-video.v4" }])
+      assert.throws(() => assertMiniMaxVideoInlineOwner(value.owner, { ...binding, ...patch }, context, ["owner"]));
+    assertMiniMaxVideoInlineOwner(value.owner, binding, context, ["owner"]);
+    assert.throws(() => assertMiniMaxVideoInlineOwner(value.owner, binding, [...context, "foreign"], ["owner"]));
+    assert.throws(() => assertMiniMaxVideoInlineOwner(value.owner, binding, context, ["replacement"]));
+  } finally { await value.owner.finish(); }
   assert.equal(bodyBudgetCharged(), 0);
 });

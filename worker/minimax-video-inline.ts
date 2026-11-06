@@ -247,12 +247,17 @@ export async function bindMiniMaxVideoInline(owner: MiniMaxVideoOperation, body:
 }
 export function assertMiniMaxVideoInlineOwner(owner: MiniMaxVideoOperation, binding: MiniMaxVideoBinding | null,
   context: readonly unknown[], identity: readonly unknown[]): void {
-  const state = states.get(owner); if (!state) return;
+  const state = states.get(owner);
+  if (!state && binding?.version === "clawrouter.minimax-video.v5") videoUnavailable();
+  if (!state) return;
   videoJsonBytes(context); videoJsonBytes(identity);
+  const qualified = binding && "inputProfile" in binding && binding.inputProfile === "inline-first-frame.v1"
+    && ((["clawrouter.minimax-video.v2", "clawrouter.minimax-video.v3"].includes(binding.version)
+      && binding.region === "global" && binding.origin === "https://api.minimax.io")
+      || (binding.version === "clawrouter.minimax-video.v5" && binding.region === "cn" && binding.origin === "https://api.minimax.cn"));
   if (state.released || !state.image || !state.plan || !state.digest || state.used
-    || !binding || !["clawrouter.minimax-video.v2", "clawrouter.minimax-video.v3"].includes(binding.version)
-    || !miniMaxVideoBindingModel(binding, state.plan.model) || binding.region !== "global"
-    || binding.origin !== "https://api.minimax.io" || state.context !== JSON.stringify(context)) videoUnavailable();
+    || !qualified || !miniMaxVideoBindingModel(binding, state.plan.model)
+    || state.context !== JSON.stringify(context)) videoUnavailable();
   const next = JSON.stringify(identity);
   if (state.authority !== undefined && state.authority !== next) videoUnavailable();
   state.authority = next;

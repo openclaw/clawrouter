@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit current-CN six-model inline video attestation. Every V5 create requires owned first-frame input before secrets and at final dispatch; prior bindings and T2V permissions remain unchanged, with original-job controls independent of retired input. Declarations and native-client activation remain separate.
+
 - Add explicit current-CN MiniMax video attestation for `api.minimax.cn`, limited to the original two text-to-video models and original-job files. Legacy CN and global bindings keep their destinations; re-attestation invalidates old jobs. Public declarations, native-client activation and live credential portability remain separate.
 
 - Add a local-only repository repair benchmark with pinned model routing, bounded actions, explicit context failures and coder-to-general handoff comparisons.
