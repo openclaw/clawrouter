@@ -476,15 +476,18 @@ test('a settling flush cannot delete newer feedback retained while registration 
   t.after(async () => { release.resolve(); await held.release(); await pendingBackgroundWork(); await flushSelections(f.env); });
   const get = f.env.ACCESS_CONTROL.get, observations = [];
   f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(input, init) {
-    if (new URL(input).pathname !== '/grant-pools/feedback') return stub.fetch(input, init);
-    observations.push(JSON.parse(init.body).state.observedAt);
-    try { const response = await stub.fetch(input, init); if (observations.length === 1) { entered.resolve(); await release.promise; } return response; }
+    try {
+      if (new URL(input).pathname !== '/grant-pools/feedback') return await stub.fetch(input, init);
+      observations.push(JSON.parse(init.body).state.observedAt);
+      const response = await stub.fetch(input, init); if (observations.length === 1) { entered.resolve(); await release.promise; } return response;
+    }
     catch (error) { entered.reject(error); throw error; }
   } }; };
   const old = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null };
   const newer = { ...old, observedAt: new Date(Date.now() + 1).toISOString() };
   const mark = backgroundMark(); queueGrantRuntime(f.env, keyA, old);
-  await entered.promise;
+  const arrivalFacade = pendingBackgroundWork(mark); assert.ok(arrivalFacade, 'scheduled flush must register a cohort');
+  await cacheBarrierArrival(entered.promise, arrivalFacade, 'registered feedback');
   queueGrantRuntime(f.env, keyA, newer);
   assert.equal(tryRunInBackground(() => assert.fail('overflow start')), false);
   release.resolve(); await pendingBackgroundWork(mark);
