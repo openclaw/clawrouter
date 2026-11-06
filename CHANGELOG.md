@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exclude declared MiniMax Music routes from speculative credential prefetch so an expired admission hint cannot read secrets before current caller, pricing and original-operation checks. Ordinary-provider prefetch is unchanged.
+
 - Add explicit current-CN six-model inline video attestation. Every V5 create requires owned first-frame input before secrets and at final dispatch; prior bindings and T2V permissions remain unchanged, with original-job controls independent of retired input. Declarations and native-client activation remain separate.
 
 - Add explicit current-CN MiniMax video attestation for `api.minimax.cn`, limited to the original two text-to-video models and original-job files. Legacy CN and global bindings keep their destinations; re-attestation invalidates old jobs. Public declarations, native-client activation and live credential portability remain separate.
