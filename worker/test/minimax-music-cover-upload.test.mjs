@@ -87,7 +87,7 @@ test("same dispatched source: early headers wait for held LAST pull, cleared ref
     const response = await flow.result; await upload;
     assert.equal(source.snapshot().references, 0); assert.equal(source.snapshot().pending, false);
     assert.equal(bodyBudgetCharged(), 96 * MiB); await response.body.cancel();
-    await flow.retired; assert.equal(bodyBudgetCharged(), 0);
+    await flow.retired; await f.input.retired; assert.equal(bodyBudgetCharged(), 0);
   } finally { held.resolve(); await cleanup(f, flow); await upload?.catch(() => {}); }
 });
 
@@ -103,7 +103,7 @@ test("failed transfer disposes unread response and keeps original 96 MiB until F
   try {
     await entry(entered, flow); assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 96 * MiB);
     await assert.rejects(flow.result); assert.equal(bodyBudgetCharged(), 96 * MiB);
-    held.resolve(); await flow.retired; assert.equal(bodyBudgetCharged(), 0);
+    held.resolve(); await flow.retired; await f.input.retired; assert.equal(bodyBudgetCharged(), 0);
   } finally { held.resolve(); await cleanup(f, flow); }
 });
 
@@ -212,7 +212,7 @@ test("established bounded public cancellation remains separate from cleanup fail
     await drain(init.body); f.controller.abort(reason); return reply();
   });
   try {
-    await assert.rejects(flow.result, error => error === "cover control stopped"); await flow.retired;
+    await assert.rejects(flow.result, error => error === "cover control stopped"); await flow.retired; await f.input.retired;
     assert.equal(flow.snapshot().cleanupFailed, false); assert.equal(bodyBudgetCharged(), 0);
   } finally { await cleanup(f, flow); }
 });

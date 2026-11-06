@@ -62,7 +62,7 @@ function ownObserved(response,a){
     if(['read','read-reject','read-error','late','split-fail'].includes(a.mode)){a.cancelHeld=true;await gate(a.mode,'cleanup');}
     if(a.mode==='read-reject')throw Error('synthetic FIRST response cancel rejection');
    }}).then(resolve,reject);}return cancellation;
-  },releaseLock(){a.unlockAttempts++;if(a.mode==='unlock'||a.mode==='unlock-pre')throw Error('synthetic pre-unlock failure');a.unlocks++;reader.releaseLock();}
+  },releaseLock(){a.unlockAttempts++;if(a.mode==='unlock'||a.mode==='unlock-pre'){a.resolveUnlock();throw Error('synthetic pre-unlock failure');}a.unlocks++;reader.releaseLock();}
  };};return response;
 }
 async function consume(response,a){
@@ -78,12 +78,14 @@ async function consume(response,a){
 export default {async fetch(request,env,context){
  const url=new URL(request.url);
  if(url.pathname==='/state')return Response.json(state());
+ if(url.pathname==='/unlock-observed'){await active.unlockObserved;return Response.json(state());}
  if(url.pathname==='/contend'){const lease=new BodyLease();try{return Response.json({admitted:lease.grow(1024*1024),charged:bodyBudgetCharged()});}finally{lease.release();}}
  if(url.pathname==='/abort'){active?.controller.abort('fixture abort');return Response.json({ok:true});}
  if(url.pathname!=='/start')return new Response(null,{status:404});
  if(active&&!active.retired)return new Response(null,{status:409});
  const a=active={mode:url.searchParams.get('mode')??'normal',audio:Number(url.searchParams.get('audio')??3),controller:new AbortController(),
   fetches:0,reads:0,nativeReads:0,cancels:0,unlocks:0,unlockAttempts:0,discards:0,splits:0,outputBytes:0,maxOutputBacking:0,headers:false,result:false,done:false,retired:false};
+ a.unlockObserved=new Promise(resolve=>{a.resolveUnlock=resolve;});
  const input=beginMiniMaxMusicCoverInput({body:request.body,signal:a.controller.signal,deadlineAt:Date.now()+(a.mode==='deadline'?1500:60000),
   route:url.searchParams.get('route')==='manifest'?'manifest':'native',contentType:'application/json'});
  try{
@@ -138,7 +140,7 @@ function responsePlan(maximum) {
 test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic ownership and physical retirement", { timeout: 180000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "cover-upload-workerd-")); t.after(() => rm(temporary, { recursive: true, force: true }));
   const held = new Map(), arrived = new Set(), released = new Set(), clients = new Set(), errors = [];
-  let mode = "normal", size = 5, audio = 3, posts = 0, uploaded = 0, uploadEnded = false, uploadValid = true;
+  let mode = "normal", size = 5, audio = 3, posts = 0, uploaded = 0, uploadEnded = false, uploadValid = true, uploadEvidence;
   const release = key => { released.add(key); held.get(key)?.end("ok"); held.delete(key); };
   const releaseAll = () => {
     // Open future arrivals too: failure can precede entry into a physical gate.
@@ -154,11 +156,11 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     posts++; const currentMode = mode, expectedSize = size, expectedAudio = audio;
     const prefix = Buffer.from('{"model":"music-cover","prompt":"Synthetic cover style","stream":false,"output_format":"hex","audio_base64":"');
     const suffix = Buffer.from('"}'), encoded = Math.ceil(expectedSize / 3) * 4, padding = (3 - expectedSize % 3) % 3;
-    let count = 0;
+    let count = 0, firstMismatch = null;
     request.on("data", chunk => {
       for (const byte of chunk) { const expected = count < prefix.length ? prefix[count]
         : count < prefix.length + encoded ? count < prefix.length + encoded - padding ? 65 : 61 : suffix[count - prefix.length - encoded];
-        if (byte !== expected) uploadValid = false; count++; }
+        if (byte !== expected) { uploadValid = false; firstMismatch ??= { offset: count, expected: expected ?? null, actual: byte }; } count++; }
       uploaded = count;
     });
     request.on("error", error => { if (!["early", "upload-reject"].includes(currentMode)) errors.push(error); });
@@ -179,6 +181,8 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     };
     request.on("end", () => {
       uploadEnded = true;
+      uploadEvidence = { bytes: count, expectedBytes: prefix.length + encoded + suffix.length,
+        contentLength: request.headers["content-length"] ?? null, transferEncoding: request.headers["transfer-encoding"] ?? null, firstMismatch };
       if (count !== prefix.length + encoded + suffix.length || Number(request.headers["content-length"]) !== count) uploadValid = false;
       if (!["early", "upload-reject"].includes(currentMode)) void send().catch(error => errors.push(error));
     });
@@ -200,7 +204,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   });
   const call = async path => { const r = await runtime.dispatchFetch("https://router.example/" + path); assert.equal(r.status, 200); return r.json(); };
   const start = (nextMode = "normal", bytes = 5, route = "native", decoded = 3) => {
-    mode = nextMode; size = bytes; audio = decoded; uploaded = 0; uploadEnded = false; uploadValid = true;
+    mode = nextMode; size = bytes; audio = decoded; uploaded = 0; uploadEnded = false; uploadValid = true; uploadEvidence = undefined;
     const payload = input(bytes, route), controller = new AbortController(), client = { controller };
     client.promise = runtime.dispatchFetch(`https://router.example/start?mode=${mode}&route=${route}&audio=${audio}`, {
       method: "POST", headers: { "content-type": "application/json", "content-length": String(payload.length) },
@@ -215,7 +219,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     assert.equal(state.retainedTickets, 0); assert.equal(state.source.references, 0); assert.equal(state.fetches, 1); };
   for (const route of ["native", "manifest"]) {
     const before = posts, client = start("maximum", 50_000_000, route, 4 * 1024 * 1024), state = await client.promise;
-    check(state); assert.equal(state.error, undefined); assert.equal(uploadValid, true); assert.equal(uploadEnded, true); assert.equal(posts - before, 1);
+    check(state); assert.equal(state.error, undefined); assert.equal(uploadValid, true, JSON.stringify(uploadEvidence)); assert.equal(uploadEnded, true); assert.equal(posts - before, 1);
     assert.equal(state.splitBefore, 96 * 1024 * 1024); assert.equal(state.splitAfter, state.splitBefore); assert.equal(state.splitReferences, 0);
     assert.ok(state.maxOutputBacking <= 16384); assert.ok(state.outputBytes > 8 * 1024 * 1024);
   }
@@ -277,8 +281,12 @@ for (const mode of ["unlock", "unlock-pre"]) test("actual Workerd retains locked
   // after proving no released capacity; disposal is not a runtime cleanup ACK.
   t.after(() => runtime.dispose());
   const document = JSON.stringify({ model: "music-cover", prompt: "Synthetic cover style", audio_base64: "AAAAAAA=" });
-  const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode, { method: "POST", body: document, headers: { "content-type": "application/json" } });
-  assert.equal(response.status, 200); const state = await response.json();
+  const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode, { method: "POST", body: document, signal: t.signal, headers: { "content-type": "application/json" } });
+  assert.equal(response.status, 200); await response.json();
+  // Public failure precedes physical unlock. Await the ORIGINAL hook, not a
+  // status snapshot taken at public failure, before asserting retained custody.
+  const observed = await runtime.dispatchFetch("https://router.example/unlock-observed", { signal: t.signal });
+  assert.equal(observed.status, 200); const state = await observed.json();
   assert.equal(state.done, true); assert.equal(state.error, "transport"); assert.equal(state.retired, false);
   assert.equal(state.locked, true); assert.equal(state.unlockAttempts, 1); assert.equal(state.unlocks, 0);
   assert.equal(state.charged, 96 * 1024 * 1024); assert.equal(state.flow.ordinaryActive, 1); assert.equal(state.flow.postAttempts, 1);
