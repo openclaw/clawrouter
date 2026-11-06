@@ -9,11 +9,12 @@ one attempt. A copied input, metadata claim, completed inactive preparation or
 raw allocation cannot substitute for that custody. Custody is not permission.
 
 The separate inactive authority preparation finishes known-unsent accounting.
-It must never be followed by this POST. Future composition needs a separate
-lease: move the existing final connection/policy/original-owner refresh to the
-actual POST tail, after preparation and slot waits, and use dispatch-aware
-settlement with the original IDs. No extra refresh, retry or zero-debit claim is
-provided here. PCM16/input-format compatibility, vendor availability, entitlement,
+It must never be followed by this POST. The separate
+[private composition](minimax-music-cover-composition-contract.md) moves the
+existing final connection/policy/original-owner refresh to the actual POST tail
+and uses dispatch-aware settlement with original IDs. This inactive transport
+entry does not provide that authority. No extra refresh, retry or zero-debit claim
+is provided here. PCM16/vendor input compatibility, vendor availability, entitlement,
 SSE, public routes and authorized end-to-end cover generation remain unqualified.
 
 ## Ownership and charges

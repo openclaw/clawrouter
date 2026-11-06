@@ -225,6 +225,21 @@ async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicr
 // Sole inactive-cover finalizer. IDs and all four possible attempts exist before
 // I/O. Unlike reserveBudget, this branch NEVER starts an internal rollback.
 export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent) {
+  return ownedMusicCoverAccounting(env, owner, plan, event);
+}
+interface CoverDispatchFacts { invoked: boolean; success: boolean; soft: boolean; fixed: number | null }
+export function musicCoverCompositionAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan,
+  event: UsageEvent, soft: boolean, fixed: number | null) {
+  if (fixed !== null && (!Number.isSafeInteger(fixed) || fixed < 0)) musicCoverUnavailable();
+  const dispatch: CoverDispatchFacts = { invoked: false, success: false, soft, fixed };
+  const accounting = ownedMusicCoverAccounting(env, owner, plan, event, dispatch);
+  return Object.freeze({ ...accounting,
+    invoked() { dispatch.invoked = true; },
+    succeeded() { if (!dispatch.invoked) musicCoverUnavailable(); dispatch.success = true; },
+  });
+}
+function ownedMusicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent,
+  dispatch?: CoverDispatchFacts) {
   if (!isMusicCoverControl(owner) || plan.legs.length > 4) musicCoverUnavailable();
   searchJsonBytes(plan); searchJsonBytes(event);
   const attempts = plan.legs.map(leg => ({ leg, attempted: false, denied: false, acknowledged: false, dispatched: false }));
@@ -254,9 +269,34 @@ export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, 
         // It cannot join this finalizer: mandatory tickets have a separate lane.
         await owner.retireOrdinary();
         let failed = false;
+        const amount = dispatch?.invoked ? dispatch.fixed ?? 0 : 0;
+        if (dispatch?.invoked) {
+          // The numeric accumulator cannot represent unknown USD. The basis
+          // and nullable reporting value preserve unknown; zero is not a quote.
+          event.actual_cost_micros = amount; event.reporting_known_cost_micros = null;
+          event.cost_basis = dispatch.fixed === null ? "unpriced_request" : "policy_fixed";
+          event.status = dispatch.success ? "success" : "provider_error";
+          event.status_code = dispatch.success ? 200 : null;
+          event.duration_ms = Math.max(0, Date.now() - event.occurred_at_ms);
+        }
+        searchJsonBytes(event);
         for (const attempt of attempts) {
+          if (dispatch?.soft) {
+            if (!dispatch.invoked) continue;
+            const original = attempt.leg.request;
+            const request: BudgetChargeRequest = { chargeId: original.reservationId, policyId: original.policyId,
+              windowKey: original.windowKey, scopeKey: original.scopeKey ?? "", amountMicros: amount, capability: original.capability };
+            try {
+              try { await chargeLedger(env, attempt.leg.objectName, request, undefined, owner); }
+              catch {
+                const message = { kind: "budget_charge" as const, ledger: { objectName: attempt.leg.objectName }, request };
+                await owner.task(message, () => env.USAGE_QUEUE.send(message), true);
+              }
+            } catch { failed = true; }
+            continue;
+          }
           if (!attempt.attempted || attempt.denied) continue;
-          const request: BudgetSettleRequest = { reservationId: attempt.leg.request.reservationId, actualCostMicros: 0 };
+          const request: BudgetSettleRequest = { reservationId: attempt.leg.request.reservationId, actualCostMicros: amount };
           try {
             try { await settleLedger(env, attempt.leg.objectName, request, undefined, undefined, owner); }
             catch {
@@ -265,8 +305,8 @@ export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, 
             }
           } catch { failed = true; }
         }
-        // This slice never constructs a provider POST. Its event records known
-        // unsent preparation, not a free cover generation or vendor receipt.
+        // The legacy preparation remains known-unsent. Composition changes
+        // this event only from its original, synchronous invocation record.
         try {
           try { await owner.task(event, () => env.USAGE_QUEUE.send(event), true); }
           catch { await ingestUsage(env, event, undefined, undefined, owner); }

@@ -1,11 +1,12 @@
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import { musicCoverAccounting, planBudgetReservation, validateBudgetReservation, type EstimatedCost } from "./accounting.ts";
+import { musicCoverAccounting, musicCoverCompositionAccounting, planBudgetReservation, validateBudgetReservation, type EstimatedCost } from "./accounting.ts";
 import { resolveConnection } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { inspectGrantCredentials, materializeGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-eligibility.ts";
-import { runMiniMaxMusicCoverControls, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
-import type { SealedMusicCoverInput, MusicCoverInputMetadata } from "./minimax-music-cover-input.ts";
+import { runMiniMaxMusicCoverControls, runMiniMaxMusicCoverComposition, musicCoverUnavailable, type MiniMaxMusicCoverControl, type MusicCoverFinalRead } from "./minimax-music-cover-control.ts";
+import { isMiniMaxMusicCoverWave, type SealedMusicCoverInput, type MusicCoverInputMetadata } from "./minimax-music-cover-input.ts";
+import { prepareMiniMaxMusicCoverCompositionUpload } from "./minimax-music-cover-upload.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverIdentity, miniMaxMusicCoverProjection } from "./native-media-credential.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { authenticateProxyKey, proxyAdmission, proxyKeyVerification } from "./proxy-auth.ts";
@@ -45,10 +46,16 @@ function allowed(policy: AccessPolicy, connection: ProviderConnection): void {
     connection, policy.dailyBudgetMicros, policy.limitHint, policy.weeklyBudgetMicros);
 }
 
-// This exact tail must be MOVED to actual POST integration in a later lease.
-// Its current result confers no authority across the finalizer's later awaits.
+interface CoverRefresh { current: UpstreamGrant; connection: ProviderConnection; coverage: string }
+function refresh(env: Env, auth: AuthorizedIdentity, key: string, original: UpstreamGrant,
+  control: MiniMaxMusicCoverControl, expectedCoverage?: string): Promise<CoverRefresh>;
+function refresh<T>(env: Env, auth: AuthorizedIdentity, key: string, original: UpstreamGrant,
+  control: MiniMaxMusicCoverControl, expectedCoverage: string, handoff: (current: CoverRefresh, read: MusicCoverFinalRead) => T): Promise<Awaited<T>>;
+// Preparation returns only an observation. Composition moves this SAME tail
+// to the actual synchronous POST handoff, after all other preparation/waits.
 async function refresh(env: Env, auth: AuthorizedIdentity, key: string, original: UpstreamGrant,
-  control: MiniMaxMusicCoverControl, expectedCoverage?: string) {
+  control: MiniMaxMusicCoverControl, expectedCoverage?: string,
+  handoff?: (current: CoverRefresh, read: MusicCoverFinalRead) => unknown): Promise<unknown> {
   const caller = publicControlAuthorization(auth), signal = control.operation.signal;
   const owner: ContinuationOwner = { providerId: "minimax", endpointId: "music-cover", grantKey: key,
     lineage: original.credentialLineage!, routeSha256: "minimax.music:global:music-cover:inline-audio.v1",
@@ -61,13 +68,15 @@ async function refresh(env: Env, auth: AuthorizedIdentity, key: string, original
   if (expectedCoverage !== undefined && currentCoverage !== expectedCoverage) musicCoverUnavailable(409);
   const identity = miniMaxMusicCoverIdentity(original);
   // All policy, price, connection, slot and preparation waits precede this read.
+  const read = handoff ? control.markFinalOwnerRead() : undefined;
   const current = await inspectGrantCredentials(env, key, signal, undefined, undefined, undefined, control);
   signal.throwIfAborted(); assertControlCallerLive(caller);
   if (Date.now() >= control.phase.deadlineAt || miniMaxMusicCoverIdentity(current) !== identity
     || !filterGrantCandidates("minimax", [{ key, grant: current, runtimeState: null }], new Set(),
       grantRoutingPolicy(policy.grantRouting), key, undefined, Date.now()).available.length) musicCoverUnavailable(403);
   auth.policy = policy;
-  return { current, connection, coverage: currentCoverage };
+  const result = { current, connection, coverage: currentCoverage };
+  return handoff ? handoff(result, read!) : result;
 }
 
 function preparationEvent(auth: AuthorizedIdentity, key: string, requestId: string, reserveMicros: number): UsageEvent {
@@ -120,5 +129,41 @@ export function prepareInactiveMiniMaxMusicCover(env: Env, headers: Headers, inp
     catch { if (!primary) primary = new HttpError(503, "accounting_unavailable", "Cover preparation finalization is unavailable"); }
     if (primary) throw primary;
     return result!;
+  });
+}
+
+// Private authorized composition, deliberately absent from public factories,
+// discovery and routes. Opaque-only input and completed preparation cannot enter.
+export function composePrivateMiniMaxMusicCover(env: Env, headers: Headers, input: SealedMusicCoverInput) {
+  if (!isMiniMaxMusicCoverWave(input)) musicCoverUnavailable(403);
+  return runMiniMaxMusicCoverComposition(input, async (control, installFinalizer) => {
+    const auth = await authenticateProxyKey(headers, env, [{ id: "minimax", tokenRef: "minimax" }], false,
+      undefined, selection, "authoritative", undefined, undefined, control);
+    if (auth instanceof Response) { await auth.body?.cancel(); throw new HttpError(auth.status, "invalid_proxy_key", "Cover caller is unavailable"); }
+    if (!proxyKeyVerification(auth)) musicCoverUnavailable(403);
+    const selected = proxyAdmission(auth)?.selection?.selected;
+    if (!selected || !miniMaxMusicCoverProjection(selected.grant)) musicCoverUnavailable(403);
+    const first = await refresh(env, auth, selected.key, selected.grant, control);
+    const soft = softBudgetPolicy(auth.policy); control.setBudgetMode(soft);
+    const estimate = cost(auth.policy), plan = planBudgetReservation(auth, capability, estimate, first.connection, Date.now(), soft);
+    const event = preparationEvent(auth, selected.key, randomId("cover"), soft ? 0 : plan.reservedMicros);
+    const accounting = musicCoverCompositionAccounting(env, control, plan, event, soft, policyRequestCost(auth.policy, capability));
+    installFinalizer(accounting.finish); // Sole owner, including partial reserve.
+    const materialized = await materializeGrantCredentials(env, selected.key, first.current, "minimax", null, false,
+      control.operation.signal, "minimax.music", undefined, undefined, undefined, control);
+    const secret = miniMaxApiKeySecret(materialized), identity = miniMaxMusicCoverIdentity(first.current);
+    if (!secret || miniMaxMusicCoverIdentity(materialized) !== identity) musicCoverUnavailable();
+    if (soft) await musicCoverSoftBudget(env, plan, first.connection, control);
+    else { await accounting.reserve(); await accounting.dispatchAdmission(); }
+    const capsule = prepareMiniMaxMusicCoverCompositionUpload(control, "Bearer " + secret);
+    // The callback invokes fetch before refresh returns: no await, header work,
+    // serializer preparation or queued predecessor follows the owner read.
+    const response = await refresh(env, auth, selected.key, first.current, control, first.coverage, (last, read) =>
+      control.tryPostHandoff<Response>(capsule, read, () => {
+        if (!isMiniMaxMusicCoverWave(control.phase) || miniMaxMusicCoverIdentity(last.current) !== identity
+          || last.coverage !== first.coverage) musicCoverUnavailable(403);
+      }, accounting.invoked));
+    accounting.succeeded();
+    return response;
   });
 }

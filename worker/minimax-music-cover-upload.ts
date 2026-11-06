@@ -1,6 +1,6 @@
 import { jsonBodyBytes } from "./json-body.ts";
-import { runMiniMaxMusicCoverControls } from "./minimax-music-cover-control.ts";
-import { claimMiniMaxMusicCoverUpload, isMiniMaxMusicCoverUpload, encodeMiniMaxMusicCoverUpload, retireMiniMaxMusicCoverUpload,
+import { runMiniMaxMusicCoverControls, coverControlHeaders, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import { claimMiniMaxMusicCoverUpload, isMiniMaxMusicCoverWave, isMiniMaxMusicCoverUpload, encodeMiniMaxMusicCoverUpload, retireMiniMaxMusicCoverUpload,
   transferMiniMaxMusicCoverResponse, type MusicCoverControlPhase, type MusicCoverUploadCapability,
   type SealedMusicCoverInput } from "./minimax-music-cover-input.ts";
 import { disposeMiniMaxMusicCoverResponse, readNativeMiniMaxMusicCover } from "./native-minimax-music.ts";
@@ -119,50 +119,73 @@ export function runInactiveMiniMaxMusicCoverUpload(input: SealedMusicCoverInput,
   transport: (url: string, init: RequestInit) => Promise<Response>) {
   return runMiniMaxMusicCoverControls(input, async owner => {
     const phase = owner.phase, cap = claimMiniMaxMusicCoverUpload(phase), signal = owner.operation.signal;
-    return owner.post(cap, async reportFailure => {
-      const upload = new MusicCoverUploadSource(cap, phase);
-      let response: Response | undefined, disposal: Promise<void> | undefined, cleanupFailed = false;
-      const discardResponse = () => {
-        if (!disposal && response) {
-          const original = response; response = undefined;
-          disposal = disposeMiniMaxMusicCoverResponse(original).catch(() => { cleanupFailed = true; });
-        }
-        return disposal;
-      };
-      const abort = () => { void upload.discard().catch(() => { cleanupFailed = true; }); void discardResponse(); };
-      signal.addEventListener("abort", abort, { once: true });
-      // Both physical roots exist before fetch construction. Headers are not
-      // upload retirement; a late response belongs to this same attempt.
-      let resolve!: (value: Response | PromiseLike<Response>) => void, reject!: (reason: unknown) => void;
-      let actual: Promise<Response> | undefined = new Promise<Response>((yes, no) => { resolve = yes; reject = no; });
-      void actual.catch(() => undefined);
-      try {
-        signal.throwIfAborted();
-        // Normalize before the owned promise can retain any rejection graph.
-        void transport(destination, { method: "POST", redirect: "manual", signal, body: upload.body,
-          headers: { "content-type": "application/json", accept: "application/json", "content-length": String(upload.length) } })
-          .then(resolve, () => reject(failed()));
-      } catch { reject(failed()); }
-      try {
-        response = await actual; actual = undefined;
-        if (signal.aborted) abort();
-        await upload.retired;
-        if (signal.aborted) throw failed();
-        const successor = transferMiniMaxMusicCoverResponse(cap);
-        const original = response!; response = undefined;
-        const output = await readNativeMiniMaxMusicCover(original, successor, signal, reportFailure);
-        signal.removeEventListener("abort", abort);
-        return { value: output.response, retired: output.retired };
-      } catch (error) {
-        const failedCleanup = cleanupFlag(error); error = undefined;
-        reportFailure();
-        // Disposal starts BEFORE joins and does not depend on transfer success.
-        abort();
-        try { await upload.discard(); } catch { cleanupFailed = true; }
-        await discardResponse(); await disposal;
-        if (cleanupFailed || failedCleanup) throw cleanupError();
-        throw failed();
-      } finally { signal.removeEventListener("abort", abort); actual = undefined; response = undefined; disposal = undefined; }
-    });
+    return owner.post(cap, report => prepareTransport(cap, phase, signal, transport).start(report));
   });
+}
+
+// Private composition only: no caller-supplied destination/body/transport and
+// no completed preparation record. Current authority must still run at handoff.
+export function prepareMiniMaxMusicCoverCompositionUpload(owner: MiniMaxMusicCoverControl, authorization: string) {
+  if (!isMiniMaxMusicCoverWave(owner.phase)) throw failed();
+  const phase = owner.phase, cap = claimMiniMaxMusicCoverUpload(phase);
+  const prepared = prepareTransport(cap, phase, owner.operation.signal, (url, init) => fetch(url, init), authorization);
+  return owner.preparePost(cap, prepared.start, prepared.discard, prepared.retired);
+}
+
+function prepareTransport(cap: MusicCoverUploadCapability, phase: MusicCoverControlPhase, signal: AbortSignal,
+  transport: (url: string, init: RequestInit) => Promise<Response>, authorization?: string) {
+  // Header rejection precedes creation of the stream. Reserve the longest safe
+  // decimal length before replacing it with the shorter exact source length.
+  const headers = new Headers({ "content-type": "application/json", accept: "application/json", "content-length": "9999999999999999" });
+  if (authorization !== undefined) headers.set("authorization", authorization);
+  authorization = undefined;
+  coverControlHeaders(headers);
+  const upload = new MusicCoverUploadSource(cap, phase);
+  headers.set("content-length", String(upload.length));
+  let response: Response | undefined, disposal: Promise<void> | undefined, cleanupFailed = false, started = false;
+  let init: RequestInit | undefined = { method: "POST", redirect: "manual", signal, body: upload.body, headers };
+  let resolve!: (value: Response | PromiseLike<Response>) => void, reject!: (reason: unknown) => void;
+  let actual: Promise<Response> | undefined = new Promise<Response>((yes, no) => { resolve = yes; reject = no; });
+  void actual.catch(() => undefined);
+  const discardResponse = () => {
+    if (!disposal && response) {
+      const original = response; response = undefined;
+      disposal = disposeMiniMaxMusicCoverResponse(original).catch(() => { cleanupFailed = true; });
+    }
+    return disposal;
+  };
+  const abort = () => { void upload.discard().catch(() => { cleanupFailed = true; }); void discardResponse(); };
+  signal.addEventListener("abort", abort, { once: true });
+  const discard = () => {
+    if (!started) { reject(failed()); actual = undefined; init = undefined; signal.removeEventListener("abort", abort); }
+    return upload.discard();
+  };
+  return { retired: upload.retired, discard, async start(reportFailure: () => void) {
+    if (started || !actual || !init) throw failed();
+    started = true;
+    // All headers, serializer and roots already exist. The caller has marked
+    // invocation; even a synchronous transport throw is potentially dispatched.
+    try {
+      signal.throwIfAborted();
+      void transport(destination, init).then(resolve, () => reject(failed()));
+    } catch { reject(failed()); }
+    try {
+      response = await actual; actual = undefined;
+      if (signal.aborted) abort();
+      await upload.retired; init = undefined;
+      if (signal.aborted) throw failed();
+      const successor = transferMiniMaxMusicCoverResponse(cap);
+      const original = response!; response = undefined;
+      const output = await readNativeMiniMaxMusicCover(original, successor, signal, reportFailure);
+      signal.removeEventListener("abort", abort);
+      return { value: output.response, retired: output.retired };
+    } catch (error) {
+      const failedCleanup = cleanupFlag(error); error = undefined;
+      reportFailure(); abort();
+      try { await upload.discard(); } catch { cleanupFailed = true; }
+      await discardResponse(); await disposal;
+      if (cleanupFailed || failedCleanup) throw cleanupError();
+      throw failed();
+    } finally { signal.removeEventListener("abort", abort); actual = undefined; response = undefined; disposal = undefined; init = undefined; }
+  } };
 }
