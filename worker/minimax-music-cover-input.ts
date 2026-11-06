@@ -12,7 +12,7 @@ export const musicCoverInputLimits = Object.freeze({
   records: 12, recordCell: 16 * KiB, unusedRecordAllowance: 64 * KiB,
 });
 type Failure = "capacity" | "invalid" | "cancelled" | "deadline" | "hash" | "cleanup" | "used";
-type Phase = "intake" | "hash" | "sealed" | "retired";
+type Phase = "intake" | "hash" | "sealed" | "control" | "retired";
 const failure = (code: Failure) => Object.assign(new Error("music cover input " + code), { code });
 function invalid(): never { throw failure("invalid"); }
 const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -36,6 +36,16 @@ export interface MusicCoverInputMetadata {
 // No bytes, writer, caller reconstructible permission or dispatch API escapes.
 export interface SealedMusicCoverInput { readonly kind: "minimax-cover-input.v1" }
 const sealedOwners = new WeakMap<SealedMusicCoverInput, CoverInputOwner>();
+
+// Only the control owner consumes this bridge. No bytes or allocatable lease
+// escape; its root is installed synchronously before any control work exists.
+export interface MusicCoverControlPhase {
+  readonly metadata: MusicCoverInputMetadata;
+  readonly signal: AbortSignal;
+  readonly deadlineAt: number;
+  readonly route: "native" | "manifest";
+  close(): void;
+}
 
 class AudioWriter {
   private bytes: Uint8Array<ArrayBuffer> | undefined = new Uint8Array(musicCoverInputLimits.decoded);
@@ -217,7 +227,10 @@ class CoverInputOwner {
   private stopped?: Failure;
   private timer?: ReturnType<typeof setTimeout>;
   private deadlineAt = 0;
+  private route: "native" | "manifest" = "native";
   private signal?: AbortSignal;
+  private controlRoot?: Promise<void>;
+  private cancelControl?: () => void;
   private settled = false;
   private resolveResult!: (input: SealedMusicCoverInput) => void;
   private rejectResult!: (error: Error) => void;
@@ -238,6 +251,7 @@ class CoverInputOwner {
       const remaining = source.deadlineAt - Date.now();
       if (remaining <= 0 || remaining > 300_000) throw failure("deadline");
       this.deadlineAt = source.deadlineAt;
+      this.route = source.route;
       if ((source.route !== "native" && source.route !== "manifest") || source.contentType !== "application/json"
         || source.contentEncoding !== undefined && source.contentEncoding !== "identity"
         || source.contentLength !== undefined && (!Number.isSafeInteger(source.contentLength) || source.contentLength < 1 || source.contentLength > musicCoverInputLimits.wire)
@@ -260,6 +274,7 @@ class CoverInputOwner {
   }
   private stop(code: Failure): void {
     this.stopped ??= code; this.fail(code); this.cancelReader(); this.releaseTerminal();
+    try { this.cancelControl?.(); } catch { this.cleanupFailed = true; }
   }
   private check(): void {
     if (!this.stopped && Date.now() >= this.deadlineAt) this.stop("deadline");
@@ -341,6 +356,8 @@ class CoverInputOwner {
     try { await this.pending; } catch { /* sanitized primary failure already recorded */ }
     try { await this.digest; } catch { /* actual digest settlement, never early release */ }
     await this.cancellation;
+    try { await this.controlRoot; } catch { this.cleanupFailed = true; }
+    this.controlRoot = undefined; this.cancelControl = undefined;
     try { this.reader?.releaseLock(); } catch { this.cleanupFailed = true; }
     this.reader = undefined; this.pending = undefined; this.digest = undefined;
     this.bytes = undefined; this.metadata = undefined;
@@ -353,6 +370,16 @@ class CoverInputOwner {
     this.check();
     if (this.claimed || this.phase !== "sealed" || this.stopped || !this.metadata) throw failure("used");
     this.claimed = true; return this.metadata;
+  }
+  control(retired: Promise<void>, cancel: () => void): MusicCoverControlPhase {
+    this.check();
+    if (this.claimed || this.phase !== "sealed" || this.digest || !this.metadata || !this.signal
+      || this.stopped || this.controlRoot) throw failure("used");
+    this.claimed = true; this.phase = "control";
+    this.controlRoot = retired; this.cancelControl = cancel;
+    void retired.catch(() => undefined);
+    return Object.freeze({ metadata: this.metadata, signal: this.signal, deadlineAt: this.deadlineAt,
+      route: this.route, close: () => this.stop("cancelled") });
   }
   discard(): Promise<void> { if (this.phase !== "retired") this.stop("cancelled"); return this.retired; }
   snapshot() { return Object.freeze({ phase: this.phase, reads: this.reads, wire: this.wire, nonAudio: this.nonAudio,
@@ -368,4 +395,9 @@ export function beginMiniMaxMusicCoverInput(source: MusicCoverInputSource): Musi
 export function claimMiniMaxMusicCoverInput(input: SealedMusicCoverInput): MusicCoverInputMetadata {
   const owner = sealedOwners.get(input); if (!owner) throw failure("used");
   return owner.claim();
+}
+
+export function claimMiniMaxMusicCoverControl(input: SealedMusicCoverInput, retired: Promise<void>, cancel: () => void): MusicCoverControlPhase {
+  const owner = sealedOwners.get(input); if (!owner) throw failure("used");
+  return owner.control(retired, cancel);
 }

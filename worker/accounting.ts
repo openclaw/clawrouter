@@ -1,9 +1,10 @@
+import { isMusicCoverControl, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import { searchJsonBytes, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy-limits.ts";
 import type { AuthorizedIdentity, BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
-import { chargeLedger, ingestUsage, settleLedger } from "./ledgers.ts";
+import { chargeLedger, ingestUsage, settleLedger, musicCoverLedgerControl } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
 import type { PricingGap } from "./pricing.ts";
 
@@ -219,4 +220,62 @@ async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicr
   }));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw failed.reason;
+}
+
+// Sole inactive-cover finalizer. IDs and all four possible attempts exist before
+// I/O. Unlike reserveBudget, this branch NEVER starts an internal rollback.
+export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent) {
+  if (!isMusicCoverControl(owner) || plan.legs.length > 4) musicCoverUnavailable();
+  searchJsonBytes(plan); searchJsonBytes(event);
+  const attempts = plan.legs.map(leg => ({ leg, attempted: false, denied: false, acknowledged: false, dispatched: false }));
+  let finalization: Promise<void> | undefined;
+  return Object.freeze({
+    async reserve(): Promise<void> {
+      for (const attempt of attempts) {
+        attempt.attempted = true;
+        const result = await musicCoverLedgerControl<{ allowed: boolean; chargedMicros: number }>(env, attempt.leg.objectName, "/reserve", attempt.leg.request, owner);
+        if (result.allowed === false) { attempt.denied = true; throw new HttpError(402, "budget_exhausted", "Cover budget is exhausted"); }
+        if (result.allowed !== true || result.chargedMicros !== attempt.leg.request.costMicros) musicCoverUnavailable();
+        attempt.acknowledged = true;
+      }
+    },
+    async dispatchAdmission(): Promise<void> {
+      for (const attempt of attempts) {
+        if (!attempt.acknowledged) musicCoverUnavailable();
+        const reply = await musicCoverLedgerControl<{ dispatched: boolean }>(env, attempt.leg.objectName, "/dispatch", { reservationId: attempt.leg.request.reservationId }, owner);
+        if (reply.dispatched !== true) musicCoverUnavailable();
+        attempt.dispatched = true;
+      }
+    },
+    finish(): Promise<void> {
+      if (finalization) return finalization;
+      finalization = (async () => {
+        // This joins actual original ordinary responses, not public timeout.
+        // It cannot join this finalizer: mandatory tickets have a separate lane.
+        await owner.retireOrdinary();
+        let failed = false;
+        for (const attempt of attempts) {
+          if (!attempt.attempted || attempt.denied) continue;
+          const request: BudgetSettleRequest = { reservationId: attempt.leg.request.reservationId, actualCostMicros: 0 };
+          try {
+            try { await settleLedger(env, attempt.leg.objectName, request, undefined, undefined, owner); }
+            catch {
+              const message = { kind: "budget_settlement" as const, ledger: { objectName: attempt.leg.objectName }, request };
+              await owner.task(message, () => env.USAGE_QUEUE.send(message), true);
+            }
+          } catch { failed = true; }
+        }
+        // This slice never constructs a provider POST. Its event records known
+        // unsent preparation, not a free cover generation or vendor receipt.
+        try {
+          try { await owner.task(event, () => env.USAGE_QUEUE.send(event), true); }
+          catch { await ingestUsage(env, event, undefined, undefined, owner); }
+        } catch { failed = true; }
+        if (failed) throw new HttpError(503, "accounting_unavailable", "Cover preparation finalization is unavailable");
+      })();
+      return finalization;
+    },
+    snapshot: () => attempts.map(attempt => Object.freeze({ id: attempt.leg.request.reservationId, attempted: attempt.attempted,
+      denied: attempt.denied, acknowledged: attempt.acknowledged, dispatched: attempt.dispatched })),
+  });
 }

@@ -1,3 +1,6 @@
+import { searchJsonBytes } from "./minimax-search-operation.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import type { BudgetReservationPlan } from "./accounting.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { planBudgetReservation, type BudgetReservation } from "./accounting.ts";
 import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy-limits.ts";
@@ -90,4 +93,24 @@ export function softBudget(env: Env, auth: AuthorizedIdentity, capability: strin
     },
     close() { delivered = true; },
   };
+}
+
+// Cover completes and physically retires every observation BEFORE its final
+// authority tail. No grace-period, cache or post-dispatch background work.
+export async function musicCoverSoftBudget(env: Env, plan: BudgetReservationPlan, connection: ProviderConnection, owner: MiniMaxMusicCoverControl): Promise<void> {
+  if (plan.legs.length > 4) musicCoverUnavailable();
+  searchJsonBytes(plan);
+  for (const leg of plan.legs) {
+    if (leg.request.limitMicros === 0) throw softDenial(leg, connection);
+    const status = await owner.controlJson<{ spentMicros: number }>({}, (_body, signal) => {
+      const url = new URL("https://clawrouter.internal/status");
+      for (const [key, value] of Object.entries({ policy_id: leg.request.policyId, window_key: leg.request.windowKey,
+        scope_key: leg.request.scopeKey!, limit_micros: String(leg.request.limitMicros) })) url.searchParams.set(key, value);
+      if (url.href.length > 4096) musicCoverUnavailable();
+      return env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url, { signal, redirect: "manual",
+        headers: { [musicCoverControlHeader]: musicCoverControlVersion } });
+    });
+    if (!Number.isSafeInteger(status.spentMicros) || status.spentMicros < 0) musicCoverUnavailable();
+    if (status.spentMicros >= leg.request.limitMicros) throw softDenial(leg, connection);
+  }
 }

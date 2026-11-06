@@ -3,6 +3,7 @@ import type { MiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import { miniMaxVideoOwnerBinding } from "./minimax-video-credential.ts";
 import { miniMaxSearchOwnerBinding } from "./minimax-search-credential.ts";
 import type { SearchGrantMutationActor } from "./authority-contracts.ts";
+import type { MusicCoverControlProfile } from "./authority-contracts.ts";
 import type { CopilotAccountAttempt, CopilotAccountBinding } from "./copilot-account-flow.ts";
 import { miniMaxImageOwnerBinding } from "./minimax-image-credential.ts";
 import type { MiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
@@ -86,6 +87,7 @@ export interface OwnerResponse {
 }
 
 export interface MaterializeRequest {
+  coverOriginal?: MusicCoverControlProfile;
   operation?: "minimax.images" | "minimax.music" | "minimax.search" | "minimax.video";
   key: string;
   grant: UpstreamGrant;
