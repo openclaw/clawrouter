@@ -546,6 +546,8 @@
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
 - Tests: exercise registered ClawRouter catalog-selected Volcengine PAYG Chat, explicit tool replay, regional grant isolation, cancellation and SQLite accounting through the real Worker.
 - Complete the frozen Volcengine PAYG Chat roster while preserving its existing seed, closing deprecated identities and keeping dated standard models separate from Coding Plan aliases and tariffs.
+- Tests: qualify registered ClawRouter BytePlus PAYG catalog selection, both stream entrypoints, host tool replay, Singapore grant isolation and SQLite settlement through the real Worker.
+- Complete the six frozen BytePlus PAYG Chat dispositions with original Singapore credentials and native input facts, keeping deprecated GLM closed and Coding Plan prices or aliases separate.
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
