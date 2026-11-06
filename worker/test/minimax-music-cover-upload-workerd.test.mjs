@@ -33,7 +33,7 @@ BodyLease.prototype.splitCharges=function(left,right){
 const post=MiniMaxMusicCoverControl.prototype.post;
 MiniMaxMusicCoverControl.prototype.post=function(...args){if(active)active.owner=this;return post.apply(this,args);};
 const state=()=>active?{mode:active.mode,charged:bodyBudgetCharged(),result:active.result,done:active.done,retired:active.retired,
- error:active.error,cleanupError:active.cleanupError,fetches:active.fetches,headers:active.headers,
+ error:active.error,cleanupError:active.cleanupError,fetches:active.fetches,headers:active.headers,declaredUploadLength:active.declaredUploadLength,
  reads:active.reads,nativeReads:active.nativeReads,nativeEOF:active.nativeEOF,cancels:active.cancels,unlocks:active.unlocks,unlockAttempts:active.unlockAttempts,
  uploadHeld:active.uploadHeld,cancelHeld:active.cancelHeld,readHeld:active.readHeld,discards:active.discards,
  source:active.source?.snapshot(),splits:active.splits,splitBefore:active.splitBefore,splitAfter:active.splitAfter,splitReferences:active.splitReferences,
@@ -92,6 +92,7 @@ export default {async fetch(request,env,context){
   const sealed=await input.result;
   a.flow=runInactiveMiniMaxMusicCoverUpload(sealed,async(url,init)=>{
    if(url!=='https://api.minimax.io/v1/music_generation'||init.method!=='POST'||init.redirect!=='manual')throw Error('fixed destination');
+   a.declaredUploadLength=Number(new Headers(init.headers).get('content-length'));
    a.fetches++;const response=await fetch(url,init);a.headers=true;
    ownObserved(response,a);
    if(a.mode==='late')await gate(a.mode,'late');
@@ -183,7 +184,11 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
       uploadEnded = true;
       uploadEvidence = { bytes: count, expectedBytes: prefix.length + encoded + suffix.length,
         contentLength: request.headers["content-length"] ?? null, transferEncoding: request.headers["transfer-encoding"] ?? null, firstMismatch };
-      if (count !== prefix.length + encoded + suffix.length || Number(request.headers["content-length"]) !== count) uploadValid = false;
+      // The forwarded HTTP hop may use chunked framing; exact payload length is independent.
+      const contentLength = request.headers["content-length"], transferEncoding = request.headers["transfer-encoding"];
+      const framingValid = contentLength === undefined ? transferEncoding === "chunked"
+        : Number(contentLength) === count && transferEncoding === undefined;
+      if (count !== prefix.length + encoded + suffix.length || !framingValid) uploadValid = false;
       if (!["early", "upload-reject"].includes(currentMode)) void send().catch(error => errors.push(error));
     });
     if (["early", "upload-reject"].includes(currentMode)) void send().catch(error => errors.push(error));
@@ -220,6 +225,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   for (const route of ["native", "manifest"]) {
     const before = posts, client = start("maximum", 50_000_000, route, 4 * 1024 * 1024), state = await client.promise;
     check(state); assert.equal(state.error, undefined); assert.equal(uploadValid, true, JSON.stringify(uploadEvidence)); assert.equal(uploadEnded, true); assert.equal(posts - before, 1);
+    assert.equal(state.declaredUploadLength, uploadEvidence.expectedBytes); assert.equal(state.source.length, uploadEvidence.expectedBytes);
     assert.equal(state.splitBefore, 96 * 1024 * 1024); assert.equal(state.splitAfter, state.splitBefore); assert.equal(state.splitReferences, 0);
     assert.ok(state.maxOutputBacking <= 16384); assert.ok(state.outputBytes > 8 * 1024 * 1024);
   }
