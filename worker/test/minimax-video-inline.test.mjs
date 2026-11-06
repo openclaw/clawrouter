@@ -129,3 +129,19 @@ test("inline response projection preserves rejecting evidence and int64 before c
     assert.equal(value.task_id, "9223372036854775807"); assert.equal(Object.hasOwn(value, "discarded"), false); assert.equal(response.body.locked, false);
   } finally { await owner.finish(); }
 });
+
+
+test("inline pre-read refusal records synchronous FIRST-cancel failure and still retires the lock", async () => {
+  const owner = new MiniMaxVideoOperation("create"); let reads = 0, cancels = 0, unlocked = 0;
+  const source = new ReadableStream({ pull() { reads++; } }, { highWaterMark: 0 });
+  const get = source.getReader.bind(source);
+  source.getReader = options => { const reader = get(options); return {
+    read: (...args) => reader.read(...args), cancel() { cancels++; throw Error("synchronous cleanup failure"); },
+    releaseLock() { reader.releaseLock(); unlocked++; },
+  }; };
+  try {
+    await assert.rejects(readMiniMaxInlineResponse(new Response(source, { headers: { "content-type": "text/plain" } }), owner.controlSignal, owner.registerInput));
+    await assert.rejects(owner.finish(), { code: "minimax_video_cleanup_failed" });
+    assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(unlocked, 1); assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0);
+  } finally { await source.cancel(); }
+});

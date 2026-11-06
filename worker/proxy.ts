@@ -654,7 +654,7 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
         "minimax.video", params, context, undefined, owner)), "upstream", late => owner.discard(late));
     }
     if (request.method !== "POST" || new URL(request.url).search || endpoint.lifecycle?.protocol !== "minimax.video") miniMaxVideoDenied();
-    let body = await operation.wait(owner.track(readMiniMaxVideoInput(request, owner, route)));
+    let body: unknown = await operation.wait(owner.track(readMiniMaxVideoInput(request, owner, route)));
     let prepared;
     if (route === "manifest") {
       const envelope = manifestEnvelope(body);

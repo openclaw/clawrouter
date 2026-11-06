@@ -170,7 +170,7 @@ async function readProjected(source: Request | Response, signal: AbortSignal, mo
   let reader: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>, byob = false;
   try { reader = source.body.getReader({ mode: "byob" }); byob = true; } catch { reader = source.body.getReader(); }
   let first: Promise<void> | undefined;
-  const base = inputRetirement({ cancel(reason) { first ??= reader.cancel(reason); void first.catch(() => undefined); return first; }, releaseLock: () => reader.releaseLock() });
+  const base = inputRetirement({ cancel(reason) { first ??= Promise.resolve().then(() => reader.cancel(reason)); void first.catch(() => undefined); return first; }, releaseLock: () => reader.releaseLock() });
   const retired = base.retired.then(() => first); void retired.catch(() => undefined);
   const input: InputRetirement = { read: fn => base.read(fn), retired,
     retire(kind, reason) { void base.retire(kind, reason).catch(() => undefined); return retired; } };
