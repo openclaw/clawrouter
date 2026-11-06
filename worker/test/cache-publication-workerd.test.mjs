@@ -20,7 +20,7 @@ import {providerById} from './worker/providers.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {HotCache,setHotCacheClock} from './worker/hot-cache.ts';
 const original=globalThis.fetch.bind(globalThis),realNow=Date.now.bind(Date);
-let cacheClock=realNow(),wallOffset=0,initialized,background=0,cooldown=null,evictions=0,puts=0,hits=0,acquisitions=0,holdColo=null,lastColoAt=null,lastPutAt=null,maxAcquisitionAt=0,foreignStoredAt=null;
+let cacheClock,wallOffset=0,initialized,background=0,cooldown=null,evictions=0,puts=0,hits=0,acquisitions=0,holdColo=null,lastColoAt=null,lastPutAt=null,maxAcquisitionAt=0,foreignStoredAt=null;
 Date.now=()=>realNow()+wallOffset;setHotCacheClock(()=>cacheClock);
 const rows=new Map(),cache=caches.default,match=cache.match.bind(cache),put=cache.put.bind(cache);
 cache.match=async(...args)=>{const r=await match(...args);if(r){hits++;lastColoAt=(await r.clone().json()).fetchedAt;}
@@ -35,6 +35,7 @@ HotCache.prototype.deleteKeys=function(predicate){evictions++;return deleteKeys.
 const barrier=(id,phase)=>original('https://cache-gate.example/barrier/'+id+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('barrier failed');await r.text();});
 const report=()=>({rows:Object.fromEntries(rows),background,cacheClock,wall:Date.now(),cooldown,evictions,puts,hits,acquisitions,lastColoAt,lastPutAt,maxAcquisitionAt,foreignStoredAt});
 export default {async fetch(request,bindings,context){
+ cacheClock??=realNow(); // Capture the fixture clock inside the original request.
  const env={...bindings,...ACCESS_ENV},url=new URL(request.url),id=url.searchParams.get('id')??'control';
  initialized??=(async()=>{
   await authorityCall(env,'/users/initialize-all',[{email:'music-admin@example.invalid',record:{enabled:true,role:'admin',groups:[],tenantId:'fixture'}}]);
@@ -151,8 +152,10 @@ async function fixture(t) {
 
 test('actual public revoke fences a held completed admission; real colo publication survives restart for a valid key', {timeout:120000}, async t=>{
   const f=await fixture(t);
+  assert.ok((await f.state()).cacheClock>0,'request-time cache clock');
   assert.equal((await f.send('positive1',A,'positive')).status,200);await f.drain();
-  assert.ok((await f.state()).puts>0,'REAL Cache API publication');
+  const published=await f.state();assert.ok(published.puts>0,'REAL Cache API publication');
+  assert.equal(published.lastPutAt,published.cacheClock,'original acquisition timestamp');
   await f.restart();
   const adopted=await f.send('positive2',A,'positive');assert.equal(adopted.status,200,adopted.body);await f.drain();
   let s=await f.state();assert.equal(s.rows.positive2.admissions,0);assert.match(adopted.timing,/cr-cache;desc=colo/);assert.ok(s.hits>0);

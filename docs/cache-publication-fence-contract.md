@@ -10,6 +10,8 @@ Admission misses and stale refreshes use the same identities for local entries, 
 
 Pending runtime feedback, selection counts, cursors and their coalesced flushes remain writes, not cache entries. Invalidation does not clear them. Wrong-secret isolation, configured expiry/refresh margins, failover and MiniMax Music/image speculative-prefetch exclusions remain unchanged.
 
+A new authoritative publication owner may write at an equal or rolled-back clock, retaining the original acquisition timestamp. The timestamp fence still rejects adoption in the invalidating isolate; it does not suppress a new owner's write. Invalidated owners remain unable to publish.
+
 ## Evidence and limits
 
 Focused Node cases cover old cacheable, uncacheable and rejected completions; newer explicit values/replacement loads; pending-only credential versions; bounded overflow; unrelated keys; stale refresh; hints; held colo reads; late physical puts; equal/rollback clocks; and retained coalesced writes. Existing hot-path positive/deduplication/concurrency tests remain required.

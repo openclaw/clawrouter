@@ -97,8 +97,9 @@ async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRe
     const selection = localSelection(env, value, request.selection, value.selection?.selected?.key);
     if (selection) value.selection = selection;
   }
-  // Publish the secretless snapshot for other isolates in this location.
-  if (ok && admissions.ownsPublication(cacheKey(request), publication) && storedAt > sharedHotCacheFence()) coloPut("admission", cacheKey(request), withoutSelection(value), storedAt, config);
+  // A current owner may publish even at an equal/rolled-back clock. The shared
+  // timestamp fence governs adoption; it does not revoke new publication rights.
+  if (ok && admissions.ownsPublication(cacheKey(request), publication)) coloPut("admission", cacheKey(request), withoutSelection(value), storedAt, config);
   return { value: request.snapshot === "only" ? withoutSelection(value) : value, cacheable: ok, expiresAt: expiryOf(value), storedAt };
 }
 

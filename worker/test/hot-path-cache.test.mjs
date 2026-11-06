@@ -641,6 +641,21 @@ async function cacheBarrierArrival(arrival, originating, phase) {
   finally { clearTimeout(timer); }
 }
 
+for (const clockShift of [0, -120_000]) test(`a new admission owner publishes at the original fenced clock (${clockShift})`, async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache, sharedHotCacheFence } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  clearHotCaches(); fenceSharedHotCache(); time.advance(clockShift);
+  const acquiredAt = hotCacheNow(); assert.ok(acquiredAt <= sharedHotCacheFence());
+  assert.equal((await f.send()).response.status, 200);
+  assert.equal(colo.stats.puts, 1, 'current publication identity may write after invalidation');
+  assert.equal(JSON.parse([...colo.entries.values()][0]).fetchedAt, acquiredAt, 'no timestamp renewal');
+  clearHotCaches(); f.reset();
+  assert.equal((await f.send()).response.status, 200);
+  assert.equal(colo.stats.hits, 1, 'the shared response is physically read');
+  assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, 'fenced timestamp still denies adoption');
+});
+
 for (const clockShift of [0, -120_000]) test(`a late admission cannot republish hints or colo after invalidation (clock ${clockShift})`, async t => {
   const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
   const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
