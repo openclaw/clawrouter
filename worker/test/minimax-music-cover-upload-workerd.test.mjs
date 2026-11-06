@@ -33,7 +33,7 @@ BodyLease.prototype.splitCharges=function(left,right){
 const post=MiniMaxMusicCoverControl.prototype.post;
 MiniMaxMusicCoverControl.prototype.post=function(...args){if(active)active.owner=this;return post.apply(this,args);};
 const state=()=>active?{mode:active.mode,charged:bodyBudgetCharged(),result:active.result,done:active.done,retired:active.retired,
- error:active.error,cleanupError:active.cleanupError,fetches:active.fetches,headers:active.headers,declaredUploadLength:active.declaredUploadLength,
+ error:active.error,cleanupError:active.cleanupError,fetches:active.fetches,headers:active.headers,responseStatus:active.responseStatus,declaredUploadLength:active.declaredUploadLength,
  reads:active.reads,nativeReads:active.nativeReads,nativeEOF:active.nativeEOF,cancels:active.cancels,unlocks:active.unlocks,unlockAttempts:active.unlockAttempts,
  uploadHeld:active.uploadHeld,cancelHeld:active.cancelHeld,readHeld:active.readHeld,discards:active.discards,
  source:active.source?.snapshot(),splits:active.splits,splitBefore:active.splitBefore,splitAfter:active.splitAfter,splitReferences:active.splitReferences,
@@ -93,7 +93,7 @@ export default {async fetch(request,env,context){
   a.flow=runInactiveMiniMaxMusicCoverUpload(sealed,async(url,init)=>{
    if(url!=='https://api.minimax.io/v1/music_generation'||init.method!=='POST'||init.redirect!=='manual')throw Error('fixed destination');
    a.declaredUploadLength=Number(new Headers(init.headers).get('content-length'));
-   a.fetches++;const response=await fetch(url,init);a.headers=true;
+   a.fetches++;const response=await fetch(url,init);a.headers=true;a.responseStatus=response.status;
    ownObserved(response,a);
    if(a.mode==='late')await gate(a.mode,'late');
    return response;
@@ -217,7 +217,12 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     clients.add(client); void client.promise.then(() => clients.delete(client), () => {}); return client;
   };
   const wait = async predicate => {
-    for (let i = 0; i < 400; i++) { const s = await call("state"); if (predicate(s)) return s; if (s.retired) throw Error("boundary ended: " + JSON.stringify(s)); await delay(10); }
+    for (let i = 0; i < 400; i++) {
+      const s = await call("state");
+      // A previous invocation remains visible until /start reaches this isolate.
+      if (s.mode === mode) { if (predicate(s)) return s; if (s.retired) throw Error("boundary ended: " + JSON.stringify(s)); }
+      await delay(10);
+    }
     throw Error("fixture boundary absent");
   };
   const check = state => { assert.equal(state.charged, 0); assert.equal(state.flow.ordinary, 1); assert.equal(state.flow.postAttempts, 1);
@@ -247,7 +252,9 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
     const before = posts, client = start(nextMode);
     try {
       const s = await wait(s => s.uploadHeld && s.headers);
-      assert.equal(posts - before, 1); assert.equal(s.reads, 0); assert.equal(s.charged, 96 * 1024 * 1024);
+      assert.equal(posts - before, 1, JSON.stringify({ expectedMode: nextMode, observedMode: s.mode, responseStatus: s.responseStatus,
+        fetches: s.fetches, done: s.done, retired: s.retired, uploadHeld: s.uploadHeld }));
+      assert.equal(s.reads, 0); assert.equal(s.charged, 96 * 1024 * 1024);
       assert.equal(s.source.pending, true);
       if (nextMode === "upload-reject") {
         await call("abort"); await wait(s => s.cancelHeld);
