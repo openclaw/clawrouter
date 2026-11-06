@@ -106,7 +106,7 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   const control = await barriers(t);
   const upstream = `export default {fetch(request){if(new URL(request.url).hostname!=='cover-gate.example')throw Error('no provider calls');return fetch(${JSON.stringify(control.origin)}+new URL(request.url).pathname,{redirect:'manual'});}};`;
   const runtime = await startWorkerdFixture(temporary, router, upstream);
-  const modes = ["maximum", "manifest", "read", "cancel-reject", "hash", "hash-reject", "reads8192", "reads8193", "backing", "padding", "trailing", "overflow", "utf8", "tokens", "scalar", "escapes"];
+  const modes = ["maximum", "manifest", "read", "cancel-reject", "hash", "hash-reject", "reads8192", "reads8193", "backing", "padding", "trailing", "overflow", "utf8", "tokens", "scalar", "escapes", "escape-boundary", "escape-overflow", "escape-unicode"];
   t.after(async () => { for (const mode of modes) for (const phase of ["abort", "read", "cleanup", "hash", "delivery"]) control.release(mode, phase); await runtime.dispose(); });
   const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path); assert.equal(response.status, 200); return response.json(); };
   const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
@@ -156,4 +156,14 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   control.release("reads8192", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
   state = await start("escapes", 2, { audio: "\\u0041\\u0041\\u0041=" }); assert.equal(state.value.bytes, 2);
   assert.ok(state.nonAudio > 18); control.release("escapes", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
+  const escaped = '{"audio_base64":"' + "\\u0041".repeat(10000) + '","prompt":"Synthetic style","model":"music-cover"}';
+  const exact = escaped + " ".repeat(65536 - Buffer.byteLength(escaped));
+  state = await start("escape-boundary", 7500, { raw: exact });
+  assert.equal(state.value.bytes, 7500); assert.equal(state.nonAudio, 65536);
+  control.release("escape-boundary", "delivery"); await until(s => s.retired);
+  for (const [mode, raw] of [["escape-overflow", exact + " "], ["escape-unicode", '{"audio_base64":"' + "\\u0041".repeat(14000) + '","prompt":"Synthetic style","model":"music-cover"}']]) {
+    await start(mode, 10500, { raw }); state = await until(s => s.retired);
+    assert.equal(state.code, "invalid", JSON.stringify(state)); assert.equal(state.digestStarted, false);
+    assert.equal(state.cancels, 1); assert.equal(state.unlocks, 1); assert.equal(state.locked, false); assert.equal(state.charged, 0);
+  }
 });

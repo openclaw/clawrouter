@@ -60,7 +60,9 @@ Wire is at most66,732,204 bytes: canonical encoding of50,000,000 decoded bytes
 plus64 KiB non-audio bytes. Only literal canonical Base64 bytes inside the exact
 audio slot receive wire credit. All bytes of JSON escapes, whitespace, keys,
 quotes and scalar values spend the separate64 KiB budget before tokenizer
-copying. Quartet state crosses feeds; canonical padding bits and complete final
+copying. Unicode escapes retain their raw escape state through all four hex
+digits: none of the six bytes receives audio credit, including across feeds.
+Quartet state crosses feeds; canonical padding bits and complete final
 quartets are required. Scalar concatenation is checked before allocation:
 32-unit keys,2000-unit values,4096 aggregate units. UTF-16 surrogate validity and
 an exact closed-plan UTF-8/escaping count run before any serialization; the
@@ -118,11 +120,16 @@ this module does not qualify that next step.
 
 Focused tests cover padding/escapes/complete JSON, scalar and backing limits,
 model ordering, duplicate/foreign fields,8192 reads, FIRST-cancel rejection,
-held read/digest, public abort/deadline, contention and one-use handoff. The
+held read/wrapped-digest, public abort/deadline, contention and one-use handoff. The
 isolated Workerd fixture uses actual HTTP request bodies, two full decimal50M
 envelopes, exact maximum wire and bounded scalar plan, plus malformed and held
 physical-boundary cases. Network barriers are fixture controls, not production
-authority/RPCs. These tests are authored evidence until the exact head passes.
+authority/RPCs. Inventory assertions check declared operational arithmetic,
+not measured allocation counts. The hash barrier waits after the underlying
+native digest completes; it proves retention of the returned wrapped operation,
+not observation of a still-live native crypto snapshot. Source ordering retains
+the actual returned digest promise conservatively; no native acknowledgment is
+claimed or required. These tests are authored evidence until the exact head passes.
 
 This is input/hash qualification only. Audio codec/subtype/duration, vendor MB
 interpretation, input prefix compatibility, original-account cover authority,

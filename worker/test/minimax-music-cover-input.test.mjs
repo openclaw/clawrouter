@@ -57,6 +57,28 @@ test("escape overhead and scalar copies are bounded before hashing", async () =>
   await denied('{"audio_base64":' + "[".repeat(256));
 });
 
+test("ALL six Unicode-escape bytes spend the non-audio budget across feed boundaries", async () => {
+  const base = document("\\u0041".repeat(10000));
+  const exact = base + " ".repeat(65536 - Buffer.byteLength(base));
+  const accepted = begin(body(exact, 251));
+  try {
+    assert.equal(claimMiniMaxMusicCoverInput(await accepted.result).bytes, 7500);
+    assert.equal(accepted.snapshot().nonAudio, 65536);
+  } finally { await accepted.discard(); }
+  for (const text of [exact + " ", document("\\u0041".repeat(14000))]) {
+    const stream = body(text, 251), getReader = stream.getReader.bind(stream); let cancels = 0, unlocks = 0;
+    stream.getReader = options => { const reader = getReader(options); return {
+      read: view => reader.read(view), cancel(reason) { cancels++; return reader.cancel(reason); },
+      releaseLock() { unlocks++; reader.releaseLock(); },
+    }; };
+    const op = begin(stream);
+    try { await assert.rejects(op.result, { code: "invalid" }); await op.retired; }
+    finally { await op.discard(); }
+    assert.equal(op.snapshot().digestStarted, false); assert.equal(cancels, 1); assert.equal(unlocks, 1);
+    assert.equal(stream.locked, false); assert.equal(bodyBudgetCharged(), 0);
+  }
+});
+
 test("unsupported default producer denies before read and joins its FIRST cancellation", async () => {
   let reads = 0, cancels = 0; const held = deferred();
   const stream = new ReadableStream({ pull() { reads++; }, cancel() { cancels++; return held.promise; } }, { highWaterMark: 0 });
@@ -85,7 +107,7 @@ for (const reject of [false, true]) test(`held read and FIRST cancellation ${rej
   } finally { read.resolve(); cancel.resolve(); await op.discard().catch(() => {}); }
 });
 
-for (const reject of [false, true]) test(`actual digest ${reject ? "failure" : "settlement"} remains owned after prompt abort`, async t => {
+for (const reject of [false, true]) test(`wrapped digest ${reject ? "failure" : "settlement"} remains owned after prompt abort`, async t => {
   const held = deferred(), entered = deferred(), controller = new AbortController(), digest = crypto.subtle.digest.bind(crypto.subtle);
   t.mock.method(crypto.subtle, "digest", async (...args) => {
     assert.equal(args[1].byteLength, 2); assert.equal(args[1].buffer.byteLength, 50_000_000);

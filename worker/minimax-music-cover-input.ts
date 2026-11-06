@@ -79,6 +79,7 @@ class WireCounter {
   private depth = 0;
   private quoted = false;
   private escaped = false;
+  private unicodeDigits = 0;
   private isKey = false;
   private audio = false;
   private key = "";
@@ -91,7 +92,8 @@ class WireCounter {
     for (let i = 0; i < bytes.length; i++) {
       const byte = bytes[i]; let credit = false;
       if (this.quoted) {
-        if (this.escaped) this.escaped = false;
+        if (this.unicodeDigits) this.unicodeDigits--;
+        else if (this.escaped) { this.escaped = false; if (byte === 117) this.unicodeDigits = 4; }
         else if (byte === 92) { if (this.isKey) invalid(); this.escaped = true; }
         else if (byte === 34) { this.quoted = false; this.audio = false; }
         else if (this.isKey) {
