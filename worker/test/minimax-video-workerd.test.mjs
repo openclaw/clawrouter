@@ -161,10 +161,13 @@ crypto.subtle.digest=async function(algorithm,data){const result=await nativeDig
 const registerUpload=MiniMaxVideoOperation.prototype.registerUpload;
 MiniMaxVideoOperation.prototype.registerUpload=function(upload){const a=active;if(!a?.mode.startsWith('inline-upload'))return registerUpload.call(this,upload);
  const originalUpload={...upload},reader=originalUpload.body.getReader();a.source=originalUpload.body;let first=true,cancel,controller,stopped=false;
+ // The pinned fetch drain targets256KiB. Let two batches traverse the fixture's
+ // frontend/upstream hops before holding a read; server entry is STILL awaited.
+ const holdRead=2*256*1024/16384+1;
  const input=inputRetirement({cancel(reason){return cancel??=(async()=>{a.cancels++;await reader.cancel(reason);await gate(a,'cleanup');a.cleanup=true;if(a.mode==='inline-upload-reject')throw Error('held upload cleanup rejection');})();},releaseLock(){a.unlocks++;reader.releaseLock();}});
  const retired=Promise.allSettled([originalUpload.retired,input.retired]).then(()=>cancel);void retired.catch(()=>{});
  const discard=()=>{stopped=true;try{controller?.error(Error('discarded'));}catch{}void originalUpload.discard().catch(()=>{});void input.retire('cancel').catch(()=>{});return retired;};
- const body=new ReadableStream({start(c){controller=c;},async pull(c){try{const result=await input.read(async()=>{a.reads++;try{return await reader.read();}finally{if(first&&a.reads===2){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}});if(stopped)return;if(result.done){await input.retire('eof');c.close();}else{a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);c.enqueue(result.value);}}catch(e){if(!stopped)c.error(e);}},cancel:discard},{highWaterMark:0});
+ const body=new ReadableStream({start(c){controller=c;},async pull(c){try{const result=await input.read(async()=>{a.reads++;try{return await reader.read();}finally{if(first&&a.reads===holdRead){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}});if(stopped)return;if(result.done){await input.retire('eof');c.close();}else{a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);c.enqueue(result.value);}}catch(e){if(!stopped)c.error(e);}},cancel:discard},{highWaterMark:0});
  Object.assign(upload,{body,retired,discard});return registerUpload.call(this,upload);
 };
 
@@ -594,7 +597,10 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
     await json("/setup?inline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
     const posts = io.counts.post, started = mode.startsWith("inline-upload") ? io.nextPost() : undefined;
     const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
-    if (started) { await started; assert.equal(io.counts.post, posts + 1, JSON.stringify(state)); io.replyEarly(); }
+    t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
+      charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error }));
+    if (started) { await started; assert.equal(io.counts.post, posts + 1, JSON.stringify(state));
+      t.diagnostic(JSON.stringify({ phase: "actual-post-started", mode, posts: io.counts.post })); io.replyEarly(); }
     assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
     if (mode === "inline-late") io.release(mode + "/execution-abort");
     for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
