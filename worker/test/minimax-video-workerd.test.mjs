@@ -178,7 +178,9 @@ async function paddedControl(response,a){
 
 const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,locator:active.locator,error:active.error,results:active.results,
  reads:active.reads,cancels:active.cancels,unlocks:active.unlocks,materializations:active.materializations??0,inputReads:active.inputReads??0,inputCancels:active.inputCancels??0,inputUnlocks:active.inputUnlocks??0,inputMaxBacking:active.inputMaxBacking??0,releases:active.releases,maxBacking:active.maxBacking,actions:active.actions,
- providerAttempts:active.providerAttempts??0,failedControl:active.failedControl,cancelRejected:active.cancelRejected??false,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
+ providerAttempts:active.providerAttempts??0,failedControl:active.failedControl,cancelRejected:active.cancelRejected??false,cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking,
+ inputEOF:active.inputEOF??false,partialNativeFulfilled:active.partialNativeFulfilled??false,partialBytes:active.partialBytes??0,partialRemaining:active.partialRemaining??0,partialOriginalCancels:active.partialOriginalCancels??0,partialSameBody:active.partialSameBody??false,
+ partialBackground:active.partialBackground??0,partialBackgroundUnexpected:active.partialBackgroundUnexpected??false}: {})});
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
 const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
@@ -198,9 +200,14 @@ MiniMaxVideoOperation.prototype.registerUpload=function(upload){const a=active;i
 
 function hold(source,a){a.source=source;const get=source.getReader.bind(source);let first=true,cancel;
  source.getReader=options=>{const reader=get(options);return {
-  async read(...args){a.reads++;try{const result=await reader.read(...args);if(result.value)a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);return result;}
-   finally{if(first){first=false;a.readyReason??='first-read';a.ready.resolve();await gate(a,'read');a.readRetired=true;}}},
-  cancel(reason){return cancel??=(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{await gate(a,'cleanup');a.cleanup=true;if(a.mode==='cleanup-reject')throw Error('synthetic cleanup rejection');}})();},
+  async read(...args){a.reads++;let eof=false;try{const result=await reader.read(...args);eof=result.done;
+    if(a.mode==='upload'&&eof)a.inputEOF=true;if(a.mode==='partial-input-reject')a.partialNativeFulfilled=true;
+    if(result.value)a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);return result;}
+   // HTTP input-upload holds EOF delivery, not a mid-input or native-pending read.
+   finally{if(first&&(a.mode!=='upload'||eof)){first=false;a.readyReason??=a.mode==='upload'?'eof-delivery':'first-read';a.ready.resolve();await gate(a,'read');a.readRetired=true;}}},
+  cancel(reason){return cancel??=(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{await gate(a,'cleanup');a.cleanup=true;
+    if(a.mode==='partial-input-reject'){a.cancelRejected=true;throw Error('synthetic partial-input cleanup rejection');}
+    if(a.mode==='cleanup-reject')throw Error('synthetic cleanup rejection');}})();},
   releaseLock(){reader.releaseLock();a.unlocks++;}
  };};
 }
@@ -332,10 +339,21 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   let ok=false,error;try{await readVideoJson(request,owner.controlSignal,'input',owner.registerInput);ok=true;}catch(e){error=e.code??e.name;}finally{await owner.finish();}
   return Response.json({ok,error,reads,maxBacking,charged:bodyBudgetCharged()});
  }
- if(!['/call','/held','/scenario','/max-held'].includes(u.pathname))return new Response(null,{status:404});
+ if(!['/call','/held','/scenario','/max-held','/partial-input'].includes(u.pathname))return new Response(null,{status:404});
  const target=u.searchParams.get('target');if(!target?.startsWith('/v1/'))return new Response(null,{status:400});
  const headers=new Headers(request.headers);headers.set('authorization','Bearer clawrouter-live-fixture-fixture-secret');
  const a=fresh(u.searchParams.get('mode')??'normal');
+ let inputBody=request.body;
+ if(u.pathname==='/partial-input'){
+  // Labelled injected ORIGINAL native byte stream, created in this request.
+  // It compensates partial-input custody; it is not an incoming HTTP reproduction.
+  if(a.mode!=='partial-input-reject')throw Error('partial fixture mode');
+  const text='PARTIAL_INPUT_BODY';let at=0;a.partialRemaining=text.length;a.partialBytes=0;a.partialOriginalCancels=0;
+  inputBody=new ReadableStream({type:'bytes',pull(c){if(at===text.length){c.close();c.byobRequest?.respond(0);return;}
+   const view=c.byobRequest.view,n=Math.min(1024,view.byteLength,text.length-at);
+   for(let i=0;i<n;i++)view[i]=text.charCodeAt(at++);a.partialBytes+=n;a.partialRemaining=text.length-at;c.byobRequest.respond(n);
+  },cancel(){a.partialOriginalCancels++;}},{highWaterMark:0});
+ }
  const attempt=u.searchParams.get('attempt');if(u.pathname==='/held'&&/^(GLOBAL|CN):(upload|inline-hash|inline-upload|inline-upload-reject|inline-late):[1-5]$/.test(attempt??'')){
   a.attempt=attempt;heldObservation(a,request,'entry');observeHeldRead(a,request);
  }
@@ -355,10 +373,13 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   await a.ready.promise;return Response.json(state());
  }
  if(u.pathname==='/scenario')return worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
- if(['upload','inline-header-held'].includes(a.mode))hold(request.body,a);
- const routed=new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:a.abort.signal});
+ if(['upload','inline-header-held','partial-input-reject'].includes(a.mode))hold(inputBody,a);
+ const routed=new Request('https://router.example'+target,{method:u.pathname==='/partial-input'?'POST':request.method,headers,body:inputBody,signal:a.abort.signal});
+ if(u.pathname==='/partial-input')a.partialSameBody=routed.body===inputBody;
+ const workCtx=u.pathname==='/partial-input'?{waitUntil(p){a.partialBackground=(a.partialBackground??0)+1;ctx.waitUntil(p);
+  void Promise.resolve(p).then(()=>{a.partialBackground--;},error=>{a.partialBackground--;if(error?.code!=='minimax_video_cleanup_failed')a.partialBackgroundUnexpected=true;});}}:ctx;
  ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort(new Error('controlled caller cancellation'))));
- ctx.waitUntil(worker.fetch(routed,controlled(env,a),ctx).then(async r=>{a.status=r.status;try{const b=await r.json();a.error=b.error?.code??null;}catch{}a.results++;a.readyReason??='result';a.ready.resolve();}).catch(e=>{a.error=e.code??e.name;a.results++;a.readyReason??='exception';a.ready.resolve();}));
+ ctx.waitUntil(worker.fetch(routed,controlled(env,a),workCtx).then(async r=>{a.status=r.status;try{const b=await r.json();a.error=b.error?.code??null;}catch{}a.results++;a.readyReason??='result';a.ready.resolve();}).catch(e=>{a.error=e.code??e.name;a.results++;a.readyReason??='exception';a.ready.resolve();}));
  await a.ready.promise;heldObservation(a,request,'before-return');return Response.json(state());
 },queue:worker.queue};
 `;
@@ -500,6 +521,73 @@ test("isolated workerd Hailuo original owner, restart/file, full charge and phys
 
 });
 
+test("injected native partial input holds the owned read and rejected FIRST cleanup without HTTP readiness coupling", { timeout: 30000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "hailuo-partial-input-"));
+  const mode = "partial-input-reject", clients = [], abort = new AbortController();
+  let io, runtime, started, primary, closeExternal;
+  const releaseAll = () => { if (io) { for (const part of ["abort", "cleanup", "read"]) io.release(mode + "/" + part); io.releaseAll(); } };
+  const stop = () => { releaseAll(); abort.abort(t.signal.reason); };
+  t.signal.addEventListener("abort", stop, { once: true });
+  const state = async () => { const r = await runtime.dispatchFetch("https://router.example/state"); assert.equal(r.status, 200); return r.json(); };
+  const retired = async () => {
+    for (let i = 0; i < 500; i++) { const s = await state(); if (!s.charged && !s.locked && !s.partialBackground) {
+      assert.equal(s.partialBackgroundUnexpected, false); return s;
+    } await delay(10); }
+    assert.fail("partial input physical retirement did not complete");
+  };
+  // Register release and drainage before creating any client or held continuation.
+  t.after(async () => {
+    releaseAll(); abort.abort(new Error("fixture cleanup")); const failures = [];
+    for (const result of await Promise.allSettled(clients)) if (result.status === "rejected" && result.reason !== primary) failures.push(result.reason);
+    try { if (runtime && started) await retired(); } catch (error) { failures.push(error); }
+    try { if (runtime) await runtime.dispose(); } catch (error) { failures.push(error); }
+    try { if (closeExternal) await closeExternal(); } catch (error) { failures.push(error); }
+    try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    t.signal.removeEventListener("abort", stop);
+    if (failures.length) throw new AggregateError(failures, "partial input cleanup");
+  });
+  try {
+    // Keep the gate server alive until this test's clients/background roots drain.
+    io = await external({ after(cleanup) { closeExternal = cleanup; } }); const access = await musicAccessFixture();
+    const input = JSON.stringify({ ...videoInput(hailuoModels[0]), first_frame_image: uri(inlineImage("image/png", 32768)) });
+    assert.ok(input.length > 16384 && input.length < 65536);
+    const script = router.replace("ACCESS_ENV", JSON.stringify(access.env)).replace("'PARTIAL_INPUT_BODY'", JSON.stringify(input));
+    runtime = await isolated(directory, script, upstream(io.origin, access.jwk));
+    const json = path => { const p = runtime.dispatchFetch("https://router.example" + path, { signal: abort.signal, headers: { "content-type": "application/json" } })
+      .then(async r => { assert.equal(r.status, 200); return r.json(); }); clients.push(p); return p; };
+    await json("/setup?inline=1"); const posts = io.counts.post;
+    const readArrival = io.entered(mode + "/read"), cleanupArrival = io.entered(mode + "/cleanup");
+    started = json("/partial-input?mode=" + mode + "&target=" + encodeURIComponent("/v1/native/minimax/v1/video_generation"));
+    const failure = started.then(s => {
+      assert.equal(s.partialNativeFulfilled, true); assert.equal(s.results, 0); assert.equal(s.readRetired, false);
+      return new Promise(() => {});
+    }, error => { throw error; });
+    let timer;
+    try { await Promise.race([readArrival, failure, new Promise((_, reject) => { timer = setTimeout(() => reject(Error("partial input did not enter")), 5000); })]); }
+    finally { clearTimeout(timer); }
+    let s = await started;
+    assert.equal(s.partialSameBody, true); assert.equal(s.partialNativeFulfilled, true); assert.equal(s.reads, 1);
+    assert.equal(s.partialBytes, 1024); assert.equal(s.partialRemaining, input.length - 1024); assert.ok(s.partialRemaining > 0);
+    assert.equal(s.locked, true); assert.equal(s.charged, 96 * MiB); assert.equal(s.releases, 0); assert.equal(io.counts.post, posts);
+    io.release(mode + "/abort");
+    let failureTimer;
+    try { await Promise.race([cleanupArrival, new Promise((_, reject) => { failureTimer = setTimeout(() => reject(Error("partial cancellation did not enter")), 5000); })]); }
+    finally { clearTimeout(failureTimer); }
+    for (let i = 0; i < 500; i++) { s = await state(); if (s.results === 1) break; await delay(10); }
+    assert.equal(s.results, 1); assert.ok(s.status >= 400); assert.equal(s.cancels, 1); assert.equal(s.partialOriginalCancels, 1);
+    assert.equal(s.cleanup, false); assert.equal(s.unlocks, 0); assert.equal(s.readRetired, false); assert.equal(s.locked, true);
+    assert.equal(s.charged, 96 * MiB); assert.equal(s.releases, 0); assert.equal(s.providerAttempts, 0); assert.equal(io.counts.post, posts);
+    assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+    io.release(mode + "/cleanup");
+    for (let i = 0; i < 500; i++) { s = await state(); if (s.cancelRejected) break; await delay(10); }
+    assert.equal(s.cancelRejected, true); assert.equal(s.cleanup, true); assert.equal(s.charged, 96 * MiB); assert.equal(s.locked, true);
+    assert.equal(s.unlocks, 0); assert.equal(s.releases, 0); assert.equal(s.readRetired, false);
+    io.release(mode + "/read"); s = await retired();
+    assert.equal(s.partialOriginalCancels, 1); assert.equal(s.cancels, 1); assert.equal(s.unlocks, 1); assert.equal(s.releases, 1);
+    assert.equal(s.readRetired, true); assert.equal(s.cleanupFailure, "minimax_video_cleanup_failed"); assert.equal(s.providerAttempts, 0); assert.equal(io.counts.post, posts);
+  } catch (error) { primary = error; throw error; }
+});
+
 test("isolated workerd full8MiB global inline frames, original receipts and physical upload/hash custody", { timeout: 180000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), "hailuo-inline-runtime-")); t.after(() => rm(directory, { recursive: true, force: true }));
   const io = await external(t), access = await musicAccessFixture(), script = router.replace("ACCESS_ENV", JSON.stringify(access.env));
@@ -634,6 +722,7 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
     t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
       charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error, failedControl: state.failedControl }));
     assert.equal(state.charged, 96 * MiB, JSON.stringify(state));
+    if (mode === "upload") { assert.equal(state.inputEOF, true); assert.equal(state.providerAttempts, 0); assert.equal(io.counts.post, posts); }
     if (started) { await started; assert.equal(io.counts.post, posts + 1, JSON.stringify(state));
       t.diagnostic(JSON.stringify({ phase: "actual-post-started", mode, posts: io.counts.post })); io.replyEarly(); }
     if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
@@ -1097,6 +1186,7 @@ test("isolated workerd V5 current-CN all six inline models, retired CREATE input
     t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
       charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error, failedControl: state.failedControl }));
     assert.equal(state.charged, 96 * MiB, JSON.stringify(state));
+    if (mode === "upload") { assert.equal(state.inputEOF, true); assert.equal(state.providerAttempts, 0); assert.equal(io.counts.post, posts); }
     if (started) { await started; assert.equal(io.counts.post, posts + 1, JSON.stringify(state));
       t.diagnostic(JSON.stringify({ phase: "actual-post-started", mode, posts: io.counts.post })); io.replyEarly(); }
     if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
