@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -66,7 +67,7 @@ async function fixture(t) {
   };
   for (const name of ["log", "warn", "error"]) t.mock.method(console, name, (...args) => logs.push(args));
   t.mock.method(globalThis, "fetch", async (url, init) => {
-    if (String(url) === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [jwk] });
+    if (String(url) === `${issuer}/cdn-cgi/access/certs`) return accessCertsResponse({ keys: [jwk] }, `${issuer}/cdn-cgi/access/certs`);
     assert.match(String(url), /^https:\/\/(?:github\.com|fixture\.ghe\.com)\/login\/(?:device\/code|oauth\/access_token)$/);
     assert.equal(init.redirect, "manual"); assert.ok(init.signal instanceof AbortSignal);
     assert.equal(new Headers(init.headers).has("cf-access-jwt-assertion"), false);

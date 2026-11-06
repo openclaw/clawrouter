@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
@@ -107,7 +108,7 @@ for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery
     certificateUrl = `https://${domain}/cdn-cgi/access/certs`;
     t.mock.method(globalThis, "fetch", async (url) => {
       assert.equal(String(url), certificateUrl, "only signature verification may fetch");
-      return Response.json({ keys: [jwk] });
+      return accessCertsResponse({ keys: [jwk] }, certificateUrl);
     });
   }
   const upstreamFetch = globalThis.fetch;

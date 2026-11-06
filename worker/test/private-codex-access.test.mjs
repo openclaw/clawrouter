@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -42,7 +43,7 @@ function harness(context) {
   } });
   for (const name of ["log", "info", "warn", "error", "debug"]) context.mock.method(console, name, (...args) => state.logs.push(args));
   context.mock.method(globalThis, "fetch", async (url, init) => {
-    if (url === `${issuer}/cdn-cgi/access/certs`) { state.certs++; return Response.json({ keys: [jwk] }); }
+    if (url === `${issuer}/cdn-cgi/access/certs`) { state.certs++; return accessCertsResponse({ keys: [jwk] }, `${issuer}/cdn-cgi/access/certs`); }
     if (url === `${issuer}/cdn-cgi/access/get-identity`) {
       state.identities++;
       assert.equal(init.redirect, "manual");
@@ -322,7 +323,7 @@ test("expired verification or pre-aborted requests cannot start identity lookup"
   context.mock.method(globalThis, "fetch", async (url) => {
     assert.equal(url, `${issuer}/cdn-cgi/access/certs`);
     clock = now + 400000;
-    return Response.json({ keys: [jwk] });
+    return accessCertsResponse({ keys: [jwk] }, `${issuer}/cdn-cgi/access/certs`);
   });
   await denied(await run(assertion));
   assert.equal(state.identities, 0); noPrivateUse(state);

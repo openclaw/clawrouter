@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -601,7 +602,7 @@ test("Access auth pins verified GitHub account/IdP, never email/admin/local iden
   }
   let inference = 0;
   await withFetch((url, init) => {
-    if (String(url) === "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/certs") return Response.json({ keys: [jwk] });
+    if (String(url) === "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/certs") return accessCertsResponse({ keys: [jwk] }, "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/certs");
     if (String(url) === "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/get-identity") {
       const payload = JSON.parse(Buffer.from(new Headers(init.headers).get("cookie").split(".")[1], "base64url").toString());
       return Response.json({ email: payload.email, id: 123456, idp: { type: "github", id: "synthetic-github-idp" } });

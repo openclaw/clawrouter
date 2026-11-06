@@ -2,6 +2,9 @@ import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
+import { accessBase64Bytes, accessBase64Size, accessDenial, accessJwtParts, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
+import { readAccessJwks } from "./access-response.ts";
+import { HttpOperation } from "./http-operation.ts";
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
@@ -21,7 +24,6 @@ interface AccessJwtPayload {
   sub?: string;
 }
 
-interface Jwk { kid?: string; kty?: string; n?: string; e?: string; alg?: string; use?: string }
 export type AccessVerification = LocalSessionVerification | { readonly kind: "cloudflare_access"; readonly email: string; readonly expiresAtMs: number };
 const verifiedSessions = new WeakMap<AccessSession, AccessVerification>();
 const verifiedIdentities = new WeakMap<AuthorizedIdentity, AccessVerification>();
@@ -34,8 +36,9 @@ export async function verifiedAccessSession(request: Request, env: Env): Promise
 async function cloudflareAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
   const headers = request.headers;
   const assertion = headers.get("cf-access-jwt-assertion");
+  if (assertion !== null && !jwtParts(assertion)) return null;
   if (!assertion || !env.CLAWROUTER_ACCESS_TEAM_DOMAIN || !env.CLAWROUTER_ACCESS_AUD) return null;
-  const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN, env.CLAWROUTER_ACCESS_AUD, fetchTimeoutSignal(request.signal));
+  const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN, env.CLAWROUTER_ACCESS_AUD, request.signal);
   const email = payload?.email ? normalizeEmail(payload.email) : null;
   if (!payload || !email) return null;
   const role = adminRole(email, env) ? "admin" : "user";
@@ -156,37 +159,108 @@ async function verifiedGithubEvidence(request: Request, email: string) {
   }
 }
 
-export async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: string, signal?: AbortSignal): Promise<AccessJwtPayload | null> {
-  teamDomain = teamDomain.trim().replace(/^https?:\/\//i, "").split(/[/?#]/)[0].toLowerCase();
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  let header: { alg?: string; kid?: string }, payload: AccessJwtPayload;
+function jwtParts(token: string): readonly [string, string, string] | null {
   try {
-    header = JSON.parse(decodeBase64Url(parts[0]));
-    payload = JSON.parse(decodeBase64Url(parts[1]));
-  } catch { return null; }
-  if (header.alg !== "RS256" || !header.kid || !validPayload(payload, teamDomain, expectedAud)) return null;
-  const response = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`, { cf: { cacheTtl: 300, cacheEverything: true }, signal });
-  if (!response.ok) return null;
-  const key = (await response.json<{ keys: Jwk[] }>()).keys.find((candidate) => candidate.kid === header.kid && candidate.kty === "RSA");
-  if (!key) return null;
-  try {
-    const cryptoKey = await crypto.subtle.importKey("jwk", key as JsonWebKey, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-    const signature = base64UrlBytes(parts[2]);
-    const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", cryptoKey, signature.buffer as ArrayBuffer, new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
-    return valid ? payload : null;
-  } catch { return null; }
+    const offsets = accessJwtParts(token);
+    if (!offsets) return null;
+    const parts = [token.slice(0, offsets[0]), token.slice(offsets[0] + 1, offsets[1]), token.slice(offsets[1] + 1)] as const;
+    accessBase64Size(parts[0], accessLimits.header);
+    accessBase64Size(parts[1], accessLimits.payload);
+    accessBase64Size(parts[2], accessLimits.signature);
+    return parts;
+  } catch (error) { if (isAccessDenial(error)) throw error; return null; }
 }
 
+export async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: string, signal?: AbortSignal): Promise<AccessJwtPayload | null> {
+  const parts = jwtParts(token);
+  if (!parts) return null;
+  if (teamDomain.length > 1024 || expectedAud.length > 1024) throw accessDenial("limit");
+  teamDomain = teamDomain.trim().replace(/^https?:\/\//i, "");
+  const suffix = teamDomain.search(/[/?#]/);
+  teamDomain = (suffix < 0 ? teamDomain : teamDomain.slice(0, suffix)).toLowerCase();
+  let header: Record<string, unknown>, payload: AccessJwtPayload;
+  try {
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const h = parseAccessJson(decoder.decode(accessBase64Bytes(parts[0], accessLimits.header)), "header");
+    const p = parseAccessJson(decoder.decode(accessBase64Bytes(parts[1], accessLimits.payload)), "payload");
+    if (!record(h) || !record(p)) return null;
+    header = h; payload = p;
+  } catch (error) { if (isAccessDenial(error)) throw error; return null; }
+  if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid || !validPayload(payload, teamDomain, expectedAud)) return null;
+
+  // One 30s deadline includes fetch, physical retirement, import and verify.
+  // External error objects never become an internally classified cleanup cause.
+  const deadlineAt = Date.now() + 30_000, deadline = fetchTimeoutSignal(signal), bounded = new AbortController();
+  const cancel = () => bounded.abort(accessDenial("deadline"));
+  if (deadline.aborted) cancel(); else deadline.addEventListener("abort", cancel, { once: true });
+  const operation = new HttpOperation(bounded.signal);
+  const current = () => { if (operation.signal.aborted || Date.now() >= deadlineAt) throw accessDenial("deadline"); };
+  let importing: Promise<CryptoKey | null> | undefined, verifying: Promise<boolean> | undefined;
+  try {
+    let candidate: AccessJwtPayload | null = null;
+    try { candidate = await (async () => {
+      current();
+      const jwks = await readAccessJwks(`https://${teamDomain}/cdn-cgi/access/certs`, operation);
+      current();
+      if (!record(jwks) || !Array.isArray(jwks.keys)) return null;
+      if (jwks.keys.length > accessLimits.keys) throw accessDenial("limit");
+      // Bound ALL complete rows before selecting the FIRST matching RSA key.
+      for (const candidate of jwks.keys) if (record(candidate) && candidate.kty === "RSA") {
+        if (typeof candidate.n === "string") accessBase64Size(candidate.n, 1024);
+        if (typeof candidate.e === "string") accessBase64Size(candidate.e, 8);
+      }
+      const key = jwks.keys.find(candidate => record(candidate) && candidate.kid === header.kid && candidate.kty === "RSA");
+      if (!key) return null;
+      current();
+      // Retain the COMPLETE bounded JWK, including alg/key_ops/ext. Import failure
+      // cannot retry a later duplicate kid or reconstruct more permissive metadata.
+      let importKey!: (key: CryptoKey | null) => void;
+      importing = new Promise(resolve => { importKey = resolve; });
+      try { crypto.subtle.importKey("jwk", key as JsonWebKey, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]).then(importKey, () => importKey(null)); }
+      catch { importKey(null); }
+      const cryptoKey = await operation.wait(importing);
+      current(); if (!cryptoKey) return null;
+      const signature = accessBase64Bytes(parts[2], accessLimits.signature);
+      // Verification uses the original encoded segments, never reserialized JSON.
+      const signed = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+      let verify!: (value: boolean) => void;
+      verifying = new Promise(resolve => { verify = resolve; });
+      try { crypto.subtle.verify("RSASSA-PKCS1-v1_5", cryptoKey, signature, signed).then(verify, () => verify(false)); }
+      catch { verify(false); }
+      const valid = await operation.wait(verifying);
+      current();
+      return valid ? payload : null;
+    })(); } catch (error) {
+      if (operation.signal.aborted || Date.now() >= deadlineAt) throw accessDenial("deadline");
+      if (isAccessDenial(error)) throw error;
+      candidate = null;
+    } finally {
+      // A deadline is not retirement. Import/verify may settle later; join them.
+      await importing; await verifying;
+    }
+    current();
+    return candidate && validPayload(candidate, teamDomain, expectedAud) ? candidate : null;
+  } finally {
+    deadline.removeEventListener("abort", cancel); operation.stop("complete");
+  }
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 function validPayload(payload: AccessJwtPayload, teamDomain: string, expectedAud: string): boolean {
   const now = Math.floor(Date.now() / 1000);
-  const audiences = Array.isArray(payload.aud) ? payload.aud : payload.aud ? [payload.aud] : [];
-  const issuer = payload.iss?.replace(/\/$/, "");
-  return audiences.includes(expectedAud) && issuer === `https://${teamDomain}` && !!payload.exp && payload.exp > now && (!payload.nbf || payload.nbf <= now + 30) && (!payload.iat || payload.iat <= now + 300);
-}
-
-function decodeBase64Url(value: string): string { return new TextDecoder().decode(base64UrlBytes(value)); }
-function base64UrlBytes(value: string): Uint8Array {
-  const normalized = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-  return Uint8Array.from(atob(normalized), (char) => char.charCodeAt(0));
+  if (typeof payload.iss !== "string" || payload.iss.length > 1024
+    || payload.sub !== undefined && (typeof payload.sub !== "string" || payload.sub.length > 1024)
+    || payload.email !== undefined && (typeof payload.email !== "string" || payload.email.length > 320)
+    || typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || !Number.isFinite(payload.exp * 1000)
+    || payload.nbf !== undefined && (typeof payload.nbf !== "number" || !Number.isFinite(payload.nbf))
+    || payload.iat !== undefined && (typeof payload.iat !== "number" || !Number.isFinite(payload.iat))) return false;
+  const aud = payload.aud;
+  if (typeof aud !== "string" && !Array.isArray(aud)) return false;
+  if (Array.isArray(aud) && (aud.length > 32 || aud.some(value => typeof value !== "string" || value.length > 1024))) return false;
+  if (typeof aud === "string" && aud.length > 1024) return false;
+  return (typeof aud === "string" ? aud === expectedAud : aud.includes(expectedAud))
+    && payload.iss.replace(/\/$/, "") === `https://${teamDomain}` && payload.exp > now
+    && (payload.nbf === undefined || payload.nbf <= now + 30) && (payload.iat === undefined || payload.iat <= now + 300);
 }

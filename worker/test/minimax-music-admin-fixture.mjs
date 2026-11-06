@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import assert from "node:assert/strict";
 import { syntheticTransport } from "./minimax-search-byte-fixture.mjs";
 
@@ -24,7 +25,7 @@ export async function installMusicAdmin(t, f) {
   await f.musicUser();
   const fetch = globalThis.fetch;
   t.mock.method(globalThis, "fetch", (input, init) => new Request(input, init).url === musicIssuer + "/cdn-cgi/access/certs"
-    ? Promise.resolve(Response.json({ keys: [access.jwk] })) : fetch(input, init));
+    ? Promise.resolve(accessCertsResponse({ keys: [access.jwk] }, musicIssuer + "/cdn-cgi/access/certs")) : fetch(input, init));
   // Node fake RPC responses need a known byte producer; workerd tests use the
   // actual transport and do not inherit this synthetic BYOB evidence.
   const get = f.env.ACCESS_CONTROL.get;
