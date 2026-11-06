@@ -19,7 +19,7 @@ const gate=(mode,phase)=>fetch('https://cover-gate.example/'+mode+'/'+phase,{red
 const snapshot=()=>active?{...active.op?.snapshot(),mode:active.mode,charged:bodyBudgetCharged(),locked:active.body.locked,
   result:active.result,retired:active.retired,code:active.code,cleanupCode:active.cleanupCode,cancels:active.cancels,unlocks:active.unlocks,
   readHeld:active.readHeld,cleanupDone:active.cleanupDone,hashHeld:active.hashHeld,hashBytes:active.hashBytes,hashBacking:active.hashBacking,
-  value:active.value,claimDenied:active.claimDenied}:{};
+  readCalls:active.readCalls,nativeReads:active.nativeReads,nativeEof:active.nativeEof,value:active.value,claimDenied:active.claimDenied}:{};
 Object.defineProperty(crypto.subtle,'digest',{value:async function(...args){
  const a=active;a.hashBytes=args[1].byteLength;a.hashBacking=args[1].buffer.byteLength;
  const result=await originalDigest(...args);
@@ -32,13 +32,18 @@ export default {async fetch(request,env,context){
  if(url.pathname==='/contend'){const lease=new BodyLease();try{return Response.json({allowed:lease.grow(1024*1024),charged:bodyBudgetCharged()});}finally{lease.release();}}
  if(url.pathname!=='/start')return new Response(null,{status:404});
  if(active&&!active.retired)return new Response(null,{status:409});
- const mode=url.searchParams.get('mode'),a=active={mode,body:request.body,result:false,retired:false,cancels:0,unlocks:0,readHeld:false,cleanupDone:false,hashHeld:false};
+ const mode=url.searchParams.get('mode'),a=active={mode,body:request.body,result:false,retired:false,cancels:0,unlocks:0,readHeld:false,cleanupDone:false,hashHeld:false,readCalls:0,nativeReads:0,nativeEof:false};
  let ready;const entered=new Promise(r=>ready=r);a.ready=ready;
  const controller=new AbortController(),getReader=request.body.getReader.bind(request.body);let readCount=0;
  request.body.getReader=options=>{const reader=getReader(options);return {
-  async read(view){readCount++;
-   if((mode==='reads8192'||mode==='reads8193')&&readCount<=(mode==='reads8192'?8190:8191))return {done:false,value:view.subarray(0,0)};
-   try {const part=await reader.read(view);
+  async read(view){a.readCalls=++readCount;
+   const boundary=mode==='reads8192'?8192:mode==='reads8193'?8193:0;
+   // HTTP fragmentation is not a one-data-read contract. Observe its actual
+   // EOF first, then pad the controlled reader's EMPTY/EOF boundary exactly.
+   // Keep the original lock; native reads and controlled calls are separate.
+   if(boundary&&a.nativeEof)return {done:readCount>=boundary,value:view.subarray(0,0)};
+   try {a.nativeReads++;const part=await reader.read(view);if(part.done)a.nativeEof=true;
+    if(boundary&&part.done&&readCount<boundary)return {done:false,value:part.value?.buffer.byteLength?part.value:new Uint8Array(16384).subarray(0,0)};
     if(mode==='backing')return {done:false,value:new Uint8Array(new ArrayBuffer(16385),0,2)};
     return part;
    }finally{if((mode==='read'||mode==='cancel-reject')&&readCount===1){a.readHeld=true;ready();await gate(mode,'read');}}
@@ -185,9 +190,13 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
     let state = await start(mode, bytes, options); state = await until(s => s.retired);
     assert.equal(state.code, "invalid", JSON.stringify(state)); assert.equal(state.digestStarted, false); assert.equal(state.charged, 0);
     assert.equal(state.locked, false); assert.equal(state.unlocks, 1); assert.equal(state.cancels, 1);
-    if (mode === "reads8193") assert.equal(state.reads, 8193); // Denied attempt; only8192 original reads are invoked.
+    if (mode === "reads8193") {
+      assert.equal(state.reads, 8193); // Denied attempt; only8192 owned-reader calls start.
+      assert.equal(state.readCalls, 8192); assert.equal(state.nativeEof, true); assert.ok(state.nativeReads > 0 && state.nativeReads < 8192);
+    }
   }
-  let state = await start("reads8192", 2); assert.equal(state.value.bytes, 2); assert.equal(state.reads, 8192);
+  let state = await start("reads8192", 2); assert.ok(state.value, JSON.stringify(state)); assert.equal(state.value.bytes, 2); assert.equal(state.reads, 8192);
+  assert.equal(state.readCalls, 8192); assert.equal(state.nativeEof, true); assert.ok(state.nativeReads > 0 && state.nativeReads < 8192);
   control.release("reads8192", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
   state = await start("escapes", 2, { audio: "\\u0041\\u0041\\u0041=" }); assert.equal(state.value.bytes, 2);
   assert.ok(state.nonAudio > 18); control.release("escapes", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
