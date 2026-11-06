@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, command, verify } from './fusion-workloads.mjs';
 import { runAgent } from './fusion-agent-benchmark.mjs';
+import { runGroundedAgent } from './fusion-grounded-agent.mjs';
 import { models as roles } from './fusion-benchmark-accounting.mjs';
 import { localEndpoint } from './fusion-selector-smoke.mjs';
 import { localGenerator } from './fusion-execution-smoke.mjs';
@@ -67,21 +68,23 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
 }
 
 export async function runLocalRepository({ repo, qualificationPath, out, sourceSha,
-  models, endpoint = 'http://127.0.0.1:11435', fetcher = fetch,
-  agent = runAgent, grade = verify, inspectImage = async image => {
+  models, endpoint = 'http://127.0.0.1:11435', fetcher = fetch, profile = 'legacy', taskManifest,
+  agent, grade = verify, inspectImage = async image => {
     const result = await command('docker', ['image', 'inspect', '--format={{.Id}}', image]);
     if (result.stdout.toString().trim() !== image) throw new Error('local_image_missing');
   }, preflight = localGenerator }) {
   localEndpoint(endpoint);
+  if (!['legacy', 'grounded'].includes(profile)) throw new Error('invalid_local_profile');
+  const execute = agent ?? (profile === 'grounded' ? runGroundedAgent : runAgent);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  const tasks = await loadTasks(resolve(repo, 'benchmarks/fusion/validation-workloads.json'));
+  const tasks = await loadTasks(taskManifest ?? resolve(repo, 'benchmarks/fusion/validation-workloads.json'));
   const rawQualification = await readFile(qualificationPath), qualification = JSON.parse(rawQualification);
   const receipts = validateLocalQualification(tasks, qualification);
   for (const receipt of receipts) await inspectImage(receipt.image);
   const local = await preflight(models, endpoint, fetcher);
   if (local.pins.length !== 2) throw new Error('two_local_models_required');
   await mkdir(out, { mode: 0o700 });
-  const state = { version: 1, kind: 'local-repository-development', sourceSha,
+  const state = { version: 1, kind: 'local-repository-development', sourceSha, profile,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts,
     modelPins: local.pins, settings: localRepositorySettings, apiSpendMicros: 0,
     maxCalls: tasks.length * strategies.length * localRepositorySettings.maxTurns,
@@ -125,7 +128,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
       };
       let result, graded, outcome;
       try {
-        result = await agent(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
+        result = await execute(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
           { ...localRepositorySettings, deadlineMs: Math.min(localRepositorySettings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
         graded = await grade(task, receipt.image, result.files, repo);
         if (graded.valid !== true || typeof graded.passed !== 'boolean') throw new Error('invalid_local_grade');
@@ -165,10 +168,11 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const [qualificationPath, out, general, coder] = process.argv.slice(2);
+  const [qualificationPath, out, general, coder, profile = 'legacy', taskManifest] = process.argv.slice(2);
   Promise.resolve().then(async () => {
     const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
     if (process.env.GITHUB_SHA !== sourceSha || (await command('git', ['status', '--porcelain'])).stdout.length) throw new Error('clean_exact_source_required');
-    await runLocalRepository({ repo: process.cwd(), qualificationPath, out, sourceSha, models: [general, coder], endpoint: process.env.FUSION_OLLAMA_URL });
+    await runLocalRepository({ repo: process.cwd(), qualificationPath, out, sourceSha, models: [general, coder],
+      endpoint: process.env.FUSION_OLLAMA_URL, profile, taskManifest });
   }).catch(() => { console.error('Local repository campaign incomplete; inspect its content-free checkpoint.'); process.exitCode = 1; });
 }
