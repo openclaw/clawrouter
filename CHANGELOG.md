@@ -28,6 +28,8 @@
 
 - Bound generic soft-budget status requests and JSON observations, joining original response reads, FIRST cancellation and unlock without delaying provider dispatch. Preserve partial replies, exhaustion-cache classification and the existing delivery grace period.
 
+- Bound the seventeen generic authority acknowledgments to their exact protocol strings and join original fetch, response reads, FIRST cancellation and unlock. Preserve specialized transports and advisory catches; an invoked mutation with a lost acknowledgment remains uncertain and is never replayed.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
