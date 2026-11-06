@@ -156,6 +156,10 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
+    if (options.preloadSource === true) {
+      const files = await readSource(box, task.editPaths);
+      messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(sourceView(files, task.editPaths))}`;
+    }
     if (options.candidates) {
       for (const candidate of options.candidates) validateEdits(task, candidate);
       const baseline = await readSource(box, task.editPaths, remaining());
