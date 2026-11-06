@@ -454,3 +454,9 @@ candidate files and untrusted review notes. The reviewer does not see acceptance
 tests. All phases share the declared call ceiling and deadline; malformed
 reviews and provider refusals stop the trial. Reports retain a review digest,
 not review text. This is a benchmark policy, not a production routing default.
+
+Select this policy in the paired runner with `FUSION_PAIR_POLICY=review`.
+It preloads source for both fixed controls and the review policy automatically.
+Use an explicit configuration with at least three total calls; 24 allows a
+12-call cheap attempt, one review and up to 11 strong repair calls. All three
+arms receive the same total call ceiling.
