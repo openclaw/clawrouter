@@ -17,14 +17,33 @@ async function fixtureKey(){
   return unsigned+'.'+Buffer.from(await crypto.subtle.sign('RSASSA-PKCS1-v1_5',pair.privateKey,new TextEncoder().encode(unsigned))).toString('base64url');
  };return{jwk,token};
 }
-async function barriers(){
- const waiting=new Map(),released=new Set(),arrived=new Set();
+async function barriers(jwk){
+ const waiting=new Map(),released=new Set(),arrived=new Set(),network=new Map(),errors=[];
+ const nextWrite=response=>new Promise((resolve,reject)=>{
+  const clear=()=>{response.off('drain',drain);response.off('close',close);response.off('error',error);};
+  const drain=()=>{clear();resolve(true);},close=()=>{clear();resolve(false);},error=e=>{clear();reject(e);};
+  response.once('drain',drain);response.once('close',close);response.once('error',error);
+ });
  const server=createServer((request,response)=>{
-  const path=request.url;if(request.method!=='GET'||request.headers.authorization||!/^\/[a-z0-9-]+\/(abort|read|cancel|fetch|crypto)$/.test(path)){response.writeHead(400).end();return;}
+  const path=request.url;
+  if(['/jwks/valid','/jwks/huge','/jwks/partial'].includes(path)){
+   assert.equal(request.method,'GET');assert.equal(request.headers.authorization,undefined);network.set(path,(network.get(path)??0)+1);
+   response.once('error',error=>errors.push(error));
+   response.writeHead(path==='/jwks/partial'?206:200,{'content-type':'application/json','cache-control':'public,max-age=300'});
+   if(path!=='/jwks/huge'){response.end(JSON.stringify({keys:[jwk]}));return;}
+   void(async()=>{
+    const prefix=JSON.stringify({keys:[jwk]}).slice(0,-1)+',"ignored":"';
+    if(!response.write(prefix)&&!await nextWrite(response))return;
+    const chunk=Buffer.alloc(16384,120);
+    for(let bytes=0;bytes<33*1024*1024;bytes+=chunk.length){if(response.destroyed)return;if(!response.write(chunk)&&!await nextWrite(response))return;}
+    if(!response.destroyed)response.end('"}');
+   })().catch(error=>{errors.push(error);response.destroy();});return;
+  }
+  if(request.method!=='GET'||request.headers.authorization||!/^\/[a-z0-9-]+\/(abort|read|cancel|fetch|crypto)$/.test(path)){response.writeHead(400).end();return;}
   arrived.add(path);if(released.has(path))response.end('released');else waiting.set(path,response);
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
- return{origin:`http://127.0.0.1:${server.address().port}`,arrived:(m,p)=>arrived.has(`/${m}/${p}`),
+ return{origin:`http://127.0.0.1:${server.address().port}`,network,errors,arrived:(m,p)=>arrived.has(`/${m}/${p}`),
  release(m,p){const path=`/${m}/${p}`;released.add(path);waiting.get(path)?.end('released');waiting.delete(path);},
  releaseAll(){for(const [path,response]of waiting){released.add(path);response.end('released');}waiting.clear();},
  close:()=>new Promise((resolve,reject)=>{server.closeAllConnections();server.close(error=>error?reject(error):resolve());})};
@@ -33,6 +52,7 @@ const router=String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
+import {sha256Hex} from './worker/utils.ts';
 const certs='https://access-owned.cloudflareaccess.com/cdn-cgi/access/certs';
 let active,clockOffset=0;const now=Date.now.bind(Date);Date.now=()=>now()+clockOffset;
 const gate=(a,phase)=>fetch('https://access-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('fixture gate');await r.text();});
@@ -81,7 +101,7 @@ for(const name of ['importKey','verify']){
   return result;
  };
 }
-const state=()=>active?{mode:active.mode,fetches:active.fetches,cache:active.cache,cacheHit:active.cacheHit,acquired:active.acquired,reads:active.reads,nativeReads:active.nativeReads,nativeEof:active.nativeEof,
+const state=()=>active?{mode:active.mode,fallback:active.fallback,fetches:active.fetches,cache:active.cache,cacheHit:active.cacheHit,acquired:active.acquired,reads:active.reads,nativeReads:active.nativeReads,nativeEof:active.nativeEof,
  imports:active.imports,verifies:active.verifies,cancels:active.cancels,cancelHeld:active.cancelHeld,cancelSettled:active.cancelSettled,readHeld:active.readHeld,
  readSettled:active.readSettled,fetchHeld:active.fetchHeld,cryptoHeld:active.cryptoHeld,aborted:active.abort.signal.aborted,finished:active.finished,
  status:active.status,authenticated:active.authenticated,code:active.code,unlocked:active.unlocked,locked:active.source?.locked??false,unlockAttempts:active.unlockAttempts,
@@ -91,14 +111,22 @@ export default{async fetch(request,env,ctx){
  if(url.pathname==='/state')return Response.json(state());
  if(url.pathname==='/setup'){
   await authorityCall(env,'/users/put',{email:'access-owned@example.invalid',record:{enabled:true,role:'user',groups:[],contentRetentionDisabled:false,
-   assignmentState:{version:1,revision:'[]',assignments:{},updatedAt:null}}});return Response.json({ready:true});
+   assignmentState:{version:1,revision:'[]',assignments:{},updatedAt:null}}});
+  await env.POLICY_KV.put('local/sessions/'+await sha256Hex('a'.repeat(64)),JSON.stringify({email:'access-owned@example.invalid',role:'user',expiresAtMs:Date.now()+600000}));return Response.json({ready:true});
  }
  if(url.pathname!=='/start')return new Response(null,{status:404});
  const data=await request.json();clockOffset=0;
- const a=active={mode:data.mode,fetches:0,acquired:0,reads:0,nativeReads:0,imports:0,verifies:0,cancels:0,unlockAttempts:0,finished:false,abort:new AbortController()};
+ const a=active={mode:data.mode,fallback:0,fetches:0,acquired:0,reads:0,nativeReads:0,imports:0,verifies:0,cancels:0,unlockAttempts:0,finished:false,abort:new AbortController()};
  if(['read','reject','late','unlock','import','verify'].includes(a.mode))ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort({cleanupFailed:true})));
- const req=new Request('https://router.example/v1/session',{headers:{'cf-access-jwt-assertion':data.token},signal:a.abort.signal});
- const work=worker.fetch(req,env,ctx).then(async response=>{const body=await response.json();a.status=response.status;a.authenticated=body.authenticated===true;a.code=body.error?.code;a.finished=true;},()=>{a.code='unexpected-fixture-error';a.finished=true;});
+ const fixtureEnv={...env};
+ Object.defineProperty(fixtureEnv,'CLAWROUTER_ADMIN_TOKEN_SHA256',{get(){a.fallback++;return env.CLAWROUTER_ADMIN_TOKEN_SHA256;}});
+ if(a.mode.startsWith('no-config')){
+  fixtureEnv.CLAWROUTER_ACCESS_TEAM_DOMAIN=undefined;fixtureEnv.CLAWROUTER_ACCESS_AUD=undefined;fixtureEnv.CLAWROUTER_LOCAL_AUTH='enabled';
+  fixtureEnv.POLICY_KV={get(...args){a.fallback++;return env.POLICY_KV.get(...args);},list:(...args)=>env.POLICY_KV.list(...args)};
+ }
+ if(a.mode==='no-config-aborted')a.abort.abort({cleanupFailed:true});
+ const req=new Request('https://router.example'+(a.mode==='partial'?'/v1/admin/fixture':'/v1/session'),{headers:{'cf-access-jwt-assertion':data.token,authorization:'Bearer synthetic-access-admin',cookie:'clawrouter_session='+'a'.repeat(64)},signal:a.abort.signal});
+ const work=worker.fetch(req,fixtureEnv,ctx).then(async response=>{const body=await response.json();a.status=response.status;a.authenticated=body.authenticated===true;a.code=body.error?.code;a.finished=true;},()=>{a.code='unexpected-fixture-error';a.finished=true;});
  ctx.waitUntil(work);return Response.json(state());
 }};`;
 const upstream=(jwk,origin)=>String.raw`
@@ -111,16 +139,14 @@ export default{async fetch(request){
  if(mode==='cache-fill'||mode==='cache-hit'){
   const cache=caches.default,hit=await cache.match(request.url);
   if(hit){const headers=new Headers(hit.headers);headers.set('x-fixture-cache-hit','1');return new Response(hit.body,{headers});}
-  const response=new Response(JSON.stringify({keys:[key]}),{headers:{'content-type':'application/json','cache-control':'public,max-age=300'}});
+  const response=await fetch(${JSON.stringify(origin)}+'/jwks/valid',{redirect:'manual',signal:request.signal});
   await cache.put(request.url,response.clone());return response;
  }
- if(mode==='huge'){
-  const prefix=JSON.stringify({keys:[key]}).slice(0,-1)+',"ignored":"';let offset=0;
-  return new Response(new ReadableStream({pull(c){if(offset===0){c.enqueue(new TextEncoder().encode(prefix));offset++;}
-   else if(offset<=2112){c.enqueue(new Uint8Array(16384).fill(120));offset++;}else{c.enqueue(new TextEncoder().encode('"}'));c.close();}}),{headers:{'content-type':'application/json'}});
- }
+ if(['valid','huge','partial','read','reject','late','unlock','import','verify','expiry','cleanup','reads8192','reads8193','backing'].includes(mode))
+  return fetch(${JSON.stringify(origin)}+'/jwks/'+(mode==='huge'?'huge':mode==='partial'?'partial':'valid'),{redirect:'manual',signal:request.signal});
  if(mode==='keys33')text=JSON.stringify({keys:[key,...Array(32).fill({})]});
  else if(mode==='duplicates')text='{"keys":['+Array(32).fill(JSON.stringify({kid:'ignored'})).join(',')+'],"keys":['+JSON.stringify(key)+']}';
+ else if(mode==='duplicate-n'||mode==='duplicate-e'){const field=mode==='duplicate-n'?'n':'e',size=field==='n'?1025:9;text='{"keys":[{"'+field+'":"'+btoa('a'.repeat(size)).replace(/=+$/,'')+'",'+JSON.stringify(key).slice(1)+']}';}
  else if(mode==='key-ops')text=JSON.stringify({keys:[{...key,key_ops:['sign']},key]});
  else if(mode==='key-alg')text=JSON.stringify({keys:[{...key,alg:'RSA-OAEP'},key]});
  else if(mode==='wrong-kid')text=JSON.stringify({keys:[{...key,kid:'foreign'}]});
@@ -138,20 +164,22 @@ export default{async fetch(request){
 }};`;
 
 test('actual Workerd public Access reader/crypto limits and retirement-blocking facade', {timeout:180000},async t=>{
- const dir=await mkdtemp(join(tmpdir(),'access-owned-workerd-')),io=await barriers(),signed=await fixtureKey();let runtime;
+ const dir=await mkdtemp(join(tmpdir(),'access-owned-workerd-')),signed=await fixtureKey(),io=await barriers(signed.jwk);let runtime;
  t.after(async()=>{io.releaseAll();try{await runtime?.dispose();}finally{await io.close();await rm(dir,{recursive:true,force:true});}});
- runtime=await startWorkerdFixture(dir,router,upstream(signed.jwk,io.origin),{preventEviction:true,bindings:{CLAWROUTER_ACCESS_TEAM_DOMAIN:issuer,CLAWROUTER_ACCESS_AUD:'owned'}});
+ runtime=await startWorkerdFixture(dir,router,upstream(signed.jwk,io.origin),{preventEviction:true,bindings:{CLAWROUTER_ACCESS_TEAM_DOMAIN:issuer,CLAWROUTER_ACCESS_AUD:'owned',CLAWROUTER_ADMIN_TOKEN_SHA256:Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode('synthetic-access-admin'))).toString('hex')}});
  const call=async(path,body)=>{const response=await runtime.dispatchFetch('https://router.example'+path,body?{method:'POST',body:JSON.stringify(body),headers:{'content-type':'application/json'}}:undefined);assert.equal(response.status,200,await response.clone().text());return response.json();};
  const until=async(mode,predicate)=>{let value;for(let i=0;i<300;i++){value=await call('/state');if(value.mode===mode&&predicate(value))return value;await delay(10);}assert.fail(JSON.stringify(value));};
  await call('/setup');const valid=await signed.token();
  for(const mode of ['valid','cache-fill','cache-hit','maximum','reads8192']){
   await call('/start',{mode,token:valid});const state=await until(mode,s=>s.finished);assert.equal(state.status,200,JSON.stringify(state));assert.equal(state.authenticated,true,JSON.stringify(state));assert.equal(state.imports,1);assert.equal(state.verifies,1);assert.equal(state.unlocked,true);assert.equal(state.cache,true);
+  if(mode==='valid')assert.equal(io.network.get('/jwks/valid'),1);
   if(mode==='cache-hit')assert.equal(state.cacheHit,true);
   if(mode==='reads8192'){assert.equal(state.reads,8192);assert.equal(state.nativeEof,true);assert.ok(state.nativeReads<8192);}
  }
- for(const mode of ['huge','keys33','duplicates','maximum-plus','backing','reads8193','mime','encoding','range','utf8','length','cleanup']){
+ for(const mode of ['huge','keys33','duplicates','maximum-plus','backing','reads8193','mime','encoding','range','utf8','length','cleanup','partial','duplicate-n','duplicate-e']){
   await call('/start',{mode,token:valid});const state=await until(mode,s=>s.finished);assert.equal(state.authenticated,false,JSON.stringify(state));assert.ok(state.status>=400,JSON.stringify(state));assert.equal(state.imports,0);assert.equal(state.locked,false);assert.equal(state.unlockAttempts,1);
-  if(mode==='huge')assert.ok(state.nativeReads<=18); // Incremental rejection, not a33MiB text allocation.
+  if(mode==='huge'){assert.ok(state.nativeReads<=18);assert.equal(io.network.get('/jwks/huge'),1);}
+  if(mode==='partial'){assert.equal(state.code,'access_transport');assert.equal(state.fallback,0);assert.equal(state.cancels,1);assert.equal(state.verifies,0);} // Incremental rejection, not a33MiB text allocation.
   if(mode==='reads8193'){assert.equal(state.reads,8192);assert.equal(state.cancels,1);assert.equal(state.nativeEof,true);}
  }
  for(const mode of ['key-ops','key-alg','wrong-kid']){
@@ -159,6 +187,19 @@ test('actual Workerd public Access reader/crypto limits and retirement-blocking 
  }
  for(const [mode,token]of [['issuer',await signed.token({iss:'https://foreign.example'})],['audience',await signed.token({aud:'foreign'})],['expired',await signed.token({exp:1})],['alg',await signed.token({}, {alg:'HS256'})]]){
   await call('/start',{mode,token});const state=await until(mode,s=>s.finished);assert.equal(state.authenticated,false);assert.equal(state.fetches,0);
+ }
+ const enc=value=>Buffer.from(typeof value==='string'?value:JSON.stringify(value)).toString('base64url');
+ for(const [mode,token]of [
+  ['no-config-baseline','a.b.c'],
+  ['no-config-size','!.'+enc('x'.repeat(8193))+'.c2ln'],
+  ['no-config-padding','a===.'+enc('x'.repeat(8193))+'.c2ln'],
+  ['no-config-kid',enc({alg:'RS256',kid:'x'.repeat(257)})+'.e30.c2ln'],
+  ['no-config-structure',enc('{'+Array(33).fill('"kid":"k"').join(',')+'}')+'.e30.c2ln'],
+  ['no-config-aborted','a.b.c']]){
+   await call('/start',{mode,token});const state=await until(mode,s=>s.finished);
+   if(mode==='no-config-baseline'){assert.equal(state.authenticated,true);assert.ok(state.fallback>0);}
+   else{assert.equal(state.authenticated,false);assert.equal(state.code,mode==='no-config-aborted'?'access_deadline':'access_limit');assert.equal(state.fallback,0);}
+   assert.equal(state.fetches,0);assert.equal(state.imports,0);assert.equal(state.verifies,0);
  }
  for(const mode of ['read','reject','late','import','verify']){
   await call('/start',{mode,token:valid});let state=await until(mode,s=>s.readHeld||s.fetchHeld||s.cryptoHeld||s.finished);assert.equal(state.finished,false,JSON.stringify(state));
@@ -176,5 +217,6 @@ test('actual Workerd public Access reader/crypto limits and retirement-blocking 
  // Last: an injected releaseLock failure retains an UNKNOWN physical root. It
  // never becomes success; fixture runtime disposal is not production retirement.
  await call('/start',{mode:'unlock',token:valid});await until('unlock',s=>s.readHeld);io.release('unlock','abort');await until('unlock',s=>s.cancelHeld);io.release('unlock','cancel');await until('unlock',s=>s.cancelSettled);io.release('unlock','read');
+ assert.deepEqual(io.errors,[]);
  state=await until('unlock',s=>s.unlockAttempts===1);assert.equal(state.locked,true);assert.equal(state.finished,false);assert.equal(state.readAtUnlock,true);assert.equal(state.cancelAtUnlock,true);
 });

@@ -23,21 +23,26 @@ export function accessJwtParts(token: string): readonly [number, number] | null 
     if (token.charCodeAt(i) > 127) limit();
     if (token.charCodeAt(i) === 46) { if (!dots++) first = i; else if (dots === 2) second = i; }
   }
-  return dots === 2 && first > 0 && second > first + 1 && second < token.length - 1 ? [first, second] : null;
+  return dots === 2 ? [first, second] : null;
 }
-export function accessBase64Size(value: string, maximum: number): number {
+export function admitAccessBase64(value: string, maximum: number): number {
+  // Resource admission precedes grammar rejection, including malformed padding.
+  if (value.length > Math.ceil(maximum / 3) * 4) limit();
   let padding = 0;
   for (let i = value.length - 1; i >= 0 && value[i] === "="; i--) padding++;
-  if (padding > 2 || (padding && value.length % 4)) invalid();
   const data = value.length - padding;
-  if (data % 4 === 1) invalid();
   const size = Math.floor(data * 3 / 4);
   if (size > maximum) limit();
+  return padding;
+}
+export function accessBase64Size(value: string, maximum: number): number {
+  const padding = admitAccessBase64(value, maximum), data = value.length - padding;
+  if (padding > 2 || (padding && value.length % 4) || data % 4 === 1) invalid();
   for (let i = 0; i < data; i++) {
     const n = value.charCodeAt(i);
     if (!(n >= 65 && n <= 90 || n >= 97 && n <= 122 || n >= 48 && n <= 57 || n === 45 || n === 95 || n === 43 || n === 47)) invalid();
   }
-  return size;
+  return Math.floor(data * 3 / 4);
 }
 export function accessBase64Bytes(value: string, maximum: number): Uint8Array<ArrayBuffer> {
   const size = accessBase64Size(value, maximum);
@@ -74,12 +79,15 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
   if (text.length > p.wire || utf8Length(text) > p.wire) limit();
   let at = 0, values = 0, containers = 0, members = 0, entries = 0, units = 0, rows = 0, audiences = 0;
   const space = () => { while (at < text.length) { const c = text.charCodeAt(at); if (c !== 32 && c !== 9 && c !== 10 && c !== 13) break; at++; } };
-  const string = (maximum: number, retain: boolean): string => {
+  const string = (maximum: number, retain: boolean, binaryMaximum?: number): string => {
     if (text[at++] !== '"') invalid();
-    let length = 0, key = "";
+    let length = 0, padding = 0, key = "";
     while (at < text.length) {
       let n = text.charCodeAt(at++);
-      if (n === 34) return key;
+      if (n === 34) {
+        if (binaryMaximum !== undefined && Math.floor((length - padding) * 3 / 4) > binaryMaximum) limit();
+        return key;
+      }
       if (n < 32) invalid();
       if (n === 92) {
         const escaped = text[at++];
@@ -96,11 +104,13 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
         }
       }
       if (++length > maximum || ++units > p.units) limit();
+      if (binaryMaximum !== undefined && length > Math.ceil(binaryMaximum / 3) * 4) limit();
+      padding = n === 61 ? padding + 1 : 0;
       if (retain) key += String.fromCharCode(n);
     }
     return invalid();
   };
-  const value = (depth: number, key = "", rootMember = false, jwkRow = false): void => {
+  const value = (depth: number, key = "", rootMember = false, jwkRow = false, insideJwk = false): void => {
     space(); const start = at;
     if (++values > p.values) limit();
     const c = text[at];
@@ -112,12 +122,12 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
         if (object) {
           if (++members > p.members) limit();
           space(); const child = string(64, true); space(); if (text[at++] !== ":") invalid();
-          value(depth + 1, child, depth === 0);
+          value(depth + 1, child, depth === 0, false, insideJwk || jwkRow);
         } else {
           if (++entries > p.entries) limit();
           const row = profile === "jwks" && rootMember && key === "keys";
           if (row && ++rows > accessLimits.keys || profile === "payload" && rootMember && key === "aud" && ++audiences > 32) limit();
-          value(depth + 1, key, false, row);
+          value(depth + 1, key, false, row, insideJwk || jwkRow);
         }
         space(); if (text[at] === close) break;
         if (text[at++] !== ",") invalid();
@@ -126,7 +136,8 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
     } else if (c === '"') {
       const maximum = key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
         : profile === "payload" && key === "email" ? 320 : p.string;
-      string(maximum, false);
+      // Every n/e occurrence counts before JSON.parse can discard duplicates.
+      string(maximum, false, insideJwk && key === "n" ? 1024 : insideJwk && key === "e" ? 8 : undefined);
     } else if (c === "t" || c === "f" || c === "n") {
       const literal = c === "t" ? "true" : c === "f" ? "false" : "null";
       if (!text.startsWith(literal, at)) invalid(); at += literal.length;

@@ -2,7 +2,7 @@ import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
-import { accessBase64Bytes, accessBase64Size, accessDenial, accessJwtParts, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
+import { admitAccessBase64, accessBase64Bytes, accessBase64Size, accessDenial, accessJwtParts, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
 import { readAccessJwks } from "./access-response.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
@@ -36,9 +36,8 @@ export async function verifiedAccessSession(request: Request, env: Env): Promise
 async function cloudflareAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
   const headers = request.headers;
   const assertion = headers.get("cf-access-jwt-assertion");
-  if (assertion !== null && !jwtParts(assertion)) return null;
-  if (!assertion || !env.CLAWROUTER_ACCESS_TEAM_DOMAIN || !env.CLAWROUTER_ACCESS_AUD) return null;
-  const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN, env.CLAWROUTER_ACCESS_AUD, request.signal);
+  if (assertion === null) return null;
+  const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN ?? "", env.CLAWROUTER_ACCESS_AUD ?? "", request.signal);
   const email = payload?.email ? normalizeEmail(payload.email) : null;
   if (!payload || !email) return null;
   const role = adminRole(email, env) ? "admin" : "user";
@@ -159,36 +158,29 @@ async function verifiedGithubEvidence(request: Request, email: string) {
   }
 }
 
-function jwtParts(token: string): readonly [string, string, string] | null {
-  try {
-    const offsets = accessJwtParts(token);
-    if (!offsets) return null;
-    const parts = [token.slice(0, offsets[0]), token.slice(offsets[0] + 1, offsets[1]), token.slice(offsets[1] + 1)] as const;
-    accessBase64Size(parts[0], accessLimits.header);
-    accessBase64Size(parts[1], accessLimits.payload);
-    accessBase64Size(parts[2], accessLimits.signature);
-    return parts;
-  } catch (error) { if (isAccessDenial(error)) throw error; return null; }
+function inspectAssertion(token: string): { parts: readonly [string, string, string]; header: Record<string, unknown>; payload: AccessJwtPayload } | null {
+  const offsets = accessJwtParts(token);
+  if (!offsets) return null;
+  const parts = [token.slice(0, offsets[0]), token.slice(offsets[0] + 1, offsets[1]), token.slice(offsets[1] + 1)] as const;
+  // All three resource admissions precede ANY malformed-credential return.
+  admitAccessBase64(parts[0], accessLimits.header);
+  admitAccessBase64(parts[1], accessLimits.payload);
+  admitAccessBase64(parts[2], accessLimits.signature);
+  let header: unknown, payload: unknown, invalid = false;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  try { header = parseAccessJson(decoder.decode(accessBase64Bytes(parts[0], accessLimits.header)), "header"); }
+  catch (error) { if (isAccessDenial(error)) throw error; invalid = true; }
+  try { payload = parseAccessJson(decoder.decode(accessBase64Bytes(parts[1], accessLimits.payload)), "payload"); }
+  catch (error) { if (isAccessDenial(error)) throw error; invalid = true; }
+  try { accessBase64Size(parts[2], accessLimits.signature); }
+  catch (error) { if (isAccessDenial(error)) throw error; invalid = true; }
+  if (invalid || !record(header) || !record(payload)) return null;
+  return { parts, header, payload };
 }
 
 export async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: string, signal?: AbortSignal): Promise<AccessJwtPayload | null> {
-  const parts = jwtParts(token);
-  if (!parts) return null;
-  if (teamDomain.length > 1024 || expectedAud.length > 1024) throw accessDenial("limit");
-  teamDomain = teamDomain.trim().replace(/^https?:\/\//i, "");
-  const suffix = teamDomain.search(/[/?#]/);
-  teamDomain = (suffix < 0 ? teamDomain : teamDomain.slice(0, suffix)).toLowerCase();
-  let header: Record<string, unknown>, payload: AccessJwtPayload;
-  try {
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    const h = parseAccessJson(decoder.decode(accessBase64Bytes(parts[0], accessLimits.header)), "header");
-    const p = parseAccessJson(decoder.decode(accessBase64Bytes(parts[1], accessLimits.payload)), "payload");
-    if (!record(h) || !record(p)) return null;
-    header = h; payload = p;
-  } catch (error) { if (isAccessDenial(error)) throw error; return null; }
-  if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid || !validPayload(payload, teamDomain, expectedAud)) return null;
-
-  // One 30s deadline includes fetch, physical retirement, import and verify.
+  // One original 30s deadline starts at assertion entry, before preflight,
+  // configuration fallback or normalization, and includes physical retirement.
   // External error objects never become an internally classified cleanup cause.
   const deadlineAt = Date.now() + 30_000, deadline = fetchTimeoutSignal(signal), bounded = new AbortController();
   const cancel = () => bounded.abort(accessDenial("deadline"));
@@ -197,6 +189,18 @@ export async function verifyAccessJwt(token: string, teamDomain: string, expecte
   const current = () => { if (operation.signal.aborted || Date.now() >= deadlineAt) throw accessDenial("deadline"); };
   let importing: Promise<CryptoKey | null> | undefined, verifying: Promise<boolean> | undefined;
   try {
+    current();
+    const admitted = inspectAssertion(token);
+    current();
+    if (!admitted) return null;
+    if (teamDomain.length > 1024 || expectedAud.length > 1024) throw accessDenial("limit");
+    if (!teamDomain || !expectedAud) return null;
+    const { parts, header, payload } = admitted;
+    teamDomain = teamDomain.trim().replace(/^https?:\/\//i, "");
+    const suffix = teamDomain.search(/[/?#]/);
+    teamDomain = (suffix < 0 ? teamDomain : teamDomain.slice(0, suffix)).toLowerCase();
+    current();
+    if (header.alg !== "RS256" || typeof header.kid !== "string" || !header.kid || !validPayload(payload, teamDomain, expectedAud)) return null;
     let candidate: AccessJwtPayload | null = null;
     try { candidate = await (async () => {
       current();

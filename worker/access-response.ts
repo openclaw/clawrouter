@@ -11,8 +11,10 @@ class AccessResponse {
   private ending?: Promise<void>;
   private cleanupFailed = false;
   private readonly byob: boolean;
+  private readonly response: Response;
 
-  constructor(private readonly response: Response) {
+  constructor(response: Response) {
+    this.response = response;
     let byob = false;
     if (response.body) {
       try { this.reader = response.body.getReader({ mode: "byob" }); byob = true; }
@@ -96,7 +98,7 @@ function checkHeaders(response: Response, url: string): void {
     if (value.length > accessLimits.headerBytes - bytes) throw accessDenial("limit");
     bytes += value.length;
   }
-  if (response.redirected || response.url !== url || response.headers.has("content-range")
+  if (response.status === 206 || response.redirected || response.url !== url || response.headers.has("content-range")
     || response.headers.has("range") || response.status >= 300 && response.status < 400) throw accessDenial("transport");
   const encoding = response.headers.get("content-encoding");
   if (encoding && encoding.toLowerCase() !== "identity") throw accessDenial("transport");
@@ -119,7 +121,7 @@ export async function readAccessJwks(url: string, operation: HttpOperation): Pro
     if (operation.signal.aborted) reject(accessDenial("deadline"));
     else {
       try {
-        fetch(url, { redirect: "manual", headers: { accept: "application/json, application/jwk-set+json" },
+        fetch(url, { redirect: "manual", headers: { accept: "application/json, application/jwk-set+json", "accept-encoding": "identity" },
           cf: { cacheTtl: 300, cacheEverything: true }, signal: operation.signal }).then(response => {
           owner = new AccessResponse(response); if (operation.signal.aborted) cancel(); resolve(response);
         }, () => reject(accessDenial("transport")));

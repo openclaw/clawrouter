@@ -1,6 +1,7 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { captureTimeouts } from '../../test/helpers/timeout-capture.mjs';
 import { accessBytesResponse, accessCertsResponse } from './access-byte-fixture.mjs';
 const { verifiedAccessSession, authorizeAdmin } = await import('../access.ts');
 const { accessJwtParts, accessBase64Size, parseAccessJson } = await import('../access-json.ts');
@@ -44,7 +45,7 @@ test('Access assertion and JSON guard exact boundaries count discarded/duplicate
   assert.equal(parseAccessJson('{"keys":['+Array(32).fill('{}').join(',')+']}', 'jwks').keys.length, 32);
   assert.throws(() => parseAccessJson('{"keys":['+Array(33).fill('{}').join(',')+']}', 'jwks'), { code: 'access_limit' });
   assert.throws(() => parseAccessJson('{"keys":['+Array(20).fill('{}').join(',')+'],"keys":['+Array(13).fill('{}').join(',')+']}', 'jwks'), { code: 'access_limit' });
-  const row = '{"n":"'+'x'.repeat(4000)+'","extra":"'+'y'.repeat(4000)+'"}';
+  const row = '{"one":"'+'x'.repeat(4000)+'","extra":"'+'y'.repeat(4000)+'"}';
   assert.ok(parseAccessJson('{"keys":['+row+' '.repeat(8192-row.length)+']}', 'jwks'));
   // Whitespace outside the complete row is not part of its source span.
   assert.throws(() => parseAccessJson('{"keys":['+row.slice(0,-1)+',"z":"'+'q'.repeat(200)+'"}]}', 'jwks'), { code: 'access_limit' });
@@ -56,8 +57,15 @@ test('Access assertion and JSON guard exact boundaries count discarded/duplicate
 test('present oversized assertion cannot fall back with missing Access config and valid local/admin credentials', async t => {
   const token = 'synthetic-local-admin', hash = await sha256Hex(token);
   let localReads = 0;
-  const fallback = { CLAWROUTER_LOCAL_AUTH: 'enabled', CLAWROUTER_ADMIN_TOKEN_SHA256: hash, POLICY_KV: { get: async () => { localReads++; return { email, role:'admin', expiresAtMs: Date.now()+10000 }; } } };
-  for (const assertion of ['a'.repeat(16385), encode('x'.repeat(2049))+'.e30.c2ln']) {
+  const fallback = { ACCESS_CONTROL: env().ACCESS_CONTROL, CLAWROUTER_LOCAL_AUTH: 'enabled', CLAWROUTER_ADMIN_TOKEN_SHA256: hash, POLICY_KV: { get: async () => { localReads++; return { email, role:'admin', expiresAtMs: Date.now()+10000 }; } } };
+  assert.equal((await verifiedAccessSession(new Request('https://router.example/v1/session',{headers:{cookie:'clawrouter_session='+'a'.repeat(64)}}),fallback)).auth,'local');
+  localReads=0;
+  for (const assertion of ['a'.repeat(16385), encode('x'.repeat(2049))+'.e30.c2ln',
+    '!.'+encode('x'.repeat(8193))+'.c2ln', 'a===.'+encode('x'.repeat(8193))+'.c2ln',
+    '.'+encode('x'.repeat(8193))+'.c2ln', '!.e30.'+encode('x'.repeat(1025)),
+    encode({alg:'RS256',kid:'k'.repeat(257)})+'.e30.c2ln',
+    encode('{'+Array(33).fill('"kid":"k"').join(',')+'}')+'.e30.c2ln',
+    '!.'+encode('{"aud":['+Array(33).fill('"a"').join(',')+']}')+'.c2ln']) {
     const req = request(assertion, undefined, { authorization: 'Bearer '+token, cookie: 'clawrouter_session='+ 'a'.repeat(64) });
     await assert.rejects(verifiedAccessSession(req, fallback), {code:'access_limit'});
     await assert.rejects(authorizeAdmin(req, fallback), {code:'access_limit'});
@@ -90,7 +98,7 @@ test('public Access verifies original encoded segments and complete first matchi
 test('JWKS limits include ignored rows, metadata and cache-returned responses before import', async t => {
   let value, imports=0, calls=0;
   t.mock.method(crypto.subtle,'importKey', () => { imports++; throw Error('must not import'); });
-  t.mock.method(globalThis,'fetch', async (_url,init) => { calls++;assert.equal(init.redirect,'manual');assert.deepEqual(init.cf,{cacheTtl:300,cacheEverything:true});return accessBytesResponse(value,url); });
+  t.mock.method(globalThis,'fetch', async (_url,init) => { calls++;assert.equal(init.redirect,'manual');assert.equal(new Headers(init.headers).get('accept-encoding'),'identity');assert.deepEqual(init.cf,{cacheTtl:300,cacheEverything:true});return accessBytesResponse(value,url); });
   const token=await jwt();
   for (value of [JSON.stringify({keys:[key], ignored:'x'.repeat(33*1024*1024)}), JSON.stringify({keys:[key,...Array(32).fill({})]}), JSON.stringify({keys:[key,{kty:'RSA',n:'A'.repeat(1368),e:'AQAB'}]}), JSON.stringify({keys:[key,{kty:'RSA',n:'AQAB',e:'A'.repeat(12)}]})]) {
     await assert.rejects(session(token), {code:'access_limit'});
@@ -185,9 +193,41 @@ test('preparse guards enforce depth, aggregate strings, scalars and every resour
 
 test('exact decoded JWT header/payload boundaries are preflighted before missing-config fallback',async()=>{
  for(const [index,max]of [[0,2048],[1,8192],[2,1024]]){
-  const parts=['e30','e30','c2ln'];parts[index]=Buffer.alloc(max,32).toString('base64url');
+  const parts=['e30','e30','c2ln'];parts[index]=Buffer.from(index===2?'a'.repeat(max):'{}'+' '.repeat(max-2)).toString('base64url');
   assert.equal(await verifiedAccessSession(request(parts.join('.')),{}),null);
   parts[index]=Buffer.alloc(max+1,32).toString('base64url');
   await assert.rejects(verifiedAccessSession(request(parts.join('.')),{}),{code:'access_limit'});
  }
+});
+
+test('duplicate oversized RSA fields deny before JSON.parse/import, even when overwritten',async t=>{
+ let wire,imports=0,verifies=0;
+ const token=await jwt();t.mock.method(globalThis,'fetch',async()=>accessBytesResponse(wire,url));
+ t.mock.method(crypto.subtle,'importKey',()=>{imports++;throw Error('must not import');});
+ t.mock.method(crypto.subtle,'verify',()=>{verifies++;throw Error('must not verify');});
+ for(const [field,size]of [['n',1025],['e',9]]){
+  const encoded=Buffer.alloc(size,1).toString('base64url');
+  wire='{"keys":[{"'+field+'":"'+encoded+'",'+JSON.stringify(key).slice(1)+']}';
+  await assert.rejects(session(token),{code:'access_limit'});
+  assert.throws(()=>parseAccessJson(wire,'jwks'),{code:'access_limit'});
+ }
+ assert.equal(imports,0);assert.equal(verifies,0);
+});
+
+test('HTTP206 without range headers denies public admin fallback and cancels/unlocks once',async t=>{
+ const token=await jwt(),admin='synthetic-access-fallback',hash=await sha256Hex(admin),f=env();let fallback=0,imports=0,verifies=0,cancels=0,unlocks=0;
+ Object.defineProperty(f,'CLAWROUTER_ADMIN_TOKEN_SHA256',{get(){fallback++;return hash;}});
+ const response=accessBytesResponse(JSON.stringify({keys:[key]}),url,{status:206,headers:{'content-type':'application/json'}}),get=response.body.getReader.bind(response.body);
+ response.body.getReader=options=>{const reader=get(options);return{read:v=>reader.read(v),cancel:r=>{cancels++;return reader.cancel(r);},releaseLock(){reader.releaseLock();unlocks++;}};};
+ t.mock.method(globalThis,'fetch',async()=>response);t.mock.method(crypto.subtle,'importKey',()=>{imports++;throw Error('must not import');});t.mock.method(crypto.subtle,'verify',()=>{verifies++;throw Error('must not verify');});
+ await assert.rejects(authorizeAdmin(request(token,undefined,{authorization:'Bearer '+admin}),f),{code:'access_transport'});
+ assert.equal(fallback,0);assert.equal(imports,0);assert.equal(verifies,0);assert.equal(cancels,1);assert.equal(unlocks,1);assert.equal(response.body.locked,false);
+});
+
+test('already-aborted assertion with missing configuration is terminal before fallback or preflight',async t=>{
+ const timeouts=captureTimeouts(t),hash=await sha256Hex('fixture'),abort=new AbortController();abort.abort({cleanupFailed:true});let fallback=0,reads=0;
+ const f={ACCESS_CONTROL:env().ACCESS_CONTROL,CLAWROUTER_LOCAL_AUTH:'enabled',POLICY_KV:{get:async()=>{reads++;return {email,role:'user',expiresAtMs:Date.now()+10000};}}};
+ Object.defineProperty(f,'CLAWROUTER_ADMIN_TOKEN_SHA256',{get(){fallback++;return hash;}});
+ for(const token of ['a.b.c','!.'+encode({kid:'normal'})+'.x'])await assert.rejects(authorizeAdmin(request(token,abort.signal,{authorization:'Bearer fixture',cookie:'clawrouter_session='+'a'.repeat(64)}),f),{code:'access_deadline'});
+ assert.equal(fallback,0);assert.equal(reads,0);assert.deepEqual(timeouts,[30000,30000]);
 });
