@@ -35,6 +35,7 @@ MiniMaxMusicCoverControl.prototype.post=function(...args){if(active)active.owner
 const state=()=>active?{mode:active.mode,charged:bodyBudgetCharged(),result:active.result,done:active.done,retired:active.retired,
  error:active.error,cleanupError:active.cleanupError,fetches:active.fetches,headers:active.headers,responseStatus:active.responseStatus,declaredUploadLength:active.declaredUploadLength,
  reads:active.reads,nativeReads:active.nativeReads,nativeEOF:active.nativeEOF,cancels:active.cancels,unlocks:active.unlocks,unlockAttempts:active.unlockAttempts,
+  unlockReadSettled:active.unlockReadSettled,unlockCancelSettled:active.unlockCancelSettled,unlockReturned:active.unlockReturned,unlockThrew:active.unlockThrew,unlockPendingRead:active.unlockPendingRead,unlockRequestContext:active.unlockRequestContext,unlockLockedAfter:active.unlockLockedAfter,
  uploadHeld:active.uploadHeld,cancelHeld:active.cancelHeld,readHeld:active.readHeld,discards:active.discards,
  source:active.source?.snapshot(),splits:active.splits,splitBefore:active.splitBefore,splitAfter:active.splitAfter,splitReferences:active.splitReferences,
  outputBytes:active.outputBytes,maxOutputBacking:active.maxOutputBacking,flow:active.flow?.snapshot(),locked:active.original?.locked??false,
@@ -43,7 +44,9 @@ function ownObserved(response,a){
  a.original=response.body;if(!response.body)return response;
  const get=response.body.getReader.bind(response.body);let cancellation,nativeDone=false,emptyBacking;
  response.body.getReader=options=>{const reader=get(options);return {
-  async read(view){
+  read(view){
+   a.wrapperReadSettled=false;
+   return (async()=>{
    a.reads++;let part;
    if(nativeDone)part={done:true,value:new Uint8Array(emptyBacking,0,0)};
    else {a.nativeReads++;part=await reader.read(view);if(part.done){nativeDone=true;a.nativeEOF=true;
@@ -57,12 +60,20 @@ function ownObserved(response,a){
    if(a.mode==='read-error')throw new Error('synthetic original read failure',{cause:{discarded:'x'.repeat(100000)}});
    if(['read','read-reject'].includes(a.mode)&&a.reads===1){a.readHeld=true;await gate(a.mode,'read');}
    return part;
+   })().then(part=>{a.wrapperReadSettled=true;return part;},error=>{a.wrapperReadSettled=true;throw error;});
   },cancel(reason){if(!cancellation){let resolve,reject;cancellation=new Promise((yes,no)=>{resolve=yes;reject=no;});
    Promise.resolve().then(async()=>{a.cancels++;try{await reader.cancel(reason);}finally{
     if(['read','read-reject','read-error','late','split-fail'].includes(a.mode)){a.cancelHeld=true;await a.responseCleanupGate;}
     if(a.mode==='read-reject')throw Error('synthetic FIRST response cancel rejection');
-   }}).then(resolve,reject);}return cancellation;
-  },releaseLock(){a.unlockAttempts++;if(a.mode==='unlock'||a.mode==='unlock-pre'){a.resolveUnlock();throw Error('synthetic pre-unlock failure');}a.unlocks++;reader.releaseLock();}
+   }}).then(()=>{a.firstCancelSettled=true;resolve();},error=>{a.firstCancelSettled=true;reject(error);});}return cancellation;
+  },releaseLock(){
+   a.unlockReadSettled=a.wrapperReadSettled;a.unlockCancelSettled=a.firstCancelSettled;
+   a.unlockAttempts++;if(a.mode==='unlock'||a.mode==='unlock-pre'){a.resolveUnlock();throw Error('synthetic pre-unlock failure');}
+   a.unlocks++;
+   try{reader.releaseLock();a.unlockReturned=true;}
+   catch(error){a.unlockThrew=true;a.unlockPendingRead=/(?:pending|outstanding).{0,20}read|read.{0,20}pending/i.test(String(error?.message));a.unlockRequestContext=/different request|request context|I\/O on behalf/i.test(String(error?.message));throw error;}
+   finally{a.unlockLockedAfter=a.original.locked;}
+  }
  };};return response;
 }
 async function consume(response,a){
