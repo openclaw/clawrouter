@@ -658,7 +658,8 @@ for (const clockShift of [0, -120_000]) test(`a late admission cannot republish 
     time.advance(clockShift); clearHotCaches(); fenceSharedHotCache();
     f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
     assert.equal((await f.request()).status, 403, 'new request progresses without old I/O');
-  } finally { release.resolve(); await (await old).text(); await Promise.all(f.pending); }
+  } finally { release.resolve(); }
+  await (await old).text(); await Promise.all(f.pending);
   assert.equal(colo.stats.puts, 0, 'invalidated completion cannot start a shared publication');
   time.advance(61_000); f.reset();
   assert.equal((await f.send()).response.status, 403);
@@ -681,7 +682,8 @@ test('already-issued late colo put retains acquisition time across equal/rollbac
     await cacheBarrierArrival(entered.promise, originating, 'background colo put'); time.advance(-120_000); clearHotCaches(); fenceSharedHotCache();
     assert.ok(fetchedAt <= sharedHotCacheFence());
     f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
-  } finally { release.resolve(); await Promise.all(f.pending); }
+  } finally { release.resolve(); }
+  await Promise.all(f.pending);
   assert.equal(colo.stats.puts, 1, 'the original physical put really completes late');
   f.reset(); assert.equal((await f.send()).response.status, 403);
   assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, 'late entry is fenced, not adopted');
