@@ -139,7 +139,7 @@ export class HotCache<V> {
   beginPublication(key: string): CachePublication | undefined {
     this.publications.delete(key);
     if (this.livePublications.size >= this.limit) return undefined;
-    const publication: CachePublication = Object.freeze({ [publicationBrand]: true, acquiredAt: hotCacheAcquiredAt() });
+    const publication: CachePublication = Object.freeze({ [publicationBrand]: true as const, acquiredAt: hotCacheAcquiredAt() });
     this.livePublications.add(publication);
     this.publications.set(key, publication);
     return publication;
