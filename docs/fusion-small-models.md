@@ -308,3 +308,27 @@ First compare the grounded single-model and handoff arms on the existing
 development tasks. Improvement over the legacy scaffold is a harness gain,
 not evidence of model fusion. Fusion must beat the best grounded fixed-model
 control on new tasks, with total model calls and tokens included.
+
+
+### Reproduction-gated local profile
+
+Use `checked` in place of `grounded` to require a failing reproduction before
+editing. The first worker gets at most three actions to inspect or produce a
+Node assertion of the reported behavior. A passing probe, import failure or
+syntax error does not qualify. Each probe executes in a fresh disposable
+sandbox; its writes cannot change the repair workspace.
+
+Once a reproduction fails with an assertion on the original source, freeze it
+and allow repairs. Rerun it on each candidate in another disposable sandbox.
+Submit automatically only when the reproduction and visible tests pass. Hidden
+acceptance tests still decide correctness: a model-generated check can be weak
+or wrong. Reports expose both the public gate and hidden result without storing
+probe source. The handoff arm assigns reproduction to the first model and repair
+to the second; fixed-model controls use the same phases and budgets.
+
+The completed preceding grounded development run solved 0/4 tasks in all three
+arms: Qwen3.5 4B used 8 calls and 37,925 tokens; Qwen3 4B used 32 calls and
+127,978 tokens; old-to-new handoff used 32 calls and 132,030 tokens. All 72 calls
+had complete usage and zero paid API spend. This negative result motivates a
+verification loop; it does not establish a fusion benefit. Evaluate the new
+policy on development tasks before using the separately qualified fresh set.

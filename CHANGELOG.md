@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an experimental local Fusion reproduction gate with isolated probes, frozen checks, and explicit acceptance accounting.
+
 - Add an opt-in grounded local Fusion repair scaffold with bounded current-source views and observed edit anchors, preserving the original benchmark profile.
 
 - Fence in-flight hot-cache and admission publications after local invalidation, including pending-only credential versions evicted by upstream 401/403. Keep original snapshot age and preserve coalesced runtime/counter writes.

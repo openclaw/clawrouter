@@ -62,3 +62,58 @@ test('an expired action deadline still allows bounded final patch collection', a
     });
   assert.equal(result.outcome, 'deadline'); assert.equal(finalTimeout, 10000);
 });
+
+test('checked handoff isolates probes and repairs against the same failing reproduction', async () => {
+  const task = { instruction: 'Set enabled to true.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  const boxes = [], seenProbes = [], roles = [];
+  const reproducer = 'import assert from "node:assert/strict"; assert.equal(enabled, true);';
+  let call = 0;
+  const result = await runGroundedAgent(task, 'image', 'handoff', 'trial',
+    { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000, requireReproducer: true },
+    async (_id, role, body) => {
+      roles.push(role);
+      const message = JSON.parse(body.messages[1].content);
+      const action = { action: 'probe', path: '', line: 0, endLine: 0, query: reproducer, replace: '' };
+      if (call++ === 1) {
+        assert.equal(message.phase, 'repair'); assert.equal(message.reproduction, reproducer);
+        Object.assign(action, { action: 'edit', path: task.editPaths[0], line: 1, endLine: 1, query: '', replace: 'export const enabled = true;' });
+      }
+      return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => { const box = { source: 'export const enabled = false;', closed: false, close: async () => { box.closed = true; } }; boxes.push(box); return box; },
+      read: async (box, paths) => paths.map(path => ({ path, content: path === task.editPaths[0] ? box.source : 'test example' })),
+      write: async (box, files) => { box.source = files[0].content; },
+      test: async () => ({ passed: true, feedback: '' }),
+      runProbe: async (box, source) => {
+        assert.notEqual(box, boxes[0]); seenProbes.push(source);
+        const passed = box.source.includes('true');
+        box.source = 'probe side effect must not reach the repair workspace';
+        return { passed, assertionFailed: !passed, feedback: passed ? '' : 'ERR_ASSERTION' };
+      },
+    });
+  assert.deepEqual(roles, [models.strong, models.critic]);
+  assert.deepEqual(seenProbes, [reproducer, reproducer]);
+  assert.equal(result.outcome, 'verified'); assert.equal(result.reproducerQualified, true);
+  assert.equal(result.probePassed, true); assert.equal(result.files[0].content, 'export const enabled = true;');
+  assert.ok(boxes.every(box => box.closed));
+});
+
+test('checked repair rejects premature finish, passing probes and runtime errors within its reproduction budget', async () => {
+  let calls = 0, writes = 0;
+  const task = { instruction: 'Fix.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  const result = await runGroundedAgent(task, 'image', 'handoff', 'trial',
+    { maxTurns: 8, outputTokens: 1536, deadlineMs: 10000, requireReproducer: true },
+    async (_id, role) => {
+      assert.equal(role, models.strong);
+      const action = { action: calls++ === 0 ? 'finish' : 'probe', path: '', line: 0, endLine: 0, query: 'test', replace: '' };
+      return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => ({ close: async () => {} }),
+      read: async (_box, paths) => paths.map(path => ({ path, content: 'original' })),
+      write: async () => { writes++; },
+      runProbe: async () => ({ passed: calls === 2, assertionFailed: false, feedback: 'not a failing assertion' }),
+    });
+  assert.equal(calls, 3); assert.equal(writes, 0);
+  assert.equal(result.outcome, 'no_reproducer'); assert.equal(result.handoffUsed, false);
+  assert.equal(result.reproducerQualified, false); assert.equal(result.probePassed, false);
+});

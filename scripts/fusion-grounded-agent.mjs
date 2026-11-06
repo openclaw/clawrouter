@@ -70,13 +70,23 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
   let selection = null, feedback = 'No edits yet. Inspect the source and repair the reported behavior.', handoffUsed = false;
   let outcome = 'turn_limit', publicPassed = false, invalidActions = 0, turns = 0;
   const actions = [];
+  const checked = config.requireReproducer === true;
+  let reproducer = null, probePassed = false;
+  const isolatedProbe = async (files, source) => {
+    const isolated = await makeSandbox(image);
+    try {
+      if (files) await write(isolated, files, remaining());
+      return await runProbe(isolated, source, remaining());
+    } finally { await isolated.close(); }
+  };
   try {
     // Visible test imports are useful API examples, not hidden grading evidence.
     const examples = await read(box, task.visibleTests, remaining());
     const testExamples = sourceWindows(examples, task.instruction, null, 4000);
     for (; turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      if (strategy === 'handoff' && !handoffUsed && turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) {
+      if (checked && !reproducer && turns >= 3) { outcome = 'no_reproducer'; break; }
+      if (!checked && strategy === 'handoff' && !handoffUsed && turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) {
         handoffUsed = true; actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
         feedback = `Independently verify the attempted repair. Previous tool result: ${feedback}`;
       }
@@ -86,15 +96,21 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const readable = [...files, ...extra];
       if (selection) readable.sort((a, b) => Number(b.path === selection.path) - Number(a.path === selection.path));
       const views = sourceWindows(readable, task.instruction, selection);
-      const messages = [{ role: 'system', content: instructions }, { role: 'user', content: JSON.stringify({
+      const phaseInstructions = !checked ? '' : reproducer
+        ? '\nRepair phase: the frozen reproduction below fails with an assertion on the original source. Use inspect or edit. Each edit reruns it in a fresh sandbox. Submission is automatic only when the reproduction and visible tests both pass. Do not change the reproduction.'
+        : '\nReproduction phase: use inspect or probe only. Write a Node ES module importing the affected source and node:assert/strict. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. You have at most three actions to reproduce the bug; do not edit or finish.';
+      const actionSchema = !checked ? schema : { ...schema, properties: { ...schema.properties,
+        action: { type: 'string', enum: reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
+      const messages = [{ role: 'system', content: instructions + phaseInstructions }, { role: 'user', content: JSON.stringify({
         issue: task.instruction, editable: task.editPaths, visibleTests: task.visibleTests,
         currentSource: views.map(({ content, ...view }) => ({ ...view,
           numberedSource: content.split('\n').map((line, index) => `${view.startLine + index}|${line}`).join('\n') })),
-        testExamples, recentActions: actions.slice(-4), lastToolResult: feedback.slice(-4000),
+        testExamples, ...(checked ? { phase: reproducer ? 'repair' : 'reproduce', reproduction: reproducer } : {}),
+        recentActions: actions.slice(-4), lastToolResult: feedback.slice(-4000),
       }) }];
       const response = await invoke(trialId, handoffUsed ? models.critic : models.strong,
         { messages, max_tokens: config.outputTokens, response_format: { type: 'json_schema',
-          json_schema: { name: 'grounded_repair', strict: true, schema } } }, deadline);
+          json_schema: { name: 'grounded_repair', strict: true, schema: actionSchema } } }, deadline);
       requireCompleteResponse(response);
       let action;
       try { action = JSON.parse(response.choices[0].message.content); }
@@ -102,6 +118,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const event = { turn: turns + 1, action: ['inspect', 'edit', 'probe', 'finish'].includes(action?.action) ? action.action : 'invalid', status: 'ok' };
       actions.push(event);
       try {
+        if (checked && !(reproducer ? ['inspect', 'edit'] : ['inspect', 'probe']).includes(action.action)) throw new Error('invalid_action');
         if (action.action === 'inspect') {
           if (![...task.editPaths, ...task.visibleTests].includes(action.path) || !Number.isSafeInteger(action.line)
             || action.line < 0 || typeof action.query !== 'string' || action.query.length > 200) throw new Error('invalid_read_paths');
@@ -113,10 +130,28 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
           feedback = `Edit applied. Visible tests passed: ${publicPassed}. ${result.feedback.slice(-3500)}`;
           // Keep the edited location visible, including after a handoff.
           selection = { path: action.path, line: action.line, query: '' };
+          if (checked) {
+            const result = await isolatedProbe(await read(box, task.editPaths, remaining()), reproducer);
+            probePassed = result.passed;
+            feedback += ` Frozen reproduction passed: ${probePassed}. ${result.feedback.slice(-2000)}`;
+            event.passed = probePassed;
+            if (probePassed && publicPassed) { outcome = 'verified'; turns++; break; }
+          }
         } else if (action.action === 'probe') {
-          const result = await runProbe(box, action.query, remaining());
+          const result = checked ? await isolatedProbe(null, action.query) : await runProbe(box, action.query, remaining());
           feedback = `Behavior probe passed: ${result.passed}. ${result.feedback.slice(-3500)}`;
           event.passed = result.passed;
+          if (checked) {
+            if (result.assertionFailed === true) {
+              reproducer = action.query;
+              event.status = 'qualified';
+              feedback = `Reproduction qualified: it fails with an assertion on original source. Repair the reported behavior. ${result.feedback.slice(-3000)}`;
+              if (strategy === 'handoff') {
+                handoffUsed = true;
+                actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
+              }
+            } else feedback = `Reproduction not qualified: it must fail with ERR_ASSERTION on the original source. ${feedback}`;
+          }
         } else if (action.action === 'finish') {
           const result = await test(box, task.visibleTests, remaining()); publicPassed = result.passed;
           if (strategy === 'handoff' && !handoffUsed) {
@@ -135,6 +170,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
     // Grading/cleanup is outside the action deadline. Keep final collection
     // bounded without turning an ordinary expired trial into a campaign abort.
     const files = await read(box, task.editPaths, 10000);
-    return { files, patchDigest: hash(JSON.stringify(files)), actions, turns, outcome, handoffUsed, invalidActions, publicPassed };
+    return { files, patchDigest: hash(JSON.stringify(files)), actions, turns, outcome, handoffUsed, invalidActions, publicPassed,
+      ...(checked ? { reproducerQualified: reproducer !== null, probePassed } : {}) };
   } finally { await box.close(); }
 }

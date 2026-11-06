@@ -54,12 +54,21 @@ test('behavior probes use bounded stdin in the task sandbox and retain no script
   const calls = [];
   const box = { exec: async (args, options) => { calls.push({args, options}); return { code: 1, stdout: Buffer.from('assertion failed'), stderr: Buffer.alloc(0) }; } };
   const source = 'throw new Error("regression");';
-  assert.deepEqual(await probe(box, source, 1000), { passed: false, feedback: 'assertion failed' });
+  assert.deepEqual(await probe(box, source, 1000), { passed: false, assertionFailed: false, feedback: 'assertion failed' });
   assert.deepEqual(calls[0].args, ['timeout', '--signal=KILL', '1s', 'node', '--input-type=module']);
   assert.equal(calls[0].options.input, source);
   assert.equal(calls[0].options.timeout, 3000);
   await assert.rejects(probe(box, 'x'.repeat(16001)), /invalid_probe/);
   assert.equal(calls.length, 1);
+});
+
+test('only a normal failing assertion qualifies a reproduction', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  for (const [code, stderr, expected] of [[1, 'AssertionError [ERR_ASSERTION]', true],
+    [1, 'SyntaxError', false], [137, 'ERR_ASSERTION', false], [0, 'ERR_ASSERTION', false]]) {
+    const result = await probe({ exec: async () => ({ code, stdout: Buffer.alloc(0), stderr: Buffer.from(stderr) }) }, 'test');
+    assert.equal(result.assertionFailed, expected);
+  }
 });
 
 
