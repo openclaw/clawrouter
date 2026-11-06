@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add explicit current-CN MiniMax video attestation for `api.minimax.cn`, limited to the original two text-to-video models and original-job files. Legacy CN and global bindings keep their destinations; re-attestation invalidates old jobs. Public declarations, native-client activation and live credential portability remain separate.
+- Compile explicit product offers into stable, model-specific declarations while keeping runtime admission and legacy routes unchanged.
 
 - Add explicit global six-model MiniMax video authority for the four frozen required-first-frame models, with pre-secret model membership, exact discovery identity and original-job controls after image retirement. Existing V1/V2 permissions and capacity profiles remain unchanged; declarations and native-client activation stay separate.
 

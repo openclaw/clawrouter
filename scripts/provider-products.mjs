@@ -25,6 +25,13 @@ export function compileProviderProducts(manifest) {
       authenticationMethod: product.authenticationMethod,
       binding: { ...product.binding },
       endpoints: [...product.endpoints].sort(),
+      ...(product.offers ? { offers: product.offers.map(offer => ({
+        endpoint: offer.endpoint, capability: offer.capability,
+        models: offer.models === null ? null : [...offer.models].sort(),
+      })).sort((a, b) => {
+        const left = JSON.stringify([a.endpoint, a.capability]), right = JSON.stringify([b.endpoint, b.capability]);
+        return left < right ? -1 : left > right ? 1 : 0;
+      }) } : {}),
     };
   }).sort((a, b) => a.id.localeCompare(b.id));
 }

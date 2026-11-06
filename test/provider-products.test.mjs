@@ -22,7 +22,8 @@ test("products preserve independent authored classifications and leave execution
   const withProducts = compile(manifest);
   const legacy = structuredClone(manifest);
   delete legacy.products;
-  const { products, ...execution } = withProducts;
+  const { products, offer_definitions, ...execution } = withProducts;
+  assert.ok(offer_definitions.every(offer => offer.qualification === "declared"));
   assert.deepEqual(execution, compile(legacy));
   assert.equal(products[1].commercialModel, "subscription");
   assert.equal(products[1].authenticationMethod, "oauth2");
