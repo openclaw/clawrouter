@@ -95,55 +95,91 @@ for (const alternate of [false, true]) test(`workerd refuses ${alternate ? "alte
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
 
-for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject"]) test(`workerd ${cause} bounds stalled alternate admission before late ${late}`, { timeout: 15_000 }, async t => {
-  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-failover-lifetime-")); let mf;
+for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject"]) test(`workerd joins held alternate ${late} after observed ${cause}`, { timeout: 15_000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-failover-lifetime-"));
+  let mf, pending, control, releasePromise, primary;
+  const release = () => releasePromise ??= control?.("/fixture-release");
+  // Release and join the originating client/background before disposal, even
+  // when an arrival or pending assertion fails. Independent failures stay visible.
+  t.after(async () => {
+    const failures = [];
+    try { await release(); } catch (error) { failures.push(error); }
+    try { await pending; } catch (error) { if (error !== primary) failures.push(error); }
+    if (control) {
+      try {
+        let state = await control("/fixture-state");
+        for (let i = 0; state.background && i < 200; i++) {
+          await new Promise(resolve => setTimeout(resolve, 10)); state = await control("/fixture-state");
+        }
+        assert.equal(state.background, 0); assert.equal(state.backgroundFailed, false);
+        if (state.outward) assert.equal(state.events, 1);
+      } catch (error) { failures.push(error); }
+    }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, "alternate lifetime cleanup");
+  });
   try {
     mf = await startWorkerdFixture(temporary, `
       import handler from "./worker/index.ts";
       import { providerById } from "./worker/providers.ts";
       import { putGrantCredentials } from "./worker/grant-credentials.ts";
+      import { HttpOperation } from "./worker/http-operation.ts";
       export * from "./worker/index.ts";
-      // Allow slow runners to reach held admission; correctness is response-before-release,
-      // not a tight latency assertion. The real endpoint timer still owns interruption.
+      // Existing endpoint timers are unchanged. Observe their actual interruption,
+      // then require logical preparation settlement before outward completion.
       providerById("openai").endpoints.find(endpoint => endpoint.id === "chat_completions").timeout_ms = ${cause === "deadline" ? 1000 : 5000};
-      let entered = false, finished = false, admitted = false;
-      let released = false;
-      const caller = new AbortController();
+      let entered = false, finished = false, admitted = false, released = false, abortRequested = false;
+      let interrupted = false, category = null, preparationFinished = false, preparationRejected = false;
+      let outward = false, preparationFinishedAtResponse = false, events = 0, background = 0, backgroundFailed = false;
       export default { async fetch(request, env, context) {
         const path = new URL(request.url).pathname;
         if (path === "/fixture-setup") {
           for (const id of ["primary", "alternate"]) await putGrantCredentials(env, "oauth/fixture/" + id, { provider: "openai", kind: "api_key", enabled: true, credential: "synthetic-" + id });
           return Response.json({ ok: true });
         }
-        if (path === "/fixture-state") return Response.json({ entered, finished, admitted });
-        if (path === "/fixture-abort") { caller.abort(new Error("synthetic caller abort")); return Response.json({ ok: true }); }
+        if (path === "/fixture-state") return Response.json({ entered, finished, admitted, interrupted, category,
+          preparationFinished, preparationRejected, outward, preparationFinishedAtResponse, events, background, backgroundFailed });
+        // Only scalar intent crosses requests; abort runs in the original request's
+        // existing admission polling continuation below, never a foreign I/O root.
+        if (path === "/fixture-abort") { abortRequested = true; return Response.json({ ok: true }); }
         if (path === "/fixture-release") { released = true; return Response.json({ ok: true }); }
-        const authority = env.ACCESS_CONTROL;
+        const caller = new AbortController(), authority = env.ACCESS_CONTROL;
         const wrapped = { idFromName: name => authority.idFromName(name), get: id => {
           const stub = authority.get(id);
-          return { fetch(url, init) {
-            const pending = (async () => {
-              const call = new Request(url, init);
-              if (new URL(call.url).pathname === "/admission/resolve" && (await call.clone().json()).selection?.excludedKeys?.length) {
-                entered = true;
-                // Timer belongs to this request; no cross-request promise continuation.
-                while (!released) await new Promise(resolve => setTimeout(resolve, 10));
-                if (${late === "reject"}) { finished = true; throw new Error("synthetic late admission failure"); }
-                const response = await stub.fetch(call);
-                const result = await response.clone().json();
-                admitted = !!result.selection?.selected;
-                finished = true;
-                return response;
+          return { async fetch(url, init) {
+            const call = new Request(url, init);
+            if (new URL(call.url).pathname === "/admission/resolve" && (await call.clone().json()).selection?.excludedKeys?.length) {
+              entered = true;
+              while (!released) {
+                if (abortRequested && !caller.signal.aborted) caller.abort(new Error("synthetic caller abort"));
+                await new Promise(resolve => setTimeout(resolve, 10));
               }
-              return stub.fetch(call);
-            })();
-            // Keep the real late authority operation alive after response delivery.
-            context.waitUntil(pending.catch(() => {}));
-            return pending;
+              if (${late === "reject"}) { finished = true; throw new Error("synthetic late admission failure"); }
+              const response = await stub.fetch(call);
+              const result = await response.clone().json();
+              admitted = !!result.selection?.selected; finished = true; return response;
+            }
+            return stub.fetch(call);
           } };
         } };
-        // Inject an observed caller signal, not a claim about idle TCP disconnects.
-        return handler.fetch(new Request(request, { signal: caller.signal }), { ...env, ACCESS_CONTROL: wrapped }, context);
+        const originalWait = HttpOperation.prototype.wait;
+        HttpOperation.prototype.wait = function(actual, ...args) {
+          if (args.length === 0) {
+            const observe = () => { interrupted = true; category = this.status; };
+            if (this.signal.aborted) observe(); else this.signal.addEventListener("abort", observe, { once: true });
+            actual.then(() => { preparationFinished = true; }, () => { preparationFinished = true; preparationRejected = true; });
+          }
+          return originalWait.call(this, actual, ...args);
+        };
+        const tracked = { waitUntil(p) { background++;
+          context.waitUntil(Promise.resolve(p).then(() => { background--; }, () => { background--; backgroundFailed = true; }));
+        } };
+        try {
+          const response = await handler.fetch(new Request(request, { signal: caller.signal }), { ...env, ACCESS_CONTROL: wrapped,
+            USAGE_QUEUE: { send(event) { events++; return env.USAGE_QUEUE.send(event); } } }, tracked);
+          outward = true; preparationFinishedAtResponse = preparationFinished; return response;
+        } finally { HttpOperation.prototype.wait = originalWait; }
       }, queue: handler.queue };
     `, `
       let calls = 0;
@@ -157,35 +193,37 @@ for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject
     await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", requestCostMicros: 1, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } }));
     await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
     await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true }));
-    const control = async path => (await fetch(new URL(path, origin))).json();
+    control = async path => { const r = await fetch(new URL(path, origin)); assert.equal(r.status, 200); return r.json(); };
     assert.deepEqual(await control("/fixture-setup"), { ok: true });
-    const state = () => control("/fixture-state");
+    pending = fetch(new URL("/v1/chat/completions", origin), { method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-" + secret, "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-4.1-mini", messages: [] }), signal: AbortSignal.timeout(5_000) })
+      .then(async response => ({ status: response.status, headers: response.headers, body: await response.json() }));
+    const early = pending.then(() => { throw Error("public request completed before held preparation"); }, error => { throw error; }); early.catch(() => {});
     const waitFor = async key => {
-      for (let i = 0; i < 200; i++) { const current = await state(); if (current[key]) return current; await new Promise(resolve => setTimeout(resolve, 10)); }
+      for (let i = 0; i < 200; i++) {
+        const current = await Promise.race([early, control("/fixture-state")]); if (current[key]) return current;
+        await Promise.race([early, new Promise(resolve => setTimeout(resolve, 10))]);
+      }
       assert.fail("fixture did not reach " + key);
     };
-    const pending = fetch(new URL("/v1/chat/completions", origin), { method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-" + secret, "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-4.1-mini", messages: [] }), signal: AbortSignal.timeout(5_000) });
-    let guard;
-    try {
-      await waitFor("entered");
-      if (cause === "caller") await control("/fixture-abort");
-      const response = await Promise.race([pending, new Promise(resolve => { guard = setTimeout(() => resolve(null), 3000); })]);
-      assert.ok(response, "interruption must return before admission is released");
-      assert.equal(response.status, 502);
-      assert.deepEqual(await response.json(), { error: { message: "upstream request to provider openai failed", type: "server_error", param: null, code: "provider_unavailable" } });
-        assert.equal(response.headers.get("x-clawrouter-error-code"), "provider_unavailable");
-      assert.deepEqual(await state(), { entered: true, finished: false, admitted: false });
-      t.diagnostic(JSON.stringify({ cause, late, status: response.status, admissionFinishedAtResponse: false }));
-    } finally {
-      clearTimeout(guard);
-      await control("/fixture-release");
-      const response = await pending; await response.text().catch(() => {});
-    }
-    const completed = await waitFor("finished");
-    assert.equal(completed.admitted, late === "admit", "late successful authority selection really completes");
+    await waitFor("entered");
+    if (cause === "caller") await control("/fixture-abort");
+    const held = await waitFor("interrupted");
+    assert.equal(held.category, cause === "caller" ? "client_error" : "timeout");
+    assert.equal(held.outward, false); assert.equal(held.preparationFinished, false); assert.equal(held.events, 0);
+    assert.equal(held.finished, false); assert.equal(held.admitted, false);
     const upstream = await mf.getWorker("upstream");
-    const calls = await (await upstream.fetch("https://api.openai.com/fixture-count")).json();
-    assert.equal(calls, 1, "late admission never dispatches another upstream request");
-    t.diagnostic(JSON.stringify({ cause, late, admissionFinished: completed.finished, admitted: completed.admitted, upstreamRequests: calls }));
-  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+    assert.equal(await (await upstream.fetch("https://api.openai.com/fixture-count")).json(), 1);
+    await release();
+    const response = await pending;
+    assert.equal(response.status, 502);
+    assert.deepEqual(response.body, { error: { message: "upstream request to provider openai failed", type: "server_error", param: null, code: "provider_unavailable" } });
+    assert.equal(response.headers.get("x-clawrouter-error-code"), "provider_unavailable");
+    const completed = await control("/fixture-state");
+    assert.equal(completed.preparationFinishedAtResponse, true); assert.equal(completed.preparationFinished, true);
+    assert.equal(completed.preparationRejected, late === "reject"); assert.equal(completed.finished, true);
+    assert.equal(completed.admitted, late === "admit", "late successful authority selection really completes");
+    assert.equal(await (await upstream.fetch("https://api.openai.com/fixture-count")).json(), 1, "late admission never dispatches another upstream request");
+    t.diagnostic(JSON.stringify({ cause, late, status: response.status, category: held.category,
+      admissionFinishedAtResponse: completed.preparationFinishedAtResponse, admitted: completed.admitted, upstreamRequests: 1 }));
+  } catch (error) { primary = error; throw error; }
 });

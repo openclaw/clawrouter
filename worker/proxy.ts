@@ -989,13 +989,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
     if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
+      const preparation = prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+      const preparationSettled = preparation.then(() => {}, () => {});
       try {
-        retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
+        retry = await operation.wait(preparation);
       } catch {
-        // Cancellation also bounds selection; a late result must never dispatch.
-        signal.throwIfAborted();
         // Selection failure leaves the original rejection available to the caller.
+      } finally {
+        // Join logical preparation even when the operation stopped waiting for it.
+        await preparationSettled;
       }
+      signal.throwIfAborted();
       if (retry) {
         signal.throwIfAborted();
         void response.body?.cancel().catch(() => undefined);
