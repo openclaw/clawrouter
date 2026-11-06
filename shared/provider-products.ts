@@ -8,6 +8,24 @@ export type ProviderProductBinding =
   | { type: "provider-default" }
   | { type: "grant-transport"; grantKind: GrantKind };
 
+export interface ProviderProductOffer {
+  endpoint: string;
+  capability: string;
+  /** Exact router model IDs; null explicitly declares a model-free operation. */
+  models: string[] | null;
+}
+
+/** A static declaration. Runtime qualification and caller admission are still required. */
+export interface ProviderOfferDefinition {
+  id: string;
+  providerId: string;
+  productId: string;
+  endpoint: string;
+  capability: string;
+  model: { id: string; upstream: string } | null;
+  qualification: "declared";
+}
+
 /** Authored product metadata, not proof of entitlement, pricing, or onboarding support. */
 export interface ProviderProduct {
   id: string;
@@ -16,4 +34,5 @@ export interface ProviderProduct {
   authenticationMethod: ProviderAuthenticationMethod;
   binding: ProviderProductBinding;
   endpoints: string[];
+  offers?: ProviderProductOffer[];
 }

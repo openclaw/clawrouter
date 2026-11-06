@@ -9,6 +9,8 @@ products:
     authenticationMethod: api-key
     binding: { type: provider-default }
     endpoints: [invoke]
+    offers:
+      - { endpoint: invoke, capability: tool.invoke, models: null }
 service:
   platform: example
   kind: api_provider

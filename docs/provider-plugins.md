@@ -147,8 +147,40 @@ products and endpoint references. Manifests without products retain the same
 snapshot output. This first slice only preserves declarations in the compiled
 snapshot. Discovery, routing, authorization, pricing, and budgets still use
 their existing checks; products do not yet restrict or enable routes. A later
-offer compiler must qualify model, protocol, lifecycle, and account compatibility
+runtime migration must qualify protocol, lifecycle, and account compatibility
 before these declarations can become execution authority.
+
+### Explicit offer definitions
+
+A product can declare `offers` for its endpoints. Every entry must select an
+existing capability bound to that endpoint and supply `models` explicitly:
+
+```yaml
+offers:
+  - endpoint: invoke
+    capability: tool.invoke
+    models: null
+```
+
+Use `models: null` to declare a model-free operation, or a nonempty list of exact
+router model IDs to select registered models. Model IDs are opaque; an ID such
+as `gateway/vendor/model` is not split or rewritten. Each selected model must
+declare the selected capability. Missing `offers` generates no definitions;
+there is no wildcard selection or automatic admission of future model rows.
+
+The compiler rejects duplicate endpoint/capability bindings within a product,
+out-of-product endpoints, unknown models, and capability mismatches. It emits
+`offer_definitions` with one entry per product/endpoint/capability/model tuple.
+The IDs are opaque and remain stable across declaration ordering and display
+name changes. Distinct products receive distinct IDs even for the same model.
+
+Every definition has `qualification: declared`. This is a build-time description,
+not a caller-scoped offer from `/v1/catalog`. A model-free declaration is not
+proof that a protocol permits an omitted model. Stopped model handling, protocol
+and lifecycle constraints, pricing, credentials, and tenant policy still need
+the existing runtime checks. These definitions neither enable routes nor alter
+selection, budgets, or subscription onboarding. Their IDs identify an offer;
+the deployed snapshot must still identify its revision.
 
 ## Descriptor v1
 
