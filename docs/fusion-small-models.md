@@ -149,3 +149,37 @@ one small worker, and include all-fail tasks. Freeze the policy before evaluatin
 fresh task families. Require a gain over the best fixed worker at the same total
 budget, including verification and failed calls, before frontier confirmation.
 Keep production Fusion opt-in until a held-out coding comparison earns promotion.
+
+## Local generation with executable checks
+
+`scripts/fusion-execution-smoke.mjs` tests eight fresh, small development
+families. It generates one tiny-model draft and two small-model drafts per task.
+The fixed policies compare the first small draft, public-test selection between
+two small drafts, and public-test selection between the tiny draft and the first
+small draft. Each retry policy stops at the first public pass; hidden grading
+does not influence selection. These are equal maximum attempt counts, not equal
+monetary or compute budgets. Report tokens and selection-check counts separately.
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-execution-smoke.mjs \
+  /path/to/fresh-results node@sha256:PINNED_DIGEST \
+  qwen3:0.6b qwen3:4b-instruct-2507-q4_K_M
+```
+
+Use the local loopback Ollama server and a cached, digest-pinned Node image.
+The runner builds a minimal dependency-free image. Before generation, every
+reference must pass both test sets and every deliberately flawed implementation
+must pass public tests while failing withheld tests. CI runs this qualification.
+The generator sees the contract and two examples, never the withheld inputs.
+
+Generated modules execute only in fresh, unprivileged Docker containers with
+network disabled, read-only root, no host mounts, resource limits and a four-second
+evaluation watchdog. Expected values stay in the parent grader. Candidate
+stdout cannot declare its own test result. The report retains verdicts, hashes,
+usage and timing; generated modules and raw model responses are not retained.
+
+The run makes 24 local calls, limited to 512 output tokens each. Its 15-minute
+generation-loop deadline is checked before each call; fixture qualification is
+separate. Invalid or failed candidates count against their policy. Transport,
+identity, usage or infrastructure failures stop the campaign without retry.
+These tasks test generation and verification mechanics, not repository repair.
