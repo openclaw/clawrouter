@@ -448,7 +448,7 @@ to multiple models rather than avoided file-reading calls.
 
 `benchmarks/fusion/holdout-workloads.json` pins three additional historical
 repairs: SigV4 query canonicalization, opaque Responses input accounting, and
-credential redirect handling. The loader's `development` label keeps its
+canonical provider credential selection. The loader's `development` label keeps its
 existing schema; experimental reports must separately record whether a task
 was exposed before a policy was frozen. A filename is not proof of an unseen
 evaluation set.
