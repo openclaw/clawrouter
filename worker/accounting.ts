@@ -234,7 +234,7 @@ export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, 
       for (const attempt of attempts) {
         attempt.attempted = true;
         const result = await musicCoverLedgerControl<{ allowed: boolean; chargedMicros: number }>(env, attempt.leg.objectName, "/reserve", attempt.leg.request, owner);
-        if (result.allowed === false) { attempt.denied = true; throw new HttpError(402, "budget_exhausted", "Cover budget is exhausted"); }
+        if (result.allowed === false && result.chargedMicros === 0) { attempt.denied = true; throw new HttpError(402, "budget_exhausted", "Cover budget is exhausted"); }
         if (result.allowed !== true || result.chargedMicros !== attempt.leg.request.costMicros) musicCoverUnavailable();
         attempt.acknowledged = true;
       }

@@ -1,4 +1,4 @@
-import { musicCoverVerification } from "./proxy-auth.ts";
+import { musicCoverVerification, retireMusicCoverVerification } from "./proxy-auth.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { claimMiniMaxMusicCoverControl, type MusicCoverControlPhase, type SealedMusicCoverInput } from "./minimax-music-cover-input.ts";
@@ -34,8 +34,10 @@ type Snapshot = Readonly<{ ordinary: number; mandatory: number; ordinaryActive: 
 // Twenty-seven fixed ticket cells include one UNUSED future POST ticket. There
 // is no provider dispatch, byte exposure, response split or retry API here.
 export class MiniMaxMusicCoverControl {
-  readonly operation: HttpOperation;
-  readonly phase: MusicCoverControlPhase;
+  private activeOperation?: HttpOperation;
+  private controlPhase?: MusicCoverControlPhase;
+  get operation(): HttpOperation { return this.activeOperation ?? musicCoverUnavailable(); }
+  get phase(): MusicCoverControlPhase { return this.controlPhase ?? musicCoverUnavailable(); }
   private ordinary = 0;
   private mandatory = 0;
   private ordinaryLimit: number = musicCoverControlLimits.ordinary;
@@ -53,8 +55,8 @@ export class MiniMaxMusicCoverControl {
   };
   constructor(token: symbol, phase: MusicCoverControlPhase) {
     if (token !== ownerToken) musicCoverUnavailable();
-    this.phase = phase;
-    this.operation = new HttpOperation(phase.signal, Math.max(0, phase.deadlineAt - Date.now()));
+    this.controlPhase = phase;
+    this.activeOperation = new HttpOperation(phase.signal, Math.max(0, phase.deadlineAt - Date.now()));
     this.operation.signal.addEventListener("abort", this.abort, { once: true });
     genuine.add(this);
   }
@@ -164,7 +166,7 @@ export class MiniMaxMusicCoverControl {
     for (const ticket of this.tickets) if (!ticket.mandatory) await ticket.work;
     if (this.ownershipBlocked) await new Promise<void>(() => undefined);
   }
-  cancel(): void { this.operation.cancel("cover control stopped"); }
+  cancel(): void { this.activeOperation?.cancel("cover control stopped"); }
   finish(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
@@ -178,6 +180,15 @@ export class MiniMaxMusicCoverControl {
         await new Promise<void>(() => undefined); // Unknown physical ownership retains the original charge.
       }
       this.operation.signal.removeEventListener("abort", this.abort); this.operation.stop("complete");
+      // Retained flows may keep this owner for counters. Drop every physical
+      // handle and settled promise (including raw cleanup rejection reasons)
+      // only AFTER all work and original locks retire, before the input root.
+      for (const ticket of this.tickets) {
+        ticket.response = undefined; ticket.input = undefined;
+        ticket.cancellation = undefined; ticket.work = undefined;
+      }
+      retireMusicCoverVerification(this); genuine.delete(this);
+      this.controlPhase = undefined; this.activeOperation = undefined;
       if (this.cleanupFailed) musicCoverUnavailable();
     })();
     return this.closing;

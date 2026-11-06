@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add inactive, explicitly attested MiniMax cover authority and bounded canonical control ownership, with current SQL mutation checks, pre-secret monetary admission and joined accounting cleanup. Cover routing, upload and vendor audio compatibility remain closed.
+- Add inactive, explicitly attested MiniMax cover authority and bounded canonical control ownership, with current SQL mutation checks, pre-secret monetary admission, generic-eligibility denial and joined accounting cleanup. Cover routing, upload and vendor audio compatibility remain closed.
 
 - Add an inactive private MiniMax cover input/hash foundation with incremental decimal50MB intake, a fixed operational reservation and joined read/cancel/hash retirement. Audio compatibility, cover authority and routing remain unqualified.
 

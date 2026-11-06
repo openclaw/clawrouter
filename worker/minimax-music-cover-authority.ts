@@ -5,7 +5,7 @@ import type { ContinuationOwner } from "./continuation-store.ts";
 import { inspectGrantCredentials, materializeGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-eligibility.ts";
 import { runMiniMaxMusicCoverControls, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
-import type { SealedMusicCoverInput } from "./minimax-music-cover-input.ts";
+import type { SealedMusicCoverInput, MusicCoverInputMetadata } from "./minimax-music-cover-input.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverIdentity, miniMaxMusicCoverProjection } from "./native-media-credential.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { authenticateProxyKey, proxyAdmission, proxyKeyVerification } from "./proxy-auth.ts";
@@ -18,7 +18,7 @@ const capability = "music.generate", model = "minimax/music-cover";
 const selection = Object.freeze({ providerId: "minimax", endpointId: "music-cover", mode: "http" as const,
   model: "music-cover", catalogModelId: model, capability });
 export interface InactiveMusicCoverPreparation { readonly kind: "minimax-cover-preparation.inactive.v1" }
-const preparations = new WeakMap<InactiveMusicCoverPreparation, Readonly<{ requestId: string; inputHash: string;
+const preparations = new WeakMap<InactiveMusicCoverPreparation, Readonly<{ requestId: string; input: MusicCoverInputMetadata;
   grantKey: string; ownerIdentity: string; callerId: string; route: string; coverage: string }>>();
 export function isInactiveMusicCoverPreparation(value: unknown): value is InactiveMusicCoverPreparation {
   return typeof value === "object" && value !== null && preparations.has(value as InactiveMusicCoverPreparation);
@@ -40,7 +40,8 @@ function allowed(policy: AccessPolicy, connection: ProviderConnection): void {
   if (!policy.enabled || !connection.enabled || connection.providerId !== "minimax"
     || policy.providers.length && !policy.providers.includes("minimax")
     || policy.models != null && !policy.models.includes(model)) musicCoverUnavailable(403);
-  if (!softBudgetPolicy(policy)) validateBudgetReservation(capability, cost(policy), policy.monthlyBudgetMicros,
+  if (!softBudgetPolicy(policy) || [policy.monthlyBudgetMicros, policy.dailyBudgetMicros, policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].includes(0))
+    validateBudgetReservation(capability, cost(policy), policy.monthlyBudgetMicros,
     connection, policy.dailyBudgetMicros, policy.limitHint, policy.weeklyBudgetMicros);
 }
 
@@ -111,7 +112,7 @@ export function prepareInactiveMiniMaxMusicCover(env: Env, headers: Headers, inp
       const last = await refresh(env, auth, selected.key, first.current, control, first.coverage);
       // No fetch constructor, URL, bearer header, raw bytes or reusable permit.
       result = Object.freeze({ kind: "minimax-cover-preparation.inactive.v1" });
-      preparations.set(result, Object.freeze({ requestId, inputHash: control.phase.metadata.sha256,
+      preparations.set(result, Object.freeze({ requestId, input: control.phase.metadata,
         grantKey: selected.key, ownerIdentity: miniMaxMusicCoverIdentity(last.current), callerId: auth.credentialId!,
         route: control.phase.route, coverage: last.coverage }));
     } catch (error) { primary = error; }

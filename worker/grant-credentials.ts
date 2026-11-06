@@ -485,6 +485,11 @@ export class GrantCredentialObject implements DurableObject {
           if (!canonicalRecord(record)) throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner is unavailable");
           return json({ grant: metadataGrant(record) });
         }
+        if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") {
+          searchJsonBytes(record);
+          if (!canonicalRecord(record) || record.poolSyncPending) musicCoverUnavailable();
+          const result = { grant: metadataGrant(record) }; searchJsonBytes(result); return json(result);
+        }
         record = await this.diagnoseUnsettled(record);
         if (canonicalRecord(record) && record.poolSyncPending) {
           // A derived-index outage must not conceal the owner's diagnosis.
@@ -1127,6 +1132,9 @@ export class GrantCredentialObject implements DurableObject {
   private async loadRecord(key: string, stored?: CredentialRecord, repair = true): Promise<CredentialRecord | undefined> {
     let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return record;
+    // Cover has a separate canonical owner path. Generic materialization and
+    // maintenance cannot diagnose, repair or adopt this inactive profile.
+    if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") musicCoverUnavailable(403);
     record = await this.diagnoseUnsettled(record);
     if (canonicalRecord(record)) return repair && record.poolSyncPending ? (await this.reconcileAttachment(key)).record : record;
     if (!record.metadata || record.enabled === undefined) {

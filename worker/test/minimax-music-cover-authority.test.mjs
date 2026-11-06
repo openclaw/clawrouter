@@ -6,10 +6,12 @@ import { byteBody, syntheticTransport, jsonResponse } from "./minimax-search-byt
 import { beginMiniMaxMusicCoverInput, claimMiniMaxMusicCoverInput } from "../minimax-music-cover-input.ts";
 import { prepareInactiveMiniMaxMusicCover, isInactiveMusicCoverPreparation } from "../minimax-music-cover-authority.ts";
 import { runMiniMaxMusicCoverControls, musicCoverControlHeader, musicCoverControlVersion } from "../minimax-music-cover-control.ts";
-import { authenticateProxyKey } from "../proxy-auth.ts";
-import { inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
+import { authenticateProxyKey, musicCoverVerification, proxyAdmission, proxyKeyVerification } from "../proxy-auth.ts";
+import { inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, materializeGrantCredentials } from "../grant-credentials.ts";
 import { miniMaxMediaProjection } from "../native-media-credential.ts";
 import { minimaxMusicCoverBinding } from "../../shared/native-media-binding.ts";
+import { configureMusic } from "./minimax-music-runtime-fixture.mjs";
+import { grantSupports } from "../provider-auth.ts";
 import { BodyLease, bodyBudgetCharged } from "../body-budget.ts";
 const MiB = 1024 * 1024, tick = () => new Promise(resolve => setImmediate(resolve));
 const headers = new Headers({ authorization: "Bearer clawrouter-live-fixture-fixture-secret" });
@@ -38,7 +40,7 @@ async function setup(t, options = {}) {
     } }; };
   }
   f.input = async (route = "native", signal = new AbortController().signal) => {
-    const op = beginMiniMaxMusicCoverInput({ body: byteBody(JSON.stringify(route === "manifest" ? { body: { ...document, model: "minimax/music-cover" } } : document)),
+    const op = beginMiniMaxMusicCoverInput({ body: byteBody(JSON.stringify(route === "manifest" ? { body: document } : document)),
       signal, deadlineAt: Date.now() + 30000, contentType: "application/json", route });
     return { op, sealed: await op.result };
   };
@@ -69,6 +71,7 @@ test("cover binding is private and never grants old text/speech or imported auth
   const f = await setup(t), grant = await inspectGrantCredentials(f.env, grantKey);
   assert.deepEqual(grant.nativeMediaBinding, minimaxMusicCoverBinding);
   assert.equal(miniMaxMediaProjection(grant, "minimax.music"), false); assert.equal(miniMaxMediaProjection(grant, "minimax.speech"), false);
+  await assert.rejects(materializeGrantCredentials(f.env, grantKey, grant, "minimax", null, false));
   await f.musicPut({ nativeMediaAuthorization: null });
   await putGrantCredentials(f.env, grantKey, { provider: "minimax", kind: "api_key", enabled: true,
     credential: "synthetic-import", nativeMediaBinding: minimaxMusicCoverBinding });
@@ -144,4 +147,85 @@ test("primitive mandatory independence is not a claim of overlapping registered 
     await flow.result;
   } finally { held.resolve(); await flow?.retired; await op.discard(); }
   assert.equal(bodyBudgetCharged(), 0);
+});
+
+for (const rejectedCancel of [false, true]) test(`retained control flow clears physical and verifier references after ${rejectedCancel ? "rejected FIRST cancellation" : "success"}`, async t => {
+  const f = await setup(t), controller = new AbortController(), { op, sealed } = await f.input("native", controller.signal);
+  const readEntered = Promise.withResolvers(), readRelease = Promise.withResolvers();
+  const cancelEntered = Promise.withResolvers(), cancelRelease = Promise.withResolvers(), finishRelease = Promise.withResolvers();
+  const rawCleanup = new Error("synthetic raw cleanup failure");
+  let retainedOwner, identity, response, cancels = 0, unlocks = 0;
+  const flow = runMiniMaxMusicCoverControls(sealed, async owner => {
+    retainedOwner = owner;
+    identity = await authenticateProxyKey(headers, f.env, [{ id: "minimax", tokenRef: "minimax" }], false,
+      undefined, selection, "authoritative", undefined, undefined, owner);
+    response = jsonResponse({ ok: true });
+    if (rejectedCancel) {
+      const getReader = response.body.getReader.bind(response.body);
+      response.body.getReader = options => {
+        const reader = getReader(options);
+        return { async read(view) {
+          try { return await reader.read(view); }
+          finally { readEntered.resolve(); await readRelease.promise; }
+        }, async cancel(reason) {
+          cancels++; try { await reader.cancel(reason); }
+          finally { cancelEntered.resolve(); await cancelRelease.promise; throw rawCleanup; }
+        }, releaseLock() { unlocks++; reader.releaseLock(); } };
+      };
+    }
+    await owner.controlJson({}, async () => response);
+    readEntered.resolve(); await finishRelease.promise;
+  });
+  const result = rejectedCancel ? assert.rejects(flow.result) : flow.result;
+  const retired = rejectedCancel ? assert.rejects(flow.retired, error => error !== rawCleanup && error.message === "cover control cleanup failed") : flow.retired;
+  const inputRetired = rejectedCancel ? assert.rejects(op.retired, { code: "cleanup" }) : op.retired;
+  try {
+    await Promise.race([readEntered.promise, flow.result.then(
+      () => { throw new Error("control completed before the held boundary"); }, error => { throw error; })]);
+    assert.ok(retainedOwner.tickets.some(ticket => ticket.response && ticket.input && ticket.work));
+    assert.equal(musicCoverVerification(retainedOwner), identity);
+    assert.equal(bodyBudgetCharged(), 96 * MiB);
+    if (rejectedCancel) {
+      controller.abort("fixture cancellation"); await result; await cancelEntered.promise;
+      assert.equal(response.body.locked, true); assert.equal(bodyBudgetCharged(), 96 * MiB);
+      cancelRelease.resolve(); await tick();
+      assert.equal(response.body.locked, true); assert.equal(bodyBudgetCharged(), 96 * MiB);
+      assert.ok(retainedOwner.tickets.some(ticket => ticket.input && ticket.work));
+      readRelease.resolve();
+    }
+    finishRelease.resolve(); await result; await retired; await inputRetired;
+    for (const ticket of retainedOwner.tickets) {
+      assert.equal(ticket.response, undefined); assert.equal(ticket.input, undefined);
+      assert.equal(ticket.cancellation, undefined); assert.equal(ticket.work, undefined); assert.equal(ticket.released, true);
+    }
+    assert.equal(musicCoverVerification(retainedOwner), undefined);
+    assert.equal(proxyAdmission(identity), undefined); assert.equal(proxyKeyVerification(identity), undefined);
+    assert.equal(retainedOwner.controlPhase, undefined); assert.equal(retainedOwner.activeOperation, undefined);
+    assert.equal(flow.snapshot().cleanupFailed, rejectedCancel); assert.equal(flow.snapshot().ordinary, 2);
+    assert.equal(response.body.locked, false); assert.equal(bodyBudgetCharged(), 0);
+    if (rejectedCancel) { assert.equal(cancels, 1); assert.equal(unlocks, 1); }
+  } finally {
+    readRelease.resolve(); cancelRelease.resolve(); finishRelease.resolve(); controller.abort("fixture teardown");
+    await Promise.allSettled([result, retired, inputRetired]);
+  }
+});
+
+
+test("strict cover profile denies generic Chat/discovery while V1 permission is unchanged", async t => {
+  const f = await setup(t); configureMusic(f.provider);
+  const chat = { ...f.provider.endpoints[0], id: "chat", path: "/v1/chat/completions", request_format: "openai.chat", response_format: "openai.chat" };
+  f.provider.endpoints.push(chat); f.provider.capabilities.push({ id: "llm.chat", endpoint: "chat", methods: ["POST"] });
+  f.provider.models.push({ ...f.provider.models[0], id: "minimax/fixture-chat", upstream: "fixture-chat", capabilities: ["llm.chat"] });
+  f.policy.models = null; await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+  const grant = await inspectGrantCredentials(f.env, grantKey);
+  const requirement = { provider: f.provider, endpoint: chat, mode: "http", model: "fixture-chat" };
+  assert.equal(grantSupports(requirement, grant), false);
+  for (const endpoint of f.provider.endpoints) assert.equal(grantSupports({ ...requirement, endpoint }, grant), false);
+  const denied = await (await f.call("/v1/catalog", null)).json();
+  assert.equal(denied.providers.find(row => row.id === "minimax").offers.some(row => row.eligible), false);
+  await f.musicPut({ nativeMediaAuthorization: "minimax-global-music" });
+  const oldProfile = await inspectGrantCredentials(f.env, grantKey);
+  assert.equal(grantSupports(requirement, oldProfile), true);
+  const oldCatalog = await (await f.call("/v1/catalog", null)).json();
+  assert.equal(oldCatalog.providers.find(row => row.id === "minimax").offers.some(row => row.modelId === "minimax/fixture-chat" && row.eligible), true);
 });

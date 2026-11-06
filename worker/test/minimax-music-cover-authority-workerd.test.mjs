@@ -10,15 +10,37 @@ import { musicAccessFixture } from "./minimax-music-admin-fixture.mjs";
 
 const router = String.raw`
 import worker from './worker/index.ts';
-import {PolicyBindingIndexObject as Authority,BudgetLedgerObject,UsageLedgerObject} from './worker/index.ts';
+import {PolicyBindingIndexObject as Authority,BudgetLedgerObject as Budget,UsageLedgerObject} from './worker/index.ts';
 import {GrantCredentialObject as Credentials} from './worker/grant-credentials.ts';
 import {authorityCall} from './worker/authority.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
 import {beginMiniMaxMusicCoverInput,claimMiniMaxMusicCoverInput} from './worker/minimax-music-cover-input.ts';
 import {prepareInactiveMiniMaxMusicCover,isInactiveMusicCoverPreparation} from './worker/minimax-music-cover-authority.ts';
-import {musicCoverControlHeader,musicCoverControlVersion} from './worker/minimax-music-cover-control.ts';
-export {BudgetLedgerObject,UsageLedgerObject};
+import {MiniMaxMusicCoverControl,musicCoverControlHeader,musicCoverControlVersion} from './worker/minimax-music-cover-control.ts';
+import {musicCoverVerification} from './worker/proxy-auth.ts';
+export {UsageLedgerObject};
+function maximumControl(value){
+ const row={...value,padding:'x'.repeat(4096),discarded:[]};
+ const count=v=>1+(v&&typeof v==='object'?Object.values(v).reduce((sum,item)=>sum+count(item),0):0);
+ while(count(row)<128)row.discarded.push(null);
+ if(count(row)!==128)throw Error('fixture control node bound');
+ const text=JSON.stringify(row);if(text.length>16384)throw Error('fixture control wire bound');
+ return new Response(text+' '.repeat(16384-text.length),{headers:{'content-type':'application/json','content-length':'16384'}});
+}
+export class BudgetLedgerObject extends Budget {
+ async fetch(request){
+  const mode=request.headers.get('x-fixture-cover-mode'),path=new URL(request.url).pathname;
+  const response=await super.fetch(request);
+  if(!mode||!response.ok)return response;
+  if(path==='/settle'&&mode==='bodyless'){await response.body?.cancel();return new Response(null,{status:503});}
+  const value=await response.json();
+  if(path==='/settle'&&mode==='fallback'){
+   const error=maximumControl({error:'synthetic bounded rejection'});return new Response(error.body,{status:503,headers:error.headers});
+  }
+  return maximumControl(value);
+ }
+}
 const admin='music-admin@example.invalid',principal='cover-user@example.invalid';
 const gate=(mode,phase)=>fetch('https://cover-authority-gate.example/'+mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('fixture gate');await r.text();});
 export class PolicyBindingIndexObject extends Authority {
@@ -54,13 +76,18 @@ export class GrantCredentialObject extends Credentials {
  }
 }
 let initialized,active;
+const originalControlJson=MiniMaxMusicCoverControl.prototype.controlJson;
+MiniMaxMusicCoverControl.prototype.controlJson=function(...args){if(active)active.controlOwner=this;return originalControlJson.apply(this,args);};
+function retainedControl(owner){return owner?{
+ transports:owner.tickets.reduce((n,t)=>n+Number(!!t.response)+Number(!!t.input)+Number(!!t.cancellation)+Number(!!t.work),0),
+ verifier:!!musicCoverVerification(owner),phase:!!owner.controlPhase,operation:!!owner.activeOperation}:null;}
 const policy=(soft=false,price=700)=>({enabled:true,generation:'g1',providers:['minimax'],models:['minimax/music-cover'],tenantId:'fixture',
  budgetMode:soft?'soft':'reserve',budgetScope:'principal',monthlyBudgetMicros:100000,dailyBudgetMicros:100000,weeklyBudgetMicros:100000,
  requestCostMicros:price,retainRequestContent:false,grantRouting:{eligibleGrants:{minimax:['cover']},environmentFallback:false,failover:false}});
 const state=()=>active?{mode:active.mode,charged:bodyBudgetCharged(),done:active.done,retired:active.retired,code:active.code,
  cleanupCode:active.cleanupCode,calls:active.calls,materializations:active.materializations,reads:active.reads,cancels:active.cancels,
  unlocks:active.unlocks,locked:active.source?.locked??false,held:active.held,cleanup:active.cleanup,prepared:active.prepared,
- snapshot:active.flow?.snapshot(),ids:active.ids,queue:active.queue,post:0}:{};
+ snapshot:active.flow?.snapshot(),retainedControl:retainedControl(active.controlOwner),ids:active.ids,queue:active.queue,maximumControls:active.maximumControls,post:0}:{};
 function controlEnvironment(bindings,a){
  const env={...bindings};
  for(const name of ['ACCESS_CONTROL','GRANT_CREDENTIALS','BUDGET_LEDGER','USAGE_LEDGER']){
@@ -68,12 +95,14 @@ function controlEnvironment(bindings,a){
    const path=new URL(url).pathname,owned=new Headers(init?.headers).get(musicCoverControlHeader)===musicCoverControlVersion;
    if(!owned)return stub.fetch(url,init);
    a.calls.push(path);if(path==='/materialize')a.materializations++;
+   if(path==='/authorization/snapshot'&&((a.mode.startsWith('preprice-')&&a.calls.filter(p=>p===path).length===1)
+      ||a.mode==='coverage'&&a.calls.filter(p=>p===path).length===2)){a.held=true;await gate(a.mode,'policy');}
+
    if(['/reserve','/dispatch','/settle'].includes(path))a.ids.push({path,id:JSON.parse(init.body).reservationId});
-   let response=await stub.fetch(url,init);
+   const outgoing=name==='BUDGET_LEDGER'?{...init,headers:{...Object.fromEntries(new Headers(init.headers)),'x-fixture-cover-mode':a.mode}}:init;
+   let response=await stub.fetch(url,outgoing);
+   if(name==='BUDGET_LEDGER'&&response.headers.get('content-length')==='16384')a.maximumControls++;
    if(a.mode==='partial'&&path==='/reserve'&&a.calls.filter(p=>p==='/reserve').length===2){await response.body.cancel();return new Response(null,{status:503});}
-   if((a.mode==='fallback'||a.mode==='bodyless')&&path==='/settle'){
-    await response.body.cancel();response=a.mode==='bodyless'?new Response(null,{status:503}):Response.json({error:{code:'bounded',message:'synthetic'}},{status:503});
-   }
    if(['policy','read','reject','late'].includes(a.mode)&&path==='/authorization/snapshot'&&a.calls.filter(p=>p===path).length===2){
     a.source=response.body;const get=response.body.getReader.bind(response.body);let cancellation;
     response.body.getReader=options=>{const reader=get(options);return {
@@ -105,12 +134,15 @@ export default {async fetch(request,bindings,context){
  if(url.pathname==='/fixture/state')return Response.json(state());
  if(url.pathname==='/fixture/contend'){const lease=new BodyLease();try{return Response.json({allowed:lease.grow(1024*1024),charged:bodyBudgetCharged()});}finally{lease.release();}}
  if(url.pathname==='/fixture/configure'){
-  await authorityCall(env,'/policies/put',{policyId:'fixture',policy:policy(url.searchParams.get('soft')==='true',url.searchParams.get('unknown')==='true'?null:700)});
+  const next=policy(url.searchParams.get('soft')==='true',url.searchParams.get('unknown')==='true'?null:700);
+  if(url.searchParams.get('unmetered')==='true')next.monthlyBudgetMicros=next.dailyBudgetMicros=next.weeklyBudgetMicros=null;
+  await authorityCall(env,'/policies/put',{policyId:'fixture',policy:next});
+  await authorityCall(env,'/connections/put',{providerId:'minimax',monthlyBudgetMicros:url.searchParams.get('unmetered')==='true'?null:100000});
   return Response.json({ok:true});
  }
  if(url.pathname==='/fixture/user'){
   await authorityCall(env,'/users/put',{email:url.searchParams.get('admin')==='true'?admin:principal,record:{role:url.searchParams.get('demote')==='true'?'user':url.searchParams.get('admin')==='true'?'admin':'user',enabled:url.searchParams.get('disabled')!=='true',tenantId:'fixture',groups:[],contentRetentionDisabled:false,
-   ...(url.searchParams.get('budget')==='true'?{budgetOverrides:{fixture:{monthlyBudgetMicros:500}}}:{})}});
+   ...(url.searchParams.has('budget')?{budgetOverrides:{fixture:{[url.searchParams.get('budget')+'BudgetMicros']:500,updatedBy:admin,updatedAt:new Date().toISOString()}}}:{})}});
   return Response.json({ok:true});
  }
  if(url.pathname==='/fixture/oversize')return env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings')).fetch(request);
@@ -118,7 +150,7 @@ export default {async fetch(request,bindings,context){
  if(url.pathname==='/fixture/start'){
   if(active&&!active.retired)return new Response(null,{status:409});
   const a=active={mode:url.searchParams.get('mode')??'normal',done:false,retired:false,reads:0,cancels:0,unlocks:0,
-   held:false,cleanup:false,calls:[],ids:[],materializations:0,queue:0},controller=new AbortController();
+   held:false,cleanup:false,calls:[],ids:[],materializations:0,queue:0,maximumControls:0},controller=new AbortController();
   if(['read','reject','late'].includes(a.mode))context.waitUntil(gate(a.mode,'abort').then(()=>controller.abort('fixture caller abort')));
   const input=beginMiniMaxMusicCoverInput({body:request.body,signal:controller.signal,deadlineAt:Date.now()+60000,
    route:url.searchParams.get('route')==='manifest'?'manifest':'native',contentType:'application/json'});
@@ -137,7 +169,7 @@ export default {async fetch(request,bindings,context){
 
 function input(bytes = 2, route = "native") {
   const prefix = (route === "manifest" ? '{"body":' : "") + '{"audio_base64":"';
-  const tail = '","prompt":"Synthetic cover style","model":"' + (route === "manifest" ? "minimax/music-cover" : "music-cover") + '"}' + (route === "manifest" ? "}" : "");
+  const tail = '","prompt":"Synthetic cover style","model":"' + "music-cover" + '"}' + (route === "manifest" ? "}" : "");
   let remaining = Math.floor(bytes / 3) * 4, phase = 0;
   return { length: Buffer.byteLength(prefix + tail) + Math.ceil(bytes / 3) * 4,
     body: new ReadableStream({ pull(c) {
@@ -153,12 +185,12 @@ test("inactive cover actual isolated SQL/control owner: full input, authority, c
   const temporary = await mkdtemp(join(tmpdir(), "cover-authority-workerd-")); t.after(() => rm(temporary, { recursive: true, force: true }));
   const held = new Map(), arrived = new Set(), released = new Set();
   const server = createServer((request, response) => {
-    if (request.headers.authorization || !/^\/(admin|policy|read|reject|late)\/(pool|policy|abort|read|cleanup|late)$/.test(request.url)) { response.writeHead(400); response.end(); return; }
+    if (request.headers.authorization || !/^\/(admin|policy|read|reject|late|preprice-daily|preprice-weekly|preprice-monthly|coverage)\/(pool|policy|abort|read|cleanup|late)$/.test(request.url)) { response.writeHead(400); response.end(); return; }
     arrived.add(request.url); if (released.has(request.url)) response.end("ok"); else held.set(request.url, response);
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const release = key => { released.add(key); held.get(key)?.end("ok"); held.delete(key); };
-  const releaseAll = () => { for (const mode of ["admin", "policy", "read", "reject", "late"]) for (const phase of ["pool", "policy", "abort", "read", "cleanup", "late"]) release("/" + mode + "/" + phase); };
+  const releaseAll = () => { for (const mode of ["admin", "policy", "read", "reject", "late", "preprice-daily", "preprice-weekly", "preprice-monthly", "coverage"]) for (const phase of ["pool", "policy", "abort", "read", "cleanup", "late"]) release("/" + mode + "/" + phase); };
   const access = await musicAccessFixture();
   const upstream = `export default {fetch(request){const u=new URL(request.url);
     if(u.href==='https://music-admin-fixture.cloudflareaccess.com/cdn-cgi/access/certs')return Response.json({keys:[${JSON.stringify(access.jwk)}]});
@@ -166,7 +198,12 @@ test("inactive cover actual isolated SQL/control owner: full input, authority, c
     throw Error('inactive cover forbids every provider request');}};`;
   const runtime = await startWorkerdFixture(temporary, router.replace("ACCESS_ENV", JSON.stringify(access.env)), upstream, { preventEviction: true });
   const clients = new Set();
-  t.after(async () => { releaseAll(); await Promise.all([...clients]); await runtime.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  t.after(async () => {
+    releaseAll();
+    try { const results = await Promise.allSettled([...clients]); const failed = results.filter(value => value.status === "rejected");
+      if (failed.length) throw new AggregateError(failed.map(value => value.reason), "fixture clients failed");
+    } finally { await runtime.dispose(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  });
   const call = async path => { const r = await runtime.dispatchFetch("https://router.example/fixture/" + path); assert.equal(r.status, 200, await r.clone().text()); return r.json(); };
   const put = body => runtime.dispatchFetch("https://router.example/v1/admin/upstream-grants/policies/fixture/cover", {
     method: "PUT", headers: { ...access.headers, "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -195,6 +232,8 @@ test("inactive cover actual isolated SQL/control owner: full input, authority, c
     assert.equal(result.calls.filter(x => x === "/settle").length, soft ? 0 : 4);
     assert.equal(result.post, 0); assert.equal(result.queue, 1); assert.equal(result.charged, 0);
     assert.equal(result.snapshot.mandatory, soft ? 1 : 5);
+    assert.equal(result.maximumControls, soft ? 4 : 12);
+    assert.deepEqual(result.retainedControl,{transports:0,verifier:false,phase:false,operation:false});
   }
   await call("configure");
   for (const mode of ["forged", "metadata"]) {
@@ -202,7 +241,21 @@ test("inactive cover actual isolated SQL/control owner: full input, authority, c
   }
   await call("configure?unknown=true");
   const unpriced = await start().pending; assert.equal(unpriced.code, "pricing_required"); assert.equal(unpriced.materializations, 0);
+  for (const field of ["daily", "weekly", "monthly"]) {
+    await call("configure?unknown=true&unmetered=true");
+    const mode = "preprice-" + field, client = start(mode);
+    try {
+      await wait(value => value.mode === mode && value.held); await call("user?budget=" + field); release("/" + mode + "/policy");
+      const result = await client.pending; assert.equal(result.code, "pricing_required"); assert.equal(result.materializations, 0); assert.equal(result.post, 0);
+    } finally { release("/" + mode + "/policy"); await client.pending; await call("user"); }
+  }
   await call("configure");
+  const coverageClient = start("coverage");
+  try {
+    await wait(value => value.mode === "coverage" && value.held); await call("user?budget=daily"); release("/coverage/policy");
+    const result = await coverageClient.pending; assert.ok(result.code); assert.equal(result.calls.filter(x => x === "/reserve").length, 4);
+    assert.equal(result.calls.filter(x => x === "/settle").length, 4); assert.equal(result.post, 0);
+  } finally { release("/coverage/policy"); await coverageClient.pending; await call("user"); }
   await call("oversize?on=true");
   try { const cold = await start().pending; assert.equal(cold.calls.length, 1); assert.equal(cold.materializations, 0); assert.ok(cold.code); }
   finally { await call("oversize?on=false"); }
@@ -221,6 +274,7 @@ test("inactive cover actual isolated SQL/control owner: full input, authority, c
       assert.equal(heldState.charged, 96 * 1024 * 1024); assert.equal((await call("contend")).allowed, false);
       release("/" + mode + "/abort");
       const canceled = await wait(value => value.done); assert.equal(canceled.charged, 96 * 1024 * 1024); assert.equal(canceled.retired, false);
+      assert.ok(canceled.retainedControl.transports>0);assert.equal(canceled.retainedControl.verifier,true);
       if (mode === "late") { assert.equal(canceled.reads, 0); release("/late/late"); }
       await wait(value => value.cancels === 1);
       release("/" + mode + "/cleanup");
@@ -228,6 +282,7 @@ test("inactive cover actual isolated SQL/control owner: full input, authority, c
       if (mode !== "late") { assert.equal(cleanup.locked, true); assert.equal(cleanup.charged, 96 * 1024 * 1024); }
       release("/" + mode + "/read");
       const done = await client.pending; assert.equal(done.charged, 0); assert.equal(done.cancels, 1); assert.equal(done.unlocks, 1);
+      assert.deepEqual(done.retainedControl,{transports:0,verifier:false,phase:false,operation:false});
       assert.equal(done.locked, false); if (mode === "reject") assert.equal(done.cleanupCode, "control_cleanup");
       if (mode === "late") assert.equal(done.reads, 0);
     } catch (error) { primary = error; }

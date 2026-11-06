@@ -8,8 +8,9 @@ tail to actual dispatch; it cannot carry this observation across later waits.
 
 The new explicit `minimax-global-music-cover-inline-audio` administrator intent
 attests the original scalar API key and account to the closed GLOBAL
-`api.minimax.io`, `music-cover`, `inline-audio.v1` profile. V1 speech and regular
-Music retain their exact profiles, including environment discrimination. CN,
+`api.minimax.io`, `music-cover`, `inline-audio.v1` profile. Generic eligibility and discovery reject the strict V2 cover profile before
+endpoint handling. V1 speech and regular Music retain their exact profiles,
+including environment discrimination. CN,
 OAuth, URL, feature-ID, free-model and text-Music permission are not inherited.
 Imports project authoritative null. Changing a binding rotates lineage.
 
@@ -126,6 +127,13 @@ Input completion joins the independently registered control root. Control never
 awaits input completion or discard. It initiates input closure before joining its
 own physical roots. Cleanup rejection is reported separately from successful
 retirement; no encompassing completion promise joins itself.
+After all physical roots settle and original locks retire, tickets drop their
+response, reader, cancellation and work-promise references. The owner removes
+its verifier/admission association and caller/phase handles before resolving
+the control root. A retained completed flow keeps only bounded counters and
+sanitized terminal facts. Pending cleanup keeps the references and charge.
+Focused tests inspect those references directly, including rejected first
+cancellation; this is not a GC or heap measurement.
 
 ## Qualification boundary
 

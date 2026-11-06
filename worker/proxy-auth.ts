@@ -26,6 +26,13 @@ const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
 const admissions = new WeakMap<AuthorizedIdentity, AdmissionResult>();
 const coverIdentities = new WeakMap<MiniMaxMusicCoverControl, AuthorizedIdentity>();
 export function musicCoverVerification(owner: MiniMaxMusicCoverControl): AuthorizedIdentity | undefined { return coverIdentities.get(owner); }
+export function retireMusicCoverVerification(owner: MiniMaxMusicCoverControl): void {
+  const identity = coverIdentities.get(owner);
+  coverIdentities.delete(owner);
+  if (!identity) return;
+  admissions.delete(identity); verifiedKeys.delete(identity);
+  admissionRequests.delete(identity); selections.delete(identity); sessionHashes.delete(identity);
+}
 const sessionHashes = new WeakMap<AuthorizedIdentity, string>();
 export function proxyAdmission(identity: AuthorizedIdentity): AdmissionResult | undefined { return admissions.get(identity); }
 export function proxySessionHash(identity: AuthorizedIdentity): string | undefined { return sessionHashes.get(identity); }
