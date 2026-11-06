@@ -4,6 +4,8 @@
 
 - Add explicitly re-attested global Hailuo first-frame input for the two qualified models, with incremental full-size inline decoding, content-bound idempotency, pre-secret input authority and joined upload/hash/response retirement under the existing operational reservation. Public activation and platform-native transport allocation qualification remain separate.
 
+- Add a local Fusion generation screen with isolated execution, withheld grading and paired small-model retry baselines before paid benchmarks.
+
 - Add explicitly attested regional MiniMax Hailuo text-to-video execution and original-job file retrieval, with current SQL mutation authority, generation-bound job routes, bounded per-invocation ownership and conservative dispatch-acknowledgment handling. Public declarations and native-client activation remain separate. Resolve exact declared native and manifest model identities, pin current fixed tariffs into durable admission and preserve readable known-unsent denials after confirmed dispatch admission.
 
 - Recheck current SQL administrator authority after MiniMax Music grant preparation and pool admission, fencing exact mutations and revocation retries while preserving the old owner on denial.
