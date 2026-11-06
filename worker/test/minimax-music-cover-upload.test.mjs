@@ -206,13 +206,41 @@ test("synchronous/asynchronous transport causes are sanitized before held FIRST 
   }
 });
 
-test("original caller abort identity does not masquerade as a cleanup-failure flag", async () => {
+test("established bounded public cancellation remains separate from cleanup failure", async () => {
   const f = await begin(), reason = Object.assign(new Error("fixture caller abort", { cause: { boundedFixture: true } }), { cleanupFailed: true });
   const flow = runInactiveMiniMaxMusicCoverUpload(f.sealed, async (_url, init) => {
     await drain(init.body); f.controller.abort(reason); return reply();
   });
   try {
-    await assert.rejects(flow.result, error => error === reason); await flow.retired;
+    await assert.rejects(flow.result, error => error === "cover control stopped"); await flow.retired;
     assert.equal(flow.snapshot().cleanupFailed, false); assert.equal(bodyBudgetCharged(), 0);
   } finally { await cleanup(f, flow); }
+});
+
+test("prestart interval retires the actual slot without classifying caller-owned cleanup flags", async () => {
+  for (const directOperationFault of [false, true]) {
+    const f = await begin(), reason = Object.assign(new Error("synthetic prestart reason"), { cleanupFailed: true });
+    let started = 0, entered = 0;
+    const flow = runMiniMaxMusicCoverControls(f.sealed, async owner => {
+      const cap = claimMiniMaxMusicCoverUpload(owner.phase), slot = owner.slot.bind(owner);
+      owner.slot = async ticket => {
+        await slot(ticket); entered++;
+        // The ordinary caller path retains its established bounded reason.
+        // Direct operation.cancel is a separate PRIVATE fault injection: it
+        // places an adversarial raw reason at the catch being hardened, and
+        // would make the old structural classification report cleanup failure.
+        if (directOperationFault) owner.operation.cancel(reason);
+        else f.controller.abort(reason);
+      };
+      await owner.post(cap, async () => { started++; return { value: null, retired: Promise.resolve() }; });
+    });
+    try {
+      await assert.rejects(flow.result, error => directOperationFault ? error === reason : error === "cover control stopped");
+      await flow.retired; await f.input.retired;
+      assert.equal(entered, 1); assert.equal(started, 0);
+      assert.equal(flow.snapshot().cleanupFailed, false); assert.equal(flow.snapshot().ordinaryActive, 0);
+      assert.equal(flow.snapshot().ordinary, 1); assert.equal(flow.snapshot().postAttempts, 1);
+      assert.equal(bodyBudgetCharged(), 0);
+    } finally { await cleanup(f, flow); }
+  }
 });

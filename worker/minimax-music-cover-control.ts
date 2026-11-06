@@ -175,7 +175,9 @@ export class MiniMaxMusicCoverControl {
     ticket.work = (async () => {
       await this.slot(ticket);
       try {
-        this.operation.signal.throwIfAborted();
+        // A prestart abort is not evidence of internal cleanup failure, even
+        // when an internal caller supplied a reason with cleanupFailed:true.
+        if (this.operation.signal.aborted) throw new Error("music cover inactive transport stopped");
         const outcome = await start(() => reject(new Error("music cover inactive transport failed")));
         resolve(outcome.value); await outcome.retired;
       } catch (error) {

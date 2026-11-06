@@ -232,7 +232,7 @@ export async function readNativeMiniMaxMusicCover(response: Response, successor:
     if (input && !input.blocked) {
       try { await input.retire(eof ? "eof" : "cancel"); } catch { throw coverCleanup(); }
     }
-    // HttpOperation owns the public caller reason. The physical cleanup path
+    // The existing control operation owns public cancellation. Physical cleanup
     // retains only its bounded failure, never a caller-supplied cause graph.
     throw coverFailure();
   } finally {

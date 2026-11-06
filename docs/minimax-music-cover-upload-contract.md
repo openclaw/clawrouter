@@ -73,7 +73,9 @@ retain only a bounded failure flag, not an original exception/cause graph.
 A failed unlock or a still-locked body retains the root, POST slot and charge;
 rejected cancellation with a proved unlock can retire. Public rejection does not
 wait for physical cleanup. Stalled cleanup retains capacity.
-The original deadline covers parsing and unclaimed output.
+The original deadline covers parsing and unclaimed output. The established input
+listener cancels the control operation with bounded `cover control stopped`; this
+slice does not promise original caller-reason identity.
 
 Platform-native HTTP frames, copies, internal pumps and socket storage remain an
 explicit unqualified boundary. Application-source retirement is not a native
