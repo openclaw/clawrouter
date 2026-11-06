@@ -69,7 +69,7 @@ globalThis.fetch=async(input,init)=>{
   response.body.getReader=options=>{a.acquired++;const reader=get(options);return{
    async read(view){a.reads++;
     if(nativeEof){if(a.reads<(a.mode==='reads8192'?8192:8193))return{done:false,value:new Uint8Array(view.buffer,0,0)};return{done:true,value:new Uint8Array(view.buffer,0,0)};}
-    a.nativeReads++;const part=await reader.read(view);
+    a.nativeReads++;const part=await reader.read(view);a.nativeBytes+=part.value?.byteLength??0;a.nativeBacking=Math.max(a.nativeBacking,part.value?.buffer.byteLength??0);
     if((a.mode==='reads8192'||a.mode==='reads8193')&&part.done){nativeEof=true;a.nativeEof=true;return{done:false,value:new Uint8Array(new ArrayBuffer(16384),0,0)};}
     if(a.mode==='backing')return{done:false,value:new Uint8Array(new ArrayBuffer(16385),0,2)};
     if(['read','reject','unlock'].includes(a.mode)){a.readHeld=true;await gate(a,'read');a.readSettled=true;}
@@ -101,7 +101,7 @@ for(const name of ['importKey','verify']){
   return result;
  };
 }
-const state=()=>active?{mode:active.mode,fallback:active.fallback,fetches:active.fetches,cache:active.cache,cacheHit:active.cacheHit,acquired:active.acquired,reads:active.reads,nativeReads:active.nativeReads,nativeEof:active.nativeEof,
+const state=()=>active?{mode:active.mode,fallback:active.fallback,fetches:active.fetches,cache:active.cache,cacheHit:active.cacheHit,acquired:active.acquired,reads:active.reads,nativeReads:active.nativeReads,nativeBytes:active.nativeBytes,nativeBacking:active.nativeBacking,nativeEof:active.nativeEof,
  imports:active.imports,verifies:active.verifies,cancels:active.cancels,cancelHeld:active.cancelHeld,cancelSettled:active.cancelSettled,readHeld:active.readHeld,
  readSettled:active.readSettled,fetchHeld:active.fetchHeld,cryptoHeld:active.cryptoHeld,aborted:active.abort.signal.aborted,finished:active.finished,
  status:active.status,authenticated:active.authenticated,code:active.code,unlocked:active.unlocked,locked:active.source?.locked??false,unlockAttempts:active.unlockAttempts,
@@ -116,7 +116,7 @@ export default{async fetch(request,env,ctx){
  }
  if(url.pathname!=='/start')return new Response(null,{status:404});
  const data=await request.json();clockOffset=0;
- const a=active={mode:data.mode,fallback:0,fetches:0,acquired:0,reads:0,nativeReads:0,imports:0,verifies:0,cancels:0,unlockAttempts:0,finished:false,abort:new AbortController()};
+ const a=active={mode:data.mode,fallback:0,fetches:0,acquired:0,reads:0,nativeReads:0,nativeBytes:0,nativeBacking:0,imports:0,verifies:0,cancels:0,unlockAttempts:0,finished:false,abort:new AbortController()};
  if(['read','reject','late','unlock','import','verify'].includes(a.mode))ctx.waitUntil(gate(a,'abort').then(()=>a.abort.abort({cleanupFailed:true})));
  const fixtureEnv={...env};
  Object.defineProperty(fixtureEnv,'CLAWROUTER_ADMIN_TOKEN_SHA256',{get(){a.fallback++;return env.CLAWROUTER_ADMIN_TOKEN_SHA256;}});
@@ -178,7 +178,11 @@ test('actual Workerd public Access reader/crypto limits and retirement-blocking 
  }
  for(const mode of ['huge','keys33','duplicates','maximum-plus','backing','reads8193','mime','encoding','range','utf8','length','cleanup','partial','duplicate-n','duplicate-e']){
   await call('/start',{mode,token:valid});const state=await until(mode,s=>s.finished);assert.equal(state.authenticated,false,JSON.stringify(state));assert.ok(state.status>=400,JSON.stringify(state));assert.equal(state.imports,0);assert.equal(state.locked,false);assert.equal(state.unlockAttempts,1);
-  if(mode==='huge'){assert.ok(state.nativeReads<=18);assert.equal(io.network.get('/jwks/huge'),1);}
+  if(mode==='huge'){
+   assert.equal(state.code,'access_limit');assert.equal(state.imports,0);assert.equal(state.verifies,0);assert.equal(state.cancels,1);
+   assert.ok(state.nativeBytes>0&&state.nativeBytes<=256*1024+16*1024,JSON.stringify(state));
+   assert.ok(state.nativeBacking<=16*1024,JSON.stringify(state));assert.equal(io.network.get('/jwks/huge'),1);
+  }
   if(mode==='partial'){assert.equal(state.code,'access_transport');assert.equal(state.fallback,0);assert.equal(state.cancels,1);assert.equal(state.verifies,0);} // Incremental rejection, not a33MiB text allocation.
   if(mode==='reads8193'){assert.equal(state.reads,8192);assert.equal(state.cancels,1);assert.equal(state.nativeEof,true);}
  }

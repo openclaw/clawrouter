@@ -178,7 +178,12 @@ for (const phase of ["fetch", "body"]) for (const cause of ["timeout", "abort"])
   test(`identity ${phase} ${cause} fails closed and cancels without echoing assertion`, async (context) => {
     const { state, run } = harness(context);
     const entered = Promise.withResolvers(), abort = new AbortController(), deadline = new AbortController();
-    if (cause === "timeout") context.mock.method(AbortSignal, "timeout", (ms) => { assert.equal(ms, 10000); return deadline.signal; });
+    const timeouts = [], timeout = AbortSignal.timeout.bind(AbortSignal);
+    if (cause === "timeout") context.mock.method(AbortSignal, "timeout", (ms) => {
+      timeouts.push(ms);
+      if (ms === 10000) return deadline.signal; // Original shorter caller deadline.
+      assert.equal(ms, 30000); return timeout(ms); // Independent JWT ceiling.
+    });
     let canceled = false;
     state.lookup = (init) => {
       entered.resolve();
@@ -190,6 +195,7 @@ for (const phase of ["fetch", "body"]) for (const cause of ["timeout", "abort"])
     if (phase === "body") await new Promise((resolve) => setImmediate(resolve));
     if (cause === "abort") abort.abort(); else deadline.abort(new DOMException("synthetic deadline", "TimeoutError"));
     await denied(await pending); assert.equal(canceled, true); noPrivateUse(state);
+    if (cause === "timeout") assert.deepEqual(timeouts, [10000, 30000]);
   });
 }
 

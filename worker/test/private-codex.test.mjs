@@ -601,7 +601,7 @@ test("Access auth pins verified GitHub account/IdP, never email/admin/local iden
     return `${unsigned}.${forged ? "c3ludGhldGlj" : Buffer.from(signed).toString("base64url")}`;
   }
   let inference = 0;
-  await withFetch((url, init) => {
+  await withFetch(async (url, init) => {
     if (String(url) === "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/certs") return accessCertsResponse({ keys: [jwk] }, "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/certs");
     if (String(url) === "https://synthetic-owner.cloudflareaccess.com/cdn-cgi/access/get-identity") {
       const payload = JSON.parse(Buffer.from(new Headers(init.headers).get("cookie").split(".")[1], "base64url").toString());
