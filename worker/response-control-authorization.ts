@@ -3,6 +3,7 @@ import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { videoControlVersion, videoJsonBytes } from "./minimax-video-operation.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import { isMusicCoverControl, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
@@ -75,22 +76,24 @@ export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseCo
     policyId: auth.policyId, policyGeneration: auth.policy.generation, tenantId: auth.policy.tenantId ?? "default", proof } };
 }
 
-export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, boundedVideo = false): Promise<AccessPolicy | undefined> {
+export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, boundedVideo = false, cover?: MiniMaxMusicCoverControl): Promise<AccessPolicy | undefined> {
   if (authorization?.kind === "collection") {
+    if (cover) musicCoverUnavailable(403);
     if (authorization.video) return authorizeVideoCollection(env, authorization.video, owner, signal, video);
     if (video) denied();
     return;
   }
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
-  return authorizeIssuedControl(env, authorization.binding, owner, signal, retentionProtocol, wan, search, video, boundedVideo);
+  return authorizeIssuedControl(env, authorization.binding, owner, signal, retentionProtocol, wan, search, video, boundedVideo, cover);
 }
 
 // The public path obtains this binding only from publicControlAuthorization.
 // Delegated asset reads obtain it only from a validated, verifier-matched
 // durable receipt issued by that path. URL fields never supply caller proof.
 export async function authorizeIssuedControl(env: Env, binding: PublicControlBinding, owner: ContinuationOwner,
-  signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, boundedVideo = false): Promise<AccessPolicy> {
+  signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, boundedVideo = false, cover?: MiniMaxMusicCoverControl): Promise<AccessPolicy> {
   const proof = binding.proof;
+  if (cover && (!isMusicCoverControl(cover) || proof.kind !== "proxy_key" || wan || search || video || retentionProtocol)) musicCoverUnavailable(403);
   assertIssuedControlLive(binding);
   if (binding.policyGeneration !== owner.policyGeneration) denied();
   if (proof.kind === "proxy_key") {
@@ -101,7 +104,7 @@ export async function authorizeIssuedControl(env: Env, binding: PublicControlBin
   if (proof.kind === "local" && !await currentLocalSession(proof, env)) denied();
   signal.throwIfAborted();
   const snapshot = await authorityCall<AuthorizationSnapshot>(env, "/authorization/snapshot",
-    { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId, ...(video || boundedVideo ? { video: videoControlVersion } : {}) }, "policy-bindings", signal, wan, search, video);
+    { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId, ...(video || boundedVideo ? { video: videoControlVersion } : {}) }, "policy-bindings", signal, wan, search, video, cover);
   const policy = snapshot.policy;
   if (!policy || policy.policyId !== binding.policyId || !policy.policy.enabled || policy.policy.generation !== binding.policyGeneration
     || (policy.policy.tenantId ?? "default") !== binding.tenantId

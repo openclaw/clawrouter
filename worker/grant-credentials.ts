@@ -1,5 +1,6 @@
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
-import { miniMaxApiKeySecret } from "./native-media-credential.ts";
+import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import { miniMaxSearchDenied, miniMaxSearchOwnerBinding, miniMaxSearchProjection, mutateMiniMaxSearchBinding } from "./minimax-search-credential.ts";
 import { searchJsonBytes, searchControlHeader, searchControlVersion, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
@@ -125,6 +126,37 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.headers.get(musicCoverControlHeader) === musicCoverControlVersion) {
+      const operation = (async () => {
+        try {
+          const path = new URL(request.url).pathname;
+          if (request.method !== "POST" || !["/inspect", "/materialize"].includes(path)) musicCoverUnavailable();
+          const input = await readCoverControlRequest(request) as MaterializeRequest;
+          return await this.order(async () => {
+            if (input.coverOriginal !== musicCoverControlVersion || typeof input.key !== "string") musicCoverUnavailable();
+            const record = await this.state.storage.get<CredentialRecord>("credential");
+            // Producer-owned storage is not caller heap qualification. Bound the
+            // complete record BEFORE projection, copies or serialization; never repair it.
+            if (!record) musicCoverUnavailable();
+            searchJsonBytes(record);
+            if (!canonicalRecord(record) || record.poolSyncPending || record.refreshAttempt || record.grantKey !== input.key
+              || !miniMaxMusicCoverProjection(metadataGrant(record))) musicCoverUnavailable();
+            const original = metadataGrant(record);
+            if (path === "/inspect") {
+              if (Object.keys(input).some(key => !["coverOriginal", "key"].includes(key))) musicCoverUnavailable();
+              const result = { grant: original }; searchJsonBytes(result); return json(result);
+            }
+            if (input.providerId !== "minimax" || input.operation !== "minimax.music" || input.force || input.legacy || input.refresh
+              || input.expectedGeneration !== record.generation || input.grant?.credentialGeneration !== record.generation
+              || !miniMaxMusicCoverProjection(input.grant) || miniMaxMusicCoverIdentity(original) !== miniMaxMusicCoverIdentity(input.grant)) musicCoverUnavailable();
+            const result = { grant: materializedGrant(original, record) };
+            searchJsonBytes(result); request.signal.throwIfAborted(); return json(result);
+          });
+        } catch { return errorResponse("minimax_music_cover_unavailable", "Music cover original owner is unavailable", 503); }
+      })();
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
+      return operation;
+    }
     if (request.method === "POST" && ["/copilot-public/reserve", "/copilot-public/catalog-reserve", "/copilot-public/observe", "/copilot-public/execute", "/copilot-public/retire"].includes(new URL(request.url).pathname)) {
       const operation = this.copilotCatalog.publicOwner.fetch(request);
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
@@ -452,6 +484,11 @@ export class GrantCredentialObject implements DurableObject {
         if (input.wanOriginal) {
           if (!canonicalRecord(record)) throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner is unavailable");
           return json({ grant: metadataGrant(record) });
+        }
+        if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") {
+          searchJsonBytes(record);
+          if (!canonicalRecord(record) || record.poolSyncPending) musicCoverUnavailable();
+          const result = { grant: metadataGrant(record) }; searchJsonBytes(result); return json(result);
         }
         record = await this.diagnoseUnsettled(record);
         if (canonicalRecord(record) && record.poolSyncPending) {
@@ -1095,6 +1132,9 @@ export class GrantCredentialObject implements DurableObject {
   private async loadRecord(key: string, stored?: CredentialRecord, repair = true): Promise<CredentialRecord | undefined> {
     let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return record;
+    // Cover has a separate canonical owner path. Generic materialization and
+    // maintenance cannot diagnose, repair or adopt this inactive profile.
+    if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") musicCoverUnavailable(403);
     record = await this.diagnoseUnsettled(record);
     if (canonicalRecord(record)) return repair && record.poolSyncPending ? (await this.reconcileAttachment(key)).record : record;
     if (!record.metadata || record.enabled === undefined) {
@@ -1164,7 +1204,9 @@ async function musicMutationProof(actor: NonNullable<PutRequest["musicActor"]>, 
   const mutation = { domain, actor, key, scope, original, resultGeneration: record.generation, resultLineage: record.lineage!, mode,
     credentialFingerprint, account: record.accountId ?? null, provider: record.providerId ?? null, kind: record.kind ?? null,
     expiry: record.expiresAt ?? null, enabled: record.enabled, revokedAt: record.revokedAt ?? null,
-    binding: record.nativeMediaBinding ?? null, searchBinding: record.minimaxSearchBinding ?? null, ...intent };
+    binding: record.nativeMediaBinding ?? null, searchBinding: record.minimaxSearchBinding ?? null,
+    ...(current?.nativeMediaBinding?.version === "clawrouter.native-media.v2" || record.nativeMediaBinding?.version === "clawrouter.native-media.v2"
+      ? { originalBinding: current?.nativeMediaBinding ?? null } : {}), ...intent };
   searchJsonBytes(mutation);
   const digest = await sha256Hex(JSON.stringify(mutation));
   return { domain, actor, key, scope, original, resultGeneration: record.generation, resultLineage: record.lineage!, mode, digest };
@@ -1368,8 +1410,8 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/inspect", video ? { videoOriginal: true } : search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search, video)).grant;
+export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/inspect", cover ? { coverOriginal: musicCoverControlVersion, key } : video ? { videoOriginal: true } : search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search, video, cover)).grant;
 }
 
 export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", provenance?: "clawrouter_oauth", nativeMediaIntent?: PutRequest["nativeMediaIntent"], minimaxAnthropicIntent?: PutRequest["minimaxAnthropicIntent"], vertexAnthropicIntent?: PutRequest["vertexAnthropicIntent"], vertexPrivateKey?: string, minimaxImageIntent?: PutRequest["minimaxImageIntent"], minimaxSearchIntent?: PutRequest["minimaxSearchIntent"], searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], minimaxVideoIntent?: PutRequest["minimaxVideoIntent"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
@@ -1392,8 +1434,9 @@ export async function materializeGrantCredentials(
   wan?: WanManagedOperation,
   search?: MiniMaxSearchOperation,
   video?: MiniMaxVideoOperation,
+  cover?: MiniMaxMusicCoverControl,
 ): Promise<UpstreamGrant> {
-  const legacy = !video && !wan && !search && hasRawCredential(grant) ? grant : null;
+  const legacy = !cover && !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
     key,
     grant,
@@ -1404,7 +1447,8 @@ export async function materializeGrantCredentials(
     expectedGeneration: grant.credentialGeneration ?? null,
     operation,
     ...(wan ? { wanOriginal: true } : {}),
-  }, signal, wan, search, video)).grant;
+    ...(cover ? { coverOriginal: musicCoverControlVersion } : {}),
+  }, signal, wan, search, video, cover)).grant;
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
@@ -1496,8 +1540,10 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
+  if (cover && (!isMusicCoverControl(cover) || wan || search || video || !["/inspect", "/materialize"].includes(path))) musicCoverUnavailable();
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
+  if (cover) return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal);
   if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);

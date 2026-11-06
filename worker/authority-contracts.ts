@@ -17,6 +17,9 @@ export type CredentialMutationResult =
   | { outcome: "exists" | "missing" | "owned_elsewhere" | "limit_reached" | "policy_not_held" | "unknown_policy" | "inactive" | "actor_disabled" | "admin_required" };
 
 export interface AuthorizationSnapshotRequest { credentialId: string | null; principalId: string | null; policyId: string }
+// Internal canonical admission discriminator; it neither attests an actor nor
+// authorizes materialization. The caller must hold the genuine phase owner.
+export type MusicCoverControlProfile = "clawrouter.minimax-music-cover-control.v1";
 export interface AuthorizationSnapshot {
   credential: ProxyCredential | null;
   policy: AccessPolicyEntry | null;

@@ -2,6 +2,8 @@ import { videoControlVersion, videoJsonBytes, videoUnavailable } from "./minimax
 import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { searchControlVersion, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
+import { musicCoverControlVersion, musicCoverUnavailable } from "./minimax-music-cover-control.ts";
+import type { MusicCoverControlProfile } from "./authority-contracts.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant } from "./types";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { normalizeEmail, safeEqual } from "./utils.ts";
@@ -16,7 +18,7 @@ export interface AdmissionSelection {
 }
 // "select" also returns the pool snapshot after selecting; "only" returns the
 // snapshot without selecting or touching counters (stale-cache refresh).
-export interface AdmissionRequest { video?: typeof videoControlVersion; search?: typeof searchControlVersion; selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
+export interface AdmissionRequest { cover?: MusicCoverControlProfile; video?: typeof videoControlVersion; search?: typeof searchControlVersion; selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean; snapshot?: "select" | "only" }
 export interface AdmissionPool { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; unavailable?: true }
 export interface AdmissionPoolCandidate { key: string; grant: UpstreamGrant | null }
 // Secretless routing state for isolate-local selection: projections, counters,
@@ -62,14 +64,24 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   // Use the same import fences as the single-purpose resolvers. Every KV
   // await is followed by guarded initialization and a canonical reread.
   const video = input.video === videoControlVersion;
-  const search = input.search === searchControlVersion || video;
+  const cover = input.cover === musicCoverControlVersion;
+  const search = input.search === searchControlVersion || video || cover;
+  if (cover) {
+    searchJsonBytes(input);
+    if (Object.keys(input).some(key => !["cover", "credentialId", "secretSha256", "providers", "allConnections", "selection"].includes(key))
+      || input.allConnections || input.providers?.length !== 1 || input.providers[0].id !== "minimax" || input.providers[0].tokenRef !== "minimax"
+      || !input.selection || Object.keys(input.selection).some(key => !["providerId", "endpointId", "mode", "model", "catalogModelId", "capability", "sessionHash"].includes(key))
+      || input.selection.providerId !== "minimax" || input.selection.endpointId !== "music-cover"
+      || input.selection.mode !== "http" || input.selection.model !== "music-cover" || input.selection.catalogModelId !== "minimax/music-cover"
+      || input.selection.capability !== "music.generate") musicCoverUnavailable();
+  }
   if (video) {
     videoJsonBytes(input);
     if (input.search || input.allConnections || input.snapshot || input.providers?.length !== 1 || input.providers[0].id !== "minimax"
       || input.selection && (input.selection.providerId !== "minimax" || input.selection.capability !== "media.predict"
         || !isMiniMaxVideoModel(input.selection.model))) videoUnavailable();
   }
-  if (search && !video) { searchJsonBytes(input); if (input.allConnections || input.snapshot || input.providers?.length !== 1 || input.selection?.providerId !== "minimax" || input.selection.model != null || input.selection.capability !== "search.web") searchUnavailable(); }
+  if (search && !video && !cover) { searchJsonBytes(input); if (input.allConnections || input.snapshot || input.providers?.length !== 1 || input.selection?.providerId !== "minimax" || input.selection.model != null || input.selection.capability !== "search.web") searchUnavailable(); }
   let credential = store.getCredential(input.credentialId);
   if (!search && !credential && !store.hasMeta("credentials_global_initialized")) {
     const value = await env.POLICY_KV.get<Record<string, unknown>>(`credentials/${input.credentialId}`, "json") ?? await genuineLegacyKey(env, input.credentialId);
@@ -111,6 +123,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
         return { ...result, ownerUnavailable: true };
       }
       result.owner = owner;
+      if (cover && !owner) musicCoverUnavailable();
       if (owner?.record.enabled === false) return result;
     }
   }
@@ -133,7 +146,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   }
   for (const provider of providers) {
     if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id)) continue;
-    try { result.pools[provider.id] = store.resolveGrantPool({ providerId: provider.id, policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: [`oauth/${policyId}/${provider.tokenRef}`, `oauth/tenants/${policy.policy.tenantId ?? "default"}/${provider.tokenRef}`] }); }
+    try { result.pools[provider.id] = store.resolveGrantPool({ providerId: provider.id, policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: cover ? [] : [`oauth/${policyId}/${provider.tokenRef}`, `oauth/tenants/${policy.policy.tenantId ?? "default"}/${provider.tokenRef}`] }); }
     catch { result.pools[provider.id] = { keys: [], states: {}, hasAttachment: false, unavailable: true }; }
   }
   return input.selection && store.finishSelection ? store.finishSelection(input, result) : result;

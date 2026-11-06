@@ -1,5 +1,6 @@
 import { videoControlVersion, videoUnavailable, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { authorityCall } from "./authority.ts";
+import { coverControlHeaders, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import { searchControlVersion, searchUnavailable, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { markLocalError } from "./native-errors.ts";
@@ -23,25 +24,38 @@ const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
 // Scoped to this authenticated operation. Cross-request reuse happens only in
 // admission-cache.ts, bounded by the hot-cache max age.
 const admissions = new WeakMap<AuthorizedIdentity, AdmissionResult>();
+const coverIdentities = new WeakMap<MiniMaxMusicCoverControl, AuthorizedIdentity>();
+export function musicCoverVerification(owner: MiniMaxMusicCoverControl): AuthorizedIdentity | undefined { return coverIdentities.get(owner); }
+export function retireMusicCoverVerification(owner: MiniMaxMusicCoverControl): void {
+  const identity = coverIdentities.get(owner);
+  coverIdentities.delete(owner);
+  if (!identity) return;
+  admissions.delete(identity); verifiedKeys.delete(identity);
+  admissionRequests.delete(identity); selections.delete(identity); sessionHashes.delete(identity);
+}
 const sessionHashes = new WeakMap<AuthorizedIdentity, string>();
 export function proxyAdmission(identity: AuthorizedIdentity): AdmissionResult | undefined { return admissions.get(identity); }
 export function proxySessionHash(identity: AuthorizedIdentity): string | undefined { return sessionHashes.get(identity); }
 export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
-export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached", search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<AuthorizedIdentity | Response> {
+export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached", search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<AuthorizedIdentity | Response> {
   const admissionStart = performance.now();
+  if (cover) { if (!isMusicCoverControl(cover) || search || video || allConnections || sessionId) musicCoverUnavailable(); coverControlHeaders(headers); }
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
   const secretSha256 = await sha256Hex(parsed.secret);
   const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
   const admissionRequest = { credentialId: parsed.kid, secretSha256, providers, allConnections, selection: selection ? { ...selection, sessionHash } : undefined };
-  const { admission, cache } = video
+  const { admission, cache } = cover
+    ? { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", { ...admissionRequest, cover: musicCoverControlVersion }, "policy-bindings", cover.operation.signal, undefined, undefined, undefined, cover), cache: "off" as const }
+    : video
     ? { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", { ...admissionRequest, video: videoControlVersion }, "policy-bindings", video.operation.signal, undefined, undefined, video), cache: "off" as const }
     : search
     ? { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", { ...admissionRequest, search: searchControlVersion }, "policy-bindings", search.operation.signal, undefined, search), cache: "off" as const }
     : await resolveAdmission(env, admissionRequest, freshness);
   if (video && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable)) videoUnavailable();
   if (search && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable)) searchUnavailable();
+  if (cover && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable || !admission.selection?.selected)) musicCoverUnavailable();
   const credentialEntry = admission.credential;
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
   if (!safeEqual(secretSha256, credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
@@ -69,6 +83,7 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
   recordAdmissionDuration(identity, admissionStart, cache);
   verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256, expiresAt: credentialEntry.credential.expiresAt }));
   admissions.set(identity, admission);
+  if (cover) coverIdentities.set(cover, identity);
   if (selection) admissionRequests.set(identity, selection);
   if (selection && admission.selection) selections.set(identity, { request: selection, result: admission.selection });
   if (sessionHash) sessionHashes.set(identity, sessionHash);

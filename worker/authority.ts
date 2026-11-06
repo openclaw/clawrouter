@@ -1,5 +1,6 @@
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { InputRetirement } from "./input-retirement.ts";
 import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
 import { searchJsonBytes, searchUnavailable, searchControlBytes, inspectSearchJson, searchControlVersion, type MiniMaxSearchOperation, searchControlHeader, readSearchJson } from "./minimax-search-operation.ts";
@@ -59,21 +60,25 @@ export class PolicyBindingIndexObject implements DurableObject {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
+      const cover = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion;
+      if (cover && !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
+      const coverInput = cover ? await readCoverControlRequest(request) : undefined;
       if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
       if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
       if (path === "/grant-search/authorize") return json(this.authorizeSearchGrant(await readJson<SearchGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/grant-music/authorize") return json(this.authorizeMusicGrant(await readJson<MusicGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/grant-video/authorize") return json(this.authorizeVideoGrant(await readJson<VideoGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/authorization/snapshot") {
-        const input = await readJson<AuthorizationSnapshotRequest & { video?: string }>(request, undefined, 64 * 1024);
-        const bound = request.headers.get(videoControlHeader) === videoControlVersion || input.video === videoControlVersion ? { bytes: 0, video: true }
+        const input = (cover ? coverInput : await readJson<AuthorizationSnapshotRequest & { video?: string }>(request, undefined, 64 * 1024)) as AuthorizationSnapshotRequest & { video?: string };
+        const bound = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion || input.video === videoControlVersion ? { bytes: 0, video: true }
           : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
         const result = this.authorizationSnapshot(input, bound);
         if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
       }
       if (path === "/admission/resolve") {
-        const input = await readJson<AdmissionRequest>(request);
-        const bound = input.video === videoControlVersion ? { bytes: 0, video: true } : input.search === searchControlVersion ? { bytes: 0 } : undefined;
+        const input = (cover ? coverInput : await readJson<AdmissionRequest>(request)) as AdmissionRequest;
+        if (cover !== (input.cover === musicCoverControlVersion)) musicCoverUnavailable();
+        const bound = cover ? { bytes: 0 } : input.video === videoControlVersion ? { bytes: 0, video: true } : input.search === searchControlVersion ? { bytes: 0 } : undefined;
         const result = await resolveAdmission(this.env, input, {
         getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: id => this.getUser(id, bound), hasMeta: key => this.hasMeta(key),
         seedCredential: (id, value) => this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]),
@@ -123,9 +128,9 @@ export class PolicyBindingIndexObject implements DurableObject {
       }
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
       if (path === "/connections/resolve") {
-        const bound = request.headers.get(videoControlHeader) === videoControlVersion ? { bytes: 0, video: true }
+        const bound = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion ? { bytes: 0, video: true }
           : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
-        const input = await readJson<{ providerIds: string[] }>(request);
+        const input = (cover ? coverInput : await readJson<{ providerIds: string[] }>(request)) as { providerIds: string[] };
         if (bound && (input.providerIds.length !== 1 || input.providerIds[0] !== "minimax")) searchUnavailable();
         const result = this.resolveConnections(input.providerIds, bound); if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
       }
@@ -930,8 +935,13 @@ function invalidAuthorityValue(message: string): never {
 }
 
 
-export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<T> {
+export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
+  if (cover) {
+    if (!isMusicCoverControl(cover) || objectName !== "policy-bindings" || !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
+    return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text,
+      signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal, path === "/admission/resolve");
+  }
   if (path === "/grant-search/authorize" || path === "/grant-music/authorize" || path === "/grant-video/authorize") {
     searchJsonBytes(body);
     const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal, redirect: "manual", headers: { "content-type": "application/json" } });
@@ -1049,7 +1059,13 @@ export async function listConnections(env: Env, providerIds: string[]): Promise<
   return (await authorityCall<typeof result>(env, "/connections/resolve", { providerIds: ids })).connections;
 }
 
-export async function resolveConnection(env: Env, providerId: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<ProviderConnection | null> {
+export async function resolveConnection(env: Env, providerId: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<ProviderConnection | null> {
+  if (cover) {
+    const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
+      "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", cover.operation.signal, undefined, undefined, undefined, cover);
+    if (providerId !== "minimax" || result.missingProviderIds.length || result.connections.length !== 1 || result.connections[0].providerId !== providerId) musicCoverUnavailable();
+    return result.connections[0];
+  }
   if (video) {
     const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
       "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", video.controlSignal, undefined, undefined, video);

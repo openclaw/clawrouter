@@ -82,7 +82,7 @@ async function barriers(t) {
   return { origin: "http://127.0.0.1:" + server.address().port, release };
 }
 
-function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "", malformed = false, raw } = {}) {
+function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "", malformed = false, raw } = {}, fixed = false) {
   const encoder = new TextEncoder(), plan = { prompt: maximum ? "s".repeat(300) : "Synthetic style", ...(maximum ? { lyrics: "🎵".repeat(930) } : {}), model: "music-cover" };
   const prefix = (route === "manifest" ? '{"body":' : "") + '{"audio_base64":"';
   const tail = '",' + JSON.stringify(plan).slice(1) + (route === "manifest" ? "}" : "");
@@ -104,6 +104,15 @@ function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "
   const iterator = pieces();
   const length = raw !== undefined ? Buffer.byteLength(raw) : malformed ? Buffer.byteLength(prefix) + 1
     : Buffer.byteLength(prefix + tail + suffix) + padding + (audio !== undefined ? Buffer.byteLength(audio) : Math.ceil(bytes / 3) * 4);
+  if (fixed) {
+    assert.ok(length <= 128 * 1024, "bounded rejection fixture payload");
+    const body = new Uint8Array(length); let offset = 0;
+    for (const piece of iterator) {
+      assert.ok(offset + piece.byteLength <= length);
+      body.set(piece, offset); offset += piece.byteLength;
+    }
+    assert.equal(offset, length); return { body, length };
+  }
   const body = new ReadableStream({ pull(c) { const next = iterator.next(); if (next.done) c.close(); else c.enqueue(next.value); }, cancel() { iterator.return(); } }, { highWaterMark: 0 });
   return { body, length };
 }
@@ -129,10 +138,14 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path, { signal: t.signal }); assert.equal(response.status, 200); return response.json(); };
   const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
   const start = async (mode, bytes, options = {}, signal = t.signal) => {
-    const upload = input(bytes, options);
+    // Small early rejections use bounded, byte-identical HTTP-driver payloads.
+    // Large and held inputs stay streamed; unexpected EPIPE still fails.
+    const upload = mode === "escape-overflow" || mode === "escape-unicode"
+      ? { body: options.raw, length: Buffer.byteLength(options.raw) }
+      : input(bytes, options, ["backing", "padding", "utf8", "tokens", "scalar", "trailing"].includes(mode));
     try {
       // Known incremental length avoids Undici's trailing chunked terminator
-      // write after an intentional early input cancellation. Bytes stay streamed.
+      // write after an intentional early input cancellation. Other cases stay streamed.
       const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode + "&route=" + (options.route ?? "native"),
         { method: "POST", headers: { "content-type": "application/json", "content-length": String(upload.length) }, body: upload.body, duplex: "half", signal });
       assert.equal(response.status, 200); return response.json();

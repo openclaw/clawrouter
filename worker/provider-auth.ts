@@ -1,3 +1,4 @@
+import { readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { miniMaxVideoBindingModel } from "../shared/minimax-video-binding.ts";
 import { miniMaxSearchProjection, miniMaxSearchRequirement } from "./minimax-search-credential.ts";
 import { miniMaxVideoProjection, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
@@ -30,6 +31,7 @@ export function openRouterPcmRequirement(requirement: Pick<GrantRequirement, "pr
 }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  if (requirement.provider.id === "minimax" && readNativeMediaBinding(grant?.nativeMediaBinding)?.version === "clawrouter.native-media.v2") return false;
   if (requirement.endpoint.lifecycle?.protocol === "minimax.video" && (!miniMaxVideoRequirement(requirement)
     || !miniMaxVideoProjection(grant) || !miniMaxVideoBindingModel(grant?.minimaxVideoBinding, requirement.model)
     || transportForGrant(requirement.provider, grant) !== null)) return false;
