@@ -39,7 +39,7 @@ async function isolated(directory, router, upstream) {
 }
 
 async function external(t) {
-  let mode = "pending", id = 100, current = "100", earlyReply;
+  let mode = "pending", id = 100, current = "100", earlyReply, postStarted;
   const held = new Map(), entered = new Map(), released = new Set(), counts = { post: 0, poll: 0, metadata: 0, download: 0, imageBytes: 0, imageDigest: null };
   const server = createServer(async (request, response) => {
     if (request.url.startsWith("/gate/")) { entered.get(request.url)?.resolve(); if (released.has(request.url)) response.end("released"); else held.set(request.url, response); return; }
@@ -47,7 +47,7 @@ async function external(t) {
     const path = new URL(request.url, "http://fixture").pathname;
     const base_resp = { status_code: 0, status_msg: "success" }; let value;
     if (path === "/v1/video_generation") {
-      counts.post++; current = String(++id);
+      counts.post++; current = String(++id); postStarted?.(); postStarted = undefined;
       if (mode === "early") { const task_id = current; earlyReply = () => { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ task_id, base_resp })); }; request.resume(); return; }
       let text = ""; for await (const part of request) text += part;
       const body = JSON.parse(text); assert.ok(hailuoModels.includes(body.model)); assert.equal(body.duration, 6);
@@ -77,7 +77,7 @@ async function external(t) {
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
-  return { origin: "http://127.0.0.1:" + server.address().port, counts, replyEarly() { assert.ok(earlyReply); earlyReply(); earlyReply = undefined; }, current: () => current, entered(key) { const gate = Promise.withResolvers(); entered.set("/gate/" + key, gate); return gate.promise; }, mode(value) { mode = value; },
+  return { origin: "http://127.0.0.1:" + server.address().port, counts, nextPost() { assert.equal(postStarted, undefined); const started = Promise.withResolvers(); postStarted = started.resolve; return started.promise; }, replyEarly() { assert.ok(earlyReply); earlyReply(); earlyReply = undefined; }, current: () => current, entered(key) { const gate = Promise.withResolvers(); entered.set("/gate/" + key, gate); return gate.promise; }, mode(value) { mode = value; },
     release(key) { const path = "/gate/" + key; released.add(path); held.get(path)?.end("released"); held.delete(path); },
     releaseAll() { for (const [path, response] of held) { released.add(path); response.end("released"); } held.clear(); } };
 }
@@ -592,9 +592,9 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
 
   for (const mode of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"]) {
     await json("/setup?inline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
-    const posts = io.counts.post;
+    const posts = io.counts.post, started = mode.startsWith("inline-upload") ? io.nextPost() : undefined;
     const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
-    if (mode.startsWith("inline-upload")) { assert.equal(io.counts.post, posts + 1); io.replyEarly(); }
+    if (started) { await started; assert.equal(io.counts.post, posts + 1, JSON.stringify(state)); io.replyEarly(); }
     assert.equal(state.charged, 96 * MiB, JSON.stringify(state)); if (!mode.startsWith("inline-upload")) io.release(mode + "/abort");
     if (mode === "inline-late") io.release(mode + "/execution-abort");
     for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
