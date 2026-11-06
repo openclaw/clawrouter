@@ -149,3 +149,56 @@ one small worker, and include all-fail tasks. Freeze the policy before evaluatin
 fresh task families. Require a gain over the best fixed worker at the same total
 budget, including verification and failed calls, before frontier confirmation.
 Keep production Fusion opt-in until a held-out coding comparison earns promotion.
+
+## Local generation with executable checks
+
+`scripts/fusion-execution-smoke.mjs` tests eight fresh, small development
+families. It generates one tiny-model draft and two small-model drafts per task.
+The fixed policies compare the first small draft, public-test selection between
+two small drafts, and public-test selection between the tiny draft and the first
+small draft. Each retry policy stops at the first public pass; hidden grading
+does not influence selection. These are equal maximum attempt counts, not equal
+monetary or compute budgets. Report tokens and selection-check counts separately.
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-execution-smoke.mjs \
+  /path/to/fresh-results node@sha256:PINNED_DIGEST \
+  qwen3:0.6b qwen3:4b-instruct-2507-q4_K_M
+```
+
+Use the local loopback Ollama server and a cached, digest-pinned Node image.
+The runner builds a minimal dependency-free image. Before generation, every
+reference must pass both test sets and every deliberately flawed implementation
+must pass public tests while failing withheld tests. CI runs this qualification.
+The generator sees the contract and two examples, never the withheld inputs.
+
+Generated modules execute only in fresh, unprivileged Docker containers with
+network disabled, read-only root, no host mounts, resource limits and a four-second
+evaluation watchdog. Expected values stay in the parent grader. Candidate
+stdout cannot declare its own test result. The report retains verdicts, hashes,
+usage and timing; generated modules and raw model responses are not retained.
+
+The run makes 24 local calls, limited to 512 output tokens each. Its 15-minute
+generation-loop deadline is checked before each call; fixture qualification is
+separate. Invalid or failed candidates count against their policy. Transport,
+identity, usage or infrastructure failures stop the campaign without retry.
+These tasks test generation and verification mechanics, not repository repair.
+
+The first run (2026-11-06, source
+`51f0a281526f8c562cbeb8a06e7fe13a8b75a643`, corpus
+`1360aa974eb4a3dd2799ee17bb19402e6f4cede0557d93fa47f7c709d841f02b`)
+completed all 24 calls at zero API spend using the same Qwen model pins above.
+
+| Policy | Solved / 8 | Wrong accepted | Replay calls | Replay tokens |
+| --- | ---: | ---: | ---: | ---: |
+| 4B first draft | 4 | 4 | 8 | 2,626 |
+| Up to two 4B drafts, public-test selection | 4 | 2 | 10 | 3,334 |
+| Tiny then 4B, public-test selection | 4 | 2 | 16 | 4,648 |
+
+The tiny model solved none of the tasks. Even hindsight selection across the
+two 4B samples solved only four: no selector could recover an additional win
+from this pool. Public checks rejected two wrong answers, but still accepted
+two others that failed withheld cases. More samples and the tiny first stage
+did not improve correctness. Improve worker capability and test coverage before
+adding orchestration. A later output-limit handling fix does not affect these
+results: no candidate in this complete run hit the output limit.

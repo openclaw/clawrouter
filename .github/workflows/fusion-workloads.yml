@@ -52,6 +52,7 @@ jobs:
         run: |
           docker pull node:24.22.1-slim
           image=$(docker image inspect node:24.22.1-slim --format '{{index .RepoDigests 0}}')
+          FUSION_EXECUTION_NODE_IMAGE="$image" node --test test/fusion-execution-smoke.test.mjs
           for manifest in benchmarks/fusion/*workloads.json; do
             name=$(basename "$manifest" .json)
             node scripts/qualify-fusion-workloads.mjs "$image" "$RUNNER_TEMP/$name-qualification.json" "$manifest"
