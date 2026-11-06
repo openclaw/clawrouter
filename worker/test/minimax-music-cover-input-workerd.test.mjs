@@ -112,12 +112,17 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   const upstream = `export default {fetch(request){if(new URL(request.url).hostname!=='cover-gate.example')throw Error('no provider calls');return fetch(${JSON.stringify(control.origin)}+new URL(request.url).pathname,{redirect:'manual'});}};`;
   const runtime = await startWorkerdFixture(temporary, router, upstream);
   const modes = ["maximum", "manifest", "read", "cancel-reject", "hash", "hash-reject", "reads8192", "reads8193", "backing", "padding", "trailing", "overflow", "utf8", "tokens", "scalar", "escapes", "escape-boundary", "escape-overflow", "escape-unicode"];
-  t.after(async () => { for (const mode of modes) for (const phase of ["abort", "read", "cleanup", "hash", "delivery"]) control.release(mode, phase); await runtime.dispose(); });
-  const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path); assert.equal(response.status, 200); return response.json(); };
+  const releaseMode = mode => { for (const phase of ["abort", "read", "cleanup", "hash", "delivery"]) control.release(mode, phase); };
+  let clientCleanup;
+  t.after(async () => {
+    for (const mode of modes) releaseMode(mode);
+    try { await clientCleanup?.(); } finally { await runtime.dispose(); }
+  });
+  const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path, { signal: t.signal }); assert.equal(response.status, 200); return response.json(); };
   const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
-  const start = async (mode, bytes, options = {}) => {
+  const start = async (mode, bytes, options = {}, signal = t.signal) => {
     const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode + "&route=" + (options.route ?? "native"),
-      { method: "POST", headers: { "content-type": "application/json" }, body: input(bytes, options), duplex: "half" });
+      { method: "POST", headers: { "content-type": "application/json" }, body: input(bytes, options), duplex: "half", signal });
     assert.equal(response.status, 200); return response.json();
   };
   for (const mode of ["maximum", "manifest"]) {
@@ -134,23 +139,44 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
     control.release(mode, "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.unlocks, 1);
   }
   for (const mode of ["read", "cancel-reject", "hash", "hash-reject"]) {
-    let startFailure;
-    const started = start(mode, 2); void started.catch(error => { startFailure = error; });
-    let state = await until(s => { if (startFailure) throw startFailure; return s.mode === mode && (s.readHeld || s.hashHeld || s.result); });
-    assert.equal(state.charged, 96 * 1024 * 1024);
-    assert.equal(mode.startsWith("hash") ? state.hashHeld : state.readHeld, true);
-    control.release(mode, "abort"); state = await until(s => s.result); assert.equal(state.code, "cancelled");
-    assert.equal(state.retired, false); assert.equal(state.charged, 96 * 1024 * 1024);
-    assert.deepEqual(await call("/contend"), { allowed: false, charged: 96 * 1024 * 1024 });
-    if (mode.startsWith("hash")) { assert.equal(state.locked, false); control.release(mode, "hash"); }
-    else {
-      assert.equal(state.cancels, 1); assert.equal(state.locked, true); control.release(mode, "cleanup");
-      state = await until(s => s.cleanupDone); assert.equal(state.charged, 96 * 1024 * 1024); assert.equal(state.locked, true);
-      control.release(mode, "read");
+    const controller = new AbortController(), cleanupReason = new DOMException("fixture client cleanup", "AbortError");
+    let startFailure, primary, done = false, settled = Promise.resolve(), cleaning;
+    const abortClient = () => { releaseMode(mode); if (!done) controller.abort(cleanupReason); };
+    const cleanup = () => cleaning ??= (async () => {
+      abortClient(); await settled;
+      // Only this exact deliberate abort is expected. In particular EPIPE is
+      // never swallowed, even if it arrives while another assertion is failing.
+      if (startFailure && startFailure !== cleanupReason) {
+        if (primary && primary !== startFailure) throw new AggregateError([primary, startFailure], "fixture assertion and client transport failed");
+        throw startFailure;
+      }
+    })();
+    clientCleanup = cleanup; t.signal.addEventListener("abort", abortClient, { once: true });
+    if (t.signal.aborted) abortClient();
+    try {
+      const started = start(mode, 2, {}, controller.signal);
+      settled = started.then(() => { done = true; }, error => { done = true; startFailure = error; });
+      let state = await until(s => { if (startFailure) throw startFailure; return s.mode === mode && (s.readHeld || s.hashHeld || s.result); });
+      assert.equal(state.charged, 96 * 1024 * 1024);
+      assert.equal(mode.startsWith("hash") ? state.hashHeld : state.readHeld, true);
+      control.release(mode, "abort"); state = await until(s => s.result); assert.equal(state.code, "cancelled");
+      assert.equal(state.retired, false); assert.equal(state.charged, 96 * 1024 * 1024);
+      assert.deepEqual(await call("/contend"), { allowed: false, charged: 96 * 1024 * 1024 });
+      if (mode.startsWith("hash")) { assert.equal(state.locked, false); control.release(mode, "hash"); }
+      else {
+        assert.equal(state.cancels, 1); assert.equal(state.locked, true); control.release(mode, "cleanup");
+        state = await until(s => s.cleanupDone); assert.equal(state.charged, 96 * 1024 * 1024); assert.equal(state.locked, true);
+        control.release(mode, "read");
+      }
+      state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.locked, false); assert.equal(state.unlocks, 1);
+      assert.equal(state.cleanupCode, mode === "cancel-reject" ? "cleanup" : undefined);
+      assert.equal((await started).retired, true);
+    } catch (error) { primary = error; }
+    finally {
+      try { await cleanup(); }
+      finally { t.signal.removeEventListener("abort", abortClient); if (clientCleanup === cleanup) clientCleanup = undefined; }
     }
-    state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.locked, false); assert.equal(state.unlocks, 1);
-    assert.equal(state.cleanupCode, mode === "cancel-reject" ? "cleanup" : undefined);
-    assert.equal((await started).retired, true);
+    if (primary) throw primary;
   }
   for (const [mode, bytes, options] of [["padding", 2, { audio: "AAB=" }], ["trailing", 2, { suffix: "x" }],
     ["utf8", 2, { malformed: true }], ["overflow", 50_000_001, {}], ["backing", 2, {}], ["reads8193", 2, {}],
