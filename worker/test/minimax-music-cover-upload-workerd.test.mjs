@@ -142,7 +142,7 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   const temporary = await mkdtemp(join(tmpdir(), "cover-upload-workerd-")); t.after(() => rm(temporary, { recursive: true, force: true }));
   const held = new Map(), arrived = new Set(), released = new Set(), clients = new Set(), errors = [];
   let mode = "normal", size = 5, audio = 3, posts = 0, uploaded = 0, uploadEnded = false, uploadValid = true, uploadEvidence;
-  const release = key => { released.add(key); held.get(key)?.end("ok"); held.delete(key); };
+  const release = key => { t.diagnostic("release " + key); released.add(key); held.get(key)?.end("ok"); held.delete(key); };
   const releaseAll = () => {
     // Open future arrivals too: failure can precede entry into a physical gate.
     for (const mode of ["early", "upload-reject", "read", "read-reject", "read-error", "late", "split-fail", "unclaimed"])
@@ -151,10 +151,10 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   };
   const server = createServer((request, response) => {
     if (request.url.startsWith("/gate/")) {
-      const key = request.url.slice(5); arrived.add(key); if (released.has(key)) response.end("ok"); else held.set(key, response); return;
+      const key = request.url.slice(5); t.diagnostic("gate " + key); arrived.add(key); if (released.has(key)) response.end("ok"); else held.set(key, response); return;
     }
     if (request.url !== "/provider" || request.method !== "POST" || request.headers.authorization) { response.writeHead(400); response.end(); return; }
-    posts++; const currentMode = mode, expectedSize = size, expectedAudio = audio;
+    posts++; const currentMode = mode, expectedSize = size, expectedAudio = audio; t.diagnostic("provider POST " + currentMode);
     const prefix = Buffer.from('{"model":"music-cover","prompt":"Synthetic cover style","stream":false,"output_format":"hex","audio_base64":"');
     const suffix = Buffer.from('"}'), encoded = Math.ceil(expectedSize / 3) * 4, padding = (3 - expectedSize % 3) % 3;
     let count = 0, firstMismatch = null;
@@ -210,19 +210,29 @@ test("inactive cover actual Workerd: exact 50M upload, partial unary HEX, atomic
   const call = async path => { const r = await runtime.dispatchFetch("https://router.example/" + path); assert.equal(r.status, 200); return r.json(); };
   const start = (nextMode = "normal", bytes = 5, route = "native", decoded = 3) => {
     mode = nextMode; size = bytes; audio = decoded; uploaded = 0; uploadEnded = false; uploadValid = true; uploadEvidence = undefined;
+    t.diagnostic("start " + JSON.stringify({ mode, bytes, route, decoded }));
     const payload = input(bytes, route), controller = new AbortController(), client = { controller };
     client.promise = runtime.dispatchFetch(`https://router.example/start?mode=${mode}&route=${route}&audio=${audio}`, {
       method: "POST", headers: { "content-type": "application/json", "content-length": String(payload.length) },
-      body: payload.body, duplex: "half", signal: controller.signal }).then(async r => { assert.equal(r.status, 200); return r.json(); });
+      body: payload.body, duplex: "half", signal: controller.signal }).then(async r => {
+        assert.equal(r.status, 200); const state = await r.json();
+        t.diagnostic("settled " + JSON.stringify({ mode: state.mode, error: state.error, cleanupError: state.cleanupError,
+          charged: state.charged, retired: state.retired })); return state;
+      });
     clients.add(client); void client.promise.then(() => clients.delete(client), () => {}); return client;
   };
   const wait = async predicate => {
+    let last;
     for (let i = 0; i < 400; i++) {
-      const s = await call("state");
+      const s = last = await call("state");
       // A previous invocation remains visible until /start reaches this isolate.
-      if (s.mode === mode) { if (predicate(s)) return s; if (s.retired) throw Error("boundary ended: " + JSON.stringify(s)); }
+      if (s.mode === mode) {
+        if (predicate(s)) { t.diagnostic("boundary " + JSON.stringify(s)); return s; }
+        if (s.retired) throw Error("boundary ended: " + JSON.stringify(s));
+      }
       await delay(10);
     }
+    t.diagnostic("absent " + JSON.stringify({ mode, state: last }));
     throw Error("fixture boundary absent");
   };
   const check = state => { assert.equal(state.charged, 0); assert.equal(state.flow.ordinary, 1); assert.equal(state.flow.postAttempts, 1);
