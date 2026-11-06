@@ -152,9 +152,7 @@ export default {async fetch(request,bindings,context){
   // Labelled resource producer; the healthy producer remains unchanged above.
   let text=mode==='wire'? ' '.repeat(16382)+'{}':mode==='wire-plus'?' '.repeat(16383)+'{}':mode==='duplicates'?'{' + Array(65).fill('"a":0').join(',')+'}'
    :mode==='scalar'?'"'+'x'.repeat(1025)+'"':mode==='depth'?'[[[[[]]]]]':mode==='units'?'['+Array(4).fill('"'+'x'.repeat(1024)+'"').join(',')+',"x"]':'{}';
-  let response=mode==='huge'?await nativeFetch('https://soft-gate.example/huge'):await nativeFetch('https://soft-gate.example/bytes',{method:'POST',body:text});
-  if(mode==='headers')for(let i=0;i<33;i++)response.headers.set('x-'+i,'x');
-  if(mode==='header-bytes')response.headers.set('x-large','x'.repeat(4096));
+  let response=mode==='huge'?await nativeFetch('https://soft-gate.example/huge'):await nativeFetch('https://soft-gate.example/bytes',{method:'POST',body:text,headers:{'x-resource-mode':mode}});
   response=instrument(response,row,'helper');
   if(mode==='reads'||mode==='reads-plus'||mode==='backing'){
    const get=response.body.getReader.bind(response.body);response.body.getReader=options=>{const r=get(options),read=r.read.bind(r);let nativeDone=false,call=0,empty;
@@ -228,7 +226,10 @@ async function statusNetwork() {
     if (path === '/bytes') {
       const parts = []; let size = 0;
       for await (const chunk of req) { size += chunk.length; if (size > 32768) throw Error('fixture request bound'); parts.push(chunk); }
-      res.writeHead(Number(req.headers['x-status'] ?? 200), { 'content-type': req.headers['x-media'] ?? 'application/json' }); res.end(Buffer.concat(parts)); return;
+      const headers = { 'content-type': req.headers['x-media'] ?? 'application/json' };
+      if (req.headers['x-resource-mode'] === 'headers') for (let i = 0; i < 33; i++) headers['x-' + i] = 'x';
+      if (req.headers['x-resource-mode'] === 'header-bytes') headers['x-large'] = 'x'.repeat(4096);
+      res.writeHead(Number(req.headers['x-status'] ?? 200), headers); res.end(Buffer.concat(parts)); return;
     }
     if (path.startsWith('/provider/')) {
       const id = path.slice('/provider/'.length); let size = 0; for await (const chunk of req) size += chunk.length;
