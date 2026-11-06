@@ -55,8 +55,9 @@ fetch and one unread response; no history or raw exception/cause archive.
 The serializer writes ASCII directly into whole backings no larger than 16 KiB.
 It never creates a base64 string or another input backing. The sealed bytes have
 no public view or mutable writer. Source EOF, the last physical pull and FIRST
-discard settle before input/capability/source references clear. The genuine
-input owner then atomically splits its charge into 32 MiB control and 64 MiB
+discard settle before input/capability/source references clear. Later discard calls
+reuse the terminal closure, including rejection, without invoking source disposal
+again. The genuine input owner then atomically splits its charge into 32 MiB control and 64 MiB
 response successors. Neither a release/reacquire gap nor a second native-response
 acquisition exists. The response successor is private and single-use. Failed
 transfer retains the original allocation and disposes the unread response.

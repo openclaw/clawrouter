@@ -83,6 +83,7 @@ export class MusicCoverUploadSource {
     this.controller?.error(failed());
   }
   discard(): Promise<void> {
+    if (this.closing) return this.closing;
     if (!this.firstDiscard && !this.sourceClosed) {
       this.discarded = true;
       let resolve!: () => void;

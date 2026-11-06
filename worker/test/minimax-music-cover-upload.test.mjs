@@ -187,11 +187,14 @@ test("genuine successor consumption and upload transfer are independently single
   try { await flow.result; await flow.retired; } finally { await cleanup(f, flow); }
 });
 
-test("synchronous/asynchronous transport causes are sanitized before held FIRST discard", async t => {
+test("transport causes are sanitized and FIRST discard stays memoized after terminal cleanup", async t => {
   const original = MusicCoverUploadSource.prototype.disposeSource;
-  for (const asynchronous of [false, true]) {
-    const entered = Promise.withResolvers(), held = Promise.withResolvers(); let source;
-    MusicCoverUploadSource.prototype.disposeSource = async function() { source = this; await original.call(this); entered.resolve(); await held.promise; };
+  for (const asynchronous of [false, true]) for (const cleanupReject of [false, true]) {
+    const entered = Promise.withResolvers(), held = Promise.withResolvers(); let source, discards = 0;
+    MusicCoverUploadSource.prototype.disposeSource = async function() {
+      source = this; discards++; await original.call(this); entered.resolve(); await held.promise;
+      if (cleanupReject) throw Error("synthetic FIRST discard rejection");
+    };
     const f = await begin(), raw = new Error("synthetic transport", { cause: { retained: new Uint8Array(100000) } });
     const flow = runInactiveMiniMaxMusicCoverUpload(f.sealed, () => {
       if (asynchronous) return Promise.reject(raw); throw raw;
@@ -201,7 +204,12 @@ test("synchronous/asynchronous transport causes are sanitized before held FIRST 
       await entered.promise;
       assert.equal(bodyBudgetCharged(), 96 * MiB); assert.equal(flow.snapshot().ordinaryActive, 1);
       assert.equal(Object.values(source).includes(raw), false); assert.equal(Object.values(source).includes(raw.cause), false);
-      held.resolve(); await flow.retired; assert.equal(flow.snapshot().cleanupFailed, false);
+      assert.equal(discards, 1); held.resolve();
+      if (cleanupReject) await assert.rejects(flow.retired); else await flow.retired;
+      assert.equal(flow.snapshot().cleanupFailed, cleanupReject); assert.equal(source.snapshot().references, 0);
+      const terminal = source.discard(); assert.equal(source.discard(), terminal);
+      if (cleanupReject) await assert.rejects(terminal); else await terminal;
+      assert.equal(discards, 1);
     } finally { held.resolve(); await cleanup(f, flow); MusicCoverUploadSource.prototype.disposeSource = original; }
   }
 });
