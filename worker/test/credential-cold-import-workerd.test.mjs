@@ -26,6 +26,7 @@ export class PolicyBindingIndexObject extends Owner {
 }
 const CASES=__CASES__,states=new Map(),raw=globalThis.fetch.bind(globalThis);
 const names=['credentials','policies','users','bindings'],paths=['/credentials/list','/policies/list','/users/list','/list'];
+const owner=(env,id)=>env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings-'+id));
 const view=a=>({id:a.id,scope:a.scope,mode:a.mode,lists:a.lists,rereads:a.rereads,mutations:a.mutations,failed:a.failed,secondary:a.secondary,
  committed:a.committed,outward:a.outward,status:a.status,background:a.background,backgroundFailed:a.backgroundFailed,ownerFailure:a.ownerFailure});
 const gate=async(a,label)=>{const r=await raw('https://cold-import.example/gate/'+a.id+'/'+label);if(!r.ok)throw Error('fixture gate failed');await r.text();};
@@ -35,7 +36,7 @@ async function setup(env,id){
  if(states.has(id))return states.get(id);
  const definition=CASES[id];if(!definition)throw Error('unknown case');
  const a={id,...definition,lists:[0,0,0,0],rereads:[0,0,0,0],mutations:0,failed:false,secondary:false,committed:false,outward:false,status:null,background:0,backgroundFailed:false,ownerFailure:null};
- const stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings-'+id));a.stub=stub;
+ const stub=owner(env,id);
  const email='owner@example.com',policy={enabled:true,generation:'v1',providers:['openai'],tenantId:'fixture',monthlyBudgetMicros:null,requestCostMicros:1000,
   retainRequestContent:false,grantRouting:{strategy:'priority',eligibleGrants:{}}};
  const user={enabled:true,role:'user',groups:['maintainers'],tenantId:'fixture'},digest='ab'.repeat(32),cookie='cd'.repeat(32);
@@ -46,6 +47,12 @@ async function setup(env,id){
  // Actor resolution is warm; the GLOBAL users import remains cold.
  const seeded=await stub.fetch('https://clawrouter.internal/users/initialize',{method:'POST',body:JSON.stringify([{email,record:user}])});
  if(!seeded.ok||await seeded.text()!=='initialized')throw Error('actor seed failed');
+ a.store=store;a.adminDigest=await sha256Hex('synthetic-admin-token');states.set(id,a);return a;
+}
+function controlled(env,a){
+ // Retain synthetic data only between requests; native bindings belong to the
+ // current public request, including its authentication and import continuations.
+ const {id,store}=a,stub=owner(env,id);
  const kv={async list({prefix}){if(a.mode==='kv-list'&&prefix==='access/users/')fail(a,'generic');
    return {list_complete:true,keys:[...store.keys()].filter(k=>k.startsWith(prefix)).map(name=>({name}))};},
   async get(key){if(a.mode==='kv-get'&&typeof key==='string'&&key.startsWith('access/users/'))fail(a,'generic');
@@ -74,17 +81,16 @@ async function setup(env,id){
   if(index!==-1&&a.lists[index]===2)a.rereads[index]++;
   return response;
  }})};
- a.env={...env,POLICY_KV:kv,ACCESS_CONTROL:access,CLAWROUTER_LOCAL_AUTH:'enabled',CLAWROUTER_ADMIN_TOKEN_SHA256:await sha256Hex('synthetic-admin-token')};
- states.set(id,a);return a;
+ return {...env,POLICY_KV:kv,ACCESS_CONTROL:access,CLAWROUTER_LOCAL_AUTH:'enabled',CLAWROUTER_ADMIN_TOKEN_SHA256:a.adminDigest};
 }
 export default {async fetch(request,env,ctx){const u=new URL(request.url),id=u.searchParams.get('case');
  if(!CASES[id])return new Response(null,{status:404});
- if(u.pathname==='/setup'){const a=await setup(env,id);const r=await a.stub.fetch('https://clawrouter.internal/fixture-state',{method:'POST'});return r;}
+ if(u.pathname==='/setup'){await setup(env,id);return owner(env,id).fetch('https://clawrouter.internal/fixture-state',{method:'POST'});}
  const a=states.get(id);if(!a)throw Error('case not initialized');
  if(u.pathname==='/state')return Response.json(view(a));
- if(u.pathname==='/sql')return a.stub.fetch('https://clawrouter.internal/fixture-state',{method:'POST'});
+ if(u.pathname==='/sql')return owner(env,id).fetch('https://clawrouter.internal/fixture-state',{method:'POST'});
  if(!['/v1/admin/credentials','/v1/session/credentials'].includes(u.pathname))return new Response(null,{status:404});
- const response=await worker.fetch(request,a.env,{waitUntil(p){a.background++;const observed=Promise.resolve(p).then(()=>{a.background--;},()=>{a.background--;a.backgroundFailed=true;});ctx.waitUntil(observed);}});
+ const response=await worker.fetch(request,controlled(env,a),{waitUntil(p){a.background++;const observed=Promise.resolve(p).then(()=>{a.background--;},()=>{a.background--;a.backgroundFailed=true;});ctx.waitUntil(observed);}});
  a.outward=true;a.status=response.status;return response;
 },queue:worker.queue};`.replace('__CASES__', JSON.stringify(cases));
 
