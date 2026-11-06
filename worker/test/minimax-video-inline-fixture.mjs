@@ -62,4 +62,4 @@ export function inlineImage(type = "image/png", size = 8 * 1024 * 1024) {
   extra.write("EXIF"); extra.writeUInt32LE(extra.length - 8, 4); original[20] |= 8;
   const result = Buffer.concat([original, extra]); result.writeUInt32LE(result.length - 8, 4); return result;
 }
-export { uri };
+export { uri, png };

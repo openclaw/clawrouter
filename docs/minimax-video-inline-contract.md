@@ -104,3 +104,28 @@ unclaimed output, V1/CN/import denial and fresh authority across waits.
 Authored cases are not execution proof. Final-head hosted results must qualify
 the implementation before landing; local dependency refusal permits code-only
 inspection and syntax checks, not substitute semantic execution.
+
+
+Registered CREATE is sequential through authorization, selection, materialization,
+admission and dispatch. It can retain one ordinary provider slot for upload while
+mandatory bind/observe progresses after an early response. A final control
+refusal after a confirmed dispatch ACK can retain one ordinary cancellation
+while the mandatory known-unsent freeze completes. These are the reachable
+concurrency cases; a registered request does not manufacture four simultaneous
+ordinary controls. The four-plus-one independence and exact 21-ticket exhaustion
+cases are primitive scheduler evidence, distinct from registered call inventories.
+Each actual invocation counts every caller control transport and the provider
+POST separately. A reserved but unsent provider ticket is nonrefundable and is
+not counted as a POST. No ticket is burned merely to fill the profile. Maximum
+controls and payload observations are phase witnesses under one cumulative
+reservation; they are not measurements of simultaneous heap liveness.
+
+The registered successful CREATE inventory with an idempotency key is two
+admission RPCs, four connection RPCs, three current-policy snapshots, three
+original-owner inspections, one materialization, lookup, durable admission and
+one provider POST: 16 ordinary calls. Dispatch, bind and observe consume three
+mandatory calls. Without the key, lookup is absent: 15 ordinary calls. A
+post-dispatch final-policy refusal occurs before the third inspect and POST:
+13 ordinary calls actually start (the reserved provider ticket is still spent),
+plus dispatch and freeze as two mandatory calls. Fixture assertions compare
+these exact path/action inventories; DO-internal accounting work is excluded.

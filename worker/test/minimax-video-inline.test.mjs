@@ -51,7 +51,7 @@ test("raw nonimage bytes and JSON escape overhead are separate from base64 credi
   const image = uri(inlineImage("image/png", 1024));
   const base = JSON.stringify({ ...scalar, first_frame_image: image });
   const nonimage = Buffer.byteLength(base) - image.split(",")[1].length;
-  const value = await prepare(base + " ".repeat(65536 - nonimage), "native", 7); await value.owner.finish();
+  const value = await prepare(base + " ".repeat(65536 - nonimage), "native", 16); await value.owner.finish();
   await assert.rejects(prepare(base + " ".repeat(65537 - nonimage)));
   const escaped = image.replaceAll("A", "\\u0041");
   const document = JSON.stringify(scalar).slice(0, -1) + ',"first_frame_image":"' + escaped + '"}';
@@ -87,7 +87,7 @@ test("actual hash promise retains the image and charge after public cancellation
   held.resolve(); await finished; assert.equal(bodyBudgetCharged(), 0);
 });
 
-test("inline21 calls are nonrefundable: sixteen ordinary and five mandatory", async () => {
+test("primitive inline21 calls are nonrefundable: sixteen ordinary and five mandatory", async () => {
   const owner = new MiniMaxVideoOperation("create"); owner.selectInlineProfile(() => {}); let calls = 0;
   try {
     for (let i = 0; i < 21; i++) await owner.controlJson({}, async () => { calls++; return jsonResponse({ ok: true }); }, i >= 16);
@@ -97,7 +97,7 @@ test("inline21 calls are nonrefundable: sixteen ordinary and five mandatory", as
   } finally { await owner.finish(); }
 });
 
-for (const error of [true, false]) test(`provider slot joins independent upload retirement on ${error ? "rejection" : "early headers"}`, async () => {
+for (const error of [true, false]) test(`primitive provider slot joins independent upload retirement on ${error ? "rejection" : "early headers"}`, async () => {
   const owner = new MiniMaxVideoOperation("create"), held = Promise.withResolvers(); let discards = 0;
   owner.selectInlineProfile(() => {});
   owner.registerUpload({ body: new ReadableStream(), retired: held.promise, discard() { discards++; return held.promise; } });
@@ -144,4 +144,13 @@ test("inline pre-read refusal records synchronous FIRST-cancel failure and still
     await assert.rejects(owner.finish(), { code: "minimax_video_cleanup_failed" });
     assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(unlocked, 1); assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0);
   } finally { await source.cancel(); }
+});
+
+
+test("inline public projection remains64KiB after original-file link rewriting", async () => {
+  const owner = new MiniMaxVideoOperation("create"); owner.selectInlineProfile(() => {});
+  try {
+    assert.throws(() => owner.publish({ x: "x".repeat(65528), video_url: "/v1/native/minimax/v1/files/retrieve_content?file_id=123" }, 200, { "content-type": "application/json" }));
+  } finally { await owner.finish(); }
+  assert.equal(bodyBudgetCharged(), 0);
 });

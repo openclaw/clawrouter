@@ -467,9 +467,10 @@ export class MiniMaxVideoOperation {
   publish(value: unknown, status: number, headers: HeadersInit, caller = this.operation.signal): Response {
     if (this.outputStarted) videoUnavailable();
     this.outputStarted = true;
-    videoJsonBytes(value, "native");
+    const outputLimit = this.inline ? videoControlBytes : KiB * KiB;
+    if (videoJsonBytes(value, "native") > outputLimit) videoUnavailable();
     caller = AbortSignal.any([caller, this.operation.signal]);
-    const transport = jsonBodyTransport(value, KiB * KiB);
+    const transport = jsonBodyTransport(value, outputLimit);
     const reader = transport.stream().getReader(), input = inputRetirement(reader);
     this.registerInput(input);
     let output: ReadableStreamDefaultController<Uint8Array> | undefined;
