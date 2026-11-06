@@ -3,7 +3,7 @@ import { miniMaxInlineScalars } from "./minimax-video-inline.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./managed-media-json.ts";
 import { miniMaxVideoFileAdapter } from "./managed-minimax-video-files.ts";
-import { miniMaxVideoOrigins, prepareMiniMaxVideo, prepareMiniMaxInlineVideoScalars, prepareMiniMaxVideoControl, readMiniMaxVideo,
+import { isMiniMaxVideoOrigin, prepareMiniMaxVideo, prepareMiniMaxInlineVideoScalars, prepareMiniMaxVideoControl, readMiniMaxVideo,
   validateMiniMaxMediaId } from "./minimax-video.ts";
 
 import { videoJsonBytes, discardVideoInput } from "./minimax-video-operation.ts";
@@ -16,7 +16,7 @@ export const miniMaxVideoManagedAdapter: ManagedLifecycleAdapter = {
   files: miniMaxVideoFileAdapter, identityProbe: "1", validateId: validateMiniMaxMediaId,
   assertDispatch(request) {
     const url = new URL(request.url);
-    requireVideo(Object.values(miniMaxVideoOrigins).some(origin => origin === url.origin) && !url.username && !url.password && !url.hash);
+    requireVideo(isMiniMaxVideoOrigin(url.origin) && !url.username && !url.password && !url.hash);
     if (request.method === "POST") requireVideo(url.pathname === "/v1/video_generation" && !url.search);
     else {
       requireVideo(request.method === "GET");

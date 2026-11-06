@@ -1,4 +1,5 @@
 import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
+import { isMiniMaxVideoOrigin } from "./minimax-video.ts";
 import type { BackgroundRecord } from "./background-store.ts";
 import { BodyLease } from "./body-budget.ts";
 import { backgroundCall } from "./http-background.ts";
@@ -48,7 +49,7 @@ export function managedFileBase(provider: CompiledProvider, value: string | unde
   const base = new URL(value);
   if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(base.hostname) || /^[\d.]+$/.test(base.hostname)
     || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(base.hostname)
-    || !(provider.id === "minimax" && ["https://api.minimax.io", "https://api.minimaxi.com"].includes(value) || Object.values(provider.base_urls).some(declared => { try { return new URL(declared).origin === base.origin; } catch { return false; } }))) unavailable();
+    || !(provider.id === "minimax" ? isMiniMaxVideoOrigin(value) : Object.values(provider.base_urls).some(declared => { try { return new URL(declared).origin === base.origin; } catch { return false; } }))) unavailable();
   return value.replace(/\/$/, "");
 }
 

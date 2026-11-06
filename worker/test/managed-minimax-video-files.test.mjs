@@ -21,11 +21,12 @@ const paths = [{ id: file.id, metadata: `/v1/native/minimax/v1/files/retrieve?fi
   download: `/v1/native/minimax/v1/files/retrieve_content?file_id=${file.id}` }];
 
 test("MiniMax file descriptors require successful matching task provenance and an exact regional origin", () => {
-  for (const origin of ["https://api.minimax.io", "https://api.minimaxi.com"]) assert.deepEqual(files.describe(observed(wire.success), origin), [file]);
+  for (const origin of ["https://api.minimax.io", "https://api.minimaxi.com", "https://api.minimax.cn"]) assert.deepEqual(files.describe(observed(wire.success), origin), [file]);
   for (const body of [wire.pending, wire.failed]) assert.deepEqual(files.describe(observed(body), "https://api.minimax.io"), []);
   assert.deepEqual(files.describe({ ...observed(wire.success), observationUnavailable: "expired_or_unknown" }, "https://api.minimax.io"), []);
   assert.throws(() => files.describe({ ...observed(wire.success), id: "1" }, "https://api.minimax.io"));
-  for (const origin of ["https://api.minimax.io/", "https://api.minimax.io/anthropic", "https://media.example", "http://api.minimax.io"]) {
+  for (const origin of ["https://api.minimax.io/", "https://api.minimax.io/anthropic", "https://media.example", "http://api.minimax.io",
+    "https://api.minimax.cn/", "https://api.minimax.cn:443", "https://api.minimax.cn/anthropic", "https://api.minimax.cn.example"]) {
     assert.throws(() => files.describe(observed(wire.success), origin));
   }
 });

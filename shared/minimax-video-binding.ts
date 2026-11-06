@@ -15,7 +15,9 @@ export type MiniMaxVideoBinding = VideoBindingFields<typeof miniMaxT2VModels> & 
   | { version: "clawrouter.minimax-video.v2"; region: "global"; origin: "https://api.minimax.io";
     inputProfile: "inline-first-frame.v1" }
 ) | VideoBindingFields<typeof miniMaxFrozenVideoModels> & { version: "clawrouter.minimax-video.v3";
-  region: "global"; origin: "https://api.minimax.io"; inputProfile: "inline-first-frame.v1" };
+  region: "global"; origin: "https://api.minimax.io"; inputProfile: "inline-first-frame.v1" }
+  | Omit<VideoBindingFields<typeof miniMaxT2VModels>, "region" | "origin"> & {
+    version: "clawrouter.minimax-video.v4"; region: "cn"; origin: "https://api.minimax.cn" };
 
 export function miniMaxVideoBinding(region: MiniMaxVideoRegion): Readonly<Extract<MiniMaxVideoBinding, { version: "clawrouter.minimax-video.v1" }>> {
   return Object.freeze({ version: "clawrouter.minimax-video.v1", product: "video", region,
@@ -30,6 +32,10 @@ export function miniMaxInlineVideoBinding(): Readonly<Extract<MiniMaxVideoBindin
 
 export function miniMaxSixModelVideoBinding(): Readonly<Extract<MiniMaxVideoBinding, { version: "clawrouter.minimax-video.v3" }>> {
   return Object.freeze({ ...miniMaxInlineVideoBinding(), version: "clawrouter.minimax-video.v3", models: miniMaxFrozenVideoModels });
+}
+
+export function miniMaxCurrentCnVideoBinding(): Readonly<Extract<MiniMaxVideoBinding, { version: "clawrouter.minimax-video.v4" }>> {
+  return Object.freeze({ ...miniMaxVideoBinding("cn"), version: "clawrouter.minimax-video.v4", region: "cn", origin: "https://api.minimax.cn" });
 }
 
 export function isMiniMaxVideoModel(model: unknown): model is typeof miniMaxFrozenVideoModels[number] {
@@ -50,7 +56,8 @@ export function readMiniMaxVideoBinding(value: unknown): MiniMaxVideoBinding | n
   const row = value as Record<string, unknown>;
   if (row.region !== "global" && row.region !== "cn") return null;
   if ((row.version === "clawrouter.minimax-video.v2" || row.version === "clawrouter.minimax-video.v3") && row.region !== "global") return null;
-  const expected = row.version === "clawrouter.minimax-video.v3" ? miniMaxSixModelVideoBinding() : row.version === "clawrouter.minimax-video.v2" ? miniMaxInlineVideoBinding() : miniMaxVideoBinding(row.region);
+  if (row.version === "clawrouter.minimax-video.v4" && row.region !== "cn") return null;
+  const expected = row.version === "clawrouter.minimax-video.v4" ? miniMaxCurrentCnVideoBinding() : row.version === "clawrouter.minimax-video.v3" ? miniMaxSixModelVideoBinding() : row.version === "clawrouter.minimax-video.v2" ? miniMaxInlineVideoBinding() : miniMaxVideoBinding(row.region);
   const models = row.models;
   if (Object.keys(row).length !== Object.keys(expected).length || !Array.isArray(models)
     || models.length !== expected.models.length || Object.keys(models).length !== expected.models.length

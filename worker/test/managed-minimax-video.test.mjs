@@ -68,7 +68,7 @@ test("MiniMax original task controls accept exactly one canonical int64 query id
 });
 
 test("MiniMax structural dispatch guard fixes origin and native paths without asserting entitlement", () => {
-  for (const origin of ["https://api.minimax.io", "https://api.minimaxi.com"]) {
+  for (const origin of ["https://api.minimax.io", "https://api.minimaxi.com", "https://api.minimax.cn"]) {
     adapter.assertDispatch(new Request(origin + "/v1/video_generation", { method: "POST" }));
     for (const path of ["/v1/query/video_generation?task_id=1", "/v1/files/retrieve?file_id=1", "/v1/files/retrieve_content?file_id=1"]) {
       adapter.assertDispatch(new Request(origin + path));

@@ -81,6 +81,33 @@ closed; Messages OAuth, speech and TokenPlan Search grants do not authorize vide
 
 ## Original-job files
 
+### Explicit current-CN T2V authority
+
+`minimax-current-cn-video` is a separate administrator intent. Its closed
+`clawrouter.minimax-video.v4` binding selects exactly `https://api.minimax.cn`,
+region `cn`, scalar API-key credentials, and the original Hailuo-2.3/02 models.
+It has no input profile. Inline images and the four required-first-frame models
+remain denied before credential materialization. V1/V2/V3 constructors, their
+destinations and request digests remain unchanged; the legacy CN map still uses
+`https://api.minimaxi.com`.
+
+The existing owner computes the complete mutation digest, admits the pool, then
+checks current SQL administrator authority before storage. Changing the binding
+rotates lineage. Existing jobs fail their original-owner/route digest checks;
+they do not migrate. A separately retained legacy owner keeps its binding.
+Imported/forged binding fields do not attest authority. Shape validation accepts
+only the three exact origin strings; it supplies no credential authority. Create,
+poll, metadata and download use the original validated binding origin and current
+policy, never a declared-base fallback, redirect or alternate-host retry.
+
+The per-invocation 96 MiB application reservation, exchange profiles, original
+deadline and reader/FIRST-cancel/late-response/delivery joins are unchanged.
+Synthetic tests cover the two models on native/manifest routes, actual durable
+restart and current-CN file bytes, re-attestation/demotion and zero-secret denials.
+They do not prove live vendor availability, credential portability, entitlement,
+tariffs or native-platform allocation bounds. CN inline/six-model support,
+declarations and native-client activation remain separate work.
+
 Only a successful original task supplies a generated `file_id` descriptor.
 The primary metadata/download schemas declare int64 IDs. The bounded native
 JSON reader preserves task/file integer tokens as decimal strings before
@@ -115,8 +142,9 @@ replacement job store, global job index or raw task/file-ID route is introduced.
 
 Source 11.3 owns existing MiniMax YAML/schema/catalog; source 11.4/11.1 own
 regional native-media product/grant qualification. The selected origin is
-explicitly global api.minimax.io or CN api.minimaxi.com, independent of any
-Anthropic resource prefix. Source 11.2 owns actual native consumption and
+explicitly global api.minimax.io, legacy CN api.minimaxi.com, or separately
+attested V4 current-CN api.minimax.cn, independent of any Anthropic resource
+prefix. Source 11.2 owns actual native consumption and
 source 11.6 owns integrated proof. Codecs alone do not activate this route.
 
 The public card lists Hailuo per-video USD prices and separate resource-pack
