@@ -92,15 +92,18 @@ export default {async fetch(request,env,context){
  if(url.pathname==='/unlock-observed'){await active.unlockObserved;return Response.json(state());}
  if(url.pathname==='/contend'){const lease=new BodyLease();try{return Response.json({admitted:lease.grow(1024*1024),charged:bodyBudgetCharged()});}finally{lease.release();}}
  if(url.pathname==='/abort'){
-  // Cancellation creates physical continuations in this probe's context. Keep
-  // it alive; /start independently observes and asserts the retirement outcome.
+  // /start owns cancellation and its native reader. This probe only signals
+  // that continuation and retains the existing retirement without delaying its reply.
   if(active?.flow)context.waitUntil(active.flow.retired.catch(()=>{}));
-  active?.controller.abort('fixture abort');return Response.json({ok:true});
+  active?.requestAbort();return Response.json({ok:true});
  }
  if(url.pathname!=='/start')return new Response(null,{status:404});
  if(active&&!active.retired)return new Response(null,{status:409});
  const a=active={mode:url.searchParams.get('mode')??'normal',audio:Number(url.searchParams.get('audio')??3),controller:new AbortController(),
   fetches:0,reads:0,nativeReads:0,cancels:0,unlocks:0,unlockAttempts:0,discards:0,splits:0,outputBytes:0,maxOutputBacking:0,headers:false,result:false,done:false,retired:false};
+ // Register the cancellation continuation in the same context as the HTTP reader.
+ const abortRequested=new Promise(resolve=>{a.requestAbort=resolve;});
+ void abortRequested.then(()=>a.controller.abort('fixture abort'));
  a.unlockObserved=new Promise(resolve=>{a.resolveUnlock=resolve;});
  const input=beginMiniMaxMusicCoverInput({body:request.body,signal:a.controller.signal,deadlineAt:Date.now()+(a.mode==='deadline'?1500:60000),
   route:url.searchParams.get('route')==='manifest'?'manifest':'native',contentType:'application/json'});
