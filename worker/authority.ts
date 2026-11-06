@@ -1,5 +1,6 @@
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { authorityAck, readAuthorityAck } from "./authority-ack-response.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { InputRetirement } from "./input-retirement.ts";
 import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
@@ -955,6 +956,11 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
   if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
+  const ack = objectName === "policy-bindings" ? authorityAck(path) : undefined;
+  if (ack) {
+    const text = JSON.stringify(body);
+    return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal }), ack, signal) as T;
+  }
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) throw new Error(`authority ${path} failed (${response.status}): ${text}`);
