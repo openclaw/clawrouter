@@ -14,7 +14,7 @@ export async function setup(t, options = {}) {
     namespace.get = id => { const stub = get(id); return { async fetch(...args) { return syntheticTransport(await stub.fetch(...args)); } }; };
   }
   const upstream = globalThis.fetch;
-  t.mock.method(globalThis, "fetch", async (...args) => syntheticTransport(await upstream(...args)));
+  t.mock.method(globalThis, "fetch", async (...args) => syntheticTransport(await upstream(args[0], args[1]?.body instanceof ReadableStream ? { ...args[1], duplex: "half" } : args[1])));
   f.env.MINIMAX_API_KEY = "synthetic-forbidden-environment-key";
   f.user = (enabled = true, role = "admin") => f.authority("/users/put", { email: actor.email,
     record: { role, enabled, tenantId: "tenant", groups: [], contentRetentionDisabled: false } });

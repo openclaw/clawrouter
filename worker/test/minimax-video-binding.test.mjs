@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { miniMaxVideoBinding, miniMaxT2VModels, readMiniMaxVideoBinding } from "../../shared/minimax-video-binding.ts";
+import { miniMaxInlineVideoBinding, miniMaxVideoBinding, miniMaxT2VModels, readMiniMaxVideoBinding } from "../../shared/minimax-video-binding.ts";
 
 for (const region of ["global", "cn"]) {
   test(`Hailuo ${region} binding preserves only explicit regional T2V authority`, () => {
@@ -19,3 +19,14 @@ for (const region of ["global", "cn"]) {
     }
   });
 }
+
+
+test("inline first-frame authority is a strict explicit global V2 union", () => {
+  const value = miniMaxInlineVideoBinding();
+  assert.deepEqual(readMiniMaxVideoBinding(JSON.parse(JSON.stringify(value))), value);
+  assert.equal(value.version, "clawrouter.minimax-video.v2");
+  for (const patch of [{ region: "cn" }, { origin: "https://api.minimaxi.com" }, { inputProfile: undefined },
+    { inputProfile: "url" }, { version: "clawrouter.minimax-video.v1" }, { extra: true }])
+    assert.equal(readMiniMaxVideoBinding({ ...value, ...patch }), null);
+  assert.equal(readMiniMaxVideoBinding({ ...miniMaxVideoBinding("global"), inputProfile: value.inputProfile }), null);
+});

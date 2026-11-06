@@ -1,4 +1,5 @@
-import { MiniMaxVideoOperation, readVideoJson, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
+import { readMiniMaxVideoInput, bindMiniMaxVideoInline } from "./minimax-video-inline.ts";
+import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
 import { miniMaxT2VModels } from "../shared/minimax-video-binding.ts";
 import { prepareMiniMaxVideoDispatch } from "./minimax-video-dispatch.ts";
@@ -653,7 +654,7 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
         "minimax.video", params, context, undefined, owner)), "upstream", late => owner.discard(late));
     }
     if (request.method !== "POST" || new URL(request.url).search || endpoint.lifecycle?.protocol !== "minimax.video") miniMaxVideoDenied();
-    let body = await operation.wait(owner.track(readVideoJson(request, operation.signal, "input", owner.registerInput)));
+    let body: unknown = await operation.wait(owner.track(readMiniMaxVideoInput(request, owner, route)));
     let prepared;
     if (route === "manifest") {
       const envelope = manifestEnvelope(body);
@@ -676,6 +677,8 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
     const selection: ProxySelection = { provider, endpoint, model, capability: "media.predict", body: input,
       pathParams: prepared.pathParams, method: "POST" };
     prepared.body = {};
+    await operation.wait(owner.track(bindMiniMaxVideoInline(owner, input, [original.credentialId, original.principalId,
+      original.policyId, original.policy.tenantId, provider.id, endpoint.id, model.id, model.upstream])));
     const auth = await operation.wait(owner.track(authenticate(selection)));
     if (auth instanceof Response) return auth;
     if (auth.credentialId !== original.credentialId || auth.principalId !== original.principalId || auth.policyId !== original.policyId

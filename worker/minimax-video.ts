@@ -16,14 +16,21 @@ export function validateMiniMaxMediaId(value: unknown): string {
 }
 export function prepareMiniMaxVideo(region: keyof typeof miniMaxVideoOrigins, value: unknown) {
   if (region !== "global" && region !== "cn") fail("region");
+  return prepareVideoShape(region, value, false);
+}
+export function prepareMiniMaxInlineVideoScalars(value: unknown) {
+  return prepareVideoShape("global", value, true);
+}
+function prepareVideoShape(region: keyof typeof miniMaxVideoOrigins, value: unknown, ownedInline: boolean) {
   const body = object(value);
+  if (ownedInline && (Object.hasOwn(body, "first_frame_image") || !["MiniMax-Hailuo-2.3", "MiniMax-Hailuo-02"].includes(String(body.model)))) fail("inline_model");
   if (Object.keys(body).some(key => !["model", "prompt", "duration", "resolution", "first_frame_image"].includes(key))
     || typeof body.model !== "string" || !(miniMaxVideoModels as readonly string[]).includes(body.model)) fail("model_or_fields");
-  const imageMode = body.first_frame_image !== undefined, legacy = body.model.startsWith("I2V-");
+  const imageMode = ownedInline || body.first_frame_image !== undefined, legacy = body.model.startsWith("I2V-");
   if (!imageMode && (legacy || body.model === "MiniMax-Hailuo-2.3-Fast")) fail("requires_image");
   if (body.prompt !== undefined && (typeof body.prompt !== "string" || body.prompt.length > 2000)
     || !imageMode && (typeof body.prompt !== "string" || !body.prompt.trim())) fail("prompt");
-  if (imageMode) imageReference(body.first_frame_image);
+  if (imageMode && !ownedInline) imageReference(body.first_frame_image);
   const duration = body.duration === undefined ? 6 : body.duration, resolution = body.resolution === undefined ? legacy ? "720P" : "768P" : body.resolution;
   if (legacy ? duration !== 6 || resolution !== "720P"
     : ![6, 10].includes(Number(duration)) || typeof duration !== "number" || !["768P", "1080P"].includes(String(resolution)) || typeof resolution !== "string"

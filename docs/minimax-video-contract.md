@@ -66,12 +66,12 @@ inflate or decode pixels, prove raster integrity or establish playable media.
 Tests label dimension-mutated JPEG/WebP fixtures accordingly; the generated
 301x301 grayscale PNG also has its complete raster checked with a local inflater.
 
-This is an inactive leaf. Existing preparation/managed callers remain unchanged
-and all image routes stay closed. One decoded 8MiB allocation does not qualify
-complete 12MiB JSON admission or the whole-lifetime budget in the existing pool.
-Source1 owns those copies/leases, input digest and original caller, regional
-video grant generation/lineage, exact model/route/slot binding, current policy,
-actual signals and transport. No input publication, upload, fetch, retention
+The pure qualifier supplies no runtime authority or complete admission proof.
+The explicit global V2 runtime uses its byte/container validator after one
+incremental decode; see [inline input ownership](minimax-video-inline-contract.md).
+That contract owns the input digest, original caller and video generation/lineage,
+exact model/route/slot, current policy, signals and observable transport.
+The pure qualifier supplies no input publication, upload, fetch, retention
 permission or owned-asset receipt is supplied. OpenRouter publication consent,
 receipts, URLs and namespaces cannot authorize MiniMax input. HTTPS remains
 closed; Messages OAuth, speech and TokenPlan Search grants do not authorize video.
