@@ -362,3 +362,10 @@ The Bedrock development task explicitly includes supported aliases of the
 canonical image model. Earlier runs using the shorter canonical-model wording
 are a different task revision and must not be silently combined with these
 results. Neither revision is an unseen validation task.
+
+Grounded repair workers can inspect up to 32 declared relative source imports
+under `worker/` and `shared/`. Imports discovered in inspected modules extend
+that bounded list. Test directories, hidden tests and paths outside those
+source roots remain excluded. Dependencies are read-only; only the original
+editable paths accept changes. The action schema lists readable paths so an
+agent does not have to guess which navigation requests the harness permits.

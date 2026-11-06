@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
+
 - Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.
 
 - Include both fixed-model controls in local Fusion function-smoke summaries so mixed policies can be compared against the stronger baseline.

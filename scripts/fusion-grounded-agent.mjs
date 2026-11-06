@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import { hash, sandbox, readSource, writeFiles, check, probe, validateEdits } from './fusion-workloads.mjs';
 import { toolErrorCode } from './fusion-agent-benchmark.mjs';
 import { requireCompleteResponse } from './fusion-native-provider.mjs';
@@ -40,6 +41,21 @@ export function sourceWindows(files, instruction, selection = null, maxBytes = 1
   });
 }
 
+// Only declared relative source imports expand read access; tests and paths
+// outside the source roots remain unavailable to the repair worker.
+export function sourceDependencies(files, task) {
+  const paths = new Set();
+  for (const file of files) for (const match of file.content.matchAll(/(?:from\s*|import\s*)['"](\.\.?\/[^'"]+)['"]/g)) {
+    const path = posix.normalize(posix.join(posix.dirname(file.path), match[1]));
+    if (!/^(worker|shared)\/[A-Za-z0-9_./-]+\.(ts|mjs|js)$/.test(path)
+      || path.split('/').some(part => part === '..' || part === 'test' || part === 'tests')
+      || /\.test\./.test(path) || task.hiddenTests?.includes(path)) continue;
+    paths.add(path);
+    if (paths.size >= 32) return [...paths];
+  }
+  return [...paths];
+}
+
 export function groundedEdits(task, files, views, action) {
   if (!Number.isSafeInteger(action.line) || !Number.isSafeInteger(action.endLine) || action.line < 1
     || action.endLine < action.line || typeof action.replace !== 'string' || Buffer.byteLength(action.replace) > 8000
@@ -58,7 +74,7 @@ export function groundedEdits(task, files, views, action) {
 
 const instructions = `Repair the reported repository bug. Current source excerpts are supplied on every turn. Make the smallest correct change; preserve unrelated behavior.
 Return one JSON action. edit: choose the inclusive line and endLine from the numbered source, and put ONLY their corrected replacement text into replace; path must be an editable file. Replace as few lines as possible. Do not include line-number prefixes in replacement text or rewrite entire functions unnecessarily.
-inspect: choose a listed path and either a line number or literal query to see another source window. probe: query contains a Node ES module that imports the source and asserts the reported behavior; it executes in an isolated repository. finish: submit the current repair.
+inspect: choose a listed readable path and either a line number or literal query to see another source window. Declared source dependencies are read-only; edits still require an editable path. probe: query contains a Node ES module that imports the source and asserts the reported behavior; it executes in an isolated repository. finish: submit the current repair.
 Set unused strings to empty and unused line/endLine to 0. The source is already read for you. Do not emit notes, explanations or copies of the full file.
 Visible tests pass even on the broken baseline: their success does not prove the issue fixed. Use an executable probe of the reported invariant where possible. Final acceptance tests are unavailable.`;
 
@@ -74,6 +90,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
   const checked = config.requireReproducer === true;
   let reviewing = false, reviewed = false;
   let reproducer = null, probePassed = false;
+  const dependencies = new Set();
   const probeModules = task.editPaths.map((path, index) => ({ binding: `source${index}`, path: `./${path}` }));
   // Global bindings avoid duplicate lexical declarations if a worker still
   // supplies its own imports despite the body-only instruction.
@@ -107,16 +124,19 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       const extra = selection && !task.editPaths.includes(selection.path)
         ? await read(box, [selection.path], remaining()) : [];
       const readable = [...files, ...extra];
+      for (const path of sourceDependencies(readable, task)) if (dependencies.size < 32) dependencies.add(path);
+      const readablePaths = [...new Set([...task.editPaths, ...task.visibleTests, ...dependencies])];
       if (selection) readable.sort((a, b) => Number(b.path === selection.path) - Number(a.path === selection.path));
       const views = sourceWindows(readable, task.instruction, selection);
       const phaseInstructions = !checked ? '' : reviewing
         ? '\nIndependent review phase: the first worker attempted this candidate. Check the tool results; do not assume its tests pass. Its frozen test and visible tests can be incomplete or wrong. Review the ENTIRE issue independently, including every stated boundary and behavior that must be preserved. Use inspect or edit to correct omissions. Use finish only when the candidate satisfies the full issue. Do not treat a passing self-authored test as proof of correctness.' : reproducer
         ? '\nRepair phase: the frozen reproduction below fails with an assertion on the original source. Use inspect or edit. Each edit reruns it in a fresh sandbox. Submission is automatic only when the reproduction and visible tests both pass. Do not change the reproduction.'
         : '\nReproduction phase: use inspect or probe only. The sandbox already imports assert from node:assert/strict and each editable module as source0, source1, etc. Write only executable JavaScript in query, using assert and those module namespaces; no imports, TypeScript types or shell commands are needed. Assert the CORRECT behavior described in the issue, so the original source fails with ERR_ASSERTION. Syntax/import errors and a probe that already passes do not qualify. Each worker has at most three reproduction actions; do not edit or finish.';
-      const actionSchema = !checked ? schema : { ...schema, properties: { ...schema.properties,
+      const boundedSchema = { ...schema, properties: { ...schema.properties, path: { type: 'string', enum: ['', ...readablePaths] } } };
+      const actionSchema = !checked ? boundedSchema : { ...boundedSchema, properties: { ...boundedSchema.properties,
         action: { type: 'string', enum: reviewing ? ['inspect', 'edit', 'finish'] : reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
       const messages = [{ role: 'system', content: instructions + phaseInstructions }, { role: 'user', content: JSON.stringify({
-        issue: task.instruction, editable: task.editPaths, visibleTests: task.visibleTests,
+        issue: task.instruction, editable: task.editPaths, readable: readablePaths, visibleTests: task.visibleTests,
         currentSource: views.map(({ content, ...view }) => ({ ...view,
           numberedSource: content.split('\n').map((line, index) => `${view.startLine + index}|${line}`).join('\n') })),
         testExamples, ...(checked ? { phase: reviewing ? 'review' : reproducer ? 'repair' : 'reproduce', probeModules,
@@ -135,8 +155,13 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
       try {
         if (checked && !(reviewing ? ['inspect', 'edit', 'finish'] : reproducer ? ['inspect', 'edit'] : ['inspect', 'probe']).includes(action.action)) throw new Error('invalid_action');
         if (action.action === 'inspect') {
-          if (![...task.editPaths, ...task.visibleTests].includes(action.path) || !Number.isSafeInteger(action.line)
+          if (!readablePaths.includes(action.path) || !Number.isSafeInteger(action.line)
             || action.line < 0 || typeof action.query !== 'string' || action.query.length > 200) throw new Error('invalid_read_paths');
+          try { await read(box, [action.path], remaining()); }
+          catch (error) {
+            if (error.message === 'command_failed' && /ENOENT/.test(error.stderr ?? '')) throw new Error('invalid_read_paths');
+            throw error;
+          }
           selection = { path: action.path, line: action.line, query: action.query };
           feedback = 'Requested source window is shown next. Copy exact source for an edit.';
         } else if (action.action === 'edit') {
