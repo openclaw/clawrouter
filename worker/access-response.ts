@@ -1,4 +1,4 @@
-import { accessDenial, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
+import { accessDenial, accessEvidenceLimits, accessLimits, isAccessDenial, parseAccessJson } from "./access-json.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 
@@ -50,16 +50,20 @@ class AccessResponse {
     return this.ending;
   }
 
-  async read(operation: HttpOperation, url: string): Promise<unknown | null> {
+  async read(operation: HttpOperation, url: string, profile: "jwks" | "evidence"): Promise<unknown | null> {
     let eof = false;
     try {
       const response = this.response;
-      checkHeaders(response, url);
-      if (response.status !== 200) return null;
+      checkHeaders(response, url, profile);
+      if (profile === "jwks" ? response.status !== 200 : !response.ok) return null;
       if (!this.byob || !this.input) throw accessDenial("transport");
       const declared = response.headers.get("content-length");
       const decoder = new TextDecoder("utf-8", { fatal: true });
       let window: Uint8Array<ArrayBuffer> = new Uint8Array(accessLimits.backing), wire = 0, reads = 0, text = "";
+      const append = (chunk: string) => {
+        if (profile === "evidence" && chunk.length > accessEvidenceLimits.text - text.length) throw accessDenial("limit");
+        text += chunk;
+      };
       for (;;) {
         if (operation.signal.aborted) throw accessDenial("deadline");
         if (reads++ >= accessLimits.reads) throw accessDenial("limit");
@@ -73,15 +77,15 @@ class AccessResponse {
           if (!(bytes.buffer instanceof ArrayBuffer) || bytes.buffer.byteLength > accessLimits.backing
             || bytes.byteLength > accessLimits.jwks - wire) throw accessDenial("limit");
           wire += bytes.byteLength;
-          text += decoder.decode(bytes, { stream: !part.done });
+          append(decoder.decode(bytes, { stream: !part.done }));
           // Reuse the returned WHOLE backing; the accumulator is never lent to BYOB.
           window = new Uint8Array(bytes.buffer);
         }
-        if (part.done) { if (!bytes) text += decoder.decode(); eof = true; break; }
+        if (part.done) { if (!bytes) append(decoder.decode()); eof = true; break; }
         if (!window.byteLength) throw accessDenial("transport");
       }
       if (declared !== null && wire !== Number(declared)) throw accessDenial("transport");
-      return parseAccessJson(text, "jwks");
+      return parseAccessJson(text, profile);
     } catch (error) {
       // No raw transport/decoder cause survives the physical-retirement await.
       throw isAccessDenial(error) ? error : accessDenial("transport");
@@ -89,7 +93,7 @@ class AccessResponse {
   }
 }
 
-function checkHeaders(response: Response, url: string): void {
+function checkHeaders(response: Response, url: string, profile: "jwks" | "evidence"): void {
   let count = 0, bytes = 0;
   for (const [key, value] of response.headers) {
     // Headers are byte strings. Bound both fields before any normalization.
@@ -105,10 +109,20 @@ function checkHeaders(response: Response, url: string): void {
   const length = response.headers.get("content-length");
   if (length !== null && (!/^(0|[1-9][0-9]*)$/.test(length) || !Number.isSafeInteger(Number(length)))) throw accessDenial("transport");
   if (length !== null && Number(length) > accessLimits.jwks) throw accessDenial("limit");
-  if (response.status === 200 && !/^application\/(?:json|jwk-set\+json)(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i.test(response.headers.get("content-type") ?? "")) throw accessDenial("transport");
+  const json = profile === "jwks" ? /^application\/(?:json|jwk-set\+json)(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i
+    : /^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?\s*$/i;
+  if ((profile === "jwks" ? response.status === 200 : response.ok) && !json.test(response.headers.get("content-type") ?? "")) throw accessDenial("transport");
 }
 
 export async function readAccessJwks(url: string, operation: HttpOperation): Promise<unknown | null> {
+  return readAccessResponse(url, operation, "jwks");
+}
+
+export async function readAccessEvidence(url: string, cookie: string, operation: HttpOperation): Promise<unknown | null> {
+  return readAccessResponse(url, operation, "evidence", cookie);
+}
+
+async function readAccessResponse(url: string, operation: HttpOperation, profile: "jwks" | "evidence", cookie?: string): Promise<unknown | null> {
   let owner: AccessResponse | undefined;
   const cancel = () => { if (owner) void owner.retire("cancel").catch(() => undefined); };
   operation.signal.addEventListener("abort", cancel, { once: true });
@@ -121,14 +135,16 @@ export async function readAccessJwks(url: string, operation: HttpOperation): Pro
     if (operation.signal.aborted) reject(accessDenial("deadline"));
     else {
       try {
-        fetch(url, { redirect: "manual", headers: { accept: "application/json, application/jwk-set+json", "accept-encoding": "identity" },
-          cf: { cacheTtl: 300, cacheEverything: true }, signal: operation.signal }).then(response => {
+        fetch(url, { redirect: "manual", headers: profile === "jwks"
+          ? { accept: "application/json, application/jwk-set+json", "accept-encoding": "identity" }
+          : { accept: "application/json", "accept-encoding": "identity", cookie: cookie! },
+          ...(profile === "jwks" ? { cf: { cacheTtl: 300, cacheEverything: true } } : {}), signal: operation.signal }).then(response => {
           owner = new AccessResponse(response); if (operation.signal.aborted) cancel(); resolve(response);
         }, () => reject(accessDenial("transport")));
       } catch { reject(accessDenial("transport")); }
     }
     await operation.wait(actual);
-    return await owner!.read(operation, url);
+    return await owner!.read(operation, url, profile);
   } finally {
     // Retirement-blocking facade: a deadline stops work but never detaches roots.
     try {
