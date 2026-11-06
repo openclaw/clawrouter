@@ -111,7 +111,8 @@ test('non-success, partial, redirect and unusable media are UNKNOWN only after a
 
 test('non-BYOB evidence is cancellation-only, with no default-reader read',async t=>{
   const f=await setup(t);let cancels=0,reads=0,unlocks=0;
-  const response=Response.json(valid());Object.defineProperty(response,'url',{value:identityUrl});
+  const response=new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(JSON.stringify(valid())));controller.close();}}),{headers:{'content-type':'application/json'}});
+  Object.defineProperty(response,'url',{value:identityUrl});
   const get=response.body.getReader.bind(response.body);
   response.body.getReader=options=>{const reader=get(options);return{read(){reads++;throw Error('default read forbidden');},cancel:r=>{cancels++;return reader.cancel(r);},releaseLock:()=>{unlocks++;reader.releaseLock();}};};
   f.respond=()=>response;assert.equal((await verifiedAccessSession(f.request(),f.env)).email,email);

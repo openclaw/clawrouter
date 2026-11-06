@@ -30,7 +30,6 @@ const verifiedIdentities = new WeakMap<AuthorizedIdentity, AccessVerification>()
 export function accessIdentityVerification(identity: AuthorizedIdentity): AccessVerification | undefined { return verifiedIdentities.get(identity); }
 
 export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
-  currentCaller(request);
   const access = await cloudflareAccessSession(request, env);
   currentCaller(request);
   if (access) return access;
