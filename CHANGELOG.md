@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
+
 - Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
 
 - Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.

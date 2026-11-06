@@ -217,8 +217,9 @@ test('workers can inspect declared source dependencies but cannot edit them', as
       assert.ok(message.readable.includes('worker/helper.ts'));
       assert.ok(body.response_format.json_schema.schema.properties.path.enum.includes('worker/helper.ts'));
       assert.ok(!message.readable.includes(task.hiddenTests[0]));
-      const action = { action: 'inspect', path: 'worker/helper.ts', line: 1, endLine: 1, replace: '', query: '' };
+      const action = { action: 'inspect', path: 'worker/helper.ts', line: 1, endLine: 1, replace: '', query: '', memory: 'helper inspection requested; original file is read-only' };
       if (calls === 1) {
+        assert.equal(message.workingMemory, 'helper inspection requested; original file is read-only');
         assert.ok(message.currentSource.some(view => view.path === 'worker/helper.ts' && view.numberedSource.includes('enabled = true')));
         Object.assign(action, { action: 'edit', replace: 'export const enabled = false;' });
       }
@@ -231,4 +232,22 @@ test('workers can inspect declared source dependencies but cannot edit them', as
       write: async () => { writes++; }, test: async () => ({ passed: true, feedback: '' }),
     });
   assert.equal(writes, 0); assert.equal(result.invalidActions, 1); assert.equal(result.actions[1].status, 'unseen_edit');
+  assert.ok(!JSON.stringify(result).includes('helper inspection requested'));
+});
+
+
+test('oversized working memory cannot enter the next model context', async () => {
+  let calls = 0;
+  const result = await runGroundedAgent({ instruction: 'Fix.', editPaths: ['worker/example.ts'], visibleTests: [] },
+    'image', 'strong', 'trial', { maxTurns: 2, outputTokens: 1536, deadlineMs: 10000 },
+    async (_id, _role, body) => {
+      assert.equal(JSON.parse(body.messages[1].content).workingMemory, '');
+      const action = calls++ === 0 ? { action: 'finish', memory: 'x'.repeat(2001) } : { action: 'finish', memory: '' };
+      return { choices: [{ message: { content: JSON.stringify(action) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => ({ close: async () => {} }),
+      read: async (_box, paths) => paths.map(path => ({ path, content: 'export const x = 1;' })),
+      test: async () => ({ passed: true, feedback: '' }),
+    });
+  assert.equal(result.invalidActions, 1); assert.equal(result.actions[0].action, 'invalid_memory');
 });
