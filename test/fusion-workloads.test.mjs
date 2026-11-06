@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult } from '../scripts/fusion-workloads.mjs';
+import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
   const tasks = await loadTasks();
-  assert.equal(tasks.length, 4);
+  assert.equal(tasks.length, 3);
   assert.equal(new Set(tasks.map(task => task.base)).size, tasks.length);
   for (const task of tasks) assert.equal(validateTask(task), task);
   for (const path of ['../test.js', '/tmp/escape.ts', 'worker/../test.js', 'worker//file.ts']) {
@@ -82,4 +82,29 @@ test('transfer validation uses distinct pinned tasks without changing the origin
     assert.equal(known.has(task.id), false);
     assert.equal(known.has(task.oracle), false);
   }
+});
+
+test('qualification rejects a known repair that conflicts with the unchanged visible tests', async () => {
+  const fixture = { editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  let content = 'old', closed = false;
+  const oracleVisible = await checkOracleVisible(fixture, 'image', [{ path: fixture.editPaths[0], content: 'new' }], {
+    makeSandbox: async () => ({ close: async () => { closed = true; } }),
+    write: async (_box, files) => { content = files[0].content; },
+    test: async (_box, paths) => {
+      assert.deepEqual(paths, fixture.visibleTests);
+      assert.equal(content, 'new');
+      return { valid: true, passed: false, tests: 1, failures: 1, feedback: 'private output' };
+    },
+  });
+  assert.equal(closed, true); assert.equal('feedback' in oracleVisible, false);
+  const evidence = { visible: { passed: true }, broken: { valid: true, passed: false }, oracle: { passed: true }, oracleVisible };
+  assert.equal(qualificationSucceeded(evidence), false);
+  assert.equal(qualificationSucceeded({ ...evidence, oracleVisible: { valid: true, passed: true } }), true);
+  assert.equal(qualificationSucceeded({ ...evidence, oracleVisible: undefined }), false);
+});
+
+test('fresh corpus excludes repairs contradicted by their original visible tests', async () => {
+  const tasks = await loadTasks(new URL('../benchmarks/fusion/fresh-workloads.json', import.meta.url));
+  assert.equal(tasks.length, 2);
+  assert.ok(tasks.every(task => !['cerebras-worker-redirect-mode', 'minimax-regional-availability'].includes(task.id)));
 });

@@ -27,7 +27,8 @@ export function validateLocalQualification(tasks, qualification) {
   return tasks.map(task => {
     const matches = qualification.receipts?.filter(row => row.taskId === task.id), receipt = matches?.[0];
     if (matches?.length !== 1 || receipt.taskDigest !== hash(JSON.stringify(task)) || receipt.qualified !== true
-      || receipt.visible?.passed !== true || receipt.oracle?.passed !== true || receipt.oracle.valid !== true
+      || receipt.visible?.passed !== true || receipt.oracleVisible?.valid !== true || receipt.oracleVisible?.passed !== true
+      || receipt.oracle?.passed !== true || receipt.oracle.valid !== true
       || !Number.isSafeInteger(receipt.oracle.tests) || receipt.oracle.tests < 1
       || !Number.isSafeInteger(receipt.oracle.skipped) || receipt.oracle.skipped < 0
       || receipt.broken?.valid !== true || receipt.broken.passed !== false

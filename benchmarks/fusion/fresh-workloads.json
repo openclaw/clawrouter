@@ -18,22 +18,6 @@
       "instruction": "StepFun standard OpenAI-compatible Chat reports usage.cached_tokens as a subset of inclusive prompt_tokens. Recognize this field only when trusted provider context is stepfun or stepfun-cn and both request and response formats are openai.chat_completions. Thread the same context through JSON and cumulative SSE usage extraction. Preserve inclusive input totals, existing cache-evidence conflict validation, and every other provider and format; response model names alone must not grant this interpretation."
     },
     {
-      "id": "cerebras-worker-redirect-mode",
-      "split": "development",
-      "base": "e47ecdedd4da93bb665431b81f698668468dc8ea",
-      "oracle": "b1a1d3cad82802e86e36bd2439cec9e22e310241",
-      "editPaths": [
-        "worker/cerebras-model-catalog.ts"
-      ],
-      "visibleTests": [
-        "worker/test/cerebras-model-catalog.test.mjs"
-      ],
-      "hiddenTests": [
-        "worker/test/cerebras-model-catalog.test.mjs"
-      ],
-      "instruction": "Cerebras public model-catalog request construction uses a redirect mode that Cloudflare Workers do not support. Use the supported explicit manual redirect mode for the canonical catalog request; downstream catalog processing must remain responsible for rejecting redirects. Preserve GET, JSON Accept headers, omitted credentials, AbortSignal, canonical origin restrictions, model filtering and error behavior."
-    },
-    {
       "id": "google-audio-pricing-context",
       "split": "development",
       "base": "10bbd4f5e31e6b3de5d3d0e3e1e2d0afd6c74c2a",
@@ -49,22 +33,6 @@
         "worker/test/google-speech-pricing-gap.test.mjs"
       ],
       "instruction": "Trusted selected Google native speech/music models must remain explicitly unpriced in direct pricing and reservation paths until output-audio tariffs and measured usage are qualified. Apply the shared output-audio classification before treating a supplied text, zero-rate or foreign image price card as sufficient. Preserve ordinary Google text and image pricing and the existing responseModalities audio guard."
-    },
-    {
-      "id": "minimax-regional-availability",
-      "split": "development",
-      "base": "25c7e2a5ef7be3ea8e58d5ed210944e8aca49741",
-      "oracle": "0a66b6a63a9d225ca65930b4ed48fc65dd08bed3",
-      "editPaths": [
-        "worker/minimax-music.ts"
-      ],
-      "visibleTests": [
-        "worker/test/minimax-music.test.mjs"
-      ],
-      "hiddenTests": [
-        "worker/test/minimax-music.test.mjs"
-      ],
-      "instruction": "Represent MiniMax Music availability observations separately for global and CN regions. Both paid families are limited to existing paying users, with new paid users denied since 2026-08-20. Global free Music has an announced discontinuation without a confirmed date; CN free Music is stopped. Use region-specific documentation sources and checkedAt 2026-11-05. These observations must not grant account entitlement, invent tariffs, change routing origins or enable native Music execution."
     }
   ]
 }
