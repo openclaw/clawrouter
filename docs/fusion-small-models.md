@@ -430,3 +430,10 @@ refusal also stops the campaign, without retry or model fallback.
 The [Aider architect/editor work](https://aider.chat/2024/09/26/architect.html)
 is the rationale for separating reasoning from edits. Validate this model pair
 on fresh tasks before treating a development improvement as a useful result.
+
+The cheap Luna worker defaults to `none` reasoning for the original low-latency
+comparison. Set `FUSION_CHEAP_REASONING=medium` explicitly to calibrate its
+reasoning capability before drawing conclusions about model coordination. The
+checkpoint records the setting. These actions use structured text, not Chat
+Completions function calling; the latter requires `none` for Luna. Compare both
+quality and total cost rather than assuming that disabling reasoning saves money.

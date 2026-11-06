@@ -135,3 +135,22 @@ test('known-cost output truncation fails its trial without skipping the other co
     assert.ok(state.calls.every(call => typeof call.costMicros === 'number'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('cheap reasoning calibration is explicit, recorded and validated before inference', async () => {
+  const { root, options } = await fixture();
+  try {
+    let calls = 0;
+    await assert.rejects(runPairBenchmark({ ...options, cheapReasoning: 'invalid', fetcher: async () => { calls++; } }), /invalid_cheap_reasoning/);
+    assert.equal(calls, 0);
+    const sent = [];
+    const state = await runPairBenchmark({ ...options, cheapReasoning: 'medium', grade,
+      fetcher: async (url, request) => {
+        if (!url.includes('/v1/models/')) sent.push(JSON.parse(request.body));
+        return success(url, request);
+      }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      } });
+    assert.equal(state.cheapReasoning, 'medium');
+    assert.ok(sent.filter(request => request.model === 'gpt-6-luna').every(request => request.reasoning_effort === 'medium'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
