@@ -32,6 +32,8 @@
 
 - Join every concurrent cold credential import before returning its first failure or issuing a mutation. Preserve admin/personal hydration and original error identity without retrying or rolling back completed imports.
 
+- Join alternate grant preparation before completing a canceled failover, and recheck the original signal after that join. Preserve the first provider rejection when preparation fails without cancellation; never dispatch a late alternate.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
