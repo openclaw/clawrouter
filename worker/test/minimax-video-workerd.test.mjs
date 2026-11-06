@@ -596,6 +596,7 @@ test("isolated workerd full8MiB global inline frames, original receipts and phys
   for (const mode of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"]) {
     await json("/setup?inline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
     const posts = io.counts.post, started = mode.startsWith("inline-upload") ? io.nextPost() : undefined;
+    t.diagnostic(JSON.stringify({ phase: "held-request", mode, postsBefore: posts }));
     const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
     t.diagnostic(JSON.stringify({ phase: "held-entry", mode, postsBefore: posts, posts: io.counts.post,
       charged: state.charged, reads: state.reads, cancels: state.cancels, results: state.results, status: state.status, error: state.error, failedControl: state.failedControl }));

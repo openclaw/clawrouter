@@ -61,14 +61,20 @@ for (const change of ["revoke", "rotate", "v2"]) test(`V3 final policy await the
 
 test("V3 explicit re-attestation rotates lineage; current SQL demotion preserves the original V2 owner", async t => {
   const f = await setup(t, { models: miniMaxFrozenVideoModels }); await f.put({}, miniMaxInlineVideoBinding());
+  // Resuming a paused attachment creates pending work; an active metadata edit
+  // does not, and a later independently authorized edit is then legitimate.
+  await f.put({ enabled: false });
   const original = await inspectGrantCredentials(f.env, grantKey), get = f.env.ACCESS_CONTROL.get; let armed = true;
   f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
     const response = await stub.fetch(url, init);
-    if (new URL(url).pathname === "/grant-pools/admit" && armed) { armed = false; await f.user(true, "user"); }
+    if (new URL(url).pathname === "/grant-pools/admit" && armed) {
+      assert.equal((await response.clone().json()).pending, true); armed = false; await f.user(true, "user");
+    }
     return response;
   } }; };
-  await assert.rejects(f.put({}, miniMaxSixModelVideoBinding()));
+  await assert.rejects(f.put({ enabled: true }, miniMaxSixModelVideoBinding()));
   assert.equal(f.record().generation, original.credentialGeneration); assert.equal(f.record().lineage, original.credentialLineage);
+  assert.equal(f.record().enabled, false);
   assert.equal(f.record().minimaxVideoBinding.version, "clawrouter.minimax-video.v2");
   await f.user(); await assert.rejects(f.put({}, miniMaxSixModelVideoBinding()));
 });
@@ -89,7 +95,7 @@ for (const version of ["v1", "v2", "v3"]) test(`Hailuo discovery keeps router po
   const r = await f.invoke("/v1/catalog", null); assert.equal(r.status, 200, await r.clone().text());
   const view = (await r.json()).providers.find(row => row.id === "minimax");
   assert.equal((view?.offers ?? []).some(offer => offer.modelId === id && offer.eligible), version === "v3");
-  assert.ok((view?.offers ?? []).filter(offer => offer.eligible).every(offer => offer.modelId === id));
+  assert.ok((view?.offers ?? []).filter(offer => offer.eligible && offer.modelId != null).every(offer => offer.modelId === id));
   assert.equal(f.materializations, 0); assert.equal(f.sent.length, 0);
 });
 
