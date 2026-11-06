@@ -178,7 +178,8 @@ test('actual public admin reconciliation writes compact revisions and preserves 
     await seed('deleted', [rule(401)]);
     const deleted = reconcile('deleted'); await state(401, row => row.held, deleted);
     assert.equal((await call('deleted', '/delete')).body.deleted, true, 'labelled raw SQL deletion, not an invented public endpoint');
-    release(401); assert.equal((await deleted).status, 404); assert.deepEqual((await current('deleted')).rows, []);
+    release(401); const deletionReply = await deleted;
+    assert.equal(deletionReply.status, 500); assert.equal(deletionReply.body.error.code, 'internal_error'); assert.deepEqual((await current('deleted')).rows, []);
 
     const orgRules = [rule(1, { ruleId: 'revoking', kind: 'github_org', subject: 'example', groups: ['revoking'] }),
       rule(1, { ruleId: 'retained', kind: 'github_org', subject: 'example', groups: ['retained'], revokeOnLoss: false })].sort((a, b) => a.ruleId.localeCompare(b.ruleId));

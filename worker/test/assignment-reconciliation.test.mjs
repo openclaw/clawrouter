@@ -65,14 +65,27 @@ test("automatic creation preserves existing users after migration closes", async
 });
 
 function reconciliationOwner(t) {
-  const releases = [], drains = [];
+  const releases = [], roots = [];
+  let hasPrimary = false, primary;
   const releaseAll = () => { for (const release of releases) release(); };
   t.signal.addEventListener('abort', releaseAll, { once: true });
   // This hook precedes authorityEnv's SQLite close hook.
-  t.after(async () => { releaseAll(); await Promise.all(drains); t.signal.removeEventListener('abort', releaseAll); });
+  t.after(async () => {
+    releaseAll(); await Promise.all(roots.map(root => root.observed)); t.signal.removeEventListener('abort', releaseAll);
+    const failures = []; let primaryAccounted = false;
+    for (const root of roots) if (root.rejected && !(root.hasExpected && root.expected(root.reason))) {
+      if (hasPrimary && !primaryAccounted && root.reason === primary) { primaryAccounted = true; continue; }
+      failures.push(root.reason);
+    }
+    if (failures.length) throw new AggregateError(failures, 'independent reconciliation cleanup failures');
+  });
   return {
+    async run(work) { try { return await work(); } catch (error) { hasPrimary = true; primary = error; throw error; } },
     hold() { const gate = Promise.withResolvers(); releases.push(gate.resolve); return gate; },
-    start(start) { const actual = start(); drains.push(actual.then(() => {}, () => {})); return actual; },
+    start(start, expected) {
+      const actual = start(), root = { rejected: false, reason: undefined, hasExpected: expected !== undefined, expected };
+      root.observed = actual.then(() => {}, reason => { root.rejected = true; root.reason = reason; }); roots.push(root); return actual;
+    },
   };
 }
 async function arrival(arrived, actual) {
@@ -85,7 +98,8 @@ const revisionText = data => new TextDecoder().decode(data);
 const requestFor = rules => ({ email: user.email, rules, legacy: null, force: false });
 
 test('FIFO captures rules before waits and reads the current canonical profile only after hashing', async t => {
-  const owned = reconciliationOwner(t), fixture = authorityEnv(t); await fixture.put(user);
+  const owned = reconciliationOwner(t); return owned.run(async () => {
+  const fixture = authorityEnv(t); await fixture.put(user);
   const release = owned.hold(), entered = Promise.withResolvers(), digest = crypto.subtle.digest.bind(crypto.subtle), text = assignmentRulesRevision([rule]);
   t.mock.method(crypto.subtle, 'digest', async (...args) => {
     const result = await digest(...args);
@@ -105,10 +119,12 @@ test('FIFO captures rules before waits and reads the current canonical profile o
   assert.deepEqual(last.user.record.groups, ['new-manual']);
   for (const key of ['enabled', 'role', 'tenantId', 'contentRetentionDisabled', 'budgetOverrides']) assert.deepEqual(last.user.record[key], profile.record[key]);
   assert.equal(fixture.writes, writes + 2); assert.deepEqual(await fixture.current(), last.user);
+  });
 });
 
 for (const failure of ['snapshot-undefined', 'hash-undefined', 'hash-error']) test(`FIFO failure ${failure} joins its predecessor and cannot poison or be overtaken`, async t => {
-  const owned = reconciliationOwner(t), fixture = authorityEnv(t); await fixture.put(user);
+  const owned = reconciliationOwner(t); return owned.run(async () => {
+  const fixture = authorityEnv(t); await fixture.put(user);
   const releaseA = owned.hold(), releaseB = owned.hold(), enteredA = Promise.withResolvers(), enteredB = Promise.withResolvers();
   const bRule = { ...rule, version: 2, enabled: false }, cRule = { ...rule, version: 3, groups: ['successor'] };
   const aText = assignmentRulesRevision([rule]), bText = assignmentRulesRevision([bRule]), cText = assignmentRulesRevision([cRule]);
@@ -124,7 +140,7 @@ for (const failure of ['snapshot-undefined', 'hash-undefined', 'hash-error']) te
   const a = owned.start(() => fixture.direct(requestFor([rule]))); await arrival(enteredA.promise, a);
   // Deliberate getter fault at the DIRECT-owner Node boundary, not HTTP JSON.
   const bRules = failure === 'snapshot-undefined' ? [{ ...bRule, get groups() { snapshotAttempted = true; throw undefined; } }] : [bRule];
-  const b = owned.start(() => fixture.direct(requestFor(bRules)));
+  const b = owned.start(() => fixture.direct(requestFor(bRules)), error => error === reason);
   const c = owned.start(() => fixture.direct(requestFor([cRule]))); let bDone = false, cDone = false;
   b.then(() => { bDone = true; }, () => { bDone = true; }); c.then(() => { cDone = true; }, () => { cDone = true; });
   await Promise.resolve(); assert.equal(bDone, false); assert.equal(cDone, false); assert.equal(cHashes, 0);
@@ -137,16 +153,19 @@ for (const failure of ['snapshot-undefined', 'hash-undefined', 'hash-error']) te
   // A successor can enroll from completion without an old cleanup clearing it.
   const d = await owned.start(() => fixture.direct(requestFor([{ ...cRule, version: 4, groups: ['final'] }])));
   assert.deepEqual(d.user.record.groups, ['assignment.members', 'final', 'old-manual']);
+  });
 });
 
 test('deletion during the held logical digest cannot resurrect a canonical user', async t => {
-  const owned = reconciliationOwner(t), fixture = authorityEnv(t); await fixture.put(user);
+  const owned = reconciliationOwner(t); return owned.run(async () => {
+  const fixture = authorityEnv(t); await fixture.put(user);
   const release = owned.hold(), entered = Promise.withResolvers(), digest = crypto.subtle.digest.bind(crypto.subtle);
   t.mock.method(crypto.subtle, 'digest', async (...args) => { const result = await digest(...args); entered.resolve(); await release.promise; return result; });
-  const actual = owned.start(() => fixture.direct(requestFor([rule]))); await arrival(entered.promise, actual);
+  const actual = owned.start(() => fixture.direct(requestFor([rule])), error => error?.status === 404 && error?.code === 'unknown_user'); await arrival(entered.promise, actual);
   fixture.deleteCanonical(); release.resolve();
   await assert.rejects(actual, error => error.status === 404 && error.code === 'unknown_user');
   assert.equal(await fixture.current(), undefined); assert.equal(fixture.writes, 1);
+  });
 });
 
 test('large legacy no-op bytes stay unchanged and extra RPC revision cannot supply equality', async t => {
