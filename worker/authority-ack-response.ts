@@ -141,6 +141,7 @@ class AckResponse {
 
 export async function readAuthorityAck(start: () => Promise<Response>, expected: Ack, signal?: AbortSignal): Promise<Ack> {
   let owner: AckResponse | undefined, invoked = false;
+  let result: Ack;
   const cancel = () => { if (owner) void owner.retire("cancel").catch(() => undefined); };
   signal?.addEventListener("abort", cancel, { once: true });
   let resolve!: () => void, reject!: (reason: unknown) => void;
@@ -157,9 +158,7 @@ export async function readAuthorityAck(start: () => Promise<Response>, expected:
     }
     try { await wait(actual, signal); }
     catch { throw failure(signal?.aborted ? "aborted" : "transport", invoked); }
-    const result = await owner!.read(expected, signal);
-    if (signal?.aborted) throw failure("aborted");
-    return result;
+    result = await owner!.read(expected, signal);
   } finally {
     // Abort starts disposal before joining. Late bodies and rejected FIRST
     // cancellation remain owned; the supplied signal adds no new deadline.
@@ -167,4 +166,7 @@ export async function readAuthorityAck(start: () => Promise<Response>, expected:
     try { await actual.catch(() => undefined); if (owner) await owner.retire("cancel"); }
     finally { signal?.removeEventListener("abort", cancel); }
   }
+  // No successful publication across the final physical joins or listener cleanup.
+  if (signal?.aborted) throw failure("aborted");
+  return result;
 }

@@ -199,9 +199,9 @@ test('actual committed authority ACK faults retain original readers and advisory
     const upstream = `export default {fetch(request){const u=new URL(request.url);if(u.origin!=='https://ack-fixture.example')throw Error('unexpected egress');return fetch(${JSON.stringify(origin)}+u.pathname,{redirect:'manual',signal:request.signal});}};`;
     runtime = await startWorkerdFixture(directory, ownedRouter, upstream, { preventEviction: true, hotCache: true });
     const call = path => { const p = runtime.dispatchFetch('https://router.example' + path, { signal: abort.signal }).then(async r => { assert.equal(r.status, 200); return r.json(); }); clients.push(p); return p; };
-    const state = async (mode, predicate) => {
-      for (let i = 0; i < 2000; i++) { const s = await call('/state'); if (s.mode === mode && predicate(s)) return s;
-        if (s.mode === mode && s.done) assert.fail(JSON.stringify(s)); await delay(10); }
+    const state = async (mode, predicate, failed) => {
+      for (let i = 0; i < 2000; i++) { const s = await (failed ? Promise.race([failed, call('/state')]) : call('/state')); if (s.mode === mode && predicate(s)) return s;
+        if (s.mode === mode && s.done) assert.fail(JSON.stringify(s)); await (failed ? Promise.race([failed, delay(10)]) : delay(10)); }
       assert.fail('bounded original-owner observation expired: ' + mode);
     };
     for (const mode of ['healthy', 'wrong', 'json', 'json-escape', 'bom', 'json-bom', 'wire', 'wire-plus', 'object', 'empty', 'status', 'headers', 'header-bytes', 'default', 'pre-abort', 'reads', 'reads-over', 'backing']) {
@@ -239,7 +239,9 @@ test('actual committed authority ACK faults retain original readers and advisory
     assert.equal((await call('/flush-again')).calls, 1, 'empty flush cannot replay the committed attempt');
     // Deliberately unknown original unlock LAST. Disposal below is not retirement proof.
     const started = call('/start?mode=unknown');
-    s = await state('unknown', row => row.unlocks === 1); assert.equal(s.locked, true); assert.equal(s.done, false); assert.equal(s.calls, 1);
+    // Observe rejection BEFORE polling; success may precede the independent probe.
+    const failed = started.then(() => new Promise(() => {}), error => { throw error; });
+    s = await state('unknown', row => row.unlocks === 1, failed); assert.equal(s.locked, true); assert.equal(s.done, false); assert.equal(s.calls, 1);
     // The unlock hook releases only this public diagnostic reply; its physical root stays held.
     await started;
   } catch (error) { primary = error; throw error; }

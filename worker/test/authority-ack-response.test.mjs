@@ -128,6 +128,24 @@ test('late original response is disposed with zero reads and held rejected FIRST
   assert.equal(s.cancels, 1); assert.equal(s.unlocks, 1); assert.equal(r.body.locked, false);
 });
 
+test('original abort during final listener cleanup cannot publish a validated ACK', async () => {
+  const abort = new AbortController(), signal = abort.signal, r = bytes('initialized'), s = observe(r);
+  const add = signal.addEventListener.bind(signal), remove = signal.removeEventListener.bind(signal);
+  let root, calls = 0, finalCleanup = false;
+  signal.addEventListener = (type, listener, options) => { if (type === 'abort' && !root) root = listener; add(type, listener, options); };
+  signal.removeEventListener = (type, listener, options) => {
+    remove(type, listener, options);
+    if (type === 'abort' && listener === root) {
+      finalCleanup = true;
+      assert.equal(s.pending, 0); assert.equal(s.unlocks, 1); assert.equal(r.body.locked, false);
+      // Deterministic final-join interval injection on the ORIGINAL caller signal.
+      abort.abort(new Error('caller stopped during final cleanup'));
+    }
+  };
+  await assert.rejects(readAuthorityAck(async () => { calls++; return r; }, 'initialized', signal), expectedFailure('OUTCOME_UNKNOWN', 'aborted'));
+  assert.equal(finalCleanup, true); assert.equal(calls, 1); assert.equal(s.cancels, 0); assert.equal(s.unlocks, 1); assert.equal(r.body.locked, false);
+});
+
 test('abort joins the original pending read and FIRST cancellation before unlock', async t => {
   const held = deferred(), cleanup = deferred(), entered = deferred(), abort = new AbortController(); let pending, settled = false;
   const r = bytes('initialized'), s = observe(r, { read: async (read, args) => { const part = await read(...args); entered.resolve(); await held.promise; return part; }, cancel: () => cleanup.promise });
