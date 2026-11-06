@@ -182,6 +182,32 @@ the existing runtime checks. These definitions neither enable routes nor alter
 selection, budgets, or subscription onboarding. Their IDs identify an offer;
 the deployed snapshot must still identify its revision.
 
+### Binding compatibility
+
+`shared/provider-bindings.ts` owns the existing grant-transport, endpoint
+allowlist, lifecycle dependency, and WebSocket compatibility checks. The Worker
+uses these checks through its existing `grantSupports` entry point; specialized
+provider checks remain in that entry point.
+
+`worker/provider-offers.ts` provides an internal `resolveProviderOffer` projection.
+It resolves an explicit definition against the current product, endpoint, and
+exact model reference, then applies model availability and the existing grant
+qualification checks. A default product matches the default provider transport,
+including scoped grants without an override. A grant-transport product requires
+its exact declared grant kind and transport. Neither match infers commercial
+terms or an authentication flow.
+
+For lifecycle operations, the product must include the required retrieve,
+cancel, result, and file endpoints as well as the create endpoint. The selected
+transport must also permit those controls. Endpoint-specific pricing remains
+attached to the resolved model, including explicit unpriced cards.
+
+The result is `compatible`, not authorized or affordable. The caller must still
+validate the request, apply tenant policy, materialize the selected credential,
+and check quota and budget. Resolution performs no network or storage access.
+Current routing and discovery do not select through this resolver yet; it is
+the compatibility boundary for that migration.
+
 ## Descriptor v1
 
 | Field | Requirement |
