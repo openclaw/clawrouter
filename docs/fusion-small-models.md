@@ -437,3 +437,10 @@ reasoning capability before drawing conclusions about model coordination. The
 checkpoint records the setting. These actions use structured text, not Chat
 Completions function calling; the latter requires `none` for Luna. Compare both
 quality and total cost rather than assuming that disabling reasoning saves money.
+
+
+Set `FUSION_PRELOAD_SOURCE=1` for a paired ablation that gives every arm the
+same bounded initial editable source. The default remains tool-driven source
+inspection. Reports record the setting. A handoff receives a fresh source
+snapshot; compare against preloaded fixed controls before attributing savings
+to multiple models rather than avoided file-reading calls.

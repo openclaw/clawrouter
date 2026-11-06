@@ -154,3 +154,20 @@ test('cheap reasoning calibration is explicit, recorded and validated before inf
     assert.ok(sent.filter(request => request.model === 'gpt-6-luna').every(request => request.reasoning_effort === 'medium'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('source preload applies equally to every comparison arm and rejects invalid configuration', async () => {
+  const { root, options } = await fixture();
+  try {
+    let called = false;
+    await assert.rejects(runPairBenchmark({ ...options, preloadSource: 'yes', fetcher: async () => { called = true; } }), /invalid_source_preload/);
+    assert.equal(called, false);
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, preloadSource: true, grade, fetcher: success,
+      agent: async (_task, _image, strategy, _id, _settings, _invoke, _engine, agentOptions) => {
+        seen.push([strategy, agentOptions.preloadSource]); return repaired();
+      } });
+    assert.deepEqual(seen, [['strong', true], ['strong', true], ['planned', true]]);
+    assert.equal(state.preloadSource, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

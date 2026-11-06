@@ -40,17 +40,18 @@ export function pairExecution(strategy, config) {
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  cheapReasoning = 'none', env = process.env, fetcher = fetch, agent = runAgent, grade = verify, preflight = nativePins }) {
+  cheapReasoning = 'none', preloadSource = false, env = process.env, fetcher = fetch, agent = runAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   const tasks = await loadTasks(taskManifest);
   validatePair(config, tasks.length);
   if (!['none', 'medium'].includes(cheapReasoning)) throw new Error('invalid_cheap_reasoning');
+  if (typeof preloadSource !== 'boolean') throw new Error('invalid_source_preload');
   const rawQualification = await readFile(qualificationPath);
   const receipts = validateLocalQualification(tasks, JSON.parse(rawQualification));
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: 'native-pair-repository', sourceSha, config,
-    cheapReasoning, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
+    cheapReasoning, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
@@ -112,7 +113,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         state.records.push(row);
         await save();
         try {
-          const result = await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(strategy));
+          const result = await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(strategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
@@ -144,7 +145,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none' }).catch(() => {
+  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }
