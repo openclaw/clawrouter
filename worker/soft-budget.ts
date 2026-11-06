@@ -7,6 +7,8 @@ import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy
 import type { AuthorizedIdentity, Env, ProviderConnection } from "./types";
 import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
 import { HttpError } from "./utils.ts";
+import { admitSoftStatusRequest } from "./soft-budget-json.ts";
+import { readSoftStatus } from "./soft-budget-response.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
 // is asynchronous. Stored policies without a mode keep reserve (hard caps); new
@@ -53,17 +55,17 @@ export function softBudget(env: Env, auth: AuthorizedIdentity, capability: strin
   let complete = false;
   const check = Promise.all(plan.legs.map(async leg => {
     try {
+      const limit = String(leg.request.limitMicros);
+      if (!search && leg.request.limitMicros !== 0) admitSoftStatusRequest(leg.objectName, leg.request.policyId,
+        leg.request.windowKey, leg.request.scopeKey!, limit);
       const url = new URL("https://clawrouter.internal/status");
       url.searchParams.set("policy_id", leg.request.policyId);
       url.searchParams.set("window_key", leg.request.windowKey);
       url.searchParams.set("scope_key", leg.request.scopeKey!);
-      url.searchParams.set("limit_micros", String(leg.request.limitMicros));
+      url.searchParams.set("limit_micros", limit);
       const status = leg.request.limitMicros === 0 ? null : search
         ? await search.controlJson<{ spentMicros: number }>({}, (_body, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url, { signal }))
-        : await (async () => {
-          const response = await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url);
-          return response.ok ? response.json<{ spentMicros: number }>() : null;
-        })();
+        : await readSoftStatus(() => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url)) as { spentMicros: number } | null;
       // Zero is a configured block even when its reporting ledger is unavailable.
       if (leg.request.limitMicros !== 0 && (!status || !Number.isSafeInteger(status.spentMicros) || status.spentMicros < leg.request.limitMicros)) {
         exhausted.delete(legId(leg));
