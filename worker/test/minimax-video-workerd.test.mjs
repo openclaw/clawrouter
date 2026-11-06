@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { inlineImage, uri } from "./minimax-video-inline-fixture.mjs";
 import { musicAccessFixture } from "./minimax-music-admin-fixture.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -27,15 +29,18 @@ async function isolated(directory, router, upstream) {
 
 async function external(t) {
   let mode = "pending", id = 100, current = "100";
-  const held = new Map(), entered = new Map(), released = new Set(), counts = { post: 0, poll: 0, metadata: 0, download: 0 };
+  const held = new Map(), entered = new Map(), released = new Set(), counts = { post: 0, poll: 0, metadata: 0, download: 0, imageBytes: 0, imageDigest: null };
   const server = createServer(async (request, response) => {
     if (request.url.startsWith("/gate/")) { entered.get(request.url)?.resolve(); if (released.has(request.url)) response.end("released"); else held.set(request.url, response); return; }
     if (request.headers.authorization) { response.writeHead(400); response.end(); return; }
     const path = new URL(request.url, "http://fixture").pathname;
     const base_resp = { status_code: 0, status_msg: "success" }; let value;
     if (path === "/v1/video_generation") {
-      counts.post++; current = String(++id); let text = ""; for await (const part of request) text += part;
+      counts.post++; current = String(++id);
+      if (mode === "early") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ task_id: current, base_resp })); request.resume(); return; }
+      let text = ""; for await (const part of request) text += part;
       const body = JSON.parse(text); assert.ok(hailuoModels.includes(body.model)); assert.equal(body.duration, 6);
+      if (body.first_frame_image) { const bytes = Buffer.from(body.first_frame_image.split(",")[1], "base64"); counts.imageBytes = bytes.length; counts.imageDigest = createHash("sha256").update(bytes).digest("hex"); }
       value = { task_id: current, base_resp };
     } else if (path === "/v1/query/video_generation") {
       counts.poll++; const task_id = new URL(request.url, "http://fixture").searchParams.get("task_id");
@@ -66,13 +71,16 @@ async function external(t) {
     releaseAll() { for (const [path, response] of held) { released.add(path); response.end("released"); } held.clear(); } };
 }
 const router = String.raw`
-export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject} from './worker/index.ts';
+export {BudgetLedgerObject,UsageLedgerObject} from './worker/index.ts';
+import {PolicyBindingIndexObject as PolicyBase} from './worker/index.ts';
+export class PolicyBindingIndexObject extends PolicyBase { async fetch(request){if(new URL(request.url).pathname==='/fixture/alarm'){await this.alarm();return Response.json({settled:true});}return super.fetch(request);} }
 import worker from './worker/index.ts';
 import {snapshot} from './worker/providers.ts';
 import {configureVideo} from './worker/test/minimax-video-declaration-fixture.mjs';
 import {authorityCall} from './worker/authority.ts';
 import {GrantCredentialObject as BaseGrantCredentialObject,putGrantCredentials,inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
-import {miniMaxVideoBinding} from './shared/minimax-video-binding.ts';
+import {miniMaxVideoBinding,miniMaxInlineVideoBinding} from './shared/minimax-video-binding.ts';
+import {inputRetirement} from './worker/input-retirement.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
 import {MiniMaxVideoOperation,readVideoJson,inspectVideoJson} from './worker/minimax-video-operation.ts';
@@ -106,7 +114,11 @@ function counters(owner){let row=records.get(owner);if(!row){row={kind:owner.kin
 MiniMaxVideoOperation.prototype.fetch=function(start,mandatory=false,...rest){const row=counters(this);return operationFetch.call(this,signal=>{
  row[mandatory?'mandatory':'ordinary']++;return start(signal);
 },mandatory,...rest);};
-MiniMaxVideoOperation.prototype.providerFetch=function(start){const row=counters(this);return providerFetch.call(this,async signal=>{row.ordinary++;const response=await start(signal);return active?measure(response,active):response;});};
+MiniMaxVideoOperation.prototype.providerFetch=function(start){const row=counters(this),a=active;
+ if(a?.mode==='inline-late')this.track(gate(a,'execution-abort').then(()=>this.executionOperation.cancel(Error('controlled execution abort'))));
+ return providerFetch.call(this,async signal=>{row.ordinary++;const response=await start(signal);if(a?.mode==='inline-late'){hold(response.body,a);a.ready.resolve();await gate(a,'arrival');}return a?measure(response,a):response;});};
+const ownerFinish=MiniMaxVideoOperation.prototype.finish;
+MiniMaxVideoOperation.prototype.finish=function(){const a=active;return ownerFinish.call(this).catch(e=>{if(a)a.cleanupFailure=e.code??e.name;throw e;});};
 function fresh(mode){return active={mode,status:null,error:null,results:0,reads:0,cancels:0,unlocks:0,releases:0,maxBacking:0,actions:[],exchanges:[],controls:[],candidates:0,controlMaxValues:0,
  cleanup:false,readRetired:false,ready:deferred(),abort:new AbortController()};}
 async function paddedControl(response,a){
@@ -130,9 +142,21 @@ async function paddedControl(response,a){
 
 const state=()=>({charged:bodyBudgetCharged(),...(active?{mode:active.mode,status:active.status,locator:active.locator,error:active.error,results:active.results,
  reads:active.reads,cancels:active.cancels,unlocks:active.unlocks,releases:active.releases,maxBacking:active.maxBacking,actions:active.actions,
- cleanup:active.cleanup,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
+ cleanup:active.cleanup,cleanupFailure:active.cleanupFailure,readRetired:active.readRetired,locked:active.source?.locked??false,exchanges:active.exchanges,controls:active.controls,candidates:active.candidates,controlMaxValues:active.controlMaxValues,nativeBytes:active.nativeBytes,nativeMaxBacking:active.nativeMaxBacking}: {})});
 BodyLease.prototype.release=function(){const before=bodyBudgetCharged();release.call(this);if(active&&before-bodyBudgetCharged()===96*1024*1024)active.releases++;};
 const gate=(a,part)=>raw('https://video-gates.example/gate/'+a.mode+'/'+part,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('gate refused');await r.text();});
+const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
+crypto.subtle.digest=async function(algorithm,data){const result=await nativeDigest(algorithm,data),a=active;if(a?.mode==='inline-hash'&&data.byteLength>1024*1024){a.ready.resolve();await gate(a,'hash');}return result;};
+const registerUpload=MiniMaxVideoOperation.prototype.registerUpload;
+MiniMaxVideoOperation.prototype.registerUpload=function(upload){const a=active;if(!a?.mode.startsWith('inline-upload'))return registerUpload.call(this,upload);
+ const reader=upload.body.getReader();a.source=upload.body;let first=true,cancel,controller,stopped=false;
+ const input=inputRetirement({cancel(reason){return cancel??=(async()=>{a.cancels++;await reader.cancel(reason);await gate(a,'cleanup');a.cleanup=true;if(a.mode==='inline-upload-reject')throw Error('held upload cleanup rejection');})();},releaseLock(){a.unlocks++;reader.releaseLock();}});
+ const retired=Promise.allSettled([upload.retired,input.retired]).then(()=>cancel);void retired.catch(()=>{});
+ const discard=()=>{stopped=true;try{controller?.error(Error('discarded'));}catch{}void upload.discard().catch(()=>{});void input.retire('cancel').catch(()=>{});return retired;};
+ const body=new ReadableStream({start(c){controller=c;},async pull(c){try{const result=await input.read(async()=>{a.reads++;try{return await reader.read();}finally{if(first){first=false;a.ready.resolve();await gate(a,'read');a.readRetired=true;}}});if(stopped)return;if(result.done){await input.retire('eof');c.close();}else{a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);c.enqueue(result.value);}}catch(e){if(!stopped)c.error(e);}},cancel:discard},{highWaterMark:0});
+ return registerUpload.call(this,{body,retired,discard});
+};
+
 function hold(source,a){a.source=source;const get=source.getReader.bind(source);let first=true,cancel;
  source.getReader=options=>{const reader=get(options);return {
   async read(...args){a.reads++;try{const result=await reader.read(...args);if(result.value)a.maxBacking=Math.max(a.maxBacking,result.value.buffer.byteLength);return result;}
@@ -172,7 +196,7 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1',principalId:actor.email}}]);
   await authorityCall(env,'/connections/initialize-all',[{providerId:'minimax',enabled:true,monthlyBudgetMicros:100000}]);
   await putGrantCredentials(env,key,{provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-video-key',accountId:'synthetic-account'},false,undefined,
-    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,miniMaxVideoBinding(u.searchParams.get('region')??'global'),actor);
+    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('inline')?miniMaxInlineVideoBinding():miniMaxVideoBinding(u.searchParams.get('region')??'global'),actor);
   return Response.json({ready:true});
  }
  if(u.pathname==='/maximum-pool'){
@@ -188,7 +212,7 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   for(let i=1;i<32;i++){
    const name='oauth/fixture/maximum'+i;
    await putGrantCredentials(env,name,{provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-video-key',accountId:'synthetic-account'},false,undefined,
-    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,miniMaxVideoBinding('global'),actor);
+    undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,u.searchParams.has('inline')?miniMaxInlineVideoBinding():miniMaxVideoBinding('global'),actor);
    const response=await probe(),body=await response.json();
    if(!response.ok){overflow={count:i+1,status:response.status,code:body.error?.code};await revokeGrantCredentials(env,name,undefined,undefined,undefined,actor);break;}
    if(!body.selection?.selected)throw Error('maximum fixture lost all eligible candidates');candidates=body.pools.minimax.keys.length;
@@ -237,6 +261,7 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   return Response.json({...state(),accepted,error});
  }
  if(u.pathname==='/metadata-edit'){await putGrantCredentials(env,key,{label:'metadata changed'},true,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,actor);return Response.json({changed:true});}
+ if(u.pathname==='/settle'){const locator=u.searchParams.get('locator');if(!/^[a-f0-9]{64}\.bg_[a-f0-9]{32}$/.test(locator))return new Response(null,{status:400});return env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('http-continuations:'+locator.split('.')[0])).fetch('https://owner/fixture/alarm');}
  if(u.pathname==='/events')return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
  if(u.pathname==='/job'){const locator=u.searchParams.get('locator');if(!/^[a-f0-9]{64}\.bg_[a-f0-9]{32}$/.test(locator))return new Response(null,{status:400});
   const [scope,id]=locator.split('.');return env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('http-continuations:'+scope)).fetch('https://owner/responses-background',{method:'POST',body:JSON.stringify({action:'get',id})});}
@@ -400,4 +425,106 @@ test("isolated workerd Hailuo original owner, restart/file, full charge and phys
     assert.equal(result.code, "minimax_video_control_limit"); assert.equal(result.lookups, 0); assert.equal(result.charged, 0); assert.deepEqual(result.exchanges, []);
   }
 
+});
+
+test("isolated workerd full8MiB global inline frames, original receipts and physical upload/hash custody", { timeout: 180000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), "hailuo-inline-runtime-")); t.after(() => rm(directory, { recursive: true, force: true }));
+  const io = await external(t), access = await musicAccessFixture(), script = router.replace("ACCESS_ENV", JSON.stringify(access.env));
+  const runtime = await isolated(directory, script, upstream(io.origin, access.jwk));
+  t.after(async () => { io.releaseAll(); await runtime.dispose(); });
+  const request = (path, init) => runtime.dispatchFetch("https://router.example" + path, { ...init, redirect: "manual" });
+  const json = async path => { const response = await request(path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
+  const call = (target, body, headers = {}, kind = "call", mode = "") => request("/" + kind + "?mode=" + mode + "&target=" + encodeURIComponent(target), {
+    ...(body == null ? {} : { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) }), headers: { "content-type": "application/json", ...headers } });
+  const idle = async () => { let state; for (let i = 0; i < 100; i++) { state = await json("/state"); if (!state.charged) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
+  const native = "/v1/native/minimax/v1/video_generation";
+  let last, lastBody, lastLocator;
+  for (const mime of ["image/png", "image/jpeg", "image/webp"]) for (const model of hailuoModels) for (const manifest of [false, true]) {
+    await json("/setup?inline=1"); io.mode("maximum");
+    const image = inlineImage(mime), digest = createHash("sha256").update(image).digest("hex");
+    const input = { ...videoInput(model), first_frame_image: uri(image, mime) };
+    const body = manifest ? { body: { ...input, model: "minimax/" + model } } : input;
+    const target = manifest ? "/v1/proxy/minimax/video" : native;
+    const key = mime.replace("/", "-") + model + manifest, before = io.counts.post;
+    const response = await call(target, body, { "idempotency-key": key });
+    assert.equal(response.status, 200, await response.clone().text());
+    const locator = response.headers.get("x-clawrouter-background-recovery"), created = await response.json();
+    const state = await idle();
+    assert.equal(io.counts.post, before + 1); assert.equal(io.counts.imageBytes, 8 * MiB); assert.equal(io.counts.imageDigest, digest);
+    assert.equal(state.exchanges.length, 1); assert.ok(state.exchanges[0].ordinary <= 16); assert.ok(state.exchanges[0].mandatory <= 5);
+    assert.equal(state.exchanges[0].ordinary + state.exchanges[0].mandatory, state.controls.length + 1);
+    assert.equal(state.nativeBytes, MiB); assert.ok(state.nativeMaxBacking <= 16384); assert.equal(state.releases, 1);
+    const repeat = await call(target, body, { "idempotency-key": key }); assert.equal(repeat.status, 303); await repeat.text(); await idle();
+    assert.equal(io.counts.post, before + 1);
+    const changed = { ...input, prompt: input.prompt + " changed" };
+    const conflict = await call(target, manifest ? { body: { ...changed, model: "minimax/" + model } } : changed, { "idempotency-key": key });
+    assert.equal(conflict.status, 409, await conflict.clone().text()); await conflict.text(); await idle(); assert.equal(io.counts.post, before + 1);
+    const polled = await call("/v1/native/minimax/v1/query/video_generation?task_id=" + created.task_id, null);
+    assert.equal(polled.status, 200, await polled.clone().text()); assert.equal((await polled.json()).status, "Success"); await idle();
+    assert.deepEqual(await json("/settle?locator=" + encodeURIComponent(locator)), { settled: true });
+    let event;
+    for (let i = 0; i < 100; i++) {
+      const events = (await json("/events")).events;
+      if (events.length === io.counts.post) { event = events.at(-1); break; }
+      await delay(10);
+    }
+    assert.ok(event); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.actual_cost_micros, 700); assert.equal(event.total_tokens, null);
+    last = created.task_id; lastBody = input; lastLocator = locator;
+  }
+  assert.equal(io.counts.post, 12);
+
+  // Reachable maximum controls and maximum input/lifecycle under ONE owner.
+  await json("/setup?inline=1"); const pool = await json("/maximum-pool?inline=1");
+  const input = { ...lastBody, prompt: "x".repeat(2000) }, text = JSON.stringify(input);
+  const nonimage = Buffer.byteLength(text) - input.first_frame_image.split(",")[1].length;
+  const maximum = await call(native, text + " ".repeat(65536 - nonimage), { "idempotency-key": "inline-max" }, "max-held", "combined-inline");
+  let state = await maximum.json(); assert.equal(state.status, 200, JSON.stringify(state));
+  assert.equal(state.charged, 96 * MiB); assert.equal(state.candidates, pool.candidates); assert.equal(state.controlMaxValues, 512);
+  assert.equal(state.exchanges.length, 1); assert.ok(state.exchanges[0].ordinary <= 16); assert.ok(state.exchanges[0].mandatory <= 5);
+  assert.equal(state.exchanges[0].ordinary + state.exchanges[0].mandatory, state.controls.length + 1);
+  assert.equal(state.nativeBytes, MiB); assert.ok(state.nativeMaxBacking <= 16384); assert.equal(state.releases, 0);
+  assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+  io.release("combined-inline/output"); state = await idle(); assert.equal(state.releases, 1);
+
+  for (const mode of ["upload", "inline-hash", "inline-upload", "inline-upload-reject", "inline-late"]) {
+    await json("/setup?inline=1"); io.mode(mode.startsWith("inline-upload") ? "early" : "pending");
+    const response = await call(native, lastBody, {}, "held", mode); state = await response.json();
+    assert.equal(state.charged, 96 * MiB); io.release(mode + "/abort");
+    if (mode === "inline-late") io.release(mode + "/execution-abort");
+    for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.results === 1) break; await delay(10); }
+    assert.equal(state.results, 1, JSON.stringify(state)); assert.equal(state.charged, 96 * MiB); assert.equal(state.releases, 0);
+    assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+    if (mode === "inline-hash") io.release(mode + "/hash");
+    else if (mode === "inline-late") {
+      io.release(mode + "/arrival");
+      for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.cancels === 1) break; await delay(10); }
+      assert.equal(state.cancels, 1); assert.equal(state.reads, 0); assert.equal(state.locked, true); io.release(mode + "/cleanup");
+    } else {
+      for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.cancels === 1) break; await delay(10); }
+      assert.equal(state.cancels, 1); assert.equal(state.locked, true);
+      io.release(mode + "/cleanup");
+      for (let i = 0; i < 100; i++) { state = await json("/state"); if (state.cleanup) break; await delay(10); }
+      assert.equal(state.cleanup, true); assert.equal(state.charged, 96 * MiB); assert.equal(state.locked, true);
+      io.release(mode + "/read");
+    }
+    state = await idle(); assert.equal(state.releases, 1);
+    if (mode !== "inline-hash") { assert.equal(state.unlocks, 1); assert.equal(state.readRetired, mode !== "inline-late"); }
+    if (mode === "inline-upload-reject") assert.equal(state.cleanupFailure, "minimax_video_cleanup_failed");
+  }
+  const put = (mode, body) => request("/v1/admin/upstream-grants/policies/fixture/video-admin-" + mode, {
+    method: "PUT", headers: { ...access.headers, "content-type": "application/json" }, body: JSON.stringify(body) });
+  for (const mode of ["inline-admin-demote", "inline-admin-disable"]) {
+    await json("/fixture/user");
+    const created = await put(mode, { provider: "minimax", kind: "api_key", enabled: false, accountId: "synthetic-original-account",
+      credential: "synthetic-original-video-key", minimaxVideoAuthorization: "minimax-global-video" });
+    assert.equal(created.status, 200, await created.clone().text()); await created.text();
+    const original = await json("/fixture/pin?mode=" + mode);
+    await json("/fixture/arm?mode=" + mode); const entered = io.entered(mode + "/pool");
+    const mutation = put(mode, { enabled: true, accountId: "synthetic-new-account", credential: "synthetic-new-video-key",
+      minimaxVideoAuthorization: "minimax-global-video-inline-first-frame" });
+    await entered; await json(mode.endsWith("demote") ? "/fixture/user?role=user" : "/fixture/user?enabled=false"); io.release(mode + "/pool");
+    const denied = await mutation; assert.equal(denied.status, 403, await denied.clone().text()); await denied.text();
+    assert.deepEqual(await json("/fixture/pin?mode=" + mode), original);
+  }
+  assert.ok(last); assert.ok(lastLocator);
 });

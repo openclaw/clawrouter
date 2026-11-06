@@ -1,3 +1,4 @@
+import { assertMiniMaxVideoInlineOwner } from "./minimax-video-inline.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
 import { validateBudgetReservation } from "./accounting.ts";
@@ -21,6 +22,9 @@ export async function revalidateMiniMaxVideoOwner(env: Env, auth: AuthorizedIden
   if (!miniMaxVideoRequirement(requirement)) miniMaxVideoDenied();
   const model = requirement.provider.models.find(row => row.upstream === requirement.model && row.capabilities.includes("media.predict"));
   if (!model) miniMaxVideoDenied();
+  const inputContext = [auth.credentialId, auth.principalId, auth.policyId, auth.policy.tenantId,
+    requirement.provider.id, requirement.endpoint.id, model.id, model.upstream];
+  assertMiniMaxVideoInlineOwner(operation, readMiniMaxVideoBinding(grant.minimaxVideoBinding), inputContext, [key, miniMaxVideoIdentity(grant)]);
   const original = miniMaxVideoIdentity(grant), caller = publicControlAuthorization(auth), signal = operation.controlSignal;
   const owner = { providerId: "minimax", endpointId: requirement.endpoint.id, grantKey: key,
     lineage: grant.credentialLineage!, routeSha256: "minimax.video:v1", policyGeneration: auth.policy.generation };
@@ -42,6 +46,7 @@ export async function revalidateMiniMaxVideoOwner(env: Env, auth: AuthorizedIden
   signal.throwIfAborted(); assertControlCallerLive(caller);
   if (miniMaxVideoIdentity(current) !== original || !filterGrantCandidates("minimax", [{ key, grant: current, runtimeState: null }],
     new Set(), grantRoutingPolicy(policy.grantRouting), key, requirement, Date.now()).available.length) miniMaxVideoDenied();
+  assertMiniMaxVideoInlineOwner(operation, readMiniMaxVideoBinding(current.minimaxVideoBinding), inputContext, [key, miniMaxVideoIdentity(current)]);
   operation.setCurrentConnection(connection);
   auth.policy = policy;
   return current;

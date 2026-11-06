@@ -229,6 +229,8 @@ export async function readVideoFileBytes(response: Response, maxBytes: number, s
   } finally { signal.removeEventListener("abort", abort); }
 }
 
+export interface VideoUpload { readonly body: ReadableStream<Uint8Array>; readonly retired: Promise<void>; discard(): Promise<void> }
+
 type VideoKind = "create" | "poll" | "collector" | "file";
 type PhysicalResponse = { release: () => void; signal: AbortSignal; abort: () => void };
 
@@ -263,6 +265,25 @@ export class MiniMaxVideoOperation {
   private providerRelease?: () => void;
   private providerStarted = false;
   private outputStarted = false;
+  private inline = false;
+  private inlineCleanup?: () => void;
+  private upload?: VideoUpload;
+  private providerSlotRetired?: Promise<void>;
+
+  selectInlineProfile(cleanup: () => void): void {
+    if (this.kind !== "create" || this.inline || this.providerStarted || this.ordinary > 16 || this.mandatory > 5) videoUnavailable();
+    this.inline = true; this.inlineCleanup = cleanup;
+  }
+  registerUpload(upload: VideoUpload): void {
+    if (!this.inline || this.upload || this.providerStarted) videoUnavailable();
+    this.upload = upload;
+    const abort = () => { void upload.discard().catch(() => undefined); };
+    this.execution.signal.addEventListener("abort", abort, { once: true });
+    const retired = upload.retired.finally(() => this.execution.signal.removeEventListener("abort", abort));
+    void retired.catch(() => { this.cleanupFailed = true; });
+    this.track(retired);
+    if (this.execution.signal.aborted) abort();
+  }
 
   constructor(kind: VideoKind, request?: Request, timeoutMs = 120_000) {
     if (!this.lease.grow(48 * KiB * KiB)) {
@@ -288,7 +309,7 @@ export class MiniMaxVideoOperation {
     this.detached = true; return this.execution;
   }
   requireOrdinary(count: number): void {
-    if (!Number.isSafeInteger(count) || count < 0 || this.ordinary + count > 22) videoUnavailable();
+    if (!Number.isSafeInteger(count) || count < 0 || this.ordinary + count > (this.inline ? 16 : 22)) videoUnavailable();
   }
   pin(value: readonly unknown[] | string): void {
     if (typeof value !== "string") videoJsonBytes(value);
@@ -321,7 +342,7 @@ export class MiniMaxVideoOperation {
     void input.retired.catch(() => { this.cleanupFailed = true; });
   };
   private ticket(mandatory: boolean): void {
-    if (this.closed || (mandatory ? ++this.mandatory > 10 : ++this.ordinary > 22)) videoUnavailable();
+    if (this.closed || (mandatory ? ++this.mandatory > (this.inline ? 5 : 10) : ++this.ordinary > (this.inline ? 16 : 22))) videoUnavailable();
   }
   private async slot(mandatory: boolean): Promise<() => void> {
     if (this.ownershipFailed) videoUnavailable();
@@ -387,7 +408,11 @@ export class MiniMaxVideoOperation {
   releaseUnsentProvider(): void { this.providerRelease?.(); this.providerRelease = undefined; }
   providerFetch(start: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
     if (!this.providerRelease || this.providerStarted || !this.detached) videoUnavailable();
-    const release = this.providerRelease; this.providerRelease = undefined;
+    const physicalRelease = this.providerRelease; this.providerRelease = undefined;
+    let responseRetired!: () => void;
+    const retired = new Promise<void>(resolve => { responseRetired = resolve; });
+    this.providerSlotRetired = Promise.allSettled([retired, this.upload?.retired]).then(() => physicalRelease());
+    const release = () => responseRetired();
     this.providerStarted = true;
     return this.track((async () => {
       let response: Response | undefined;
@@ -398,6 +423,7 @@ export class MiniMaxVideoOperation {
         if (this.execution.signal.aborted) { await this.discard(response); this.execution.signal.throwIfAborted(); }
         return response;
       } catch (error) { if (!response) release(); throw error; }
+      finally { if (this.upload) void this.upload.discard().catch(() => { this.cleanupFailed = true; }); }
     })());
   }
   nativeResponse(start: () => Promise<Response>, signal = this.controlSignal): Promise<Response> {
@@ -497,6 +523,7 @@ export class MiniMaxVideoOperation {
     this.finishing = (async () => {
       // Registered roots may register children until they settle. Output
       // retirement is separate and cannot wait on this encompassing finish.
+      if (this.upload && (!this.providerStarted || this.execution.signal.aborted)) void this.upload.discard().catch(() => { this.cleanupFailed = true; });
       while (this.work.size) await Promise.allSettled([...this.work]);
       if (!this.inputClaimed && this.request?.body) {
         if (this.request.bodyUsed || this.request.body.locked) this.ownershipFailed = true;
@@ -509,10 +536,12 @@ export class MiniMaxVideoOperation {
       await Promise.allSettled([...this.responses.keys()].map(response => this.discard(response)));
       this.closed = true;
       await Promise.allSettled(this.inputs.map(input => input.retired));
+      await this.providerSlotRetired;
       if (this.ownershipFailed || this.physicalBodies.some(body => body.locked)) videoUnavailable();
       this.providerRelease?.(); this.providerRelease = undefined;
       this.operation.stop("complete"); this.execution.stop("complete");
       this.inputs.length = 0; this.physicalBodies.length = 0; this.pinValue = undefined; this.admittedConnection = undefined;
+      this.inlineCleanup?.(); this.inlineCleanup = undefined; this.upload = undefined;
       this.lease.release();
       if (this.cleanupFailed) throw new HttpError(503, "minimax_video_cleanup_failed", "Video input cleanup failed");
     })();

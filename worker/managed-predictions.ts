@@ -1,3 +1,5 @@
+import { miniMaxInlineDigest, miniMaxVideoUpload, hasMiniMaxVideoInline, readMiniMaxInlineResponse } from "./minimax-video-inline.ts";
+import { observeMiniMaxVideo } from "./minimax-video.ts";
 import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { videoCollectionAuthorization } from "./response-control-authorization.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
@@ -66,9 +68,11 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
   if (!Number.isSafeInteger(fixed) || fixed == null || fixed < 0) throw new HttpError(400, "pricing_required", "managed predictions require an explicit policy-fixed tariff before dispatch");
   const scope = await continuationScope(auth), key = request.headers.get("Idempotency-Key");
   if (key !== null && !/^[a-zA-Z0-9._:-]{1,128}$/.test(key)) throw new HttpError(400, "invalid_idempotency_key", "Idempotency-Key must be a bounded ASCII identifier");
-  const digestInput = [selection.provider.id, selection.endpoint.id, selection.pathParams, create.body, create.headers.get("Cancel-After")];
+  const digestInput: unknown[] = [selection.provider.id, selection.endpoint.id, selection.pathParams, create.body, create.headers.get("Cancel-After")];
   if (wan) { preflightWanJson(digestInput); preflightWanJson(create.body); assertWanHeaders(request.headers); }
   if (video) { videoJsonBytes(digestInput); videoJsonBytes(create.body, "input"); assertVideoHeaders(request.headers); }
+  const inlineDigest = video && miniMaxInlineDigest(video, create.body);
+  if (inlineDigest) digestInput.push(inlineDigest);
   const managed: ManagedAdmission = { protocol: adapter.protocol, providerId: selection.provider.id, requestedVersion: create.requestedVersion,
     idempotencyKey: key === null ? null : await sha256Hex(key),
     requestDigest: await sha256Hex(JSON.stringify(digestInput,
@@ -114,7 +118,11 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
       if (adapter.prepareAdmitted) requireManagedCreateAdmission(auth.policy, env, prepared.continuation, adapter.protocol);
       operation.signal.throwIfAborted();
       if (wan) assertManagedDispatch(adapter.protocol, dispatchRequest);
-      if (video) operation = video.detachAtPost();
+      if (video) {
+        operation = video.detachAtPost();
+        const upload = miniMaxVideoUpload(video, create.body);
+        if (upload) { video.registerUpload(upload); prepared.requestBody = upload.body; }
+      }
       providerStarted = true;
       if (video) response = await operation.wait(video.providerFetch(signal => fetch(prepared.url,
         { method: "POST", headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", late => video.discard(late));
@@ -124,8 +132,10 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
           late => { void late.body?.cancel().catch(() => undefined); });
       }
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-      const reading = adapter.read(response, { action: "create", requestedVersion: create.requestedVersion, pathParams: create.pathParams,
-        signal: operation.signal, ...(ownership ? { registerInput: ownership.registerInput } : {}) });
+      const reading = video && hasMiniMaxVideoInline(video)
+        ? readMiniMaxInlineResponse(response, operation.signal, video.registerInput).then(body => observeMiniMaxVideo(body, "create"))
+        : adapter.read(response, { action: "create", requestedVersion: create.requestedVersion, pathParams: create.pathParams,
+          signal: operation.signal, ...(ownership ? { registerInput: ownership.registerInput } : {}) });
       let prediction = await operation.wait(ownership ? ownership.track(reading) : reading, "upstream");
       const bound = await backgroundCall<{ bound: boolean }>(env, scope, { action: "managed_bind", id: background.admission.id, responseId: prediction.id }, ownership);
       if (bound?.bound !== true) throw new Error("prediction binding not acknowledged");

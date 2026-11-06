@@ -1,7 +1,8 @@
+import { miniMaxInlineScalars } from "./minimax-video-inline.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery } from "./managed-media-json.ts";
 import { miniMaxVideoFileAdapter } from "./managed-minimax-video-files.ts";
-import { miniMaxVideoOrigins, prepareMiniMaxVideo, prepareMiniMaxVideoControl, readMiniMaxVideo,
+import { miniMaxVideoOrigins, prepareMiniMaxVideo, prepareMiniMaxInlineVideoScalars, prepareMiniMaxVideoControl, readMiniMaxVideo,
   validateMiniMaxMediaId } from "./minimax-video.ts";
 
 import { videoJsonBytes, discardVideoInput } from "./minimax-video-operation.ts";
@@ -33,7 +34,7 @@ export const miniMaxVideoManagedAdapter: ManagedLifecycleAdapter = {
       && value.duration !== undefined && value.resolution !== undefined);
     // Regional request shapes are identical. This codec origin is discarded;
     // only the future common original-owner binding can choose a destination.
-    const prepared = prepareMiniMaxVideo("global", value);
+    const prepared = miniMaxInlineScalars(value) ? prepareMiniMaxInlineVideoScalars(value) : prepareMiniMaxVideo("global", value);
     requireVideo(videoJsonBytes(prepared.body, "input") <= 16 * 1024);
     return { body: prepared.body, headers: prepared.headers, requestedVersion: prepared.requestedVersion, pathParams: {} };
   },
