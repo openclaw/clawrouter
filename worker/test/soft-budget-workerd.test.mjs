@@ -283,7 +283,8 @@ test('actual public soft status keeps four owners, cache classification and post
   const drain = id => until(async () => { const r = (await state()).rows[id]; return r?.done && r.pending === 0; });
   try {
     const digest = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('synthetic-secret'))).toString('hex');
-    const script = publicRouter.replace('CASES', JSON.stringify(cases)).replace('DIGEST', JSON.stringify(digest));
+    const script = publicRouter.replaceAll('CASES', JSON.stringify(cases)).replace('DIGEST', JSON.stringify(digest));
+    assert.doesNotMatch(script, /\b(?:CASES|DIGEST)\b/, 'all fixture setup placeholders must be materialized');
     const upstream = String.raw`export default {async fetch(request){const u=new URL(request.url);
       if(u.hostname==='soft-gate.example')return fetch(ORIGIN+u.pathname,{method:request.method,headers:request.headers,body:request.body,redirect:'manual'});
       if(u.href!=='https://api.anthropic.com/v1/messages'||request.headers.get('authorization')!=='Bearer synthetic-soft-key')throw Error('unexpected egress');
