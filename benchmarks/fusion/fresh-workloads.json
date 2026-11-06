@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "stepfun-cache-context",
+      "split": "development",
+      "base": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
+      "oracle": "05980ff9609e18b421627aa444e5fc14616880eb",
+      "editPaths": [
+        "worker/token-usage.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-usage.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/stepfun-cached-usage.test.mjs"
+      ],
+      "instruction": "StepFun standard OpenAI-compatible Chat reports usage.cached_tokens as a subset of inclusive prompt_tokens. Recognize this field only when trusted provider context is stepfun or stepfun-cn and both request and response formats are openai.chat_completions. Thread the same context through JSON and cumulative SSE usage extraction. Preserve inclusive input totals, existing cache-evidence conflict validation, and every other provider and format; response model names alone must not grant this interpretation."
+    },
+    {
+      "id": "abliteration-server-credential",
+      "split": "development",
+      "base": "4458c6b0ef3962ab1d60ae3043ce2c0a2950e7d6",
+      "oracle": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
+      "editPaths": [
+        "worker/provider-auth.ts",
+        "worker/providers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/hosted-provider-contracts.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/abliteration-credential-runtime.test.mjs",
+        "worker/test/hosted-provider-contracts.test.mjs"
+      ],
+      "instruction": "Abliteration server authentication must recognize its canonical ABLIT_KEY while retaining compatibility with ABLITERATION_API_KEY. Prefer the canonical key when both are configured, accept either server key for readiness and operation configuration, and preserve account-owner credential selection and runtime binding. Do not require both names or change unrelated provider authentication."
+    },
+    {
+      "id": "google-audio-pricing-context",
+      "split": "development",
+      "base": "10bbd4f5e31e6b3de5d3d0e3e1e2d0afd6c74c2a",
+      "oracle": "4458c6b0ef3962ab1d60ae3043ce2c0a2950e7d6",
+      "editPaths": [
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/google-audio-pricing-context.test.mjs",
+        "worker/test/google-speech-pricing-gap.test.mjs"
+      ],
+      "instruction": "Trusted selected Google native speech/music models must remain explicitly unpriced in direct pricing and reservation paths until output-audio tariffs and measured usage are qualified. Apply the shared output-audio classification before treating a supplied text, zero-rate or foreign image price card as sufficient. Preserve ordinary Google text and image pricing and the existing responseModalities audio guard."
+    },
+    {
+      "id": "minimax-regional-availability",
+      "split": "development",
+      "base": "25c7e2a5ef7be3ea8e58d5ed210944e8aca49741",
+      "oracle": "0a66b6a63a9d225ca65930b4ed48fc65dd08bed3",
+      "editPaths": [
+        "worker/minimax-music.ts"
+      ],
+      "visibleTests": [
+        "worker/test/minimax-music.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/minimax-music.test.mjs"
+      ],
+      "instruction": "Represent MiniMax Music availability observations separately for global and CN regions. Both paid families are limited to existing paying users, with new paid users denied since 2026-08-20. Global free Music has an announced discontinuation without a confirmed date; CN free Music is stopped. Use region-specific documentation sources and checkedAt 2026-11-05. These observations must not grant account entitlement, invent tariffs, change routing origins or enable native Music execution."
+    }
+  ]
+}

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hash } from '../scripts/fusion-workloads.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
-import { localRoutes, localActionRequest, validateLocalQualification, runLocalRepository } from '../scripts/fusion-local-repository.mjs';
+import { localRoutes, localActionRequest, validateLocalQualification, runLocalRepository, groundedSampling } from '../scripts/fusion-local-repository.mjs';
 
 const pins = [{ model: 'general-local', digest: 'a'.repeat(64) }, { model: 'coder-local', digest: 'b'.repeat(64) }];
 const body = { max_tokens: 1536, messages: [{ role: 'user', content: 'private prompt sentinel' }],
@@ -32,6 +32,16 @@ test('adapter sends the same action schema through loopback with fixed limits', 
   assert.equal(sent.body.options.num_ctx, 32768); assert.equal(sent.body.options.num_predict, 1536);
   assert.equal(result.result.choices[0].message.content, 'private response sentinel');
   assert.equal(result.outputTokens, 9);
+  assert.equal(sent.body.options.temperature, 0);
+});
+
+test('grounded sampling is explicit and does not change legacy requests', async () => {
+  let options;
+  await localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: new AbortController().signal, seed: 4, profile: 'grounded',
+    fetcher: async (_url, request) => { options = JSON.parse(request.body).options; return response(pins[0].model); } });
+  for (const [key, value] of Object.entries(groundedSampling)) assert.equal(options[key], value);
+  assert.equal(options.seed, 4); assert.equal(options.num_predict, 1536);
 });
 
 test('context overflow is rejected before fetch and identity/usage errors stop the route', async () => {

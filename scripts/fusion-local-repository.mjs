@@ -11,6 +11,8 @@ import { localGenerator } from './fusion-execution-smoke.mjs';
 export const localRepositorySettings = Object.freeze({ maxTurns: 8, outputTokens: 1536,
   contextTokens: 32768, deadlineMs: 180000, campaignDeadlineMs: 1200000, temperature: 0, seed: 42000 });
 const strategies = ['general', 'coder', 'handoff'];
+export const groundedSampling = Object.freeze({ temperature: 0.7, top_p: 0.8, top_k: 20,
+  min_p: 0, presence_penalty: 1.5, repeat_penalty: 1 });
 
 export function localRoutes(strategy, pins) {
   if (!strategies.includes(strategy) || pins.length !== 2 || pins[0].model === pins[1].model) throw new Error('invalid_local_strategy');
@@ -35,7 +37,8 @@ export function validateLocalQualification(tasks, qualification) {
   });
 }
 
-export async function localActionRequest({ endpoint, model, pin, body, signal, seed, fetcher = fetch, onDispatch = async () => {} }) {
+export async function localActionRequest({ endpoint, model, pin, body, signal, seed, profile = 'legacy', fetcher = fetch, onDispatch = async () => {} }) {
+  if (!['legacy', 'grounded'].includes(profile)) throw new Error('invalid_local_profile');
   const base = localEndpoint(endpoint);
   if (model !== pin.model || !Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1
     || body.max_tokens > localRepositorySettings.outputTokens || !Array.isArray(body.messages)
@@ -49,11 +52,11 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
   await onDispatch();
   let response;
   try { response = await fetcher(base + '/api/chat', { method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
+    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(profile === 'grounded' ? 120000 : 60000)]),
     body: JSON.stringify({ model, stream: false, keep_alive: '5m', ...(pin.thinking ? { think: false } : {}),
       format: body.response_format.json_schema.schema, messages: body.messages,
       options: { num_predict: body.max_tokens, num_ctx: localRepositorySettings.contextTokens,
-        temperature: localRepositorySettings.temperature, seed } }) }); }
+        ...(profile === 'grounded' ? groundedSampling : { temperature: localRepositorySettings.temperature }), seed } }) }); }
   catch (error) { if (signal.aborted) throw new Error('provider_local_deadline'); throw error; }
   if (!response.ok) throw new Error('local_transport_failed');
   const value = await response.json(), content = value.message?.content;
@@ -86,7 +89,8 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: 'local-repository-development', sourceSha, profile,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts,
-    modelPins: local.pins, settings: localRepositorySettings, apiSpendMicros: 0,
+    modelPins: local.pins, settings: { ...localRepositorySettings,
+      ...(profile === 'grounded' ? groundedSampling : {}), requestTimeoutMs: profile === 'grounded' ? 120000 : 60000 }, apiSpendMicros: 0,
     maxCalls: tasks.length * strategies.length * localRepositorySettings.maxTurns,
     complete: false, calls: [], records: [],
     limitations: ['Previously used development repository tasks; not an unseen holdout.',
@@ -114,7 +118,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         trialCalls.push(call); state.calls.push(call); await checkpoint();
         const callStarted = performance.now();
         try {
-          const generated = await localActionRequest({ endpoint, model, pin, body, signal,
+          const generated = await localActionRequest({ endpoint, model, pin, body, signal, profile,
             seed: localRepositorySettings.seed + index, fetcher,
             onDispatch: async () => { call.dispatched = true; await checkpoint(); } });
           const { result, ...metadata } = generated; Object.assign(call, metadata, { status: 'complete', elapsedMs: Math.round(performance.now() - callStarted) });

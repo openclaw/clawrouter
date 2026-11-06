@@ -285,7 +285,13 @@ interface. It supplies numbered current source windows on every turn, requires
 line replacements to match observed current source, and gives the next worker the current edited
 source with bounded tool feedback. `inspect` selects another window; `probe`
 runs in the same isolated environment. The original `legacy` profile remains
-the default. Both profiles use the same model, action, output and deadline caps.
+the default. Both profiles use the same action, output and total trial deadline
+caps. The grounded profile uses explicit sampled non-thinking generation
+(`temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, presence penalty 1.5,
+repeat penalty 1), following the [Qwen3.5 model-card recommendation](https://huggingface.co/Qwen/Qwen3.5-4B).
+Its per-call timeout is 120 seconds inside the unchanged 180-second trial cap;
+legacy retains 60 seconds and greedy generation. Cross-profile comparisons
+therefore measure both interface and sampling changes.
 An optional final argument selects another qualified task manifest; receipt
 digests and oracle test-count checks still apply.
 

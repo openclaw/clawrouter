@@ -10,6 +10,9 @@ test('source windows are bounded and explicit inspection reaches later lines', (
   assert.ok(views[0].content.includes('value520'));
   assert.ok(Buffer.byteLength(views[0].content) <= 3000);
   assert.ok(views[0].endLine - views[0].startLine < 160);
+  const pair = sourceWindows([file, { ...file, path: 'worker/second.ts' }], 'Fix value520', null, 3000);
+  assert.ok(pair.every(view => view.content.length > 0));
+  assert.ok(pair.reduce((sum, view) => sum + Buffer.byteLength(view.content), 0) <= 3000);
 });
 
 test('numbered edits require current observed lines and reject stale views', () => {

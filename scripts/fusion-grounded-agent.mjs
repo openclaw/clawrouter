@@ -17,7 +17,8 @@ export function sourceWindows(files, instruction, selection = null, maxBytes = 1
   const terms = [...new Set(instruction.toLowerCase().match(/[a-z][a-z0-9_.]{3,}/g) ?? [])]
     .filter(word => !ignoredWords.has(word));
   let remaining = maxBytes;
-  return files.map(file => {
+  return files.map((file, fileIndex) => {
+    const allowance = Math.floor(remaining / (files.length - fileIndex));
     const lines = file.content.split('\n');
     const scores = lines.map(line => terms.reduce((sum, term) => sum + Number(line.toLowerCase().includes(term)), 0));
     let center = scores.reduce((best, score, index) => score > scores[best] ? index : best, 0);
@@ -28,9 +29,9 @@ export function sourceWindows(files, instruction, selection = null, maxBytes = 1
       } else if (selection.line > 0) center = Math.min(selection.line - 1, lines.length - 1);
     }
     const selected = selection?.path === file.path;
-    const start = !selected && Buffer.byteLength(file.content) <= remaining ? 0 : Math.max(0, center - 35);
+    const start = !selected && Buffer.byteLength(file.content) <= allowance ? 0 : Math.max(0, center - 35);
     let end = start, bytes = 0;
-    while (end < lines.length && bytes + Buffer.byteLength(lines[end]) + 1 <= remaining && end - start < 160) {
+    while (end < lines.length && bytes + Buffer.byteLength(lines[end]) + 1 <= allowance && end - start < 160) {
       bytes += Buffer.byteLength(lines[end]) + 1; end++;
     }
     remaining -= bytes;
