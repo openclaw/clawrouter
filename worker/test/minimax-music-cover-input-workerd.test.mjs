@@ -129,10 +129,13 @@ test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malfor
   const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path, { signal: t.signal }); assert.equal(response.status, 200); return response.json(); };
   const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
   const start = async (mode, bytes, options = {}, signal = t.signal) => {
-    const upload = input(bytes, options);
+    // These already-bounded rejection strings need no asynchronous producer
+    // still writing after early parser cancellation. EPIPE remains a failure.
+    const upload = mode === "escape-overflow" || mode === "escape-unicode"
+      ? { body: options.raw, length: Buffer.byteLength(options.raw) } : input(bytes, options);
     try {
       // Known incremental length avoids Undici's trailing chunked terminator
-      // write after an intentional early input cancellation. Bytes stay streamed.
+      // write after an intentional early input cancellation. Other cases stay streamed.
       const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode + "&route=" + (options.route ?? "native"),
         { method: "POST", headers: { "content-type": "application/json", "content-length": String(upload.length) }, body: upload.body, duplex: "half", signal });
       assert.equal(response.status, 200); return response.json();
