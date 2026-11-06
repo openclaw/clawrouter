@@ -146,7 +146,7 @@ export function runInactiveMiniMaxMusicCoverUpload(input: SealedMusicCoverInput,
         response = await actual; actual = undefined;
         if (signal.aborted) abort();
         await upload.retired;
-        signal.throwIfAborted();
+        if (signal.aborted) throw failed();
         const successor = transferMiniMaxMusicCoverResponse(cap);
         const original = response!; response = undefined;
         const output = await readNativeMiniMaxMusicCover(original, successor, signal, reportFailure);

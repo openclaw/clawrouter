@@ -232,7 +232,8 @@ export async function readNativeMiniMaxMusicCover(response: Response, successor:
     if (input && !input.blocked) {
       try { await input.retire(eof ? "eof" : "cancel"); } catch { throw coverCleanup(); }
     }
-    signal.throwIfAborted();
+    // HttpOperation owns the public caller reason. The physical cleanup path
+    // retains only its bounded failure, never a caller-supplied cause graph.
     throw coverFailure();
   } finally {
     scanner?.discard(); signal.removeEventListener("abort", abort);

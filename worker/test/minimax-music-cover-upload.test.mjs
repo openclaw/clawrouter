@@ -205,3 +205,14 @@ test("synchronous/asynchronous transport causes are sanitized before held FIRST 
     } finally { held.resolve(); await cleanup(f, flow); MusicCoverUploadSource.prototype.disposeSource = original; }
   }
 });
+
+test("original caller abort identity does not masquerade as a cleanup-failure flag", async () => {
+  const f = await begin(), reason = Object.assign(new Error("fixture caller abort", { cause: { boundedFixture: true } }), { cleanupFailed: true });
+  const flow = runInactiveMiniMaxMusicCoverUpload(f.sealed, async (_url, init) => {
+    await drain(init.body); f.controller.abort(reason); return reply();
+  });
+  try {
+    await assert.rejects(flow.result, error => error === reason); await flow.retired;
+    assert.equal(flow.snapshot().cleanupFailed, false); assert.equal(bodyBudgetCharged(), 0);
+  } finally { await cleanup(f, flow); }
+});
