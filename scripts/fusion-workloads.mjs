@@ -167,14 +167,33 @@ export async function verify(task, image, edits, repo) {
   } finally { await box.close(); }
 }
 
+// The repair must pass the original visible tests before acceptance tests replace
+// any same-named files. Otherwise a benchmark can punish the correct repair.
+export async function checkOracleVisible(task, image, edits, { makeSandbox = sandbox, write = writeFiles, test = check } = {}) {
+  const box = await makeSandbox(image);
+  try {
+    await write(box, validateEdits(task, edits));
+    const { feedback, ...receipt } = await test(box, task.visibleTests);
+    return receipt;
+  } finally { await box.close(); }
+}
+
+export function qualificationSucceeded({ visible, oracleVisible, broken, oracle }) {
+  return visible?.passed === true && oracleVisible?.valid === true && oracleVisible?.passed === true
+    && broken?.valid === true && broken?.passed === false && oracle?.passed === true;
+}
+
 export async function qualify(task, options) {
   const built = await buildTask(task, options);
   const box = await sandbox(built.image);
   let visible;
   try { const { feedback, ...result } = await check(box, task.visibleTests); visible = result; }
   finally { await box.close(); }
+  const edits = await revisionFiles(options.repo, task.oracle, task.editPaths);
+  const oracleVisible = await checkOracleVisible(task, built.image, edits);
   const broken = await verify(task, built.image, [], options.repo);
-  const oracle = await verify(task, built.image, await revisionFiles(options.repo, task.oracle, task.editPaths), options.repo);
-  return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, visible, broken, oracle,
-    qualified: visible.passed && broken.valid && !broken.passed && oracle.passed };
+  const oracle = await verify(task, built.image, edits, options.repo);
+  const evidence = { visible, oracleVisible, broken, oracle };
+  return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, ...evidence,
+    qualified: qualificationSucceeded(evidence) };
 }

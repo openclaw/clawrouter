@@ -279,7 +279,8 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
   const qualification = JSON.parse(await readFile(qualificationPath, 'utf8'));
   for (const task of tasks) {
     const receipts = qualification.receipts?.filter(receipt => receipt.taskId === task.id);
-    if (receipts?.length !== 1 || receipts[0].qualified !== true || receipts[0].taskDigest !== hash(JSON.stringify(task))) throw new Error('unqualified_task');
+    if (receipts?.length !== 1 || receipts[0].qualified !== true || receipts[0].oracleVisible?.valid !== true
+      || receipts[0].oracleVisible?.passed !== true || receipts[0].taskDigest !== hash(JSON.stringify(task))) throw new Error('unqualified_task');
   }
   await mkdir(out, { recursive: false, mode: 0o700 });
   const engine = await import('../worker/fusion.ts');

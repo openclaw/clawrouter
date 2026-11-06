@@ -57,10 +57,10 @@ test('context overflow is rejected before fetch and identity/usage errors stop t
 
 test('qualification requires matching task digests, passing oracle and failing baseline', () => {
   const task = { id: 'example' }, receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
-    qualified: true, visible: { passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
+    qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
   const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
   assert.equal(validateLocalQualification([task], q).length, 1);
-  for (const change of [{ qualified: 'true' }, { taskDigest: 'wrong' }, { broken: { valid: true, passed: true } },
+  for (const change of [{ qualified: 'true' }, { oracleVisible: undefined }, { oracleVisible: { valid: true, passed: false } }, { taskDigest: 'wrong' }, { broken: { valid: true, passed: true } },
     { oracle: { passed: false } }, { oracle: { valid: true, passed: true, tests: 0, skipped: 0 } },
     { oracle: { valid: true, passed: true, tests: 3, skipped: -1 } }]) {
     assert.throws(() => validateLocalQualification([task], { ...q, receipts: [{ ...receipt, ...change }] }), /unqualified_local_task/);
@@ -76,7 +76,7 @@ async function fixture() {
   const qualificationPath = join(root, 'qualification.json');
   await writeFile(qualificationPath, JSON.stringify({ nodeImage: 'node@sha256:' + 'c'.repeat(64), receipts: [{ taskId: task.id,
     taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'd'.repeat(64), qualified: true,
-    visible: { passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } }] }));
+    visible: { passed: true }, oracleVisible: { valid: true, passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } }] }));
   return { root, options: { repo: root, qualificationPath, out: join(root, 'result'), sourceSha: 'e'.repeat(40),
     models: pins.map(row => row.model), inspectImage: async () => {}, preflight: async () => ({ pins, verifyPins: async () => {} }) } };
 }

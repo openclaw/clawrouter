@@ -374,3 +374,15 @@ Grounded workers retain a nonempty bounded working summary between turns and acr
 handoff. The notes are untrusted, limited to 2000 characters and 4096 bytes,
 and excluded from benchmark reports. This preserves discoveries without
 retaining full transcripts or rereading each dependency on every turn.
+
+### Compatible visible tests
+
+Qualification now requires `oracleVisible`: the known source repair must pass
+the original visible tests before acceptance tests replace any same-named
+files. Regenerate older qualification receipts before running models. A passing
+updated acceptance suite alone does not prove that visible feedback is valid.
+
+The Copilot catalog-identity task was removed from the original corpus; the
+Cerebras redirect-mode and MiniMax regional-availability tasks were removed
+from the fresh corpus because their original visible tests reject the known
+repair. Earlier scores involving those tasks are not reliable comparisons.

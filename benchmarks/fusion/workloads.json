@@ -48,22 +48,6 @@
         "worker/test/native-openrouter-music.test.mjs"
       ],
       "instruction": "The native OpenRouter music response wrapper retains the prepared request and caller selection for the response lifetime. Response processing must retain only immutable selected model and output-format scalars. It must still work after the prepared request is mutated and revoked. Preserve bounded native byte streaming, MP3/WAV checks, model identity, EOF validation, cancellation, leases and unknown token accounting. Do not decode or retain the full audio payload."
-    },
-    {
-      "id": "copilot-catalog-identity",
-      "split": "development",
-      "base": "50f7dff508d7d1326a09b7e3d48ab132abdede90",
-      "oracle": "887a78742475677af16ceeaae7c3fc39ab752fb0",
-      "editPaths": [
-        "worker/provider-copilot.ts"
-      ],
-      "visibleTests": [
-        "worker/test/provider-copilot.test.mjs"
-      ],
-      "hiddenTests": [
-        "worker/test/provider-copilot.test.mjs"
-      ],
-      "instruction": "Copilot model discovery must distinguish picker visibility from permission to execute. Visible rows require model_picker_enabled=true and must exclude disabled/unconfigured policy states, with case and whitespace normalization. Catalog and inference requests must use explicit runtime identity bound to the selected credential owner: integration ID, editor version, editor plugin version and user agent. Reject missing, extra, malformed or wrong-owner identity fields. Preserve original credentials, qualified endpoints and supported model transports. Inference must preserve explicit user/agent initiation and image context; never invent client identity defaults."
     }
   ]
 }
