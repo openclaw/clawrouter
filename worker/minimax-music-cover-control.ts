@@ -1,7 +1,7 @@
 import { musicCoverVerification, retireMusicCoverVerification } from "./proxy-auth.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
-import { claimMiniMaxMusicCoverControl, type MusicCoverControlPhase, type SealedMusicCoverInput } from "./minimax-music-cover-input.ts";
+import { claimMiniMaxMusicCoverControl, isMiniMaxMusicCoverUpload, type MusicCoverControlPhase, type MusicCoverUploadCapability, type SealedMusicCoverInput } from "./minimax-music-cover-input.ts";
 import { assertSearchHeaders, readSearchJson, searchJsonBytes } from "./minimax-search-operation.ts";
 import { HttpError } from "./utils.ts";
 
@@ -28,11 +28,11 @@ interface Ticket {
   released: boolean;
 }
 type Snapshot = Readonly<{ ordinary: number; mandatory: number; ordinaryActive: number; mandatoryActive: number;
-  closed: boolean; cleanupFailed: boolean; ownershipBlocked: boolean; postAttempts: 0 }>;
+  closed: boolean; cleanupFailed: boolean; ownershipBlocked: boolean; postAttempts: number }>;
 
 // No independent acquisition: the genuine post-hash input owner keeps all 96 MiB.
-// Twenty-seven fixed ticket cells include one UNUSED future POST ticket. There
-// is no provider dispatch, byte exposure, response split or retry API here.
+// The inactive transport may spend the reserved POST cell. Its capability is
+// custody, not current authority; no production caller composes these paths.
 export class MiniMaxMusicCoverControl {
   private activeOperation?: HttpOperation;
   private controlPhase?: MusicCoverControlPhase;
@@ -40,6 +40,7 @@ export class MiniMaxMusicCoverControl {
   get phase(): MusicCoverControlPhase { return this.controlPhase ?? musicCoverUnavailable(); }
   private ordinary = 0;
   private mandatory = 0;
+  private postAttempts = 0;
   private ordinaryLimit: number = musicCoverControlLimits.ordinary;
   private mode?: boolean;
   private active = [false, false];
@@ -65,8 +66,10 @@ export class MiniMaxMusicCoverControl {
     this.mode = soft; this.ordinaryLimit = soft ? musicCoverControlLimits.softOrdinary : musicCoverControlLimits.ordinary;
     if (this.ordinary > this.ordinaryLimit) musicCoverUnavailable();
   }
-  private ticket(mandatory: boolean): Ticket {
-    if (this.closed || this.ownershipBlocked || (mandatory ? this.mandatory >= 10 : this.ordinary >= this.ordinaryLimit)) musicCoverUnavailable();
+  private ticket(mandatory: boolean, post = false): Ticket {
+    if (this.closed || this.ownershipBlocked || post && (mandatory || this.postAttempts)
+      || (mandatory ? this.mandatory >= 10 : this.ordinary >= this.ordinaryLimit + (post ? 1 : this.postAttempts))) musicCoverUnavailable();
+    if (post) this.postAttempts++;
     if (mandatory) this.mandatory++; else this.ordinary++;
     const ticket: Ticket = { id: this.tickets.length, mandatory, released: false };
     this.tickets.push(ticket); return ticket;
@@ -160,6 +163,27 @@ export class MiniMaxMusicCoverControl {
     })().catch(() => { reject(new HttpError(503, "minimax_music_cover_control_failed", "Music cover control failed")); });
     return result;
   }
+  // Inactive transport only. This spends scheduling capacity, NOT a verifier
+  // or preparation record. Start owns upload/fetch/late-body/read/delivery and
+  // must dispose failure branches before rejection; the slot joins its root.
+  post<T>(cap: MusicCoverUploadCapability, start: () => Promise<{ value: T; retired: Promise<void> }>): Promise<T> {
+    if (!isMiniMaxMusicCoverUpload(cap, this.phase)) musicCoverUnavailable(403);
+    const ticket = this.ticket(false, true);
+    let resolve!: (value: T) => void, reject!: (reason: unknown) => void;
+    const result = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    void result.catch(() => undefined);
+    ticket.work = (async () => {
+      await this.slot(ticket);
+      try {
+        this.operation.signal.throwIfAborted();
+        const outcome = await start(); resolve(outcome.value); await outcome.retired;
+      } catch (error) {
+        if ((error as { cleanupFailed?: unknown })?.cleanupFailed === true) this.cleanupFailed = true;
+        reject(new Error("music cover inactive transport failed"));
+      } finally { this.release(ticket); }
+    })();
+    return result;
+  }
   async retireOrdinary(): Promise<void> {
     // The bounded snapshot is at most sixteen fixed ticket references. No new
     // operation may be introduced by finalization; late ACKs keep their IDs.
@@ -172,9 +196,12 @@ export class MiniMaxMusicCoverControl {
     this.closed = true;
     // Initiate input closure BEFORE joins. The input joins our registered root;
     // neither this promise nor any ticket ever awaits input.retired/discard().
-    this.phase.close();
+    if (!this.postAttempts) this.phase.close();
     this.closing = (async () => {
       for (const ticket of this.tickets) { await ticket.work; }
+      // Successful publication must retain the original deadline through
+      // downstream EOF/cancel. Never cancel it merely because headers exist.
+      if (this.postAttempts) this.phase.close();
       if (this.ownershipBlocked || this.tickets.some(ticket => ticket.response?.body?.locked)) {
         this.ownershipBlocked = true;
         await new Promise<void>(() => undefined); // Unknown physical ownership retains the original charge.
@@ -195,7 +222,7 @@ export class MiniMaxMusicCoverControl {
   }
   snapshot(): Snapshot { return Object.freeze({ ordinary: this.ordinary, mandatory: this.mandatory,
     ordinaryActive: Number(this.active[0]), mandatoryActive: Number(this.active[1]), closed: this.closed,
-    cleanupFailed: this.cleanupFailed, ownershipBlocked: this.ownershipBlocked, postAttempts: 0 }); }
+    cleanupFailed: this.cleanupFailed, ownershipBlocked: this.ownershipBlocked, postAttempts: this.postAttempts }); }
 }
 
 export function runMiniMaxMusicCoverControls<T>(input: SealedMusicCoverInput, work: (owner: MiniMaxMusicCoverControl) => Promise<T>) {

@@ -46,6 +46,12 @@ export interface MusicCoverControlPhase {
   readonly route: "native" | "manifest";
   close(): void;
 }
+// Internal custody capabilities, never credentials or permission to dispatch.
+export interface MusicCoverUploadCapability { readonly kind: "music-cover-upload.v1" }
+export interface MusicCoverResponseCapability { readonly kind: "music-cover-response.v1" }
+const phaseOwners = new WeakMap<MusicCoverControlPhase, CoverInputOwner>();
+const uploadOwners = new WeakMap<MusicCoverUploadCapability, { owner: CoverInputOwner; offset: number; retired: boolean; complete: boolean }>();
+const responseOwners = new WeakMap<MusicCoverResponseCapability, { lease: BodyLease }>();
 
 class AudioWriter {
   private bytes: Uint8Array<ArrayBuffer> | undefined = new Uint8Array(musicCoverInputLimits.decoded);
@@ -231,6 +237,8 @@ class CoverInputOwner {
   private signal?: AbortSignal;
   private controlRoot?: Promise<void>;
   private cancelControl?: () => void;
+  private upload?: MusicCoverUploadCapability;
+  private controlLease?: BodyLease;
   private settled = false;
   private resolveResult!: (input: SealedMusicCoverInput) => void;
   private rejectResult!: (error: Error) => void;
@@ -330,8 +338,9 @@ class CoverInputOwner {
   }
   private async run(route: "native" | "manifest", contentLength?: number): Promise<void> {
     try {
-      const value = await this.intake(route, contentLength);
+      let value: Awaited<ReturnType<CoverInputOwner["intake"]>> | undefined = await this.intake(route, contentLength);
       this.bytes = value.bytes;
+      const plan = value.plan; value = undefined;
       this.check();
       this.phase = "hash"; this.digestStarted = true;
       // WebCrypto owns its snapshot. Pass the populated original view directly;
@@ -341,7 +350,7 @@ class CoverInputOwner {
       this.check();
       if (hash.byteLength !== 32 || hash.buffer.byteLength !== 32) throw failure("hash");
       let sha256 = ""; for (let i = 0; i < hash.length; i++) sha256 += hash[i].toString(16).padStart(2, "0");
-      this.metadata = Object.freeze({ ...value.plan, bytes: this.bytes.length, sha256 });
+      this.metadata = Object.freeze({ ...plan, bytes: this.bytes.length, sha256 });
       const sealed: SealedMusicCoverInput = Object.freeze({ kind: "minimax-cover-input.v1" });
       sealedOwners.set(sealed, this);
       this.phase = "sealed"; this.settled = true; this.resolveResult(sealed);
@@ -361,9 +370,11 @@ class CoverInputOwner {
     try { this.reader?.releaseLock(); } catch { this.cleanupFailed = true; }
     this.reader = undefined; this.pending = undefined; this.digest = undefined;
     this.bytes = undefined; this.metadata = undefined;
+    if (this.upload) uploadOwners.delete(this.upload);
+    this.upload = undefined;
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.signal?.removeEventListener("abort", this.abort); this.signal = undefined;
-    this.phase = "retired"; this.lease.release();
+    this.phase = "retired"; this.lease.release(); this.controlLease?.release(); this.controlLease = undefined;
     if (this.cleanupFailed) this.rejectRetired(failure("cleanup")); else this.resolveRetired();
   }
   claim(): MusicCoverInputMetadata {
@@ -378,8 +389,50 @@ class CoverInputOwner {
     this.claimed = true; this.phase = "control";
     this.controlRoot = retired; this.cancelControl = cancel;
     void retired.catch(() => undefined);
-    return Object.freeze({ metadata: this.metadata, signal: this.signal, deadlineAt: this.deadlineAt,
+    const phase: MusicCoverControlPhase = Object.freeze({ metadata: this.metadata, signal: this.signal, deadlineAt: this.deadlineAt,
       route: this.route, close: () => this.stop("cancelled") });
+    phaseOwners.set(phase, this); return phase;
+  }
+  beginUpload(): MusicCoverUploadCapability {
+    this.check();
+    if (this.phase !== "control" || this.upload || !this.bytes || this.digest || this.reader || this.pending) throw failure("used");
+    const cap: MusicCoverUploadCapability = Object.freeze({ kind: "music-cover-upload.v1" });
+    uploadOwners.set(cap, { owner: this, offset: 0, retired: false, complete: false });
+    this.upload = cap; return cap;
+  }
+  encodeUpload(cap: MusicCoverUploadCapability, target: Uint8Array<ArrayBuffer>): number {
+    this.check();
+    const state = uploadOwners.get(cap);
+    if (!state || state.owner !== this || state.retired || !this.bytes || target.buffer.byteLength > 16384
+      || target.byteLength < 4 || target.byteLength % 4) throw failure("used");
+    let output = 0;
+    while (output + 4 <= target.length && state.offset < this.bytes.length) {
+      const remaining = this.bytes.length - state.offset, a = this.bytes[state.offset++];
+      const b = remaining > 1 ? this.bytes[state.offset++] : 0, c = remaining > 2 ? this.bytes[state.offset++] : 0;
+      target[output++] = alphabet.charCodeAt(a >>> 2);
+      target[output++] = alphabet.charCodeAt((a & 3) * 16 + (b >>> 4));
+      target[output++] = remaining > 1 ? alphabet.charCodeAt((b & 15) * 4 + (c >>> 6)) : 61;
+      target[output++] = remaining > 2 ? alphabet.charCodeAt(c & 63) : 61;
+    }
+    return output;
+  }
+  retireUpload(cap: MusicCoverUploadCapability, complete: boolean): void {
+    const state = uploadOwners.get(cap);
+    if (!state || state.owner !== this || state.retired) throw failure("used");
+    state.complete = complete && state.offset === this.metadata?.bytes;
+    state.retired = true; this.bytes = undefined;
+  }
+  transfer(cap: MusicCoverUploadCapability): MusicCoverResponseCapability {
+    this.check();
+    const state = uploadOwners.get(cap);
+    if (!state || state.owner !== this || !state.retired || !state.complete || this.bytes || this.digest
+      || this.reader || this.pending || this.controlLease) throw failure("used");
+    const split = this.lease.splitCharges(32 * MiB, 64 * MiB);
+    if (!split) throw failure("capacity");
+    this.controlLease = split[0];
+    const result: MusicCoverResponseCapability = Object.freeze({ kind: "music-cover-response.v1" });
+    responseOwners.set(result, { lease: split[1] }); uploadOwners.delete(cap); this.upload = undefined;
+    return result;
   }
   discard(): Promise<void> { if (this.phase !== "retired") this.stop("cancelled"); return this.retired; }
   snapshot() { return Object.freeze({ phase: this.phase, reads: this.reads, wire: this.wire, nonAudio: this.nonAudio,
@@ -400,4 +453,31 @@ export function claimMiniMaxMusicCoverInput(input: SealedMusicCoverInput): Music
 export function claimMiniMaxMusicCoverControl(input: SealedMusicCoverInput, retired: Promise<void>, cancel: () => void): MusicCoverControlPhase {
   const owner = sealedOwners.get(input); if (!owner) throw failure("used");
   return owner.control(retired, cancel);
+}
+
+export function claimMiniMaxMusicCoverUpload(phase: MusicCoverControlPhase): MusicCoverUploadCapability {
+  const owner = phaseOwners.get(phase); if (!owner) throw failure("used");
+  return owner.beginUpload();
+}
+export function isMiniMaxMusicCoverUpload(cap: MusicCoverUploadCapability, phase: MusicCoverControlPhase): boolean {
+  return uploadOwners.get(cap)?.owner === phaseOwners.get(phase) && phaseOwners.has(phase);
+}
+export function encodeMiniMaxMusicCoverUpload(cap: MusicCoverUploadCapability, target: Uint8Array<ArrayBuffer>): number {
+  const state = uploadOwners.get(cap); if (!state) throw failure("used");
+  return state.owner.encodeUpload(cap, target);
+}
+export function retireMiniMaxMusicCoverUpload(cap: MusicCoverUploadCapability, complete: boolean): void {
+  const state = uploadOwners.get(cap); if (!state) throw failure("used");
+  state.owner.retireUpload(cap, complete);
+}
+export function transferMiniMaxMusicCoverResponse(cap: MusicCoverUploadCapability): MusicCoverResponseCapability {
+  const state = uploadOwners.get(cap); if (!state) throw failure("used");
+  return state.owner.transfer(cap);
+}
+// The successor can be consumed once; no raw lease or caller allocation escapes.
+export function consumeMiniMaxMusicCoverResponse(cap: MusicCoverResponseCapability): () => void {
+  const state = responseOwners.get(cap); if (!state) throw failure("used");
+  responseOwners.delete(cap);
+  let lease: BodyLease | undefined = state.lease;
+  return () => { lease?.release(); lease = undefined; };
 }
