@@ -672,15 +672,18 @@ allowed time after invocation end and have been cancelled`, each with 30-37 s of
 wall time. When that limit hits, Cloudflare cancels every remaining task of the
 request, including its usage accounting and settlement.
 
-The Worker entry handed the whole global set of pending background work (stale
-refreshes, colo publishes, counter flushes) to each request's `waitUntil`,
-including work owned by other requests. If such work never settles in the
-draining request's context (for example after its owner's client disconnected),
-the 25 s bound inside `runInBackground` does not help either, because that timer
-also belongs to the owning request. A request now drains only work registered
-after its own entry (`backgroundMark`) and races it against a 10 s timer created
-in its own context (`DRAIN_BOUND_MS`), so it can no longer reach the platform
-limit through someone else's work.
+The change at that time limited the background facade handed to `waitUntil`
+using `backgroundMark` and a caller-created 10 s timer (`DRAIN_BOUND_MS`). A
+sequence mark is not request identity: it includes interleaved registrations
+from other requests. This observation did not establish physical retirement or
+guarantee that the platform would complete the originating tasks.
+
+The current [registration contract](background-registration-contract.md) keeps
+64 actual logical registrations until their original tasks settle. A facade
+polls a snapshot of scalar identities on its own timers, never foreign native
+I/O promises. Its hard 10 s timer and monotonic 25 s visibility age do not release
+registrations. Cache TTL and wall-clock adjustments are separate. Platform
+execution and originating-request physical lifetime remain best effort.
 
 ### Production check of the colo layer and burst coalescing (2026-10-24)
 
@@ -825,8 +828,10 @@ requests. Findings and changes:
 - Catalog and model lists stayed CPU/KV-bound with zero authority calls. The
   derived per-key inventory (health, grant eligibility, balances) is now reused
   within the hot-cache bounds, keyed by the full authorized identity and policy.
-- Background work is bounded at 25 s so a hung backend call leaves the pending
-  set instead of extending every later request's `waitUntil`.
+- The historical implementation removed background work from its pending set
+  after 25 s. The current registration contract supersedes that behavior:
+  facade expiry leaves actual work charged until settlement, and saturation
+  refuses new background starts before side effects.
 - The harness now waits for asynchronous selection counters to converge before
   reconciling them.
 - Mid-stream aborts at concurrency 200 produced occasional client `ECONNRESET`

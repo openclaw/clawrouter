@@ -1,5 +1,5 @@
 import { grantRevision, grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibility.ts";
-import { HotCache, hotCacheConfig, registerHotCache, runInBackground, type HotCacheState } from "./hot-cache.ts";
+import { HotCache, hotCacheConfig, registerHotCache, tryRunInBackground, type HotCacheState } from "./hot-cache.ts";
 import type { Env, UpstreamGrant } from "./types";
 
 // Materialized upstream credentials, isolate memory only: never persisted,
@@ -32,7 +32,7 @@ export async function cachedGrantCredentials(env: Env, key: string, grant: Upstr
 export function prefetchGrantCredentials(env: Env, key: string, grant: UpstreamGrant, materialize: () => Promise<UpstreamGrant>): void {
   const config = hotCacheConfig(env), id = entryId(key, grant);
   if (!config.maxAgeMs || credentials.peek(id, config)) return;
-  runInBackground(credentials.load(id, config, loader(materialize)));
+  tryRunInBackground(() => credentials.load(id, config, loader(materialize)));
 }
 
 /** Drop every cached version of a grant (upstream 401/403, credential failure, revoke). */
