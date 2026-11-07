@@ -1,5 +1,5 @@
 import type { AccessControlUser, AssignmentRule, AssignmentState, AssignmentStateEntry } from "./types";
-import { admitAssignmentJson, admitAssignmentRevision, assignmentMapPlan, assignmentSequencePlan } from "./assignment-source.ts";
+import { admitAssignmentJson, admitAssignmentRevision, assignmentMapPlan, assignmentSequencePlan, assignmentSourceFailure } from "./assignment-source.ts";
 
 export interface AssignmentEvidence {
   source: string;
@@ -26,6 +26,11 @@ export function captureAdmittedAssignmentRules(rules: AssignmentRuleEntry[]): As
   // Count the exact ordered legacy projection before map/nested array copies,
   // stringify, UTF8 encoding and digest. generatedGroup is deliberately absent.
   admitAssignmentJson(rules);
+  for (const rule of rules) {
+    if (!Array.isArray(rule.groups) || !Array.isArray(rule.policyIds)) throw assignmentSourceFailure("protocol");
+    for (const group of rule.groups) if (typeof group !== "string") throw assignmentSourceFailure("protocol");
+    for (const policy of rule.policyIds) if (typeof policy !== "string") throw assignmentSourceFailure("protocol");
+  }
   admitAssignmentRevision(rules, revisionRule);
   return captureRules(rules, true);
 }
