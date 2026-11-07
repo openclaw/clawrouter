@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import { usageReportFixture } from "./usage-report-fixture.mjs";
 import { projectUsageEvent, queryUsageReport, queryUsageEvents, insertUsageReportEvent } from "../usage-report-store.ts";
 import { knownBasisClasses } from "../usage-report-cost.ts";
 import { parseUsageReportQuery } from "../usage-report.ts";
 
 const now = Date.parse("2026-11-02T12:00:00Z");
+// Ingest runs retention cleanup on Date.now(): an unpinned clock deletes these fixture rows after 2026-11-20.
+beforeEach(t => { t.mock.method(Date, "now", () => now); });
 const params = values => new URLSearchParams(values);
 const content = ({ historySource, projectionComplete, historyComplete, ...report }) => report;
 
