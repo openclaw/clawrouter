@@ -25,6 +25,7 @@ import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { chooseGrantKey, normalizedChoiceCandidates } from "./grant-selection-strategies.ts";
 import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
+import { readAuthorityUserResponse } from "./authority-user-response.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
@@ -980,6 +981,10 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
   if (ack) {
     const text = JSON.stringify(body);
     return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal }), ack, signal) as T;
+  }
+  if (objectName === "policy-bindings" && path === "/users/resolve") {
+    const text = JSON.stringify(body);
+    return await readAuthorityUserResponse(() => stub.fetch("https://clawrouter.internal/users/resolve", { method: "POST", body: text, signal }), signal) as T;
   }
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();

@@ -248,37 +248,39 @@ async function statusNetwork() {
 
 test('actual public soft status keeps four owners, cache classification and post-header grace', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'soft-status-public-')), io = await statusNetwork();
-  const clients = new Set(), clientFailures = []; let runtime, primary;
+  const clients = new Set(), clientFailures = [], diagnosticFailures = []; let runtime, primary, hasPrimary = false;
   const abort = new AbortController(), cancel = () => { io.releaseAll(); abort.abort(t.signal.reason); };
   t.signal.addEventListener('abort', cancel, { once: true });
   // Register releases/drains before ANY client; future barriers are released too.
   t.after(async () => {
     io.releaseAll(); const errors = [];
-    for (const r of await Promise.allSettled([...clients])) if (r.status === 'rejected' && r.reason !== primary) errors.push(r.reason);
+    for (const r of await Promise.allSettled([...clients])) if (r.status === 'rejected' && (!hasPrimary || !Object.is(r.reason, primary))) errors.push(r.reason);
     try { if (runtime) await until(async () => { const s = await state(); return s.background === (s.rows.unknown?.pending ?? 0); }); } catch (e) { errors.push(e); }
     try { await runtime?.dispose(); } catch (e) { errors.push(e); }
     try { await io.close(); } catch (e) { errors.push(e); }
-    await rm(directory, { recursive: true, force: true }); t.signal.removeEventListener('abort', cancel);
-    if (errors.length || clientFailures.some(e => e !== primary)) throw new AggregateError([...clientFailures.filter(e => e !== primary), ...errors], 'public status fixture cleanup');
+    try { await rm(directory, { recursive: true, force: true }); } catch (e) { errors.push(e); }
+    t.signal.removeEventListener('abort', cancel);
+    const independent = [...diagnosticFailures, ...clientFailures.filter(e => !hasPrimary || !Object.is(e, primary)), ...errors];
+    if (independent.length) throw new AggregateError(hasPrimary ? [primary, ...independent] : independent, 'public status primary and independent cleanup failures');
   });
   const call = async path => { const r = await runtime.dispatchFetch('https://router.example' + path); const text = await r.text(); assert.equal(r.status, 200, text); return JSON.parse(text); };
   const state = () => call('/state');
-  const until = async (predicate, originating) => {
+  const until = async (predicate, originating, allowCompletion = false) => {
     for (let n = 0; n < 600; n++) {
       if (await predicate()) return;
-      if (originating?.failure) throw originating.failure;
-      if (originating?.done) assert.fail('originating request completed before expected phase');
+      if (originating?.failed) throw originating.failure;
+      if (originating?.done && !allowCompletion) assert.fail('originating request completed before expected phase');
       await delay(10);
     }
     assert.fail('bounded status fixture arrival: ' + JSON.stringify(await state()));
   };
   const send = (name, id = name, mode = name) => {
-    const record = { done: false, failure: null };
+    const record = { done: false, failed: false, failure: undefined };
     const work = runtime.dispatchFetch('https://router.example/proxy?case=' + name + '&id=' + id + '&mode=' + mode, {
       method: 'POST', signal: abort.signal, headers: { authorization: 'Bearer clawrouter-live-' + name.replaceAll('-', '_') + '-synthetic-secret', 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [], metadata: { user_id: id } }),
     }).then(async r => ({ status: r.status, body: await r.text(), timing: r.headers.get('server-timing') }));
-    clients.add(work); work.then(() => { record.done = true; clients.delete(work); }, e => { record.failure = e; clients.delete(work); clientFailures.push(e); });
+    clients.add(work); work.then(() => { record.done = true; clients.delete(work); }, e => { record.failed = true; record.failure = e; clients.delete(work); clientFailures.push(e); });
     return { work, record };
   };
   const drain = id => until(async () => { const r = (await state()).rows[id]; return r?.done && r.pending === 0; });
@@ -305,10 +307,45 @@ test('actual public soft status keeps four owners, cache classification and post
     assert.equal((await send('zero').work).status, 402); await drain('zero'); r = (await state()).rows.zero; assert.equal(r.provider, 0); assert.equal(r.starts, 0);
 
     await call('/seed?case=exhausted'); const exhausted = send('exhausted');
-    await until(async () => (await state()).rows.exhausted?.checkSettled, exhausted.record);
-    io.release('/provider/exhausted'); assert.equal((await exhausted.work).status, 402); await drain('exhausted');
-    r = (await state()).rows.exhausted; assert.equal(r.provider, 1); assert.equal(r.providerBeforeStatus, true);
-
+    let exhaustedResult, exhaustedProgress, exhaustedOutcome = 'pending';
+    // Observe the existing fulfilled result; no second body read or raw archive.
+    void exhausted.work.then(value => {
+      exhaustedOutcome = 'fulfilled';
+      try {
+        let code = value.body.length > 4096 ? 'diagnostic_body_limit' : 'non_json';
+        if (value.body.length <= 4096) try {
+          const found = JSON.parse(value.body)?.error?.code;
+          code = found === undefined ? 'none' : ['budget_exhausted', 'daily_budget_exhausted', 'weekly_budget_exhausted',
+            'provider_budget_exhausted', 'provider_unavailable', 'internal_error'].includes(found) ? found : 'other';
+        } catch { /* Fixed classification only; never retain parse errors. */ }
+        exhaustedResult = { status: value.status, code };
+      } catch (error) { diagnosticFailures.push(error); }
+    }, () => { exhaustedOutcome = 'rejected'; });
+    try {
+      await until(async () => {
+        const s = await state(), row = s.rows.exhausted;
+        exhaustedProgress = { present: !!row, background: s.background, originOutcome: exhaustedOutcome,
+          providerArrived: io.arrived.has('/provider/exhausted'),
+          dispatchPhase: ['none', 'body-parse', 'row-lookup', 'invoke'].includes(s.dispatchPhase) ? s.dispatchPhase : 'other',
+          status: row?.status, done: row?.done, provider: row?.provider, starts: row?.starts,
+          checkRegistered: row?.checkRegistered, checkSettled: row?.checkSettled, checkRejected: !!row?.checkRejected,
+          pending: row?.pending, reads: row?.reads, readPending: row?.readPending, readSettled: row?.readSettled,
+          cancels: row?.cancels, unlocks: row?.unlocks, unlocked: !!row?.unlocked,
+          otherLegs: row?.otherLegs.length ?? 0, otherUnlocked: row?.otherLegs.reduce((n, leg) => n + Number(!!leg.unlocked), 0) ?? 0 };
+        return row?.checkSettled;
+      }, exhausted.record, true); // A leg may deny publicly before sibling observations retire.
+      io.release('/provider/exhausted'); assert.equal((await exhausted.work).status, 402); await drain('exhausted');
+      r = (await state()).rows.exhausted; assert.equal(r.provider, 1); assert.equal(r.providerBeforeStatus, true);
+      assert.equal(r.starts, 4); assert.equal(r.checkRegistered, 1); assert.equal(r.checkSettled, true); assert.equal(r.pending, 0);
+      assert.equal(r.unlocked, true); assert.equal(r.otherLegs.length, 3);
+      for (const leg of r.otherLegs) { assert.equal(leg.unlocked, true); assert.equal(leg.readPending, 0); }
+    } catch (error) {
+      hasPrimary = true; primary = error;
+      try { t.diagnostic(JSON.stringify({ phase: 'exhausted-check', originOutcome: exhaustedOutcome, clientFulfilled: exhausted.record.done,
+        result: exhaustedResult ?? null, progress: exhaustedProgress ?? null })); }
+      catch (diagnosticError) { diagnosticFailures.push(diagnosticError); }
+      throw error;
+    }
     const parallel = send('parallel');
     await until(async () => { const r = (await state()).rows.parallel; return r?.readPending === 1 && r.readSettled >= 1 && r.checkRegistered === 1 && io.arrived.has('/provider/parallel'); }, parallel.record);
     await until(async () => (await state()).rows.parallel.otherLegs.filter(x => x.unlocked).length === 3, parallel.record);
@@ -357,5 +394,5 @@ test('actual public soft status keeps four owners, cache classification and post
     assert.equal((await send('unknown').work).status, 200);
     await until(async () => (await state()).rows.unknown.unlocks === 1);
     r = (await state()).rows.unknown; assert.equal(r.checkSettled, false); assert.notEqual(r.unlocked, true); assert.ok(r.pending > 0);
-  } catch (error) { primary = error; throw error; }
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 });
