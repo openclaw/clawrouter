@@ -16,10 +16,10 @@ seventeen ACK selectors and old synchronous evaluator APIs retain their behavior
 Operational failures use fixed `503 assignment_materialization_unavailable`
 with `limit`, `protocol`, `transport` or `cleanup`. They never become absence,
 partial rules, user creation or alternate-authority/authentication fallback.
-Bounded business failures remain distinct: canonical absence propagates
-`404 unknown_user`; bounded authority validation/status errors are preserved.
-Selected error bodies are owned and bounded too; raw error/record text is not
-included in retained operational failures.
+Selected callers now propagate sanitized owner business errors (`404 unknown_user`
+and `400/500 authority_error`) instead of the old generic public `500 internal_error`
+wrapper; unmarked flows are unchanged. Selected error bodies are owned and bounded
+too; raw bodies and causes stay private and are not included in propagated errors.
 
 ## Closed phase profile
 

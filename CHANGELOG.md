@@ -78,7 +78,7 @@
 
 - Bound selected user-record SQL/KV materialization and private cold initialization with cumulative source admission, original-stream retirement and complete batch checks before writes. Preserve canonical winners, full legacy records and unmarked bulk flows; resource failures deny without truncation, migration or rollback claims.
 
-- Bound selected assignment rule/KV/SQL sources, exact revision capture and complete stored/reply representations before materialization or writes. Admit four reconciliations through original-stream retirement and the existing FIFO; preserve bounded business errors, legacy no-ops and projected storage without migration or rollback claims.
+- Bound selected assignment rule/KV/SQL sources, exact revision capture and complete stored/reply representations before materialization or writes. Admit four reconciliations through original-stream retirement and the existing FIFO; preserve legacy no-ops and projected storage without migration or rollback claims. Selected callers now propagate sanitized owner `404 unknown_user` and `400/500 authority_error` instead of the old generic public `500 internal_error` wrapper; unmarked flows are unchanged.
 
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
