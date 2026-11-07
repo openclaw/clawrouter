@@ -122,7 +122,9 @@ export async function probe(box, source, timeout = 15000) {
   const result = await box.exec(['timeout', '--signal=KILL', `${limit / 1000}s`, 'node', '--input-type=module'],
     { input: source, allowFailure: true, timeout: limit + 2000 });
   return { passed: result.code === 0,
-    assertionFailed: result.code === 1 && /\bERR_ASSERTION\b/.test(result.stderr.toString()),
+    // node:test can rethrow an uncaught assertion from its exception handler,
+    // producing Node's exit code 7 instead of the usual uncaught exit code 1.
+    assertionFailed: [1, 7].includes(result.code) && /\bERR_ASSERTION\b/.test(result.stderr.toString()),
     feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
 }
 
