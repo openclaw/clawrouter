@@ -150,7 +150,7 @@ export default {async fetch(request,env,ctx){
  // Explicit fixture lifetime support, not a production physical-retirement claim.
  if(mode==='unknown-lock')ctx.waitUntil(abortRoot);
  if(mode==='pre-abort')abort.abort();
- const background=[];
+ const background=[];let queryOutcome;
  const work=(async()=>{
   let hasPrimary=false,primary;
   try{
@@ -165,7 +165,12 @@ export default {async fetch(request,env,ctx){
      a.legacyBytes=new TextEncoder().encode(result[1].record.assignmentState.revision).length;
      a.legacyUnchanged=JSON.stringify(again[0])===JSON.stringify(result[1]);a.disabled=result[1].record.enabled===false;
     }else{
-     const value=await authorityCall(x.env,'/users/resolve',{emails:[mode==='missing'?'missing@example.invalid':email]},'policy-bindings',abort.signal);
+     const query=authorityCall(x.env,'/users/resolve',{emails:[mode==='missing'?'missing@example.invalid':email]},'policy-bindings',abort.signal);
+     if(mode==='unknown-lock'){
+      void query.then(value=>{queryOutcome={failed:false,value};},error=>{queryOutcome={failed:true,error};});
+      ctx.waitUntil(query);
+     }
+     const value=await query;
      a.users=value.users.length;a.unknown=value.users[0]?.record.extra?.kid.length===300;
     }
     a.published=true;
@@ -190,7 +195,26 @@ export default {async fetch(request,env,ctx){
    if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'user-reply primary and independent cleanup failures');
   }
  })();
- ctx.waitUntil(work);await work;return Response.json(a);
+ ctx.waitUntil(work);
+ if(mode==='unknown-lock'){
+  let workOutcome;
+  const observed=work.then(value=>{workOutcome={failed:false,value};},error=>{workOutcome={failed:true,error};});
+  const finite=await Promise.all([abortRoot,...background]);
+  // Unexpected query settlement has a finite work/finally root to join too.
+  if(a.operationSettled)await observed;
+  let hasPrimary=false,primary;
+  if(queryOutcome){hasPrimary=true;primary=queryOutcome.failed?queryOutcome.error:Error('unknown query unexpectedly fulfilled');}
+  else if(workOutcome){hasPrimary=true;primary=workOutcome.failed?workOutcome.error:Error('unknown work unexpectedly fulfilled');}
+  else if(!a.unknownLock||!a.locked||a.done||a.published||a.operationSettled){hasPrimary=true;primary=Error('unknown owner was not held at diagnostic exit');}
+  const failures=finite.filter(x=>x.failed).map(x=>x.error);
+  if(workOutcome?.failed&&(!hasPrimary||!Object.is(workOutcome.error,primary)))failures.push(workOutcome.error);
+  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'unknown primary and independent finite-root failures');
+  if(hasPrimary)throw primary;
+  // This is a fixture reply after external release, never the query result.
+  return Response.json({fixture:'unknown-lock-held',locked:a.locked,done:a.done,published:a.published,
+   operationSettled:a.operationSettled,controlSettled:a.controlSettled,controlFailed:a.controlFailed});
+ }
+ await work;return Response.json(a);
 },queue:worker.queue};
 `;
 
@@ -209,22 +233,20 @@ async function signedIdentity() {
 test('actual user-query producer, public authentication and owned network faults', { timeout: 120000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'authority-user-workerd-'));
   const identity = await signedIdentity(), waiting = new Map(), arrived = new Set(), released = new Set(), tails = new Map(), outcomes = [], serverErrors = [];
-  let runtime, server, releaseFuture = false, primary, hasPrimary = false, unknownOutcome, drainUnknownLifetime;
+  let runtime, server, releaseFuture = false, primary, hasPrimary = false;
   const release = key => { released.add(key); const response = waiting.get(key); if (response) { waiting.delete(key); response.end('released'); } };
   const releaseAll = () => { releaseFuture = true; for (const key of waiting.keys()) release(key); for (const r of tails.values()) if (!r.destroyed) r.end('true,"users":[],"missingEmails":[]}'); };
   const stop = () => releaseAll();
   t.signal.addEventListener('abort', stop, { once: true });
   t.after(async () => {
     releaseAll(); const failures = [];
-    try { if (drainUnknownLifetime) await drainUnknownLifetime(); } catch (error) { failures.push(error); }
-    for (const result of await Promise.all(outcomes)) if (!result.ok && (!hasPrimary || result.error !== primary)) failures.push(result.error);
+    for (const result of await Promise.all(outcomes)) if (!result.ok && (!hasPrimary || !Object.is(result.error, primary))) failures.push(result.error);
     failures.push(...serverErrors);
     try { if (runtime) await runtime.dispose(); } catch (error) { failures.push(error); }
-    if (unknownOutcome) await unknownOutcome;
     if (server) await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
     try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }
     t.signal.removeEventListener('abort', stop);
-    if (failures.length) throw new AggregateError(failures, 'independent user-reply cleanup failures');
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'user-reply primary and independent cleanup failures');
   });
   const track = actual => { outcomes.push(actual.then(() => ({ ok: true }), error => ({ ok: false, error }))); return actual; };
   try {
@@ -341,25 +363,34 @@ test('actual user-query producer, public authentication and owned network faults
     // Unknown unlock is a deliberately nonterminating physical owner. Isolate
     // disposal below ends the fixture; it is NOT retirement or successful auth.
     await setup('unknown');
-    let lifetimeDrain;
-    drainUnknownLifetime = () => lifetimeDrain ??= (async () => {
-      let control;
-      for (let i = 0; i < 500; i++) {
-        control = await call('/state?id=unknown');
-        if (control.controlSettled) break;
-        await delay(10);
+    let diagnosticAllowed = false, dispatchOutcome;
+    const dispatch = runtime.dispatchFetch('https://router.example/start?id=unknown&mode=unknown-lock');
+    const original = dispatch.then(response => {
+      dispatchOutcome = { failed: false, response, allowed: diagnosticAllowed }; return response;
+    }, error => { dispatchOutcome = { failed: true, error }; throw error; });
+    const unknown = track(original.then(async response => {
+      let hasResponseFailure = false, responseFailure, text;
+      try {
+        assert.equal(dispatchOutcome.allowed, true, 'diagnostic response cannot precede held assertions and external release');
+        assert.equal(response.status, 200, 'unknown-lock fixture diagnostic status');
+      } catch (error) { hasResponseFailure = true; responseFailure = error; }
+      try { text = await response.text(); } // Drain the ORIGINAL body even on unexpected fulfillment.
+      catch (error) {
+        if (hasResponseFailure) throw new AggregateError([responseFailure, error], 'diagnostic response and independent body failures');
+        throw error;
       }
-      assert.equal(control.controlSettled, true, 'original-request fixture lifetime root must settle before disposal');
-      assert.equal(control.controlFailed, false);
-    })();
-    const unknown = runtime.dispatchFetch('https://router.example/start?id=unknown&mode=unknown-lock');
-    let unknownSettled = false;
-    unknownOutcome = unknown.then(() => { unknownSettled = true; return { ok: true }; }, () => { unknownSettled = true; return { ok: false }; });
-    await wait('unknown', s => s.unknownLock && arrived.has('unknown/lifetime'), unknownOutcome);
+      if (hasResponseFailure) throw responseFailure;
+      return JSON.parse(text);
+    }));
+    await wait('unknown', s => s.unknownLock && arrived.has('unknown/lifetime'), unknown);
     const held = await call('/state?id=unknown');
-    assert.equal(unknownSettled, false); assert.equal(held.locked, true); assert.equal(held.done, false); assert.equal(held.published, false);
+    assert.equal(dispatchOutcome, undefined); assert.equal(held.locked, true); assert.equal(held.done, false); assert.equal(held.published, false);
+    assert.equal(held.operationSettled, false); diagnosticAllowed = true;
     release('unknown/lifetime');
-    await drainUnknownLifetime();
-    await runtime.dispose(); runtime = undefined; await unknownOutcome;
+    assert.deepEqual(await unknown, { fixture: 'unknown-lock-held', locked: true, done: false, published: false,
+      operationSettled: false, controlSettled: true, controlFailed: false });
+    // All finite fixture roots and diagnostic HTTP EOF joined; the deliberately
+    // unknown production owner alone remains. Disposal is only fixture cleanup.
+    await runtime.dispose(); runtime = undefined;
   } catch (error) { primary = error; hasPrimary = true; throw error; }
 });
