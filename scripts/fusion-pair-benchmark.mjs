@@ -12,6 +12,7 @@ export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect'];
+const contractPolicies = ['contract', 'contract-cheap', 'contract-strong'];
 
 // The caller supplies repair scope before inference; never inspect test answers.
 export function scopeStrategy(task) {
@@ -33,6 +34,8 @@ export function validatePair(config, taskCount) {
 }
 
 export function pairModel(strategy, role, config) {
+  if (strategy === 'contract-cheap') return config.cheap;
+  if (strategy === 'contract-strong') return config.strong;
   if (strategy === 'contract') return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
@@ -49,9 +52,9 @@ export function pairExecution(strategy, config) {
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
   cheapReasoning = 'none', preloadSource = false, policy = 'architect', env = process.env, fetcher = fetch, agent = runAgent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  if (!['architect', 'scope', 'contract'].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['architect', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (policy !== 'architect') preloadSource = true;
-  if (policy === 'contract' && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
+  if (contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const trialStrategies = ['cheap', 'strong', policy];
   const tasks = await loadTasks(taskManifest);
   validatePair(config, tasks.length);
@@ -119,15 +122,15 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
       // Rotate arm order to avoid always giving one arm the warmest caches.
       for (let offset = 0; offset < trialStrategies.length; offset++) {
         const strategy = trialStrategies[(index + offset) % trialStrategies.length], trialId = `${task.id}:${strategy}`;
-        const selectedStrategy = strategy === 'scope' ? scopeStrategy(task) : strategy === 'contract' ? 'strong' : strategy;
+        const selectedStrategy = strategy === 'scope' ? scopeStrategy(task) : contractPolicies.includes(strategy) ? 'strong' : strategy;
         const start = performance.now(), execution = pairExecution(selectedStrategy, config);
         const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running',
           ...(strategy === 'scope' ? { selectedStrategy, selectedModel: config[selectedStrategy] } : {}) };
         state.records.push(row);
         await save();
         try {
-          const result = strategy === 'contract'
-            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke('contract'), { agent })
+          const result = contractPolicies.includes(strategy)
+            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
             : await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;

@@ -6,6 +6,8 @@
 
 - Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
 
+- Add same-workflow cheap-only and strong-only controls for the experimental Fusion contract benchmark.
+
 - Supply bounded original-source declaration context to Fusion repair workers, with unique selectors and unchanged edit permissions.
 
 - Add an independent three-repair Fusion evaluation cohort for generated-check policies, with observed/billed usage and scalar validation cases.

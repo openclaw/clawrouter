@@ -228,3 +228,35 @@ test('contract policy meters the test author and worker inside the same trial', 
     assert.ok(state.records.every(row => row.score === 1));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('contract ablations preserve the scaffold while routing every role to the declared model', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const [policy, selected] of [['contract-cheap', config.cheap], ['contract-strong', config.strong]]) {
+      await assert.rejects(runPairBenchmark({ ...options, policy }), /four_calls/);
+      const state = await runPairBenchmark({ ...options, out: join(root, policy),
+        config: { ...config, maxCalls: 4 }, policy, grade, fetcher: success,
+        agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+          await invoke(id, roles.strong, body, signal); return repaired();
+        },
+        contractAgent: async (_task, _image, id, settings, invoke) => {
+          assert.equal(settings.maxTurns, 4);
+          for (const role of [roles.strong, roles.cheap, roles.strong, roles.cheap]) {
+            await invoke(id, role, body, signal);
+          }
+          await assert.rejects(invoke(id, roles.strong, body, signal), /trial_budget/);
+          return { ...repaired(), contractQualified: true, contractPassed: true };
+        } });
+      assert.equal(state.policy, policy);
+      assert.deepEqual(state.strategies, ['cheap', 'strong', policy]);
+      assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, ...Array(4).fill(selected)]);
+      assert.equal(state.records[2].calls, 4);
+      assert.equal(state.spentOrReservedMicros,
+        config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
+      assert.ok(state.records.every(row => row.score === 1));
+      const saved = JSON.parse(await readFile(join(root, policy, 'pair.json'), 'utf8'));
+      assert.equal(saved.policy, policy);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
