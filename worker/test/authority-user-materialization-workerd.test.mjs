@@ -27,7 +27,7 @@ function observe(body,a,mode,id){
   reader.cancel=(...args)=>{
    if(!first){a.cancels++;first=(async()=>{
     let failed=false,error;try{await cancel(...args);a.actualCancel=true;}catch(e){failed=true;error=e;}
-    if(mode==='cleanup'){a.cancelHeld=true;await gate(id,'cancel');a.cancelHeld=false;if(failed)throw error;throw undefined;}
+    if(mode==='cleanup'){a.cancelHeld=true;await gate(id,'cancel');a.releaseObserved=true;a.cancelHeld=false;if(failed)throw error;throw undefined;}
     if(failed)throw error;
    })();}return first;
   };
@@ -85,7 +85,7 @@ function current(env,id,a,mode){
   else if(mode==='default')body=new ReadableStream({},{highWaterMark:0});
   else body=await env.POLICY_KV.get(prefix+key,'stream');
   if(body)observe(body,a,mode,id);
-  if(mode==='late'){a.getHeld=true;await gate(id,'late');a.getHeld=false;}
+  if(mode==='late'){a.getHeld=true;await gate(id,'late');a.releaseObserved=true;a.getHeld=false;}
   if(mode==='race')await (await call('/users/put',{email,record:{...record,enabled:false,groups:['canonical']} })).text();
   return body;
  }}}};
@@ -93,7 +93,7 @@ function current(env,id,a,mode){
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url),id=u.searchParams.get('id')??'cap',mode=u.searchParams.get('mode')??'cold';
  if(u.pathname==='/state')return Response.json(states.get(id)??{absent:true});
- const a={...fresh(),id,gets:0,done:false,published:false,failed:false,reason:null,operationSettled:false},x=current(env,id,a,mode);
+ const a={...fresh(),id,gets:0,done:false,published:false,failed:false,reason:null,operationSettled:false,releaseObserved:false,earlyTermination:false},x=current(env,id,a,mode);
  if(u.pathname==='/capability'){
   await env.POLICY_KV.put('material/cap/access/users/'+email,JSON.stringify(record));
   const body=await env.POLICY_KV.get('material/cap/access/users/'+email,'stream'),kv=await probe(body);
@@ -156,14 +156,15 @@ export default {async fetch(request,env,ctx){
   const value=response.headers.get('content-type')?.includes('application/json')?JSON.parse(text):text;
   return {status:response.status,code:value?.error?.code,reason:value?.error?.message,missing:value?.missingEmails};
  })();
- let outcome;const observed=operation.then(value=>{a.operationSettled=true;outcome={failed:false,value};return outcome;},error=>{
-  a.operationSettled=true;a.failed=true;a.reason=['limit','protocol','transport','cleanup'].find(k=>error?.message==='User materialization failed ('+k+')')??'unexpected';
-  outcome={failed:true,error};return outcome;
+ let outcome;const heldCase=['late','cleanup','unknown'].includes(mode);
+ const observed=operation.then(value=>{a.operationSettled=true;a.earlyTermination=heldCase&&!a.releaseObserved;outcome={failed:false,value,early:a.earlyTermination};return outcome;},error=>{
+  a.operationSettled=true;a.earlyTermination=heldCase&&!a.releaseObserved;a.failed=true;a.reason=['limit','protocol','transport','cleanup'].find(k=>error?.message==='User materialization failed ('+k+')')??'unexpected';
+  outcome={failed:true,error,early:a.earlyTermination};return outcome;
  });
  // Deliberately unknown owner is retained, not classified as retired by HTTP EOF.
  ctx.waitUntil(observed.then(()=>undefined));
  if(mode==='unknown'){
-  let gateFailed=false,gateError;try{await gate(id,'lifetime');}catch(error){gateFailed=true;gateError=error;}
+  let gateFailed=false,gateError;try{await gate(id,'lifetime');a.releaseObserved=true;}catch(error){gateFailed=true;gateError=error;}
   if(outcome){if(outcome.failed){if(gateFailed)throw new AggregateError([outcome.error,gateError],'operation and gate');throw outcome.error;}
    throw new AggregateError([Error('unknown owner unexpectedly fulfilled'),...(gateFailed?[gateError]:[])],'unexpected outcome');}
   if(gateFailed)throw gateError;
@@ -171,10 +172,14 @@ export default {async fetch(request,env,ctx){
   return Response.json({fixtureDiagnostic:true,...a});
  }
  const result=await observed;
+ // Capture pre-release failure BEFORE inspection awaits: later teardown releases
+ // cannot turn an unexpected original outcome into an expected scalar diagnostic.
+ const hasPrimary=heldCase&&result.early,primary=hasPrimary?(result.failed?result.error:Error('held operation fulfilled before release')):undefined;
  let extra,stats,cleanupFailed=false,cleanupError;
  try{stats=await (await x.call('/fixture/stats',{})).json();extra=await x.sql('SELECT email,user_json FROM access_users ORDER BY email');}
  catch(error){cleanupFailed=true;cleanupError=error;}
- if(cleanupFailed)throw new AggregateError(result.failed?[result.error,cleanupError]:[cleanupError],'primary and independent inspection');
+ if(cleanupFailed)throw new AggregateError(hasPrimary?[primary,cleanupError]:result.failed?[result.error,cleanupError]:[cleanupError],'primary and independent inspection');
+ if(hasPrimary)throw primary;
  a.done=true;
  return Response.json({...a,result:result.failed?null:result.value,stats,stored:extra.map(x=>({email:x.email,bytes:x.user_json.length}))});
 }};
@@ -187,6 +192,7 @@ test('selected user materialization: ORIGINAL KV/request BYOB then actual SQLite
   let runtime, server, releaseFuture = false, primary, hasPrimary = false;
   const release = key => { released.add(key); const response = waiting.get(key); if (response) { waiting.delete(key); response.end('released'); } };
   const releaseTail = id => { const response = tails.get(id); if (response) { tails.delete(id); response.end(' '.repeat(2097153)); } };
+  const releaseHeld = id => { for (const phase of ['late', 'cancel', 'lifetime']) release(id + '/' + phase); releaseTail(id); };
   const releaseAll = () => { releaseFuture = true; for (const key of waiting.keys()) release(key); for (const key of tails.keys()) releaseTail(key); };
   const stop = () => releaseAll(); t.signal.addEventListener('abort', stop, { once: true });
   t.after(async () => {
@@ -217,12 +223,18 @@ test('selected user materialization: ORIGINAL KV/request BYOB then actual SQLite
     const call = path => { const { actual } = track((async () => { const response = await runtime.dispatchFetch('https://fixture.invalid' + path); const value = await response.json(); assert.equal(response.status, 200); return value; })()); return actual; };
     const start = (id, mode) => track(call('/start?id=' + id + '&mode=' + mode));
     const wait = async (id, pending, predicate) => {
-      const until = Date.now() + 10000; let last;
+      const until = Date.now() + 10000; let last, joiningOrigin = false;
       while (Date.now() < until) {
         if (pending.state.settled) { if (pending.state.failed) throw pending.state.error; throw Error('origin completed before required phase'); }
-        last = await call('/state?id=' + id);
-        if (last.operationSettled) throw Error('operation settled before phase: ' + (last.reason ?? 'fulfilled'));
-        if (predicate(last)) return last;
+        if (!joiningOrigin) {
+          last = await Promise.race([call('/state?id=' + id), pending.actual.then(() => { throw Error('origin completed before arrival'); }, error => { throw error; })]);
+          if (last.operationSettled) {
+            // Release finite controls, then consume the ORIGINAL client outcome.
+            // Its invocation joins inspection/control and rethrows the original
+            // reason (including undefined), or the primary + cleanup aggregate.
+            releaseHeld(id); joiningOrigin = true;
+          } else if (predicate(last)) return last;
+        }
         await Promise.race([delay(10), pending.actual.then(() => { throw Error('origin completed before arrival'); }, error => { throw error; })]);
       }
       assert.fail('missing bounded phase: ' + JSON.stringify(last));
