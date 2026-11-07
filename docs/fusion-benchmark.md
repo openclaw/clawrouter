@@ -396,3 +396,35 @@ one original-source strong draft when verification fails. All attempts count.
 check and fallback scaffold but map both roles to one model. Use these ablations
 to distinguish a model-combination gain from the value of a second attempt.
 Policy-only ablations remain explicitly separate from paired-control reports.
+
+
+Matched one-shot results on the same three exposed development repairs:
+
+| Strategy | Solved | Total API cost | Summed elapsed |
+| --- | --- | --- | --- |
+| One cheap draft | 1/3 | $0.003417 | 61.234s |
+| One strong draft | 1/3 | $0.073903 | 41.791s |
+| Cheap draft, then strong on failed check | 2/3 | $0.072998 | 118.156s |
+| Strong draft, then strong on failed check | 2/3 | $0.071008 | 97.148s |
+| Cheap draft, then cheap on failed check | 1/3 | $0.009432 | 136.664s |
+
+The single-model retry controls ran after the paired comparison; they were not
+interleaved arms. All used the same one-shot executor, supplied check, medium
+cheap reasoning and four-call shared ceiling. The strong retry matched the
+mixed route's quality at lower cost and latency. These observations do not
+establish a benefit from mixing models. No candidate advances from this study.
+Costs use reported usage and published tariffs, not provider invoices.
+
+A subsequent interactive-agent calibration used medium cheap reasoning and
+20 cheap calls within 40 shared calls. All three arms repaired its first GMI
+case. The next strong-control API call failed at the transport boundary without
+a response or usage, so the run stopped with its full reservation retained.
+There are no complete three-case totals or promotion result for this run. Its
+partial outcomes must not be combined with successful trials from other runs.
+
+The repository repair agent and its executable checks run in the benchmark's
+isolated local environment. The deployed Worker Fusion route supports single
+model execution and adviser/synthesizer requests; it does not execute client
+repository tools or the benchmark's regression checks. A successful repair
+benchmark would still require a caller-side agent integration and separate
+end-to-end validation before describing it as deployed verified repair.

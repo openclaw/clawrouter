@@ -190,6 +190,9 @@ Direct public, native, and manifest routes retain their protocol passthrough.
   Raw prompt and completion bodies still never enter the usage ledger.
 - Fusion cannot select itself as an adviser or synthesizer.
 
-Fusion improves diversity and review, not correctness guarantees. The final
-synthesizer remains responsible for the answer, and all models can share the
-same blind spot.
+Fusion can provide multiple perspectives; measured quality or cost gains depend
+on the task and configuration. The final synthesizer remains responsible for
+the answer, and all models can share the same blind spot. The Worker does not
+execute client tools or repository regression checks. Executable repair policies
+in the benchmark require a caller-side agent and are not deployed by selecting
+`clawrouter/fusion`.
