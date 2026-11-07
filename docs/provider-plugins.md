@@ -219,6 +219,31 @@ publish product references. Providers without declarations retain their existing
 catalog shape. These fields neither choose an account nor promise entitlement;
 dispatch still revalidates the request and its authority.
 
+### Bundled OpenAI pilot
+
+`openai.provider.yaml` declares two products:
+
+| Product ID | Commercial model | Authentication metadata | Existing binding |
+| --- | --- | --- | --- |
+| `platform-api` | Metered | API key | Default OpenAI provider configuration |
+| `chatgpt-subscription` | Subscription | OAuth 2 | Stored `subscription` grant transport |
+
+The API product covers the registered endpoints, including Responses recovery
+controls. The subscription product covers only Responses, matching its existing
+transport allowlist. It does not gain recovery controls, WebSocket access,
+Chat, Decisions, image, audio, or model-list access.
+
+Model selections are explicit. The subscription shares the API product's
+Responses model list; it does not assert account entitlement to those models.
+Model listing, model retrieval, and standalone search are declared model-free
+operations. Other offers identify their registered model cards. Catalog forms
+without a selected model do not inherit those model-specific identities.
+
+These declarations add catalog annotations. They do not change execution,
+prices, quota ownership, or [subscription onboarding](openai-subscriptions.md).
+When changing a model's capabilities, update the corresponding explicit offer
+selection in the same change; the OpenAI declaration tests check coverage.
+
 ## Descriptor v1
 
 | Field | Requirement |
