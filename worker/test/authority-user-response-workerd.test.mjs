@@ -98,7 +98,8 @@ function observe(response,a,mode,signal){
 }
 const fresh=id=>({id,done:false,queries:0,creates:0,reconciles:0,initializes:0,sessions:0,localReads:0,reads:0,pending:0,settled:0,
  bytes:0,maxBacking:0,cancels:0,unlocks:0,unlockAttempts:0,locked:false,cancelHeld:false,cancelRejected:false,actualCancel:false,
- nativePending:false,lateHeld:false,eof:false,code:null,reason:null,publicStatus:null,published:false});
+ nativePending:false,lateHeld:false,eof:false,code:null,reason:null,publicStatus:null,published:false,
+ operationKind:null,operationSettled:false,operationFailed:false,controlSettled:false,controlFailed:false});
 export default {async fetch(request,env,ctx){
  const u=new URL(request.url),id=u.searchParams.get('id')??'producer';
  if(u.pathname==='/state')return Response.json(states.get(id)??{id,absent:true});
@@ -136,11 +137,14 @@ export default {async fetch(request,env,ctx){
  }
  if(u.pathname!=='/start')return new Response(null,{status:404});
  const mode=u.searchParams.get('mode')??'healthy',kind=u.searchParams.get('kind')??'query',a=fresh(id),abort=new AbortController();
+ a.operationKind=kind==='query'?'query':'public';
  states.set(id,a);
  const x=environment(env,id,a,kind,mode,abort);
  // All I/O promises/handles below belong only to THIS originating request.
  let abortRoot;
- if(['read','read-reject','late'].includes(mode))abortRoot=gate(id,'abort').then(()=>{a.aborted=true;abort.abort();});
+ if(['read','read-reject','late'].includes(mode))abortRoot=gate(id,'abort').then(()=>{a.aborted=true;abort.abort();}).then(
+  ()=>{a.controlSettled=true;return true;},
+  ()=>{a.controlSettled=true;a.controlFailed=true;return false;});
  if(mode==='pre-abort')abort.abort();
  const background=[];
  const work=(async()=>{
@@ -167,13 +171,18 @@ export default {async fetch(request,env,ctx){
       cookie:'clawrouter_session='+'a'.repeat(64),...(kind==='local'?{}:{'cf-access-jwt-assertion':env.FIXTURE_JWT})},
      ...(kind==='local'?{body:JSON.stringify({token:'synthetic-user-reader-admin'})}:{})});
     const response=await worker.fetch(routed,x.env,{waitUntil(p){background.push(Promise.resolve(p).then(()=>({ok:true}),()=>({ok:false})));}});
-    a.publicStatus=response.status;a.setCookie=response.headers.has('set-cookie');
+    a.publicStatus=response.status;a.operationFailed=!response.ok;a.setCookie=response.headers.has('set-cookie');
     const value=await response.json();a.publicCode=value.error?.code??null;a.published=response.ok;
    }
-  }catch(error){a.code=error?.code==='authority_user_query_failed'?error.code:'unexpected';a.reason=['aborted','transport','status','limit','protocol','cleanup'].includes(error?.reason)?error.reason:'unexpected';}
+  }catch(error){a.operationFailed=true;a.code=error?.code==='authority_user_query_failed'?error.code:'unexpected';a.reason=['aborted','transport','status','limit','protocol','cleanup'].includes(error?.reason)?error.reason:'unexpected';}
   finally{
-   if(abortRoot)await abortRoot;
+   a.operationSettled=true; // Observable before a held control/cleanup join.
+   const controlClean=abortRoot?await abortRoot:true;
    const drained=await Promise.all(background);a.backgroundClean=drained.every(x=>x.ok);a.done=true;
+   const failures=[];
+   if(!controlClean)failures.push(Error('user-reply abort control failed'));
+   if(!a.backgroundClean)failures.push(Error('user-reply background cleanup failed'));
+   if(failures.length)throw new AggregateError(failures,'user-reply independent cleanup failures');
   }
  })();
  ctx.waitUntil(work);await work;return Response.json(a);
@@ -252,6 +261,9 @@ test('actual user-query producer, public authentication and owned network faults
           if (stopped) return;
           last = await call('/state?id=' + id);
           if (stopped) return;
+          if (last.operationSettled || last.operationFailed || last.controlFailed) throw Error('user-reply operation ended before phase: ' + JSON.stringify({
+            id, operationKind: last.operationKind, operationSettled: last.operationSettled, operationFailed: last.operationFailed,
+            code: last.code, reason: last.reason, publicStatus: last.publicStatus, controlFailed: last.controlFailed }));
           if (predicate(last)) return last;
           if (last.done) throw Error('user-reply operation ended before expected phase');
           await delay(10);
@@ -287,7 +299,13 @@ test('actual user-query producer, public authentication and owned network faults
         if (kind === 'local') assert.equal(s.sessions, 1);
       } else {
         assert.equal(s.published, false);
-        if (kind === 'query') assert.equal(s.code, 'authority_user_query_failed');
+        if (kind === 'query') {
+          const reasons = { 'wire-plus': 'limit', 'key-plus': 'limit', duplicates: 'limit', malformed: 'protocol',
+            status: 'status', headers: 'limit', 'header-bytes': 'limit', default: 'transport',
+            'pre-abort': 'aborted', 'final-abort': 'aborted', 'reads-over': 'limit', backing: 'limit' };
+          assert.equal(Object.hasOwn(reasons, mode), true, 'negative query must name its expected guard');
+          assert.equal(s.code, 'authority_user_query_failed'); assert.equal(s.reason, reasons[mode]);
+        }
         else { assert.equal(s.publicStatus, 500); assert.equal(s.publicCode, 'internal_error'); assert.equal(s.setCookie, false); }
         assert.equal(s.creates, 0); assert.equal(s.reconciles, 0); assert.equal(s.sessions, 0); assert.equal(s.localReads, 0);
         if (['status', 'headers', 'header-bytes', 'default'].includes(mode)) { assert.equal(s.reads, 0); assert.equal(s.cancels, 1); }
