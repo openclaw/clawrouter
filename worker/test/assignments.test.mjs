@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assignmentEvidenceFromAccessIdentity, assignmentRulesRevision, evaluateUserAssignments, withLegacyAssignmentState } from "../assignment-evaluator.ts";
+import { assignmentEvidenceFromAccessIdentity, assignmentRulesRevision, evaluateUserAssignments, withLegacyAssignmentState, captureAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments } from "../assignment-evaluator.ts";
 
 const rule = {
   ruleId: "members",
@@ -77,4 +77,75 @@ test("Cloudflare GitHub identity becomes normalized assignment evidence", () => 
   assert.equal(assignmentEvidenceFromAccessIdentity({ email: "member@example.com", idp: { type: "github" }, orgs: [{ id: 7, name: "OpenClaw" }], teams: [{ org_id: 8, name: "Maintainers" }] }, "member@example.com"), undefined);
   assert.equal(assignmentEvidenceFromAccessIdentity({ email: "member@example.com", idp: { type: "google" }, orgs: [{ id: 7, name: "OpenClaw" }], teams: [] }, "member@example.com"), undefined);
   assert.equal(assignmentEvidenceFromAccessIdentity({ email: "other@example.com", idp: { type: "github" }, orgs: [{ id: 7, name: "OpenClaw" }], teams: [] }, "member@example.com"), undefined);
+});
+
+const prepared = rules => prepareAssignmentRules(captureAssignmentRules(rules));
+
+test("compact writer hashes the exact ordered legacy serialization, excluding generatedGroup", async () => {
+  const rules = Array.from({ length: 1000 }, (_, i) => ({ ...rule, ruleId: `nonmatching-${i}`, subject: `absent-${i}.example`, groups: [`group-${i}`], policyIds: [] }));
+  const legacy = assignmentRulesRevision(rules);
+  assert.ok(Buffer.byteLength(legacy) > 64 * 1024, 'measured legacy text, not a response-cap claim');
+  const user = { email: 'member@example.com', record: { groups: ['manual'] } };
+  const next = evaluatePreparedUserAssignments(user, await prepared(rules));
+  const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(legacy))).toString('hex');
+  assert.equal(next.changed, true);
+  assert.equal(next.user.record.assignmentState.revision, `assignment-rules.v1:sha256:${hash}`);
+  assert.deepEqual(next.user.record.groups, ['manual']);
+  const reversed = evaluatePreparedUserAssignments(user, await prepared([...rules].reverse()));
+  assert.notEqual(reversed.user.record.assignmentState.revision, next.user.record.assignmentState.revision);
+  const changedGroup = rules.map(r => ({ ...r, generatedGroup: 'assignment.other' }));
+  assert.equal(evaluatePreparedUserAssignments(user, await prepared(changedGroup)).user.record.assignmentState.revision, next.user.record.assignmentState.revision);
+});
+
+test("legacy and compact no-ops preserve original bytes and timestamp even when forced", async () => {
+  const original = { email: 'member@example.com', record: { groups: ['manual'] } };
+  const legacy = evaluateUserAssignments(original, [rule]).user;
+  assert.equal(typeof legacy.then, 'undefined', 'the original evaluator remains synchronous');
+  const compact = evaluatePreparedUserAssignments(original, await prepared([rule])).user;
+  for (const user of [legacy, compact]) for (const force of [false, true]) {
+    const before = JSON.stringify(user), result = evaluatePreparedUserAssignments(user, await prepared([rule]), undefined, force);
+    assert.equal(result.changed, false); assert.equal(result.user, user); assert.equal(JSON.stringify(result.user), before);
+  }
+});
+
+test("generatedGroup-only ordinary no-op and forced reassignment preserve legacy parity", async () => {
+  const original = { email: 'member@example.com', record: { groups: ['manual'] } };
+  const changed = { ...rule, generatedGroup: 'assignment.replaced' };
+  const legacy = evaluateUserAssignments(original, [rule]).user;
+  const capsule = await prepared([changed]);
+  const ordinary = evaluatePreparedUserAssignments(legacy, capsule);
+  assert.equal(ordinary.changed, false); assert.equal(ordinary.user, legacy);
+  const forced = evaluatePreparedUserAssignments(legacy, capsule, undefined, true);
+  const oldForced = evaluateUserAssignments(legacy, [changed], undefined, true);
+  assert.equal(forced.changed, oldForced.changed); assert.equal(forced.changed, true);
+  assert.deepEqual(forced.user.record.groups, oldForced.user.record.groups);
+  assert.deepEqual(forced.user.record.assignmentState.assignments, oldForced.user.record.assignmentState.assignments);
+  assert.match(forced.user.record.assignmentState.revision, /^assignment-rules\.v1:sha256:[a-f0-9]{64}$/);
+});
+
+test("private capsules bind hashing and evaluation to immutable captured rules", async () => {
+  const mutable = structuredClone(rule), legacy = assignmentRulesRevision([mutable]);
+  const snapshot = captureAssignmentRules([mutable]);
+  mutable.groups.push('mutated'); mutable.policyIds.length = 0; mutable.generatedGroup = 'assignment.mutated'; mutable.enabled = false;
+  const capsule = await prepareAssignmentRules(snapshot);
+  const result = evaluatePreparedUserAssignments({ email: 'member@example.com', record: { groups: [] } }, capsule);
+  assert.deepEqual(result.user.record.groups, ['assignment.members', 'members']);
+  const hash = Buffer.from(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(legacy))).toString('hex');
+  assert.equal(result.user.record.assignmentState.revision, `assignment-rules.v1:sha256:${hash}`);
+  await assert.rejects(prepareAssignmentRules({ ...snapshot }), /invalid assignment rules snapshot/);
+  assert.throws(() => evaluatePreparedUserAssignments(result.user, { ...capsule }), /invalid prepared assignment rules/);
+  assert.throws(() => evaluatePreparedUserAssignments(result.user, { revision: result.user.record.assignmentState.revision }), /invalid prepared assignment rules/);
+});
+
+test("prepared UNKNOWN, empty, nonrevoking, disabled and deleted rule outcomes match synchronous evaluation", async () => {
+  const org = { ...rule, kind: 'github_org', subject: 'example' };
+  const present = { source: 'github', verified: true, githubOrgs: ['example'], githubTeams: [] };
+  const empty = { ...present, githubOrgs: [] };
+  for (const [rules, evidence] of [[[org], undefined], [[org], empty], [[{ ...org, revokeOnLoss: false }], empty], [[{ ...org, enabled: false }], undefined], [[], undefined]]) {
+    const initial = evaluateUserAssignments({ email: 'member@example.com', record: { enabled: false, groups: ['manual'] } }, [org], present, true).user;
+    const old = evaluateUserAssignments(initial, rules, evidence, true), next = evaluatePreparedUserAssignments(initial, await prepared(rules), evidence, true);
+    assert.equal(next.changed, old.changed); assert.deepEqual(next.user.record.groups, old.user.record.groups);
+    assert.deepEqual(next.user.record.assignmentState.assignments, old.user.record.assignmentState.assignments);
+    assert.deepEqual(next.retainedRuleIds, old.retainedRuleIds); assert.equal(next.user.record.enabled, false);
+  }
 });
