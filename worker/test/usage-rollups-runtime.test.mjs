@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -57,8 +56,7 @@ function router(source) { return `
 
 test("persisted release writer → mid-backfill restart/reset → completed rollback writer retains exact rollups", { timeout: 120_000 }, async t => {
   if (!requireBaselineCommit(t, release) || !requireBaselineCommit(t, personalUsageBaseline)) return;
-  const externalScratch = "/Volumes/Clawstudio-Storage/CodexWorktrees";
-  const scratch = process.env.CLAWROUTER_TEST_SCRATCH ?? (existsSync(externalScratch) ? externalScratch : tmpdir());
+  const scratch = process.env.CLAWROUTER_TEST_SCRATCH ?? tmpdir();
   const temporary = await mkdtemp(join(scratch, "usage-rollup-runtime-"));
   const baseline = join(temporary, "release"); await mkdir(baseline);
   const archive = execFileSync("git", ["archive", release, "package.json", "worker", "shared"], { maxBuffer: 32 * 1024 * 1024 });
