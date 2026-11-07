@@ -318,3 +318,9 @@ input contract. Their supplied reproducers cover an observable reported bug;
 the separate acceptance suites cover additional behavior. Do not compare this
 workflow with tests-hidden baselines or call its reproducers independent final
 acceptance. Generated-check results remain separate and unchanged.
+
+First three-task paired trial: cheap solved 2/3 for $0.041099, strong 3/3
+for $0.524965, and supplied-reproducer cascade 3/3 for $0.581189. Summed
+elapsed times were 143.635s, 101.497s and 176.300s respectively. The cascade
+retained quality but cost 10.71% more than strong, failing the predeclared
+20% saving screen. This is a small pilot, not deployment evidence.
