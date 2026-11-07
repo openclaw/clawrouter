@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readTaskContext, validateSourceContext } from '../scripts/fusion-workloads.mjs';
+import { runGroundedAgent } from '../scripts/fusion-grounded-agent.mjs';
 
 const task = { editPaths: ['worker/pricing.ts'], hiddenTests: ['worker/test/acceptance.test.mjs'],
   sourceContext: [{ path: 'scripts/compile-providers.mjs', query: 'function declaredFormats(' }] };
@@ -39,4 +40,21 @@ test('missing, ambiguous and oversized context cannot silently alter the experim
   }
   await assert.rejects(readTaskContext('box', task, 123, async () => [{ path: task.sourceContext[0].path,
     content: `function declaredFormats(${ 'x'.repeat(24000) }` }]), /source_context_too_large/);
+});
+
+test('grounded workers receive the original declaration without edit access', async () => {
+  const request = { ...task, instruction: 'Repair pricing.', visibleTests: ['worker/test/pricing.test.mjs'] };
+  let closed = false;
+  await runGroundedAgent(request, 'image', 'strong', 'case', { maxTurns: 1, outputTokens: 256, deadlineMs: 10000 },
+    async (_id, _role, body) => {
+      const state = JSON.parse(body.messages[1].content);
+      assert.match(state.sourceContext[0].content, /declaredFormats/);
+      assert.deepEqual(state.editable, task.editPaths);
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ action: 'finish' }) } }] };
+    }, undefined, {
+      makeSandbox: async () => ({ close: async () => { closed = true; } }),
+      read: async (_box, paths) => paths.map(path => ({ path, content: path === task.sourceContext[0].path ? 'function declaredFormats() {}' : 'export const value = 1;' })),
+      test: async () => ({ passed: true, feedback: '' }),
+    });
+  assert.equal(closed, true);
 });

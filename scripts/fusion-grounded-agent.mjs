@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { hash, sandbox, readSource, writeFiles, check, probe, validateEdits } from './fusion-workloads.mjs';
+import { hash, sandbox, readSource, readTaskContext, writeFiles, check, probe, validateEdits } from './fusion-workloads.mjs';
 import { toolErrorCode } from './fusion-agent-benchmark.mjs';
 import { requireCompleteResponse } from './fusion-native-provider.mjs';
 import { models } from './fusion-benchmark-accounting.mjs';
@@ -111,6 +111,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
     } finally { await isolated.close(); }
   };
   try {
+    const sourceContext = await readTaskContext(box, task, remaining(), read);
     // Visible test imports are useful API examples, not hidden grading evidence.
     const examples = await read(box, task.visibleTests, remaining());
     const testExamples = sourceWindows(examples, task.instruction, null, 4000);
@@ -144,6 +145,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
         action: { type: 'string', enum: reviewing ? ['inspect', 'edit', 'finish'] : reproducer ? ['inspect', 'edit'] : ['inspect', 'probe'] } } };
       const messages = [{ role: 'system', content: instructions + phaseInstructions }, { role: 'user', content: JSON.stringify({
         issue: task.instruction, editable: task.editPaths, readable: readablePaths, visibleTests: task.visibleTests, workingMemory,
+        ...(sourceContext.length ? { sourceContext } : {}),
         currentSource: views.map(({ content, ...view }) => ({ ...view,
           numberedSource: content.split('\n').map((line, index) => `${view.startLine + index}|${line}`).join('\n') })),
         testExamples, ...(checked ? { phase: reviewing ? 'review' : reproducer ? 'repair' : 'reproduce', probeModules,
