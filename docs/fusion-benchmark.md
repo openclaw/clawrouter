@@ -382,3 +382,19 @@ The medium-reasoning cascade cost 2.99% more than strong and was dominated by
 cheap-only. Neither configuration advances to the untouched operational cohort.
 These results calibrate the benchmark scaffold; they do not establish general
 model superiority or justify changing production defaults.
+
+### Bounded draft repair
+
+`FUSION_PAIR_POLICY=contract-refine` allows up to three cheap patch attempts,
+limited further by the shared cheap-stage allowance. After a failed attempt,
+the next request receives the current editable source and bounded executable
+check feedback. Each check runs in a fresh sandbox. The outer contract gate
+still independently checks the final candidate before accepting it or using
+the original-source strong fallback. The fixed controls, hidden acceptance,
+and total call, time and cost limits are unchanged. This is an opt-in
+experiment; it does not change the single-draft or production defaults.
+
+The first bounded-repair development run solved 2/3 for $0.258246, versus
+3/3 for cheap-only ($0.065905) and 3/3 for strong ($0.383451). The Voyage
+repair passed its supplied probe but failed hidden acceptance. This rejects
+promotion even though aggregate cascade cost was lower than strong.

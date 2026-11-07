@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { contractRequest, runContractAgent, runSingleDraft } from '../scripts/fusion-contract-agent.mjs';
+import { contractRequest, runContractAgent, runSingleDraft, runRefinedDraft } from '../scripts/fusion-contract-agent.mjs';
 import { models } from '../scripts/fusion-benchmark-accounting.mjs';
 
 const task = { instruction: 'Repair both admission and settlement.', editPaths: ['worker/a.ts'], visibleTests: ['worker/test/a.test.mjs'] };
@@ -231,4 +231,51 @@ test('single-draft injection leaves the strong fallback on its original executio
   assert.equal(f.seen.filter(row => row.settings).length, 1);
   assert.deepEqual(f.seen.filter(row => row.role).map(row => row.role), [models.cheap, models.strong]);
   assert.equal(output.turns, 2); assert.equal(output.contractPassed, true);
+});
+
+
+test('bounded draft refinement carries current source and failed checks into one correction', async () => {
+  const seen = [], boxes = [], checks = [false, true];
+  const refinedTask = { ...task, reproducer: 'supplied probe' };
+  const output = await runRefinedDraft(refinedTask, 'image', 'strong', 'refine', config, async () => {}, undefined, {
+    draft: async (_task, _image, _strategy, _id, settings, _invoke, _engine, options) => {
+      seen.push({ settings, options });
+      return { ...result(), files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'incomplete' : 'fixed' }], publicPassed: false };
+    },
+    makeSandbox: async () => { const box = { closed: false, async close() { this.closed = true; } }; boxes.push(box); return box; },
+    write: async () => {}, test: async () => passed,
+    runProbe: async () => ({ ...passed, passed: checks.shift(), feedback: 'private failed-check sentinel' }),
+  });
+  assert.equal(seen.length, 2); assert.equal(output.turns, 2); assert.equal(output.publicPassed, true);
+  assert.equal(seen[1].options.initialFiles[0].content, 'incomplete');
+  assert.match(seen[1].options.feedback, /private failed-check sentinel/);
+  assert.ok(seen.every(row => row.settings.maxTurns === 1));
+  assert.deepEqual(output.actions.filter(row => row.action === 'draft_check').map(row => row.status), ['failed', 'passed']);
+  const { files, ...trace } = output; assert.ok(!JSON.stringify(trace).includes('sentinel'));
+  assert.ok(boxes.every(box => box.closed));
+});
+
+test('draft refinement stops at the available allowance or three drafts', async () => {
+  for (const allowance of [1, 2, 20]) {
+    let calls = 0;
+    const f = fixture([]);
+    const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+      { ...config, maxTurns: allowance }, async () => {}, undefined, {
+        ...f.dependencies, draft: async () => { calls++; return result(); }, test: async () => passed, runProbe: async () => failed,
+      });
+    assert.equal(calls, Math.min(allowance, 3)); assert.equal(output.turns, calls);
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('draft refinement stops on uncertain charges and rejects an escaped candidate before verification', async () => {
+  for (const reason of ['unknown_cost', 'provider_refused']) {
+    let calls = 0;
+    await assert.rejects(runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine', config,
+      async () => {}, undefined, { draft: async () => { calls++; throw Error(reason); } }), new RegExp(reason));
+    assert.equal(calls, 1);
+  }
+  await assert.rejects(runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine', config,
+    async () => {}, undefined, { draft: async () => ({ ...result(), files: [{ path: 'worker/test/a.test.mjs', content: 'escape' }] }),
+      makeSandbox: async () => { throw Error('must_not_allocate'); } }), /invalid_edit_path/);
 });
