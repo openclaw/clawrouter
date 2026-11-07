@@ -103,6 +103,34 @@ test('a failed cheap check escalates within the same shared allowance', async ()
   assert.ok(f.boxes.every(box => box.closed));
 });
 
+test('candidate handoff preserves failed source only for the opted-in strong worker', async () => {
+  for (const handoffCandidate of [false, true]) {
+    const f = fixture([failed, failed, passed]);
+    const output = await runContractAgent(task, 'image', 'case:handoff', config, f.invoke,
+      { ...f.dependencies, providedProbe: 'provided probe', handoffCandidate });
+    const workers = f.seen.filter(entry => entry.options);
+    assert.equal(workers[0].options.initialFiles, undefined);
+    assert.deepEqual(workers[1].options.initialFiles, handoffCandidate ? result().files : undefined);
+    assert.equal(output.candidateHandedOff, handoffCandidate);
+    assert.equal(output.contractPassed, true);
+    assert.equal(output.turns, 2);
+    assert.equal(f.boxes.length, 3);
+    assert.ok(f.boxes.every(box => box.closed));
+    const { files, ...trace } = output;
+    assert.ok(!JSON.stringify(trace).includes('sentinel'));
+  }
+});
+
+test('candidate handoff needs a supplied check and does not run after cheap success', async () => {
+  await assert.rejects(runContractAgent(task, 'image', 'case:handoff', config, async () => {},
+    { handoffCandidate: true }), /invalid_contract_handoff/);
+  const f = fixture([failed, passed]);
+  const output = await runContractAgent(task, 'image', 'case:handoff', config, f.invoke,
+    { ...f.dependencies, providedProbe: 'provided probe', handoffCandidate: true });
+  assert.equal(output.candidateHandedOff, false);
+  assert.equal(f.seen.filter(entry => entry.options).length, 1);
+});
+
 test('invalid or non-reproducing checks cannot certify a cheap repair', async () => {
   const f = fixture([passed], [{ probe: '' }, { probe: 'non-reproducing' }]);
   const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke, f.dependencies);

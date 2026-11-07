@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+- Add an opt-in Fusion benchmark policy that hands a failed cheap repair to the strong executor in a fresh sandbox with independent verification.
+
 - Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
 
 - Add an experimental Fusion contract policy that withholds the verifier probe from the cheap repair worker until escalation.

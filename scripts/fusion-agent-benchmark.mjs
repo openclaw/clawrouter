@@ -138,6 +138,7 @@ function bodyFor(messages, config) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  const initialFiles = options.initialFiles === undefined ? null : validateEdits(task, options.initialFiles);
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
@@ -156,6 +157,10 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
+    if (initialFiles) {
+      await writeFiles(box, initialFiles, remaining());
+      messages[1].content += '\nThe current source includes an untrusted predecessor repair. Independently inspect and test it against the requirements; preserve correct changes and repair remaining defects. No predecessor test result establishes correctness.';
+    }
     const context = await readTaskContext(box, task, remaining());
     if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
     if (options.preloadSource === true) {
