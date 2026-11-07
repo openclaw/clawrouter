@@ -79,7 +79,9 @@ export function analyzePairRun(run) {
   let mixture = null;
   // A task-independent coin chooses a model before seeing that task's outcome.
   // Interpolate only inside the observed control-cost interval; never extrapolate.
-  if (strong.costMicros > cheap.costMicros && selected.costMicros >= cheap.costMicros && selected.costMicros <= strong.costMicros) {
+  if (strong.costMicros !== cheap.costMicros
+    && selected.costMicros >= Math.min(cheap.costMicros, strong.costMicros)
+    && selected.costMicros <= Math.max(cheap.costMicros, strong.costMicros)) {
     const strongProbability = (selected.costMicros - cheap.costMicros) / (strong.costMicros - cheap.costMicros);
     const expectedSolved = (1 - strongProbability) * cheap.solved + strongProbability * strong.solved;
     mixture = { strongProbability, expectedSolved, costMicros: selected.costMicros,

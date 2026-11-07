@@ -87,6 +87,12 @@ test('mixture does not extrapolate outside control costs or divide by equal pric
   }
 });
 
+test('observed strong cost may be lower when it finishes in fewer calls', () => {
+  const mixture = analyzePairRun(fixture(undefined, [100, 10, 40])).matchedCostRandomMixture;
+  assert.equal(mixture.strongProbability, 2 / 3);
+  assert.ok(Math.abs(mixture.expectedSolved - 5 / 3) < 1e-12);
+});
+
 test('unsafe provenance is not copied into the summary', () => {
   const run = fixture(); run.sourceSha = '/home/private/source';
   assert.throws(() => analyzePairRun(run), /invalid_pair_run/);
