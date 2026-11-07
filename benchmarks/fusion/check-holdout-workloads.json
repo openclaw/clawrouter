@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "stepfun-inclusive-cache",
+      "split": "development",
+      "base": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
+      "oracle": "05980ff9609e18b421627aa444e5fc14616880eb",
+      "editPaths": [
+        "worker/token-usage.ts",
+        "worker/proxy-response.ts",
+        "worker/proxy.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-usage.test.mjs",
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/stepfun-cached-usage.test.mjs",
+        "worker/test/stepfun-cached-usage-runtime.test.mjs"
+      ],
+      "instruction": "Standard StepFun and StepFun-CN Chat completions report cached_tokens as an inclusive subset of prompt_tokens. Recognize it only with trusted provider and request/response format context, including JSON and terminal cumulative SSE. Keep observed input and total tokens inclusive; reject invalid or contradictory cache evidence without retaining an earlier valid cache count. Pass the trusted context through response observation. Preserve other providers, subscription lanes and formats."
+    },
+    {
+      "id": "cohere-billed-units",
+      "split": "development",
+      "base": "db1830552d5033ef30c23b1b2d9c04ad009d1f9c",
+      "oracle": "dee3f328d94f74fc289fc40da531ab8c590887a6",
+      "editPaths": [
+        "worker/token-usage.ts",
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-usage.test.mjs",
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/cohere-usage.test.mjs",
+        "worker/test/cohere-usage-runtime.test.mjs"
+      ],
+      "instruction": "Native Cohere Chat reports observed usage.tokens separately from usage.billed_units, including terminal SSE message-end events. Preserve observed input/output/total values in usage reports, carry separately validated billedTokens, and calculate native Cohere cost only from billed units. Missing or malformed billing data must leave cost unknown; explicit zero billed units remain valid. Preserve other formats, cumulative SSE semantics, backpressure and cancellation."
+    },
+    {
+      "id": "fal-music-scalar-mime",
+      "split": "development",
+      "base": "90931a85d0409610da95bac64ba65a5957cf8305",
+      "oracle": "8ace6847873a40d18996b3a7a2c528f2f6021337",
+      "editPaths": [
+        "worker/fal-music.ts"
+      ],
+      "visibleTests": [
+        "worker/test/fal-music.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/fal-music.test.mjs"
+      ],
+      "instruction": "Native fal music File content_type must be a scalar MIME string when present. Reject arrays, objects, booleans and numbers rather than accepting them through string coercion. Preserve the allowed MP3/WAV MIME variants, absent/null MIME handling, URL/size validation and bounded response behavior."
+    }
+  ]
+}

@@ -6,6 +6,8 @@
 
 - Supply bounded original-source declaration context to Fusion repair workers, with unique selectors and unchanged edit permissions.
 
+- Add an independent three-repair Fusion evaluation cohort for generated-check policies, with observed/billed usage and scalar validation cases.
+
 - Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
 
 - Add an experimental declared-scope routing control to the Fusion repair benchmark, with independent cheap and strong baselines.
