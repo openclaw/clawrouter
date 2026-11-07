@@ -158,6 +158,7 @@ Current recommendation: inexpensive models are useful smoke-test workers, but
 keep correctness checks external and measure the quality loss on held-out
 repairs. No measured multi-model quality improvement has been established by
 these experiments, and no production default changes follow from them.
+
 ### Independent check-policy holdout
 
 `benchmarks/fusion/check-holdout-workloads.json` pins three further repairs:
@@ -168,3 +169,18 @@ model call. Freeze the policy before exposing these instructions to a model.
 The schema label `development` is not evidence of exposure history; record
 that history with results. Selection and qualification alone do not establish
 a performance improvement.
+
+### Executable-check experiment
+
+`FUSION_PAIR_POLICY=contract` replaces the third paired arm with a strong test
+author and cheap repair worker. The test author has up to two calls to produce
+a probe that fails with an assertion on the original source. The cheap worker
+gets at most ten calls and sees the frozen probe. A fresh sandbox checks its
+candidate; a failed check or visible suite triggers strong repair from the
+original source with the remaining call and time allowance. Invalid probes
+also fall back to strong repair. Every model call uses the shared trial ledger.
+
+Generated checks can be incomplete or wrong. The fallback's probe result is
+reported but does not replace independent acceptance. Reports retain only the
+probe digest and finite outcomes, not its source. This experimental option
+does not change production routing or claim a quality improvement.
