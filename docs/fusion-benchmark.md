@@ -324,3 +324,9 @@ for $0.524965, and supplied-reproducer cascade 3/3 for $0.581189. Summed
 elapsed times were 143.635s, 101.497s and 176.300s respectively. The cascade
 retained quality but cost 10.71% more than strong, failing the predeclared
 20% saving screen. This is a small pilot, not deployment evidence.
+
+The shared repair agent states exact-file navigation, the empty-path search
+default, literal query bounds and the 1–8 edit limit. Invalid navigation and
+edit requests receive the same actionable feedback in every model arm. This
+changes the common scaffold, so results from earlier instructions are historical
+comparisons, not contemporaneous controls for the revised agent.

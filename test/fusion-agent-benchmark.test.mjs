@@ -1,7 +1,46 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody, actionFeedback, runAgent } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
+
+test('tool feedback explains recovery without revealing final acceptance paths', () => {
+  const task = { editPaths: ['worker/a.ts'], visibleTests: ['worker/test/a.test.mjs'], hiddenTests: ['worker/test/private.test.mjs'] };
+  const navigation = actionFeedback('invalid_read_paths', 'search', task);
+  assert.match(navigation, /leave paths empty/);
+  assert.ok(navigation.includes(task.editPaths[0]));
+  assert.ok(navigation.includes(task.visibleTests[0]));
+  assert.ok(!navigation.includes(task.hiddenTests[0]));
+  assert.match(actionFeedback('invalid_edits', 'edit', task), /1–8 edits/);
+  assert.match(actionFeedback('search_must_match_once', 'edit', task), /current source/);
+});
+
+test('an invalid directory search recovers using a real file within the shared call budget', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  let calls = 0;
+  const result = await runAgent(task, receipt.image, 'strong', 'navigation-fixture',
+    { maxTurns: 3, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+      const turn = calls++;
+      if (turn === 0) assert.match(body.messages[0].content, /FILE paths only/);
+      if (turn === 1) {
+        assert.match(body.messages.at(-1).content, /leave paths empty/);
+        assert.ok(body.messages.at(-1).content.includes(task.editPaths[0]));
+      }
+      if (turn === 2) assert.match(body.messages.at(-1).content, /matches/);
+      const action = { action: turn === 2 ? 'finish' : 'search', paths: turn === 0 ? ['.'] : [],
+        edits: [], query: turn === 2 ? '' : 'configuredEndpointPath', memory: '' };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+    });
+  assert.equal(calls, 3);
+  assert.deepEqual(result.actions.map(action => action.status), ['invalid_read_paths', 'ok', 'ok']);
+  assert.equal(result.publicPassed, true);
+});
 
 test('every arm fits the predeclared campaign ceiling including previous uncertainty', () => {
   assert.equal(validateExperiment(defaultExperiment, 4), 3390914);
