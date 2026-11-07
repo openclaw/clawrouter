@@ -382,3 +382,17 @@ The medium-reasoning cascade cost 2.99% more than strong and was dominated by
 cheap-only. Neither configuration advances to the untouched operational cohort.
 These results calibrate the benchmark scaffold; they do not establish general
 model superiority or justify changing production defaults.
+
+### Matched one-shot execution
+
+`FUSION_PAIR_EXECUTOR=single-draft` applies the same one-patch executor to
+both fixed controls and the strong fallback, rather than comparing a cheap
+draft against an interactive strong agent. It requires a supplied-check policy
+and is recorded as `executor` in the report. The default remains `interactive`.
+A fixed control makes one draft; the cascade can use a cheap draft followed by
+one original-source strong draft when verification fails. All attempts count.
+
+`contract-provided-strong` and `contract-provided-cheap` keep that same supplied
+check and fallback scaffold but map both roles to one model. Use these ablations
+to distinguish a model-combination gain from the value of a second attempt.
+Policy-only ablations remain explicitly separate from paired-control reports.
