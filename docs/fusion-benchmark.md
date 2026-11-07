@@ -275,9 +275,10 @@ retains the conservative three-arm reservation bound.
 ### Workflow validation cohort
 
 `benchmarks/fusion/workflow-holdout-workloads.json` pins three further repairs:
-bounded grant reports, declared native model identities and scalar-only native
-music response context. Qualify the original visible suite, repaired visible
+Titan Multimodal error messages, declared native model identities and scalar-only
+native music response context. Qualify the original visible suite, repaired visible
 suite, original acceptance failure and repaired acceptance success before use.
-The grant-report fixture checks functional bounds, not measured heap usage.
+A proposed grant-report fixture was excluded before model exposure because its
+original code already passed the selected acceptance suite.
 Freeze the selected workflow and record first model exposure separately from
 the schema label. This manifest alone makes no performance claim.

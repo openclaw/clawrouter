@@ -2,20 +2,20 @@
   "version": 1,
   "tasks": [
     {
-      "id": "bounded-grant-report",
+      "id": "titan-multimodal-errors",
       "split": "development",
-      "base": "06ae9666227e416b705ecd8062d2eaa021109b4b",
-      "oracle": "f916c605f48eab6644f4af89b26637389aac47c5",
+      "base": "8029f0e7dbba6590d7e9ffb4827b06644887dce8",
+      "oracle": "cf6bf95665a1678cdc417f4578d99393f2822c76",
       "editPaths": [
-        "worker/ledgers.ts"
+        "worker/provider-bedrock-embeddings.ts"
       ],
       "visibleTests": [
-        "worker/test/ledger-queue.test.mjs"
+        "worker/test/provider-bedrock-embeddings.test.mjs"
       ],
       "hiddenTests": [
-        "worker/test/grant-usage.test.mjs"
+        "worker/test/provider-bedrock-embeddings.test.mjs"
       ],
-      "instruction": "Bound grant-usage reporting while preserving its response contract. Aggregate daily, grant and lane usage without retaining the full event rowset. Accept at most 8192 distinct daily groups; exceeding that limit returns HTTP 422 with usage_range_too_large and no partial totals. Preserve inclusive since/until bounds, policy filtering, binary identifier ordering, null identities, token/cache counters and per-group totals. This repair is evaluated for functional bounds and correctness; it does not claim a measured process-memory improvement."
+      "instruction": "Reject Titan Multimodal embedding responses when the message field is present and non-null, even if vectors and token counts otherwise look valid. This applies to amazon.titan-embed-image-v1 and its supported regional/inference-profile identifiers. Accept absent or null message values without changing vectors, zero or positive token counts, or completeness requirements. Preserve behavior for other embedding families, whose informational message field alone must not reject a valid response. Do not expose upstream message contents in thrown errors."
     },
     {
       "id": "declared-native-identity",
