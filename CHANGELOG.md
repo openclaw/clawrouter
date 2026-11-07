@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
+
 - Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
 
 - Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
