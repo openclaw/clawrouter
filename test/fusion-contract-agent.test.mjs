@@ -53,6 +53,26 @@ test('the test author receives the same declared original-source context as repa
   assert.match(evidence.find(file => file.path === 'scripts/registry.mjs').content, /example\.native/);
 });
 
+test('private checks are withheld from cheap repair and revealed only after escalation', async () => {
+  for (const cheapCheck of [passed, failed]) {
+    const f = fixture([failed, cheapCheck, passed]);
+    const output = await runContractAgent(task, 'image', 'case:contract-private', config, f.invoke,
+      { ...f.dependencies, exposeProbe: false });
+    const workers = f.seen.filter(entry => entry.instruction);
+    assert.equal(workers[0].instruction, task.instruction);
+    assert.equal(output.contractExposed, false);
+    assert.equal(output.escalated, !cheapCheck.passed);
+    if (!cheapCheck.passed) {
+      assert.equal(workers.length, 2);
+      assert.match(workers[1].instruction, /private probe sentinel/);
+      assert.match(workers[1].instruction, /invariant failed/);
+    } else assert.equal(workers.length, 1);
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+  await assert.rejects(runContractAgent(task, 'image', 'case:contract-private', config, async () => {},
+    { exposeProbe: 'false' }), /invalid_contract_exposure/);
+});
+
 test('a failed cheap check escalates within the same shared allowance', async () => {
   const f = fixture([failed, failed, passed]);
   const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke, f.dependencies);
