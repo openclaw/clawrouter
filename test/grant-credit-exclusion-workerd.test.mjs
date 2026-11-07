@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -10,7 +11,6 @@ const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
 const { build } = require('esbuild');
 const secret = 'synthetic-credit-secret';
 const credit = { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } };
-const scratch = '/Volumes/Clawstudio-Storage/CodexWorktrees';
 
 // Each named Worker runs its own module graph/isolate. Only KV, the SQLite
 // authority/credential owners and the Cache API namespace are shared.
@@ -84,7 +84,7 @@ export default { async fetch(request) {
 `;
 
 async function fixture(t, routing = {}) {
-  const directory = await mkdtemp(join(scratch, 'pr888-workerd-'));
+  const directory = await mkdtemp(join(tmpdir(), 'grant-credit-workerd-'));
   let mf;
   t.after(async () => { await mf?.dispose(); await rm(directory, { recursive: true, force: true }); });
   const bundle = await build({ stdin: { contents: router, resolveDir: process.cwd(), loader: 'ts' }, write: false, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent' });
