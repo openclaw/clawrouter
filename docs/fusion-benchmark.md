@@ -393,3 +393,8 @@ still independently checks the final candidate before accepting it or using
 the original-source strong fallback. The fixed controls, hidden acceptance,
 and total call, time and cost limits are unchanged. This is an opt-in
 experiment; it does not change the single-draft or production defaults.
+
+The first bounded-repair development run solved 2/3 for $0.258246, versus
+3/3 for cheap-only ($0.065905) and 3/3 for strong ($0.383451). The Voyage
+repair passed its supplied probe but failed hidden acceptance. This rejects
+promotion even though aggregate cascade cost was lower than strong.
