@@ -21,16 +21,30 @@ const req = (value, headers = marker, path = '/users/reconcile-assignments') => 
   body: new Headers(headers).has('x-clawrouter-assignment-materialization') ? bytes(typeof value === 'string' ? value : JSON.stringify(value)) : JSON.stringify(value), duplex: 'half' });
 
 function ownership(t) {
-  const roots = [], releases = []; let primary, hasPrimary = false;
+  const roots = [], bodies = [], releases = [], texts = new WeakMap(); let primary, hasPrimary = false;
+  const text = response => {
+    let actual = texts.get(response);
+    if (!actual) {
+      actual = Promise.resolve().then(() => response.text());
+      texts.set(response, actual);
+      bodies.push(actual.then(() => ({ failed: false }), error => ({ failed: true, error })));
+    }
+    return actual;
+  };
   t.after(async () => {
     for (const release of releases) release();
     const errors = [];
-    for (const state of await Promise.all(roots)) if (state.failed && !state.expected && !(hasPrimary && Object.is(primary, state.error))) errors.push(state.error);
+    const operations = await Promise.all(roots);
+    // Every fulfillment registers its original body before its operation outcome.
+    const consumed = await Promise.all(bodies);
+    for (const state of operations) if (state.failed && !state.expected) errors.push(state.error);
+    for (const state of consumed) if (state.failed) errors.push(state.error);
     if (errors.length) throw new AggregateError(hasPrimary ? [primary, ...errors] : errors, 'primary and independent cleanup failures');
   });
   return {
     hold() { const gate = Promise.withResolvers(); releases.push(gate.resolve); return gate; },
-    start(actual, expected) { roots.push(actual.then(value => ({ failed: false, value }), error => ({ failed: true, error, expected: !!expected?.(error) }))); return actual; },
+    start(actual, expected) { roots.push(actual.then(value => { if (value instanceof Response) text(value); return { failed: false, value }; }, error => ({ failed: true, error, expected: !!expected?.(error) }))); return actual; },
+    text,
     async run(fn) { try { return await fn(); } catch (error) { hasPrimary = true; primary = error; throw error; } },
   };
 }
@@ -164,12 +178,13 @@ test('four actual intakes retain admission; fifth cancels without semantic read;
     assert.equal(f.owner.assignmentAdmissions, 4);
     let reads = 0, cancels = 0;
     const body = new ReadableStream({ type: 'bytes', pull() { reads++; }, cancel() { cancels++; } });
-    const fifth = await f.owner.fetch(new Request('https://clawrouter.internal/users/reconcile-assignments', { method: 'POST', headers: marker, body, duplex: 'half' }));
+    const fifth = await owned.start(f.owner.fetch(new Request('https://clawrouter.internal/users/reconcile-assignments', { method: 'POST', headers: marker, body, duplex: 'half' })));
     assert.equal(fifth.status, 503); assert.equal(reads, 0); assert.equal(cancels, 1); assert.equal(body.locked, false); assert.equal(f.owner.assignmentAdmissions, 4);
-    for (const gate of gates) gate.resolve(); for (const root of started) { const r = await root; await r.text(); }
+    await owned.text(fifth);
+    for (const gate of gates) gate.resolve(); for (const root of started) await owned.text(await root);
     assert.equal(f.owner.assignmentAdmissions, 0); assert.equal(f.state.writes, 0);
     for (const [path, headers] of [['/users/list', marker], ['/users/reconcile-assignments', { 'x-clawrouter-assignment-materialization': 'v2' }]]) {
-      const request = req('{', headers, path), r = await f.owner.fetch(request); assert.equal(r.status, 503); assert.equal(request.body.locked, false);
+      const request = req('{', headers, path), r = await owned.start(f.owner.fetch(request)); assert.equal(r.status, 503); assert.equal(request.body.locked, false); await owned.text(r);
     }
   });
 });
@@ -197,7 +212,7 @@ for (const field of ['groups', 'policyIds']) test(`admitted ${field} scalar cann
     t.mock.method(crypto.subtle, 'digest', async (...args) => { hashes++; const value = await digest(...args); entered.resolve(); await hold.promise; return value; });
     const invalid = [rule({ [field]: 'x'.repeat(300000) })];
     assert.throws(() => captureAdmittedAssignmentRules(invalid), denied('protocol')); assert.equal(hashes, 0);
-    const deniedReply = await f.owner.fetch(req(payload(invalid))); assert.equal(deniedReply.status, 503); assert.equal((await deniedReply.json()).error.message, 'Assignment materialization failed (protocol)');
+    const deniedReply = await owned.start(f.owner.fetch(req(payload(invalid)))); assert.equal(deniedReply.status, 503); assert.equal(JSON.parse(await owned.text(deniedReply)).error.message, 'Assignment materialization failed (protocol)');
     assert.equal(hashes, 0); assert.equal(f.state.writes, 0); assert.equal(f.owner.assignmentAdmissions, 0);
     const a = owned.start(f.owner.fetch(req(payload()))); await arrival(entered.promise, a);
     // Await intake completion using the actual direct postparse entry seam.
@@ -206,8 +221,8 @@ for (const field of ['groups', 'policyIds']) test(`admitted ${field} scalar cann
     const b = owned.start(f.owner.fetch(req(payload(invalid)))); let settled = false; b.then(() => { settled = true; }, () => { settled = true; });
     await arrival(captured.promise, b);
     assert.equal(settled, false); assert.equal(hashes, 1); assert.equal(f.state.writes, 0); assert.equal(f.owner.assignmentAdmissions, 2);
-    hold.resolve(); await (await a).text(); const result = await b;
-    assert.equal(result.status, 503); assert.equal((await result.json()).error.message, 'Assignment materialization failed (protocol)');
+    hold.resolve(); await owned.text(await a); const result = await b;
+    assert.equal(result.status, 503); assert.equal(JSON.parse(await owned.text(result)).error.message, 'Assignment materialization failed (protocol)');
     assert.equal(hashes, 1); assert.equal(f.owner.assignmentAdmissions, 0); assert.equal(f.state.writes, 1, 'only the valid predecessor writes');
   });
 });
