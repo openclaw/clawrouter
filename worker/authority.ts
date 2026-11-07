@@ -290,6 +290,13 @@ export class PolicyBindingIndexObject implements DurableObject {
     const actualPlan = policySequencePlan();
     for (const entry of candidates) {
       const policy = raw ? normalizePolicyRecord(entry.policy as unknown as Record<string, unknown>, (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault) : entry.policy;
+      if (raw) {
+        // Only fresh normalizer dictionaries: __proto__ consumed its quota but
+        // created no own JSON field. Preserve those bytes without touching seeds.
+        const routing = policy.grantRouting;
+        if (Array.isArray(Object.getPrototypeOf(routing.eligibleGrants))) Object.setPrototypeOf(routing.eligibleGrants, Object.prototype);
+        if (Object.hasOwn(routing, "sharedGrants") && Array.isArray(Object.getPrototypeOf(routing.sharedGrants!))) Object.setPrototypeOf(routing.sharedGrants!, Object.prototype);
+      }
       actualPlan({ policyId: entry.policyId, policy });
       prepared.push({ policyId: entry.policyId, text: policyJsonText(policy) });
     }

@@ -18,6 +18,7 @@ async function signing() {
 const router = String.raw`
 import worker from './worker/index.ts';
 import {PolicyBindingIndexObject as Base,authorityCall} from './worker/authority.ts';
+import {normalizePolicyRecord} from './worker/authority-policy.ts';
 import {sessionPolicies} from './worker/access.ts';
 export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 const header={'x-clawrouter-policy-collection':'v1'},email='policy@example.invalid',raw=globalThis.fetch.bind(globalThis),states=new Map();
@@ -42,6 +43,7 @@ async function probe(body){
  if(cleanup.length)throw new AggregateError(hasPrimary?[primary,...cleanup]:cleanup,'probe cleanup');if(hasPrimary)throw primary;return {supported:!!reader,a,text};
 }
 const policy=(extra={})=>({enabled:true,generation:'fixture',providers:[],budgetScope:'principal',retainRequestContent:false,...extra});
+const prototypePolicy=()=>policy({grantRouting:JSON.parse('{"eligibleGrants":{"__proto__":["a"],"p":["z","a","z"]},"sharedGrants":{"__proto__":'+JSON.stringify(Array.from({length:32},(_,i)=>'oauth/p/k'+i))+',"p":["oauth/p/later"]}}')});
 const binding=(id,type='group',principal='team',priority=5,enabled=true)=>({policyId:id,principalType:type,principalId:principal,priority,enabled});
 export class PolicyBindingIndexObject extends Base{
  constructor(ctx,env){super(ctx,env);this.fixtureSql=ctx.storage.sql;this.metrics={writes:0,markers:0,queries:0,inits:0};this.failAfter=false;
@@ -120,7 +122,7 @@ export default {async fetch(request,bindings,ctx){
    await put('access/bindings/group/team/p',binding('p','group','team',20));
    await put('access/bindings/group/team/q',binding('q'));await put('access/bindings/group/team/r',binding('r'));
    for(let i=0;i<64;i++)await put('access/bindings/group/team/disabled-'+i,binding('disabled-'+i,'group','team',0,false));
-   for(const key of ['p','q','r'])await put('policies/'+key,policy(key==='p'&&mode==='canonical'?{requestCostsMicros:'ignored-invalid'}:{}));
+   for(const key of ['p','q','r'])await put('policies/'+key,key==='p'&&mode==='prototype'?prototypePolicy():policy(key==='p'&&mode==='canonical'?{requestCostsMicros:'ignored-invalid'}:{}));
   }
   if(mode==='sql-limit')await x.sql('INSERT INTO access_policies(policy_id,policy_json) VALUES(?,?)',['p',' '.repeat(2097152)+'{}']);
   if(mode==='unknown-sql')await x.sql('INSERT INTO access_policies(policy_id,policy_json) VALUES(?,?)',['p',JSON.stringify(policy({unknown:{policyId:'x'.repeat(1025),principalId:'x'.repeat(1025),policyIds:'x'.repeat(1025)}}))]);
@@ -149,8 +151,13 @@ export default {async fetch(request,bindings,ctx){
   const session={email,groups:['team','other'],budgetOverrides:{p:{dailyBudgetMicros:0,weeklyBudgetMicros:null,unknown:{policyId:'x'.repeat(1025)}}}};
   const policies=await sessionPolicies(session,x.env);a.published=true;
   const p=policies.find(p=>p.policyId==='p')?.policy;
+  let prototype;if(mode==='prototype'){
+   const stored=await x.sql('SELECT policy_json FROM access_policies WHERE policy_id=?',['p']),expected=JSON.stringify(normalizePolicyRecord(prototypePolicy(),false));
+   prototype={storedBytesEqual:stored[0]?.policy_json===expected,rereadEqual:JSON.stringify(p?.grantRouting)===JSON.stringify(JSON.parse(expected).grantRouting),
+    quotaEmpty:Array.isArray(p?.grantRouting.sharedGrants?.p)&&p.grantRouting.sharedGrants.p.length===0,eligibleOwn:JSON.stringify(p?.grantRouting.eligibleGrants)==='{"p":["a","z"]}'};
+  }
   return {ids:policies.map(p=>p.policyId),daily:p?.dailyBudgetMicros,weekly:p?.weeklyBudgetMicros,overrideUnknown:p?.budgetOverride?.unknown?.policyId.length,
-   unknown:p?.unknown?.policyId.length,unknownPrincipal:p?.unknown?.principalId.length,unknownIds:p?.unknown?.policyIds.length,generation:p?.generation};
+   unknown:p?.unknown?.policyId.length,unknownPrincipal:p?.unknown?.principalId.length,unknownIds:p?.unknown?.policyIds.length,generation:p?.generation,prototype};
  })();
  let settled;
  const observed=operation.then(value=>{a.operationSettled=true;settled={failed:false,value};return settled;},error=>{
@@ -251,10 +258,10 @@ test('policy collection ORIGINAL KV/request/reply prerequisites and real public/
     assert.ok(capability.requests.every(proof => proof.sameBody)); assert.equal(capability.reply.sameBody, true); assert.equal(capability.reply.status, 200);
     assert.equal(JSON.parse(capability.kv.text).enabled, true); assert.deepEqual(JSON.parse(capability.reply.text).policies, []);
     // Capability consumption above is separate from actual production semantics.
-    for (const mode of ['cold', 'public', 'principals-plus', 'unknown-sql', 'canonical', 'legacy-false', 'legacy-zero', 'legacy-null', 'aggregate', 'sql-limit', 'init-limit', 'sql-fail', 'default']) {
+    for (const mode of ['cold', 'public', 'principals-plus', 'unknown-sql', 'canonical', 'prototype', 'legacy-false', 'legacy-zero', 'legacy-null', 'aggregate', 'sql-limit', 'init-limit', 'sql-fail', 'default']) {
       const setup = await call('/setup?id=' + mode + '&mode=' + mode), result = await call('/start?id=' + mode + '&mode=' + mode);
       assert.equal(setup.ready, true); assert.equal(result.done, true, mode);
-      if (['cold', 'public', 'unknown-sql', 'canonical'].includes(mode)) {
+      if (['cold', 'public', 'unknown-sql', 'canonical', 'prototype'].includes(mode)) {
         assert.equal(result.failed, false, mode); assert.deepEqual(result.result.ids, ['q', 'r', 'p']);
         assert.equal(result.result.daily, 0); assert.equal(result.result.weekly, null); assert.ok(result.lists >= 4);
         assert.equal(result.stats.query.byob, true); assert.equal(result.stats.query.eof, true); assert.equal(result.stats.query.unlocked, true);
@@ -264,6 +271,7 @@ test('policy collection ORIGINAL KV/request/reply prerequisites and real public/
         else assert.equal(result.result.overrideUnknown, 1025);
         if (mode === 'unknown-sql' || mode === 'canonical') for (const field of ['unknown', 'unknownPrincipal', 'unknownIds']) assert.equal(result.result[field], 1025);
         if (mode === 'canonical') assert.equal(result.result.generation, 'canonical');
+        if (mode === 'prototype') assert.deepEqual(result.result.prototype, { storedBytesEqual: true, rereadEqual: true, quotaEmpty: true, eligibleOwn: true });
       } else if (mode.startsWith('legacy-')) {
         assert.equal(result.failed, false); assert.deepEqual(result.result.ids, mode === 'legacy-null' ? ['p'] : []);
         assert.equal(result.legacyReads, mode === 'legacy-null' ? 1 : 0);

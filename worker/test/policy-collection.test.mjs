@@ -134,7 +134,7 @@ test('normalized candidate visitor hits the actual graph boundary before filter/
   });
 });
 
-test('candidate visitor matches exact normalized UTF8/text escaping limits and selected projection fields', t => {
+test('candidate visitor matches selected-owner normalized UTF8/text escaping limits and projection fields', async t => {
   t.mock.method(Date, 'now', () => 1760000000000);
   const cases = [
     {},
@@ -143,17 +143,85 @@ test('candidate visitor matches exact normalized UTF8/text escaping limits and s
     { grantRouting: JSON.parse('{"eligibleGrants":{"__proto__":["a"],"p":["z"]},"sharedGrants":{"__proto__":["oauth/a/z"],"p":["oauth/a/q"]}}') },
     { upstreamRetention: { version: 'clawrouter.upstream-retention.v1', allow: [{ providerId: 'p', protocol: 'q' }] }, inputPublication: { version: 'clawrouter.input-publication.v1', allow: [{ providerId: 'openrouter', endpointId: 'music_generate', modelId: 'openrouter/google/lyria-3-clip-preview', publish: true, forward: false, expiresAt: '2030-01-01T00:00:00Z' }] } },
   ];
-  for (const base of cases) for (const unit of ['x', 'é', '\0']) {
-    const raw = { ...base, serviceTiers: 'x'.repeat(1048576), limitHint: '' };
-    const overhead = Buffer.byteLength(JSON.stringify([{ policyId: 'p', policy: normalizePolicyRecord(raw, true) }]));
-    const cost = Buffer.byteLength(JSON.stringify(unit)) - 2;
-    raw.limitHint = unit.repeat(Math.floor((maximum - overhead) / cost));
-    assert.doesNotThrow(() => policyCandidatePlan()('p', raw, true));
-    assert.doesNotThrow(() => admitPolicyJson([{ policyId: 'p', policy: normalizePolicyRecord(raw, true) }]));
-    raw.limitHint += unit;
-    assert.throws(() => policyCandidatePlan()('p', raw, true), denied('limit'));
-    assert.throws(() => admitPolicyJson([{ policyId: 'p', policy: normalizePolicyRecord(raw, true) }]), denied('limit'));
-  }
+  const f = fixture(t); let index = 0;
+  await f.run(async () => {
+    for (const base of cases) for (const unit of ['x', 'é', '\0']) {
+      const id = 'p' + index++, raw = { ...base, serviceTiers: 'x'.repeat(1048576), limitHint: '' };
+      const overhead = Buffer.byteLength(JSON.stringify([{ policyId: id, policy: normalizePolicyRecord(raw, true) }]));
+      const cost = Buffer.byteLength(JSON.stringify(unit)) - 2;
+      raw.limitHint = unit.repeat(Math.floor((maximum - overhead) / cost));
+      assert.doesNotThrow(() => policyCandidatePlan()(id, raw, true));
+      const expected = JSON.stringify(normalizePolicyRecord(raw, true));
+      const accepted = await f.call('/policies/initialize', { entries: [{ policyId: id, policy: raw }], retainRequestContentDefault: true });
+      assert.equal(accepted.status, 200); assert.equal(accepted.text, 'initialized');
+      const stored = f.db.prepare('SELECT policy_json FROM access_policies WHERE policy_id=?').get(id).policy_json;
+      assert.equal(stored, expected);
+      assert.doesNotThrow(() => admitPolicyJson([{ policyId: id, policy: JSON.parse(stored) }]));
+      raw.limitHint += unit;
+      const overflowId = 'q' + id.slice(1), writes = f.state.writes;
+      assert.throws(() => policyCandidatePlan()(overflowId, raw, true), denied('limit'));
+      const rejected = await f.call('/policies/initialize', { entries: [{ policyId: overflowId, policy: raw }], retainRequestContentDefault: true });
+      assert.equal(rejected.status, 503); assert.equal(JSON.parse(rejected.text).error.code, 'policy_collection_unavailable');
+      assert.equal(f.state.writes, writes); assert.equal(f.state.markers, 0);
+      assert.equal(f.db.prepare('SELECT count(*) AS n FROM access_policies WHERE policy_id=?').get(overflowId).n, 0);
+    }
+  });
+});
+
+test('selected owner preserves normalized prototype JSON bytes, shared quota and raw seed identity', async t => {
+  const f = fixture(t), quota = Array.from({ length: 32 }, (_, i) => 'oauth/p/k' + i);
+  const cases = [
+    ['eligible', '{"eligibleGrants":{"__proto__":["a"],"p":["z","a","z"]}}'],
+    ['shared', '{"sharedGrants":{"__proto__":["oauth/p/z"],"p":["oauth/p/a"]}}'],
+    ['both', '{"eligibleGrants":{"__proto__":["a"],"p":["z"]},"sharedGrants":{"__proto__":["oauth/p/z"],"p":["oauth/p/a"]}}'],
+    ['quota', '{"sharedGrants":{"__proto__":' + JSON.stringify(quota) + ',"p":["oauth/p/later"]}}'],
+    ['omitted', '{"sharedGrants":{"__proto__":["oauth/p/z"]}}'],
+  ];
+  await f.run(async () => {
+    for (const [id, text] of cases) {
+      const borrowed = { unknown: ['kept'] }, raw = { grantRouting: JSON.parse(text), serviceTiers: borrowed };
+      const before = JSON.stringify(raw), normalized = normalizePolicyRecord(raw, false);
+      assert.equal(normalized.serviceTiers, borrowed);
+      const expected = JSON.stringify(normalized);
+      if (id === 'eligible' || id === 'both') assert.equal(Array.isArray(Object.getPrototypeOf(normalized.grantRouting.eligibleGrants)), true);
+      if (id === 'shared' || id === 'both' || id === 'quota') assert.equal(Array.isArray(Object.getPrototypeOf(normalized.grantRouting.sharedGrants)), true);
+      const response = await f.call('/policies/initialize', { entries: [{ policyId: id, policy: raw }], retainRequestContentDefault: false });
+      assert.equal(response.status, 200); assert.equal(response.text, 'initialized');
+      assert.equal(f.db.prepare('SELECT policy_json FROM access_policies WHERE policy_id=?').get(id).policy_json, expected);
+      assert.equal(JSON.stringify((await resolvePolicies(f.env, [id]))[0].policy), expected);
+      // Direct selected-owner call observes original aliases, without an HTTP JSON copy.
+      f.owner.initializeCollectedPolicies({ entries: [{ policyId: id + '-direct', policy: raw }], retainRequestContentDefault: false });
+      assert.equal(f.db.prepare('SELECT policy_json FROM access_policies WHERE policy_id=?').get(id + '-direct').policy_json, expected);
+      assert.equal(JSON.stringify(raw), before);
+      assert.equal(raw.serviceTiers, borrowed); assert.equal(Object.getPrototypeOf(borrowed), Object.prototype);
+      for (const key of ['eligibleGrants', 'sharedGrants']) if (Object.hasOwn(raw.grantRouting, key)) {
+        assert.equal(Object.getPrototypeOf(raw.grantRouting[key]), Object.prototype); assert.equal(Object.hasOwn(raw.grantRouting[key], '__proto__'), true);
+      }
+      if (id === 'quota') assert.deepEqual(JSON.parse(expected).grantRouting.sharedGrants, { p: [] });
+      if (id === 'omitted') assert.equal(Object.hasOwn(JSON.parse(expected).grantRouting, 'sharedGrants'), false);
+    }
+  });
+});
+
+test('generic raw and non-normalizing admission still rejects unexpected prototypes without mutation or writes', async t => {
+  const f = fixture(t);
+  await f.run(async () => {
+    for (const prototype of [[], { inherited: true }]) for (const borrowed of [false, true]) {
+      const record = Object.assign(Object.create(prototype), { own: 'kept' });
+      const raw = borrowed ? { serviceTiers: record } : record, before = JSON.stringify(raw);
+      assert.throws(() => admitPolicyJson(raw), denied('protocol'));
+      // Direct-owner NONHTTP boundary: JSON serialization would erase this prototype.
+      assert.throws(() => f.owner.initializeCollectedPolicies({ entries: [{ policyId: 'bad', policy: raw }], retainRequestContentDefault: false }), denied('protocol'));
+      assert.equal(Object.getPrototypeOf(record), prototype); assert.equal(JSON.stringify(raw), before);
+      assert.equal(f.state.writes, 0); assert.equal(f.state.markers, 0);
+    }
+    const normalized = normalizePolicyRecord({ grantRouting: JSON.parse('{"eligibleGrants":{"__proto__":["a"]}}') }, false);
+    const prototype = Object.getPrototypeOf(normalized.grantRouting.eligibleGrants), before = JSON.stringify(normalized);
+    assert.throws(() => admitPolicyJson(normalized), denied('protocol'));
+    assert.throws(() => f.owner.initializeCollectedPolicies([{ policyId: 'unchanged', policy: normalized }]), denied('protocol'));
+    assert.equal(Object.getPrototypeOf(normalized.grantRouting.eligibleGrants), prototype); assert.equal(JSON.stringify(normalized), before);
+    assert.equal(f.state.writes, 0); assert.equal(f.state.markers, 0);
+  });
 });
 
 test('expired publication reserves its structural branch before normalization across clock rollback', t => {

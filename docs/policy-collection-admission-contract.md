@@ -70,6 +70,12 @@ calling the allocating normalizer to measure them. Bounded visitor selection
 state retains at most 1024 model or 32 grant references at a time. Sorting the
 same retained values changes order, not representation totals.
 
+Only in raw-seed initialization, fresh normalized `eligibleGrants` and own-present
+`sharedGrants` dictionaries with a direct array prototype regain Object.prototype.
+This preserves the unchanged normalizer's own fields, exact JSON bytes and already
+consumed shared quota; prototype-only shared grants remain omitted. Raw seeds,
+borrowed fields, other prototypes and generic graph admission are unchanged.
+
 Publication admission is deliberately conservative: every structurally valid
 potential permission branch (at most two entries) is counted with canonical
 24-character ISO timestamps, even if currently expired. The visitor never reads
