@@ -262,3 +262,12 @@ Compare these controls with `contract` on the same qualified tasks, source and
 limits before attributing a benefit to mixed models. Different call counts can
 result from different model decisions. A lower price on one exposed task does
 not establish general superiority or production readiness.
+
+
+For a standalone ablation, set `FUSION_PAIR_CONTROLS=0` (or pass
+`includeControls: false` to the runner). This runs only the selected contract
+policy and labels the report `native-policy-repository`; it is not a complete
+paired comparison and the paired analyzer rejects it. Use this to avoid paying
+for repeated fixed controls, and disclose any comparison to earlier controls as
+non-contemporaneous. The default still runs all three arms. Budget admission
+retains the conservative three-arm reservation bound.

@@ -260,3 +260,30 @@ test('contract ablations preserve the scaffold while routing every role to the d
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('a policy-only ablation never calls baseline workers or claims a paired report', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const includeControls of ['false', null, 0]) {
+      await assert.rejects(runPairBenchmark({ ...options, includeControls }), /invalid_control_selection/);
+    }
+    await assert.rejects(runPairBenchmark({ ...options, includeControls: false }), /invalid_control_selection/);
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
+      policy: 'contract-strong', includeControls: false, grade, fetcher: success,
+      agent: async () => { assert.fail('baseline worker must not run'); },
+      contractAgent: async (_task, _image, id, _settings, invoke) => {
+        await invoke(id, roles.cheap, body, signal);
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      } });
+    assert.equal(state.kind, 'native-policy-repository');
+    assert.equal(state.includeControls, false);
+    assert.deepEqual(state.strategies, ['contract-strong']);
+    assert.equal(state.records.length, 1);
+    assert.equal(state.records[0].score, 1);
+    assert.deepEqual(state.calls.map(call => call.model), [config.strong, config.strong]);
+    assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.records[0].costMicros);
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8')).kind, 'native-policy-repository');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
