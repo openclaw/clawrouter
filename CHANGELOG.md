@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
+
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 
 - Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
