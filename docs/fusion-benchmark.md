@@ -158,3 +158,13 @@ Current recommendation: inexpensive models are useful smoke-test workers, but
 keep correctness checks external and measure the quality loss on held-out
 repairs. No measured multi-model quality improvement has been established by
 these experiments, and no production default changes follow from them.
+### Independent check-policy holdout
+
+`benchmarks/fusion/check-holdout-workloads.json` pins three further repairs:
+StepFun inclusive cache accounting, Cohere observed versus billed usage, and
+scalar fal music MIME validation. Qualify unchanged visible tests, oracle-visible
+tests, original acceptance failure and repaired acceptance success before any
+model call. Freeze the policy before exposing these instructions to a model.
+The schema label `development` is not evidence of exposure history; record
+that history with results. Selection and qualification alone do not establish
+a performance improvement.
