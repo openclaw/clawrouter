@@ -178,9 +178,19 @@ a probe that fails with an assertion on the original source. The cheap worker
 gets at most ten calls and sees the frozen probe. A fresh sandbox checks its
 candidate; a failed check or visible suite triggers strong repair from the
 original source with the remaining call and time allowance. Invalid probes
-also fall back to strong repair. Every model call uses the shared trial ledger.
+also fall back to strong repair. Known-cost truncated or empty test-author
+responses consume one of the same two attempts; uncertain charges and refusals
+still stop the campaign. Every model call uses the shared trial ledger.
 
 Generated checks can be incomplete or wrong. The fallback's probe result is
 reported but does not replace independent acceptance. Reports retain only the
 probe digest and finite outcomes, not its source. This experimental option
 does not change production routing or claim a quality improvement.
+
+The initial three-task executable-check development run at `694d0f4` solved
+1/3 in every arm: cheap-only $0.131493, strong-only $0.897908, generated-check
+policy $0.463669. Runway passed after escalation. The pricing candidate passed
+its generated check but failed four independent acceptance tests. Native
+routing failed when test generation exceeded its output limit. This is no
+quality gain and no reason to activate the policy. Subsequent fallback changes
+are a new policy revision and need their own evaluation.

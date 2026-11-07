@@ -64,6 +64,38 @@ test('invalid or non-reproducing checks cannot certify a cheap repair', async ()
   assert.ok(f.boxes.every(box => box.closed));
 });
 
+test('settled unusable test-author outputs consume attempts before strong fallback', async () => {
+  for (const reason of ['provider_truncated', 'provider_empty']) {
+    const f = fixture([]);
+    let calls = 0;
+    const output = await runContractAgent(task, 'image', 'case:contract', config, async (...args) => {
+      if (++calls <= 2) throw new Error(reason);
+      return f.invoke(...args);
+    }, f.dependencies);
+    assert.equal(output.contractQualified, false);
+    assert.equal(output.contractAttempts, 2);
+    assert.equal(output.escalated, true);
+    assert.equal(output.turns, 3);
+    assert.deepEqual(output.actions.slice(0, 2).map(action => action.status), [reason, reason]);
+    assert.equal(f.seen.find(entry => entry.settings).settings.maxTurns, 6);
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('a complete second probe can recover from an incomplete first response', async () => {
+  const f = fixture([failed, passed]);
+  let calls = 0;
+  const output = await runContractAgent(task, 'image', 'case:contract', config, async (...args) => {
+    if (++calls === 1) throw new Error('provider_truncated');
+    return f.invoke(...args);
+  }, f.dependencies);
+  assert.equal(output.contractAttempts, 2);
+  assert.equal(output.contractQualified, true);
+  assert.equal(output.escalated, false);
+  assert.equal(output.turns, 3);
+  assert.match(f.seen.find(entry => entry.body?.messages?.[1]).body.messages[1].content, /shorter probe/);
+});
+
 test('unknown costs and refusals stop before fallback, without leaking a sandbox', async () => {
   for (const code of ['unknown_cost', 'provider_refused']) {
     const f = fixture([]);

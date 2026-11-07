@@ -40,9 +40,20 @@ export async function runContractAgent(task, image, trialId, config, invoke, {
   try { files = await read(initial, [...new Set([...task.editPaths, ...task.visibleTests])], remaining()); }
   finally { await initial.close(); }
   for (; attempts < 2 && !contract; attempts++) {
-    const response = await call(models.strong)(trialId, models.strong,
-      contractRequest(task, files, config.outputTokens, feedback), signal);
-    requireCompleteResponse(response);
+    let response;
+    try {
+      response = await call(models.strong)(trialId, models.strong,
+        contractRequest(task, files, config.outputTokens, feedback), signal);
+      requireCompleteResponse(response);
+    } catch (error) {
+      // These outputs have settled usage but contain no usable probe. Count the
+      // attempt, then use the existing retry/fallback allowance. Refusals and
+      // uncertain charges must still stop rather than selecting another model.
+      if (!['provider_truncated', 'provider_empty'].includes(error.message)) throw error;
+      feedback = 'The previous response contained no complete probe. Return a shorter probe in the required JSON object.';
+      actions.push({ action: 'contract', status: error.message });
+      continue;
+    }
     let source;
     try { source = JSON.parse(response.choices[0].message.content).probe; } catch { /* A bounded second attempt can correct malformed JSON. */ }
     if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) {
