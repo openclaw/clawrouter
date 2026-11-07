@@ -143,11 +143,12 @@ export default {async fetch(request,env,ctx){
  // All I/O promises/handles below belong only to THIS originating request.
  let abortRoot;
  if(['read','read-reject','late'].includes(mode))abortRoot=gate(id,'abort').then(()=>{a.aborted=true;abort.abort();}).then(
-  ()=>{a.controlSettled=true;return true;},
-  ()=>{a.controlSettled=true;a.controlFailed=true;return false;});
+  ()=>{a.controlSettled=true;return {failed:false};},
+  error=>{a.controlSettled=true;a.controlFailed=true;return {failed:true,error};});
  if(mode==='pre-abort')abort.abort();
  const background=[];
  const work=(async()=>{
+  let hasPrimary=false,primary;
   try{
    if(kind==='query'){
     if(mode==='mixed'){
@@ -170,19 +171,19 @@ export default {async fetch(request,env,ctx){
      headers:{origin:'https://router.example',authorization:'Bearer synthetic-user-reader-admin',
       cookie:'clawrouter_session='+'a'.repeat(64),...(kind==='local'?{}:{'cf-access-jwt-assertion':env.FIXTURE_JWT})},
      ...(kind==='local'?{body:JSON.stringify({token:'synthetic-user-reader-admin'})}:{})});
-    const response=await worker.fetch(routed,x.env,{waitUntil(p){background.push(Promise.resolve(p).then(()=>({ok:true}),()=>({ok:false})));}});
+    const response=await worker.fetch(routed,x.env,{waitUntil(p){background.push(Promise.resolve(p).then(()=>({failed:false}),error=>({failed:true,error})));}});
     a.publicStatus=response.status;a.operationFailed=!response.ok;a.setCookie=response.headers.has('set-cookie');
     const value=await response.json();a.publicCode=value.error?.code??null;a.published=response.ok;
+    if(!response.ok){hasPrimary=true;primary={kind:'public',status:response.status,code:a.publicCode==='internal_error'?'internal_error':'unexpected'};}
    }
-  }catch(error){a.operationFailed=true;a.code=error?.code==='authority_user_query_failed'?error.code:'unexpected';a.reason=['aborted','transport','status','limit','protocol','cleanup'].includes(error?.reason)?error.reason:'unexpected';}
+  }catch(error){hasPrimary=true;primary=error;a.operationFailed=true;a.code=error?.code==='authority_user_query_failed'?error.code:'unexpected';a.reason=['aborted','transport','status','limit','protocol','cleanup'].includes(error?.reason)?error.reason:'unexpected';}
   finally{
    a.operationSettled=true; // Observable before a held control/cleanup join.
-   const controlClean=abortRoot?await abortRoot:true;
-   const drained=await Promise.all(background);a.backgroundClean=drained.every(x=>x.ok);a.done=true;
-   const failures=[];
-   if(!controlClean)failures.push(Error('user-reply abort control failed'));
-   if(!a.backgroundClean)failures.push(Error('user-reply background cleanup failed'));
-   if(failures.length)throw new AggregateError(failures,'user-reply independent cleanup failures');
+   const drained=await Promise.all([abortRoot??{failed:false},...background]);
+   a.backgroundClean=drained.slice(1).every(x=>!x.failed);a.done=true;
+   // Original reasons, including undefined, stay in this invocation only.
+   const failures=drained.filter(x=>x.failed).map(x=>x.error);
+   if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'user-reply primary and independent cleanup failures');
   }
  })();
  ctx.waitUntil(work);await work;return Response.json(a);
