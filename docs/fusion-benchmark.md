@@ -346,3 +346,9 @@ setting changes allocation, not the trial spend ceiling or the fixed controls'
 call allowance. A larger value can help a cheap worker finish, but can also
 leave too little time or too few calls for the strong fallback. Freeze both
 this value and total `maxCalls` before comparing runs.
+
+The first exposed-task allocation run (20 cheap calls within 40 total) solved
+2/3 for $0.287720; the matched strong control solved 3/3 for $0.476787.
+The cascade saved 39.65% but accepted an incomplete GMI repair and therefore
+failed the no-regression screen. The default allowance remains 10. These are
+three development tasks, not independent holdout evidence.
