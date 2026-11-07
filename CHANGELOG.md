@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
 
 - Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
