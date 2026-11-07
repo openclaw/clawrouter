@@ -55,11 +55,13 @@ export function accessBase64Bytes(value: string, maximum: number): Uint8Array<Ar
   return bytes;
 }
 
-type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user" | "user_record" | "user_query" | "user_init";
+type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user" | "user_record" | "user_query" | "user_init" | "assignment_source";
 export const authorityUserJsonLimits = Object.freeze({ wire: 1048576, text: 1048576 });
 export type UserSourceCounts = { values: number; containers: number; members: number; entries: number; units: number };
 const userSourceProfile = { wire: 2097152, depth: 16, values: 16384, containers: 4096, members: 8192, entries: 8192, units: 2097152, string: 2097152 } as const;
+const assignmentSourceProfile = { wire: 2097152, depth: 16, values: 65536, containers: 16384, members: 32768, entries: 32768, units: 2097152, string: 1048576 } as const;
 const profiles = {
+  assignment_source: assignmentSourceProfile,
   user_record: userSourceProfile, user_query: userSourceProfile, user_init: userSourceProfile,
   header: { wire: 2048, depth: 4, values: 64, containers: 8, members: 32, entries: 16, units: 2048, string: 2048 },
   payload: { wire: 8192, depth: 8, values: 512, containers: 64, members: 256, entries: 128, units: 8192, string: 8192 },
@@ -82,8 +84,8 @@ function utf8Length(text: string, start = 0, end = text.length): number {
 // Closed recursive states (maximum depth sixteen), not a token vector. All raw
 // occurrences, including duplicate/discarded members, count before JSON.parse.
 export function parseAccessJson(text: string, profile: Profile, source?: UserSourceCounts): unknown {
-  const p = profiles[profile], user = profile === "authority_user" || profile === "user_record" || profile === "user_query" || profile === "user_init";
-  if (source && profile !== "user_record") invalid();
+  const p = profiles[profile], user = profile === "authority_user" || profile === "user_record" || profile === "user_query" || profile === "user_init" || profile === "assignment_source";
+  if (source && profile !== "user_record" && profile !== "assignment_source") invalid();
   if (profile === "evidence" && text.length > accessEvidenceLimits.text) limit();
   // The user-reply owner counts ORIGINAL bytes before replacement decoding.
   // Re-encoding its decoded text would incorrectly charge replacement expansion.
@@ -132,11 +134,11 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
       const object = c === "{", close = object ? "}" : "]";
       if (text[at] !== close) for (;;) {
         if (object) {
-          if (++members > p.members) limit();
+          if (++members > p.members || profile === "assignment_source" && members + entries > 32768) limit();
           space(); const child = string(user ? 1024 : 64, true); space(); if (text[at++] !== ":") invalid();
           value(depth + 1, child, depth === 0, false, insideJwk || jwkRow, false, requestRow && child === "email");
         } else {
-          if (++entries > p.entries) limit();
+          if (++entries > p.entries || profile === "assignment_source" && members + entries > 32768) limit();
           const row = profile === "jwks" && rootMember && key === "keys";
           if (row && ++rows > accessLimits.keys || profile === "payload" && rootMember && key === "aud" && ++audiences > 32) limit();
           if (profile === "evidence" && rootMember && (key === "orgs" && ++orgs > accessEvidenceLimits.orgs

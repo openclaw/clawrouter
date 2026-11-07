@@ -1,4 +1,5 @@
 import type { AccessControlUser, AssignmentRule, AssignmentState, AssignmentStateEntry } from "./types";
+import { admitAssignmentJson, admitAssignmentRevision, assignmentMapPlan, assignmentSequencePlan } from "./assignment-source.ts";
 
 export interface AssignmentEvidence {
   source: string;
@@ -12,12 +13,24 @@ export interface AssignmentRuleEntry extends AssignmentRule { ruleId: string; ge
 const snapshotBrand = Symbol("assignment rules snapshot"), preparedBrand = Symbol("prepared assignment rules");
 export interface AssignmentRuleSnapshot { readonly [snapshotBrand]: true }
 export interface PreparedAssignmentRules { readonly [preparedBrand]: true }
-type RuleSnapshot = { rules: AssignmentRuleEntry[]; legacyRevision: string };
+type RuleSnapshot = { rules: AssignmentRuleEntry[]; legacyRevision: string; bounded: boolean };
 const snapshots = new WeakMap<AssignmentRuleSnapshot, RuleSnapshot>();
 const preparedRules = new WeakMap<PreparedAssignmentRules, RuleSnapshot & { revision: string }>();
 
 /** Private owner interface: snapshot before waiting, hash only after its FIFO turn. */
 export function captureAssignmentRules(rules: AssignmentRuleEntry[]): AssignmentRuleSnapshot {
+  return captureRules(rules, false);
+}
+
+export function captureAdmittedAssignmentRules(rules: AssignmentRuleEntry[]): AssignmentRuleSnapshot {
+  // Count the exact ordered legacy projection before map/nested array copies,
+  // stringify, UTF8 encoding and digest. generatedGroup is deliberately absent.
+  admitAssignmentJson(rules);
+  admitAssignmentRevision(rules, revisionRule);
+  return captureRules(rules, true);
+}
+
+function captureRules(rules: AssignmentRuleEntry[], bounded: boolean): AssignmentRuleSnapshot {
   const copied = rules.map(rule => {
     const copy = { ruleId: rule.ruleId, version: rule.version, enabled: rule.enabled, kind: rule.kind,
       subject: rule.subject, groups: [...rule.groups], policyIds: [...rule.policyIds], priority: rule.priority,
@@ -26,7 +39,7 @@ export function captureAssignmentRules(rules: AssignmentRuleEntry[]): Assignment
   });
   Object.freeze(copied);
   const capsule: AssignmentRuleSnapshot = Object.freeze({ [snapshotBrand]: true as const });
-  snapshots.set(capsule, { rules: copied, legacyRevision: assignmentRulesRevision(copied) });
+  snapshots.set(capsule, { rules: copied, legacyRevision: assignmentRulesRevision(copied), bounded });
   return capsule;
 }
 
@@ -43,7 +56,62 @@ export async function prepareAssignmentRules(snapshot: AssignmentRuleSnapshot): 
 export function evaluatePreparedUserAssignments(user: AccessControlUser, prepared: PreparedAssignmentRules, evidence?: AssignmentEvidence, force = false) {
   const state = preparedRules.get(prepared);
   if (!state) throw new TypeError("invalid prepared assignment rules");
-  return evaluateAssignments(user, state.rules, state.legacyRevision, state.revision, evidence, force);
+  if (state.bounded) planAssignmentEvaluation(user, state.rules, state.legacyRevision, state.revision, evidence, force);
+  return evaluateAssignments(user, state.rules, state.legacyRevision, state.revision, evidence, force, state.bounded);
+}
+
+export function withAdmittedLegacyAssignmentState(user: AccessControlUser, legacy: Partial<AssignmentState> | null): AccessControlUser {
+  admitAssignmentJson(user); admitAssignmentJson(legacy);
+  if (!user.record.assignmentState && legacy?.assignments && typeof legacy.assignments === "object") {
+    const ids = assignmentSequencePlan(), groups = assignmentSequencePlan();
+    for (const id in legacy.assignments) if (Object.hasOwn(legacy.assignments, id)) {
+      const entry = legacy.assignments[id];
+      if (!entry || !Array.isArray(entry.groups)) continue;
+      ids.add(id);
+      for (const group of entry.groups) groups.normalized(group);
+    }
+  }
+  const candidate = withLegacyAssignmentState(user, legacy);
+  admitAssignmentJson(candidate);
+  return candidate;
+}
+
+function planAssignmentEvaluation(user: AccessControlUser, rules: AssignmentRuleEntry[], legacyRevision: string, revision: string, evidence?: AssignmentEvidence, force = false): void {
+  admitAssignmentJson(user); admitAssignmentJson(evidence);
+  const previous = user.record.assignmentState?.assignments ?? {};
+  const ids = assignmentSequencePlan();
+  const same = user.record.assignmentState?.revision === legacyRevision || user.record.assignmentState?.revision === revision;
+  if (!force && same) {
+    for (const id in previous) if (Object.hasOwn(previous, id)) ids.add(id);
+    return;
+  }
+  const oldGroups = assignmentSequencePlan(), nextGroups = assignmentSequencePlan(), combined = assignmentSequencePlan(), nextAssignments = assignmentMapPlan();
+  const normalizedCurrent = assignmentSequencePlan();
+  for (const id in previous) if (Object.hasOwn(previous, id)) for (const group of previous[id].groups) oldGroups.add(group);
+  for (const group of user.record.groups ?? []) {
+    normalizedCurrent.normalized(group);
+    // No Object.values/flatMap/Set is built until the whole prospective sequence
+    // has been admitted. Match the existing manual-group membership test.
+    let assigned = false;
+    for (const id in previous) if (Object.hasOwn(previous, id) && previous[id].groups.includes(group)) { assigned = true; break; }
+    if (!assigned && !group.startsWith("assignment.")) combined.normalized(group);
+  }
+  for (const rule of rules) {
+    const outcome = assignmentMatch(rule, user.email, evidence);
+    if (outcome === "match") {
+      ids.add(rule.ruleId);
+      // Original source groups already have bounded backing. This prospective
+      // entry counts multiplicity before the evaluator creates its map/arrays;
+      // separate plans also charge normalization expansion and generated groups.
+      nextAssignments.matched(rule.ruleId, rule.groups, rule.policyIds.length ? rule.generatedGroup : undefined, rule.revokeOnLoss);
+      for (const group of rule.groups) { nextGroups.normalized(group); combined.normalized(group); }
+      if (rule.policyIds.length) { nextGroups.normalized(rule.generatedGroup); combined.normalized(rule.generatedGroup); }
+    } else if ((outcome === "unknown" || outcome === "no_match" && rule.enabled && !rule.revokeOnLoss) && previous[rule.ruleId]) {
+      ids.add(rule.ruleId);
+      nextAssignments.retained(rule.ruleId, previous[rule.ruleId]);
+      for (const group of previous[rule.ruleId].groups) { nextGroups.add(group); combined.normalized(group); }
+    }
+  }
 }
 
 export function assignmentEvidenceFromAccessIdentity(value: unknown, expectedEmail: string): AssignmentEvidence | undefined {
@@ -92,7 +160,7 @@ export function evaluateUserAssignments(user: AccessControlUser, rules: Assignme
   return evaluateAssignments(user, rules, revision, revision, evidence, force);
 }
 
-function evaluateAssignments(user: AccessControlUser, rules: AssignmentRuleEntry[], legacyRevision: string, revision: string, evidence?: AssignmentEvidence, force = false) {
+function evaluateAssignments(user: AccessControlUser, rules: AssignmentRuleEntry[], legacyRevision: string, revision: string, evidence?: AssignmentEvidence, force = false, bounded = false) {
   const previous = user.record.assignmentState ?? { version: 1, revision: "", assignments: {}, updatedAt: null } satisfies AssignmentState;
   const sameRevision = previous.revision === legacyRevision || previous.revision === revision;
   if (!force && sameRevision) return { changed: false as const, user, matchedRuleIds: Object.keys(previous.assignments).sort(), retainedRuleIds: [] as string[] };
@@ -110,6 +178,7 @@ function evaluateAssignments(user: AccessControlUser, rules: AssignmentRuleEntry
       }
     }
   }
+  if (bounded) admitAssignmentJson(assignments);
   const previousGroups = new Set(Object.values(previous.assignments).flatMap((entry) => entry.groups));
   const manual = (user.record.groups ?? []).filter((group) => !previousGroups.has(group) && !group.startsWith("assignment."));
   const groups = normalizeGroups([...manual, ...Object.values(assignments).flatMap((entry) => entry.groups)]);
@@ -122,7 +191,10 @@ function evaluateAssignments(user: AccessControlUser, rules: AssignmentRuleEntry
 }
 
 export function assignmentRulesRevision(rules: AssignmentRuleEntry[]): string {
-  return JSON.stringify(rules.map((rule) => ({ ruleId: rule.ruleId, version: rule.version, enabled: rule.enabled, kind: rule.kind, subject: rule.subject, groups: rule.groups, policyIds: rule.policyIds, priority: rule.priority, revokeOnLoss: rule.revokeOnLoss, provenance: rule.provenance })));
+  return JSON.stringify(rules.map(revisionRule));
+}
+function revisionRule(rule: AssignmentRuleEntry) {
+  return { ruleId: rule.ruleId, version: rule.version, enabled: rule.enabled, kind: rule.kind, subject: rule.subject, groups: rule.groups, policyIds: rule.policyIds, priority: rule.priority, revokeOnLoss: rule.revokeOnLoss, provenance: rule.provenance };
 }
 
 export function normalizeAssignmentEvidence(value: AssignmentEvidence | undefined): AssignmentEvidence | undefined {
