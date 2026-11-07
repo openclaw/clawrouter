@@ -1,7 +1,7 @@
 import { runAgent } from './fusion-agent-benchmark.mjs';
 import { models } from './fusion-benchmark-accounting.mjs';
 import { requireCompleteResponse } from './fusion-native-provider.mjs';
-import { sandbox, readSource, writeFiles, validateEdits, probe, hash } from './fusion-workloads.mjs';
+import { sandbox, readSource, readTaskContext, writeFiles, validateEdits, probe, hash } from './fusion-workloads.mjs';
 
 export function contractRequest(task, files, outputTokens, feedback = '') {
   return { max_tokens: Math.min(outputTokens, 4096), messages: [
@@ -37,7 +37,10 @@ export async function runContractAgent(task, image, trialId, config, invoke, {
   };
   let files;
   const initial = await makeSandbox(image);
-  try { files = await read(initial, [...new Set([...task.editPaths, ...task.visibleTests])], remaining()); }
+  try {
+    files = await read(initial, [...new Set([...task.editPaths, ...task.visibleTests])], remaining());
+    files.push(...await readTaskContext(initial, task, remaining(), read));
+  }
   finally { await initial.close(); }
   for (; attempts < 2 && !contract; attempts++) {
     let response;

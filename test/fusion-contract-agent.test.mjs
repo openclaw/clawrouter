@@ -42,6 +42,17 @@ test('a reproduced frozen check accepts the cheap candidate without strong repai
   assert.ok(f.boxes.every(box => box.closed));
 });
 
+test('the test author receives the same declared original-source context as repair workers', async () => {
+  const f = fixture([failed, passed]);
+  f.dependencies.read = async (_box, paths) => paths.map(path => ({ path,
+    content: path === 'scripts/registry.mjs' ? 'const declaredFormat = "example.native";' : 'original source' }));
+  await runContractAgent({ ...task, hiddenTests: [], sourceContext: [{ path: 'scripts/registry.mjs', query: 'const declaredFormat' }] },
+    'image', 'case:contract', config, f.invoke, f.dependencies);
+  const author = f.seen.find(entry => entry.body?.messages?.[1]);
+  const evidence = JSON.parse(author.body.messages[1].content).files;
+  assert.match(evidence.find(file => file.path === 'scripts/registry.mjs').content, /example\.native/);
+});
+
 test('a failed cheap check escalates within the same shared allowance', async () => {
   const f = fixture([failed, failed, passed]);
   const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke, f.dependencies);
