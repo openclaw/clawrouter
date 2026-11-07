@@ -55,9 +55,12 @@ export function accessBase64Bytes(value: string, maximum: number): Uint8Array<Ar
   return bytes;
 }
 
-type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user";
+type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user" | "user_record" | "user_query" | "user_init";
 export const authorityUserJsonLimits = Object.freeze({ wire: 1048576, text: 1048576 });
+export type UserSourceCounts = { values: number; containers: number; members: number; entries: number; units: number };
+const userSourceProfile = { wire: 2097152, depth: 16, values: 16384, containers: 4096, members: 8192, entries: 8192, units: 2097152, string: 2097152 } as const;
 const profiles = {
+  user_record: userSourceProfile, user_query: userSourceProfile, user_init: userSourceProfile,
   header: { wire: 2048, depth: 4, values: 64, containers: 8, members: 32, entries: 16, units: 2048, string: 2048 },
   payload: { wire: 8192, depth: 8, values: 512, containers: 64, members: 256, entries: 128, units: 8192, string: 8192 },
   jwks: { wire: 262144, depth: 8, values: 4096, containers: 256, members: 2048, entries: 1024, units: 65536, string: 4096 },
@@ -78,13 +81,15 @@ function utf8Length(text: string, start = 0, end = text.length): number {
 
 // Closed recursive states (maximum depth sixteen), not a token vector. All raw
 // occurrences, including duplicate/discarded members, count before JSON.parse.
-export function parseAccessJson(text: string, profile: Profile): unknown {
-  const p = profiles[profile];
+export function parseAccessJson(text: string, profile: Profile, source?: UserSourceCounts): unknown {
+  const p = profiles[profile], user = profile === "authority_user" || profile === "user_record" || profile === "user_query" || profile === "user_init";
+  if (source && profile !== "user_record") invalid();
   if (profile === "evidence" && text.length > accessEvidenceLimits.text) limit();
   // The user-reply owner counts ORIGINAL bytes before replacement decoding.
   // Re-encoding its decoded text would incorrectly charge replacement expansion.
-  if (text.length > p.wire || profile !== "authority_user" && utf8Length(text) > p.wire) limit();
-  let at = 0, values = 0, containers = 0, members = 0, entries = 0, units = 0, rows = 0, audiences = 0, orgs = 0, teams = 0;
+  if (text.length > p.wire || !user && utf8Length(text) > p.wire) limit();
+  let at = 0, values = source?.values ?? 0, containers = source?.containers ?? 0, members = source?.members ?? 0,
+    entries = source?.entries ?? 0, units = source?.units ?? 0, rows = 0, audiences = 0, orgs = 0, teams = 0, occurrences = 0;
   const space = () => { while (at < text.length) { const c = text.charCodeAt(at); if (c !== 32 && c !== 9 && c !== 10 && c !== 13) break; at++; } };
   const string = (maximum: number, retain: boolean, binaryMaximum?: number): string => {
     if (text[at++] !== '"') invalid();
@@ -117,7 +122,7 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
     }
     return invalid();
   };
-  const value = (depth: number, key = "", rootMember = false, jwkRow = false, insideJwk = false): void => {
+  const value = (depth: number, key = "", rootMember = false, jwkRow = false, insideJwk = false, requestRow = false, rawEmail = false): void => {
     space(); const start = at;
     if (++values > p.values) limit();
     const c = text[at];
@@ -128,22 +133,25 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
       if (text[at] !== close) for (;;) {
         if (object) {
           if (++members > p.members) limit();
-          space(); const child = string(profile === "authority_user" ? 1024 : 64, true); space(); if (text[at++] !== ":") invalid();
-          value(depth + 1, child, depth === 0, false, insideJwk || jwkRow);
+          space(); const child = string(user ? 1024 : 64, true); space(); if (text[at++] !== ":") invalid();
+          value(depth + 1, child, depth === 0, false, insideJwk || jwkRow, false, requestRow && child === "email");
         } else {
           if (++entries > p.entries) limit();
           const row = profile === "jwks" && rootMember && key === "keys";
           if (row && ++rows > accessLimits.keys || profile === "payload" && rootMember && key === "aud" && ++audiences > 32) limit();
           if (profile === "evidence" && rootMember && (key === "orgs" && ++orgs > accessEvidenceLimits.orgs
             || key === "teams" && ++teams > accessEvidenceLimits.teams)) limit();
-          value(depth + 1, key, false, row, insideJwk || jwkRow);
+          const queryEmail = profile === "user_query" && rootMember && key === "emails";
+          const initRow = profile === "user_init" && depth === 0;
+          if ((queryEmail || initRow) && ++occurrences > 4096) limit();
+          value(depth + 1, key, false, row, insideJwk || jwkRow, initRow, queryEmail);
         }
         space(); if (text[at] === close) break;
         if (text[at++] !== ",") invalid();
       }
       at++;
     } else if (c === '"') {
-      const maximum = profile !== "evidence" && profile !== "authority_user" && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
+      const maximum = rawEmail ? 1024 : profile !== "evidence" && !user && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
         : (profile === "payload" || profile === "evidence") && key === "email" ? 320 : p.string;
       // Every n/e occurrence counts before JSON.parse can discard duplicates.
       string(maximum, false, insideJwk && key === "n" ? 1024 : insideJwk && key === "e" ? 8 : undefined);
@@ -162,6 +170,7 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
     if (jwkRow && utf8Length(text, start, at) > accessLimits.jwk) limit();
   };
   value(0); space(); if (at !== text.length) invalid();
+  if (source) Object.assign(source, { values, containers, members, entries, units });
   return JSON.parse(text); // Normal parsed duplicate-member (last wins) semantics.
 }
 const escapeCodes = [34, 92, 47, 8, 12, 10, 13, 9] as const;

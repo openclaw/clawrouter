@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -79,13 +80,14 @@ function migrationEnv(t, family) {
       ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: (url, init) => authority.fetch(new Request(url, init)) }) },
       POLICY_KV: {
         async list({ prefix }) { return { list_complete: true, keys: [...fixture.store.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })) }; },
-        async get(key) {
+        async get(key, type) {
           if (!fixture.store.has(key)) return null;
           fixture.reads++;
           const action = fixture.beforeRead;
           fixture.beforeRead = null;
           await action?.();
-          return structuredClone(fixture.store.get(key));
+          const value = structuredClone(fixture.store.get(key));
+          return type === "stream" ? accessBytesResponse(JSON.stringify(value), "").body : value;
         },
       },
     },
