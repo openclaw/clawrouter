@@ -152,7 +152,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   return input.selection && store.finishSelection ? store.finishSelection(input, result) : result;
 }
 
-export async function genuineLegacyKey(env: Env, id: string): Promise<Record<string, unknown> | null> {
-  const value = await env.POLICY_KV.get<Record<string, unknown>>(`keys/${id}`, "json");
+export async function genuineLegacyKey(env: Env, id: string, boundedRead?: (key: string) => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown> | null> {
+  const value = boundedRead ? await boundedRead(`keys/${id}`) : await env.POLICY_KV.get<Record<string, unknown>>(`keys/${id}`, "json");
   return value && (value.generation == null || value.generation === "legacy") ? value : null;
 }
