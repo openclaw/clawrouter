@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hash } from '../scripts/fusion-workloads.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
-import { pairDefaults, validatePair, pairModel, pairExecution, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
+import { pairDefaults, validatePair, pairModel, pairExecution, scopeStrategy, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
 
 const body = { messages: [{ role: 'user', content: 'private prompt sentinel' }], max_tokens: 256 };
 const signal = new AbortController().signal;
@@ -169,5 +169,37 @@ test('source preload applies equally to every comparison arm and rejects invalid
       } });
     assert.deepEqual(seen, [['strong', true], ['strong', true], ['planned', true]]);
     assert.equal(state.preloadSource, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('scope policy selects from declared edit paths before any inference', async () => {
+  const { root, options } = await fixture();
+  try {
+    assert.equal(scopeStrategy({ editPaths: ['worker/a.ts'] }), 'cheap');
+    assert.equal(scopeStrategy({ editPaths: ['worker/a.ts', 'worker/b.ts'] }), 'strong');
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'unknown' }), /invalid_pair_policy/);
+    for (const count of [1, 2]) {
+      const manifest = JSON.parse(await readFile(options.taskManifest, 'utf8'));
+      if (count === 2) manifest.tasks[0].editPaths.push('worker/second.ts');
+      await writeFile(options.taskManifest, JSON.stringify(manifest));
+      const proof = JSON.parse(await readFile(options.qualificationPath, 'utf8'));
+      proof.receipts[0].taskDigest = hash(JSON.stringify(manifest.tasks[0]));
+      await writeFile(options.qualificationPath, JSON.stringify(proof));
+      const seen = [];
+      const state = await runPairBenchmark({ ...options, out: join(root, `scope-${count}`), policy: 'scope',
+        grade, fetcher: success,
+        agent: async (_task, _image, strategy, id, settings, invoke, _unused, agentOptions) => {
+          seen.push({ strategy, turns: settings.maxTurns, preload: agentOptions.preloadSource });
+          await invoke(id, roles.strong, body, signal); return repaired();
+        } });
+      assert.deepEqual(state.strategies, ['cheap', 'strong', 'scope']);
+      assert.ok(seen.every(row => row.strategy === 'strong' && row.preload && row.turns === config.maxCalls));
+      const routed = state.records.find(row => row.strategy === 'scope');
+      assert.equal(routed.selectedStrategy, count === 1 ? 'cheap' : 'strong');
+      assert.equal(routed.selectedModel, count === 1 ? config.cheap : config.strong);
+      assert.equal(state.calls.at(-1).model, routed.selectedModel);
+      assert.equal(routed.calls, 1);
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

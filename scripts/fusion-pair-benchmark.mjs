@@ -12,6 +12,11 @@ export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect'];
 
+// The caller supplies repair scope before inference; never inspect test answers.
+export function scopeStrategy(task) {
+  return task.editPaths.length === 1 ? 'cheap' : 'strong';
+}
+
 export function validatePair(config, taskCount) {
   if (JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(Object.keys(pairDefaults).sort())
     || !Object.hasOwn(nativeModels, config.cheap) || !Object.hasOwn(nativeModels, config.strong)
@@ -40,8 +45,11 @@ export function pairExecution(strategy, config) {
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  cheapReasoning = 'none', preloadSource = false, env = process.env, fetcher = fetch, agent = runAgent, grade = verify, preflight = nativePins }) {
+  cheapReasoning = 'none', preloadSource = false, policy = 'architect', env = process.env, fetcher = fetch, agent = runAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
+  if (!['architect', 'scope'].includes(policy)) throw new Error('invalid_pair_policy');
+  if (policy === 'scope') preloadSource = true;
+  const trialStrategies = ['cheap', 'strong', policy];
   const tasks = await loadTasks(taskManifest);
   validatePair(config, tasks.length);
   if (!['none', 'medium'].includes(cheapReasoning)) throw new Error('invalid_cheap_reasoning');
@@ -52,7 +60,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: 'native-pair-repository', sourceSha, config,
     cheapReasoning, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
-    strategies, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
+    strategies: trialStrategies, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
       'Published tariffs applied to reported usage; unknown charges retain their full reservation.'] };
@@ -106,14 +114,16 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     for (const [index, task] of tasks.entries()) {
       const receipt = receipts.find(row => row.taskId === task.id);
       // Rotate arm order to avoid always giving one arm the warmest caches.
-      for (let offset = 0; offset < strategies.length; offset++) {
-        const strategy = strategies[(index + offset) % strategies.length], trialId = `${task.id}:${strategy}`;
-        const start = performance.now(), execution = pairExecution(strategy, config);
-        const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running' };
+      for (let offset = 0; offset < trialStrategies.length; offset++) {
+        const strategy = trialStrategies[(index + offset) % trialStrategies.length], trialId = `${task.id}:${strategy}`;
+        const selectedStrategy = strategy === 'scope' ? scopeStrategy(task) : strategy;
+        const start = performance.now(), execution = pairExecution(selectedStrategy, config);
+        const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running',
+          ...(strategy === 'scope' ? { selectedStrategy, selectedModel: config[selectedStrategy] } : {}) };
         state.records.push(row);
         await save();
         try {
-          const result = await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(strategy), undefined, { preloadSource });
+          const result = await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
@@ -145,7 +155,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1' }).catch(() => {
+  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }

@@ -75,3 +75,72 @@ cost-saving flag therefore requires no lost strong-model repair. These are
 observations from the supplied run, not statistical significance, a signed
 attestation, or approval to change production routing. Prior campaign expenses
 remain in the spending ledger but are excluded from per-arm comparisons.
+
+### Declared-scope routing experiment
+
+Set `FUSION_PAIR_POLICY=scope` on the native paired repair runner to replace
+the architect arm with a deterministic selection: one editable source file uses
+the cheap model, while multiple editable files use the strong model. All arms
+receive initial editable source and the same call, time, and spending limits.
+The report records the selected model and charges only calls actually made.
+
+This is a benchmark hypothesis, not a production classifier. It requires the
+caller to provide a trustworthy repair scope before inference; it cannot infer
+that scope from an arbitrary prompt. Freeze the rule before evaluating unseen
+tasks, and compare complete paired cohorts. Passing visible tests or receiving
+a model's approval does not establish correctness; isolated acceptance decides
+the score. The scope policy does not use acceptance outcomes to select models.
+
+`benchmarks/fusion/scope-workloads.json` declares a separate prospective cohort.
+Its `development` schema label does not prove it is unseen: report exposure
+history and source revisions with each run. Qualify all four baseline/oracle
+checks before inference. This option does not change production routing.
+
+### Small-model evidence, 2026-11-07
+
+These are single-trial repository repairs with isolated acceptance tests. The
+controls receive the same initial editable source, and execution order rotates.
+Do not combine cohorts or interpret a passing visible test as a correct repair.
+
+| Cohort and limits | Cheap only | Strong only | Review cascade |
+| --- | --- | --- | --- |
+| Four development repairs; 12 calls, 300 seconds | 3/4; $0.054320 | 3/4; $0.543629 | Not matched at these limits |
+| Two prospectively frozen repairs; 24 calls, 600 seconds | 1/2; $0.019827 | 2/2; $0.518835 | 1/2; $0.065743 |
+
+Cheap is GPT-6 Luna with no reasoning; strong is GPT-6.1 Sol with medium
+reasoning. Both use an 8192 output-token ceiling. Costs are published-tariff
+estimates applied to reported usage, not invoice totals. The development tasks
+are `gmi-unified-selectors`, `bedrock-error-message`, `responses-literal-path`,
+and `unpriced-native-speech`. The prospective tasks are
+`sigv4-encoded-query` and `opaque-responses-input`.
+
+The development result is a 90.0% cost reduction at the same observed score.
+The holdout shows why that is not evidence of general quality parity: the
+strong control solved an accounting repair that the cheap control missed.
+A strong textual reviewer also accepted a cheap accounting candidate with two
+failing acceptance tests. Those independent test results were recorded only
+for diagnosis and were never shown to the policy. Textual approval is not a
+validated substitute for execution.
+
+The review policy was frozen at source `c8cb06187aabe7d261cd4deba74acd2b87d5cdce`
+before holdout exposure. It permits up to 12 cheap-author calls, one strong
+review, and strong revision after rejection, all within the 24-call total.
+The equal-source development controls used source
+`eb03ad5` and the same agent implementation; source preloading is the explicit
+configuration difference from earlier controls without it.
+
+The declared-scope experiment uses `scope-workloads.json`. All three fixtures
+pass original-visible and oracle-visible checks; broken acceptance fails in
+3, 4 and 10 tests respectively, and each oracle passes its full acceptance
+suite. The completed HTTP/1.1 campaign at source `df967b4` gave every arm
+24 calls and 600 seconds. Cheap-only solved 1/3 for $0.095080, strong-only 1/3
+for $0.999845, and scope routing 1/3 for $0.433089. Every arm solved Runway and
+missed both remaining repairs. Scope added no quality over cheap-only or the
+matched-cost random-mixture expectation. Earlier HTTP 503 and transport-failed
+attempts remain incomplete; their unknown-call reservations stay in the
+campaign spending ledger and are excluded from these per-arm comparisons.
+
+Current recommendation: inexpensive models are useful smoke-test workers, but
+keep correctness checks external and measure the quality loss on held-out
+repairs. No measured multi-model quality improvement has been established by
+these experiments, and no production default changes follow from them.
