@@ -177,7 +177,21 @@ usage event and delegates independent settlement and delivery to `accounting.ts`
    response headers into provider-neutral windows.
 8. On an upstream 401, 403, or 429, record sanitized grant state and, when the
    policy permits, try at most one same-provider alternate for an LLM or GET/HEAD
-   route.
+   route. Anthropic's explicit credit-balance HTTP 400 also excludes the selected
+   grant for five minutes through that same quota-feedback owner. Inspect at most
+   64 KiB / 128 reads before delivery; ambiguous or larger errors retain their
+   original response and do not trigger credit failover. Healthy grants retain
+   session stickiness. Exclusions follow full grant keys: policy/tenant-local
+   grants stay isolated, while explicitly shared grants share quota state.
+   The existing failover and billing/continuation safety gates still apply; no
+   generation is replayed after response bytes are delivered. When the alternate
+   also rejects, return its credit error. Subsequent requests with no eligible
+   grant receive the existing pool-unavailable error and earliest Retry-After.
+   Same-isolate hot admission snapshots apply feedback immediately, including
+   pending observations during alternate selection. Other isolates learn feedback
+   after publication through the bounded admission-cache refresh; colo-shared
+   snapshots retain their original acquisition time (60-second default max age).
+   Expired credit exclusions permit a normal request to try again.
 9. Settle budget and publish the single final usage event independently. Recovery
    for either task never masks the provider response or suppresses the other task.
 

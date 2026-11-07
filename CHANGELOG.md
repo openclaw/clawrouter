@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry one eligible same-provider grant before delivery, preserving healthy session stickiness and scoped quota state.
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
 
