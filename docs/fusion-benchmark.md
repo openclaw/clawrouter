@@ -55,3 +55,23 @@ This measures the composition algorithm. It does not exercise the gateway's
 credential authority, budget ledgers, transport adapters or production traffic.
 Those remain separate integration and load-test obligations. Model aliases and
 catalog slugs record declared identity, not proof of a provider's hidden weights.
+
+## Analyze paired repair results
+
+Run `node scripts/fusion-pair-analysis.mjs <pair.json>` on a complete native
+repair comparison. It checks that each qualified task has every arm and that
+row costs and call counts reconcile with settled attempts. Incomplete runs,
+unknown charges and duplicate or missing outcomes are rejected.
+
+The summary reports per-task wins and losses against each fixed control, total
+cost, and the number of extra repairs available from choosing correctly between
+the controls. It also compares the candidate with a task-independent random
+mixture of the two controls at the candidate's observed cost, when that cost is
+inside the control range. This mixture is a computed expectation from the
+control observations, not an additional executed benchmark.
+
+Equal aggregate scores can conceal regressions on different tasks. The reported
+cost-saving flag therefore requires no lost strong-model repair. These are
+observations from the supplied run, not statistical significance, a signed
+attestation, or approval to change production routing. Prior campaign expenses
+remain in the spending ledger but are excluded from per-arm comparisons.
