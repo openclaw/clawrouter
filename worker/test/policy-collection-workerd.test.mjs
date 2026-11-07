@@ -114,9 +114,9 @@ export default {async fetch(request,bindings,ctx){
    await put('access/bindings/group/team/p',binding('p'));await put('policies/p',mode==='legacy-false'?'false':mode==='legacy-zero'?'0':'null');await put('keys/p',policy({generation:'legacy'}));
   }else if(mode==='aggregate'){
    for(const[principal,key]of[['team','a'],['other','b']])await put('access/bindings/group/'+principal+'/'+key,' '.repeat(1500000)+JSON.stringify(binding('p','group',principal)));
-   await put('access/bindings/user/'+email+'/c',' '.repeat(1500000)+JSON.stringify(binding('p','user',email)));
+   await put('access/bindings/user/'+encodeURIComponent(email)+'/c',' '.repeat(1500000)+JSON.stringify(binding('p','user',email)));
   }else{
-   await put('access/bindings/user/'+email+'/p',binding('p','user',email,10));
+   await put('access/bindings/user/'+encodeURIComponent(email)+'/p',binding('p','user',email,10));
    await put('access/bindings/group/team/p',binding('p','group','team',20));
    await put('access/bindings/group/team/q',binding('q'));await put('access/bindings/group/team/r',binding('r'));
    for(let i=0;i<64;i++)await put('access/bindings/group/team/disabled-'+i,binding('disabled-'+i,'group','team',0,false));
@@ -273,6 +273,7 @@ test('policy collection ORIGINAL KV/request/reply prerequisites and real public/
       } else {
         assert.equal(result.failed, true, mode);
         assert.equal(result.reason, mode === 'aggregate' ? 'limit' : mode === 'sql-limit' ? 'query' : mode === 'default' ? 'transport' : 'ack');
+        if (mode === 'aggregate') { assert.equal(result.gets, 3); assert.ok(result.source.bytes > 0, 'third aggregate record was read'); }
         if (mode === 'aggregate' || mode === 'init-limit' || mode === 'default') { assert.equal(result.stats.writes, 0); assert.equal(result.stats.markers, setup.markers); }
         if (mode === 'sql-fail') { assert.equal(result.stats.writes, 1); assert.deepEqual(result.stored, ['one']); }
         if (mode === 'init-limit' || mode === 'sql-fail') assert.equal(result.outcome, 'OUTCOME_UNKNOWN');

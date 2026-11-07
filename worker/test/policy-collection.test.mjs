@@ -110,11 +110,12 @@ test('SQL and cold canonical replies retain all unknown ID-named fields; cold bi
 });
 
 test('normalized candidate visitor hits the actual graph boundary before filter/copy, including the LAST candidate', async t => {
-  const original = Array.prototype.filter; let copies = 0;
-  t.mock.method(Array.prototype, 'filter', function (...args) {
+  const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'filter'), original = descriptor.value; let copies = 0;
+  t.after(() => { Object.defineProperty(Array.prototype, 'filter', descriptor); });
+  Object.defineProperty(Array.prototype, 'filter', { ...descriptor, value: function (...args) {
     if (this[0] === 'projection-witness') copies++;
     return Reflect.apply(original, this, args);
-  });
+  } });
   const exact = { providers: Array(32738).fill('projection-witness') };
   assert.doesNotThrow(() => policyCandidatePlan()('p', exact, false)); assert.equal(copies, 0);
   assert.doesNotThrow(() => admitPolicyJson([{ policyId: 'p', policy: normalizePolicyRecord(exact, false) }])); assert.equal(copies, 1);
@@ -158,8 +159,9 @@ test('candidate visitor matches exact normalized UTF8/text escaping limits and s
 test('expired publication reserves its structural branch before normalization across clock rollback', t => {
   let now = Date.parse('2031-01-01T00:00:00Z'), clockReads = 0, copies = 0;
   t.mock.method(Date, 'now', () => { clockReads++; return now; });
-  const original = Array.prototype.filter;
-  t.mock.method(Array.prototype, 'filter', function (...args) { if (this[0] === 'clock-projection') copies++; return Reflect.apply(original, this, args); });
+  const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'filter'), original = descriptor.value;
+  t.after(() => { Object.defineProperty(Array.prototype, 'filter', descriptor); });
+  Object.defineProperty(Array.prototype, 'filter', { ...descriptor, value: function (...args) { if (this[0] === 'clock-projection') copies++; return Reflect.apply(original, this, args); } });
   const publication = { version: 'clawrouter.input-publication.v1', allow: [
     { providerId: 'openrouter', endpointId: 'music_generate', modelId: 'openrouter/google/lyria-3-pro-preview', publish: true, forward: false, expiresAt: '2030-01-01T00:00:00Z' },
     { providerId: 'openrouter', endpointId: 'music_generate', modelId: 'openrouter/google/lyria-3-clip-preview', publish: false, forward: true, expiresAt: '2030-01-01T00:00:00.001Z' },
