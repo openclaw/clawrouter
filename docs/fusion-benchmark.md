@@ -56,6 +56,20 @@ credential authority, budget ledgers, transport adapters or production traffic.
 Those remain separate integration and load-test obligations. Model aliases and
 catalog slugs record declared identity, not proof of a provider's hidden weights.
 
+## Original source context
+
+Repair tasks may declare up to four `sourceContext` entries, each with a source
+`path` and a unique literal `query`. The harness supplies eight surrounding lines
+on each side from the original repository, capped at 24 KB total. Test files and
+editable files cannot be context sources. Qualification rejects missing or
+ambiguous selectors before inference. This helps workers use actual internal
+identifiers instead of guessing them; it grants no additional edit permission.
+
+For example, a pricing task can select `function validateGroqMistralTranscription(`
+in `scripts/compile-providers.mjs`. Every comparison arm must receive the same
+context. Changing a selector changes the task digest and requires qualification
+again. Context is input evidence, not an acceptance test or a known repair.
+
 ## Analyze paired repair results
 
 Run `node scripts/fusion-pair-analysis.mjs <pair.json>` on a complete native
