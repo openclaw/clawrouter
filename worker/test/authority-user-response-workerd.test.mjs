@@ -142,9 +142,13 @@ export default {async fetch(request,env,ctx){
  const x=environment(env,id,a,kind,mode,abort);
  // All I/O promises/handles below belong only to THIS originating request.
  let abortRoot;
- if(['read','read-reject','late'].includes(mode))abortRoot=gate(id,'abort').then(()=>{a.aborted=true;abort.abort();}).then(
+ if(['read','read-reject','late','unknown-lock'].includes(mode))abortRoot=gate(id,mode==='unknown-lock'?'lifetime':'abort').then(()=>{
+  if(mode!=='unknown-lock'){a.aborted=true;abort.abort();}
+ }).then(
   ()=>{a.controlSettled=true;return {failed:false};},
   error=>{a.controlSettled=true;a.controlFailed=true;return {failed:true,error};});
+ // Explicit fixture lifetime support, not a production physical-retirement claim.
+ if(mode==='unknown-lock')ctx.waitUntil(abortRoot);
  if(mode==='pre-abort')abort.abort();
  const background=[];
  const work=(async()=>{
@@ -205,13 +209,14 @@ async function signedIdentity() {
 test('actual user-query producer, public authentication and owned network faults', { timeout: 120000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'authority-user-workerd-'));
   const identity = await signedIdentity(), waiting = new Map(), arrived = new Set(), released = new Set(), tails = new Map(), outcomes = [], serverErrors = [];
-  let runtime, server, releaseFuture = false, primary, hasPrimary = false, unknownOutcome;
+  let runtime, server, releaseFuture = false, primary, hasPrimary = false, unknownOutcome, drainUnknownLifetime;
   const release = key => { released.add(key); const response = waiting.get(key); if (response) { waiting.delete(key); response.end('released'); } };
   const releaseAll = () => { releaseFuture = true; for (const key of waiting.keys()) release(key); for (const r of tails.values()) if (!r.destroyed) r.end('true,"users":[],"missingEmails":[]}'); };
   const stop = () => releaseAll();
   t.signal.addEventListener('abort', stop, { once: true });
   t.after(async () => {
     releaseAll(); const failures = [];
+    try { if (drainUnknownLifetime) await drainUnknownLifetime(); } catch (error) { failures.push(error); }
     for (const result of await Promise.all(outcomes)) if (!result.ok && (!hasPrimary || result.error !== primary)) failures.push(result.error);
     failures.push(...serverErrors);
     try { if (runtime) await runtime.dispose(); } catch (error) { failures.push(error); }
@@ -336,12 +341,25 @@ test('actual user-query producer, public authentication and owned network faults
     // Unknown unlock is a deliberately nonterminating physical owner. Isolate
     // disposal below ends the fixture; it is NOT retirement or successful auth.
     await setup('unknown');
+    let lifetimeDrain;
+    drainUnknownLifetime = () => lifetimeDrain ??= (async () => {
+      let control;
+      for (let i = 0; i < 500; i++) {
+        control = await call('/state?id=unknown');
+        if (control.controlSettled) break;
+        await delay(10);
+      }
+      assert.equal(control.controlSettled, true, 'original-request fixture lifetime root must settle before disposal');
+      assert.equal(control.controlFailed, false);
+    })();
     const unknown = runtime.dispatchFetch('https://router.example/start?id=unknown&mode=unknown-lock');
     let unknownSettled = false;
     unknownOutcome = unknown.then(() => { unknownSettled = true; return { ok: true }; }, () => { unknownSettled = true; return { ok: false }; });
-    await wait('unknown', s => s.unknownLock, unknownOutcome);
+    await wait('unknown', s => s.unknownLock && arrived.has('unknown/lifetime'), unknownOutcome);
     const held = await call('/state?id=unknown');
     assert.equal(unknownSettled, false); assert.equal(held.locked, true); assert.equal(held.done, false); assert.equal(held.published, false);
+    release('unknown/lifetime');
+    await drainUnknownLifetime();
     await runtime.dispose(); runtime = undefined; await unknownOutcome;
   } catch (error) { primary = error; hasPrimary = true; throw error; }
 });
