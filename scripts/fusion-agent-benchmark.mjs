@@ -137,6 +137,16 @@ function bodyFor(messages, config) {
     json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
 }
 
+export function actionFeedback(code, action, task) {
+  if (['read', 'search'].includes(action) && ['invalid_read_paths', 'invalid_source_view', 'command_failed'].includes(code)) {
+    return `Tool error: ${code}. Use at most three existing file paths, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
+  }
+  if (['invalid_edits', 'invalid_edit', 'search_must_match_once'].includes(code)) {
+    return `Tool error: ${code}. Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
+  }
+  return `Tool error: ${code}. Check allowed paths, line ranges and exact unique search text.`;
+}
+
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
   const box = await sandbox(image), started = performance.now();
   const actions = [];
@@ -144,6 +154,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   const deadline = AbortSignal.any([AbortSignal.timeout(config.deadlineMs), ...(options.signal ? [options.signal] : [])]);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
+  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
@@ -267,7 +278,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         event.status = toolErrorCode(error);
         if (deadline.aborted) { outcome = 'deadline'; break; }
-        invalidActions++; messages.push({ role: 'user', content: `Tool error: ${event.status}. Check allowed paths, line ranges and exact unique search text.` }); }
+        invalidActions++; messages.push({ role: 'user', content: actionFeedback(event.status, action.action, task) }); }
       finally { toolMs += performance.now() - toolStarted; }
       // This is a development cascade using observable tests, not an oracle gate.
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }

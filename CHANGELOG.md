@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+- Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
 - Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
