@@ -320,6 +320,14 @@ export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```
 
+With `CLAWROUTER_SMOKE_VERSION_ID`, every Worker response must prove the selected
+version (existing Cloudflare Access challenges remain exempt). GET/HEAD responses
+proving a different valid version are discarded and retried for at most 30 seconds
+per request; missing or malformed proof fails immediately. Before its first POST,
+the smoke requires five consecutive honored health reads one second apart within
+30 seconds, resetting on any fallback. POSTs are never replayed. The train retains
+its five-minute overall smoke limit, including these waits.
+
 Each provider POST has a unique request ID. After recording its health result,
 the smoke uses the same key to poll `GET /v1/usage` for that request's successful
 event, matching provider and HTTP status. It reports the independent event ID

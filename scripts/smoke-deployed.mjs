@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createVersionFetch } from "./smoke-version.mjs";
+import { createVersionFetch, waitForVersionStability } from "./smoke-version.mjs";
 import packageMetadata from "../package.json" with { type: "json" };
 import {
   buildProviderSmokePlan,
@@ -18,6 +18,7 @@ import {
 const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL").replace(/\/$/, "");
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 const versionId = process.env.CLAWROUTER_SMOKE_VERSION_ID?.trim();
+const fetchWithoutOverride = globalThis.fetch;
 // This standalone CLI also scopes fetch calls made by provider/usage helpers.
 // The Cloudflare KV health-record API is a different origin and is not overridden.
 if (versionId) globalThis.fetch = createVersionFetch({
@@ -51,6 +52,10 @@ await expectAccessGate(`${baseUrl}/v1/session/usage`, "session usage access gate
 await expectClientAuthGate(`${baseUrl}/v1/entitlements`, "entitlements Worker auth gate");
 await expectAccessGate(`${baseUrl}/v1/playground/v1/chat/completions`, "playground access gate");
 await expectAccessGate(`${baseUrl}/v1/oauth/callback`, "OAuth callback access gate");
+if (versionId) await waitForVersionStability({
+  baseUrl, versionId, workerName: process.env.CLAWROUTER_WORKER_NAME || "clawrouter-edge",
+  fetchImpl: fetchWithoutOverride,
+});
 await expectAccessGate(
   `${baseUrl}/v1/admin/upstream-grants/policies/smoke/openai/authorize`,
   "OAuth authorization access gate",

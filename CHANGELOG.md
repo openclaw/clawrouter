@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Retry transient Worker version-override fallbacks during deploy smoke reads and require stable version proof before POSTs, without replaying paid requests.
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
 

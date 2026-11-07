@@ -132,7 +132,7 @@ export async function runWithinDeadline(run, timeoutMs, message) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      const error = new Error(message);
+      const error = message instanceof Error ? message : new Error(message);
       controller.abort(error);
       reject(error);
     }, timeoutMs);
