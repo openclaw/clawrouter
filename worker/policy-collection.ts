@@ -1,5 +1,7 @@
 import { isAccessDenial, parseAccessJson, type UserSourceCounts } from "./access-json.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
+import { DEFAULT_GRANT_ROUTING, validGrantSegment } from "./grant-routing.ts";
+import { boundedPercent, GRANT_SELECTION_STRATEGIES } from "./grant-selection-strategies.ts";
 import { HttpError } from "./utils.ts";
 import type { AccessPolicyEntry, BudgetOverride, Env, PolicyBinding } from "./types";
 
@@ -23,10 +25,10 @@ export function admitPolicyBytes(budget: PolicySourceBudget, bytes: number): voi
   if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > 2097152 || bytes > budget.maximum - budget.bytes) fail("limit");
   budget.bytes += bytes;
 }
-export function parsePolicyRecord(text: string, budget: PolicySourceBudget): unknown {
+export function parsePolicyRecord(text: string, budget: PolicySourceBudget, binding = false): unknown {
   if (typeof text !== "string" || text.length > 2097152 || text.length > budget.maximum - budget.text) fail("limit");
   budget.text += text.length;
-  try { return parseAccessJson(text, "policy_collection", budget); }
+  try { return parseAccessJson(text, binding ? "policy_binding_record" : "policy_collection", budget); }
   catch (error) { return fail(isAccessDenial(error) ? "limit" : "protocol"); }
 }
 
@@ -90,7 +92,16 @@ function jsonMeter(maximum: number, counts = policySourceBudget()) {
       string(key, true); add(1); if (nested) nested(); else item(value, depth + 1);
     });
   };
-  return { item, add, string, object, counts };
+  const array = (depth: number, elements: (entry: (value: unknown, nested?: () => void) => void) => void) => {
+    if (depth >= 16 || ++counts.values > 65536 || ++counts.containers > 16384) fail("limit");
+    add(2); let first = true;
+    elements((value, nested) => {
+      if (++counts.entries + counts.members > 32768) fail("limit");
+      if (!first) add(1); first = false;
+      if (nested) nested(); else item(value, depth + 1);
+    });
+  };
+  return { item, add, string, object, array, counts };
 }
 
 export function admitPolicyJson(value: unknown): void {
@@ -287,7 +298,7 @@ export async function readPolicyResponse(start: () => Promise<Response>, signal?
     if (!response!.ok) throw Object.assign(new Error("Authority policy query failed"), { code: "policy_collection_query_failed", reason: "status" });
     const budget = policySourceBudget();
     const text = await owner!.text(budget, signal);
-    try { result = parseAccessJson(text, path === "/resolve" ? "policy_binding_reply" : "policy_collection"); }
+    try { result = parseAccessJson(text, path === "/resolve" ? "policy_binding_reply" : "policy_reply"); }
     catch (error) { fail(isAccessDenial(error) ? "limit" : "protocol"); }
     if (!result || typeof result !== "object" || Array.isArray(result)) fail("protocol");
     const envelope = result as { initialized?: unknown; policies?: unknown; bindings?: unknown; missingPrincipals?: unknown; missingPolicyIds?: unknown };
@@ -334,11 +345,11 @@ export class PolicyCollection {
       for (const group of groups) policyId(group);
     }
   }
-  async read(env: Env, key: string): Promise<Record<string, unknown> | null> {
+  async read(env: Env, key: string, binding = false): Promise<Record<string, unknown> | null> {
     const body = await policyActual(() => env.POLICY_KV.get(key, "stream"));
     if (body === null) return null;
     const owner = new PolicySource(body);
-    try { return parsePolicyRecord(await owner.text(this.source), this.source) as Record<string, unknown> | null; }
+    try { return parsePolicyRecord(await owner.text(this.source), this.source, binding) as Record<string, unknown> | null; }
     finally { await owner.retire("cancel"); }
   }
   async listBindings(env: Env, prefix: string): Promise<PolicyBinding[]> {
@@ -357,7 +368,7 @@ export class PolicyCollection {
       if (!page.list_complete) admitCursor(page.cursor);
       for (const key of page.keys) {
         if (!key || typeof key.name !== "string") fail("protocol");
-        const value = await this.read(env, key.name);
+        const value = await this.read(env, key.name, true);
         if (++this.bindings > 4096) fail("limit");
         if (value) { plan(value); values.push(value as unknown as PolicyBinding); }
       }
@@ -400,4 +411,165 @@ export function admitEffectivePolicies(entries: AccessPolicyEntry[], ids: string
       }));
     }
   }
+}
+
+const objectRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+function ownKeyCount(value: object): number { let count = 0; for (const key in value) if (Object.hasOwn(value, key)) count++; return count; }
+function exactKeys(value: unknown, names: readonly string[]): value is Record<string, unknown> {
+  return objectRecord(value) && ownKeyCount(value) === names.length && names.every(name => Object.hasOwn(value, name));
+}
+// Same validGrantKey predicate without split/slice allocations during planning.
+function plannedGrantKey(value: string): boolean {
+  if (!value.startsWith("oauth/")) return false;
+  let from = 6, parts = 1, tenant = false;
+  for (;;) {
+    const slash = value.indexOf("/", from), end = slash < 0 ? value.length : slash, length = end - from;
+    if (!length || length > 256) return false;
+    if (parts === 1) tenant = length === 7 && value.startsWith("tenants", from);
+    for (let i = from; i < end; i++) { const c = value.charCodeAt(i); if (c < 32 || c === 127) return false; }
+    if (++parts > 4) return false;
+    if (slash < 0) return parts === (tenant ? 4 : 3);
+    from = slash + 1;
+  }
+}
+// At most the retained first 1024 models / 32 grant references. No filtered
+// output array, full Set of discarded values or sorted copy is constructed.
+function projectedStrings(values: unknown[], maximum: number, valid: (value: string) => boolean, emit: (value: string) => void): number {
+  const seen = new Set<string>();
+  if (!maximum) return 0;
+  for (const value of values) if (typeof value === "string" && valid(value) && !seen.has(value)) {
+    seen.add(value); emit(value); if (seen.size === maximum) break;
+  }
+  return seen.size;
+}
+function projectedRetention(value: unknown): value is { version: string; allow: Array<{ providerId: string; protocol: string }> } {
+  if (!exactKeys(value, ["version", "allow"]) || value.version !== "clawrouter.upstream-retention.v1" || !Array.isArray(value.allow) || value.allow.length > 64) return false;
+  const seen = new Set<string>();
+  for (const entry of value.allow) {
+    if (!exactKeys(entry, ["providerId", "protocol"]) || typeof entry.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(entry.providerId)
+      || typeof entry.protocol !== "string" || !/^[a-z][a-z0-9_.-]{0,63}$/.test(entry.protocol)) return false;
+    const key = `${entry.providerId}/${entry.protocol}`;
+    if (seen.has(key)) return false; seen.add(key);
+  }
+  return true;
+}
+type PublicationProjection = { version: string; allow: Array<{ providerId: string; endpointId: string; modelId: string; publish: boolean; forward: boolean; expiresAt: string }> };
+function projectedPublication(value: unknown, now: number): value is PublicationProjection {
+  if (!Number.isFinite(now) || !exactKeys(value, ["version", "allow"]) || value.version !== "clawrouter.input-publication.v1" || !Array.isArray(value.allow) || value.allow.length > 2) return false;
+  let previous: unknown;
+  for (const entry of value.allow) {
+    if (!exactKeys(entry, ["providerId", "endpointId", "modelId", "publish", "forward", "expiresAt"])
+      || entry.providerId !== "openrouter" || entry.endpointId !== "music_generate"
+      || entry.modelId !== "openrouter/google/lyria-3-pro-preview" && entry.modelId !== "openrouter/google/lyria-3-clip-preview"
+      || typeof entry.publish !== "boolean" || typeof entry.forward !== "boolean" || typeof entry.expiresAt !== "string"
+      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(entry.expiresAt)) return false;
+    const expires = Date.parse(entry.expiresAt);
+    if (!Number.isFinite(expires) || expires <= now || new Date(expires).toISOString().replace(".000Z", "Z") !== entry.expiresAt.replace(".000Z", "Z")
+      || previous === entry.modelId) return false;
+    previous = entry.modelId;
+  }
+  return true;
+}
+
+// Exact serialized/graph projection of authority-policy.ts. The visitor uses
+// borrowed raw fields and bounded selection state, not the allocating normalizer.
+// Sorting retained strings/permission rows changes order, never these totals.
+function visitNormalizedPolicy(meter: ReturnType<typeof jsonMeter>, raw: Record<string, unknown>, retentionDefault: boolean, depth: number): void {
+  const array = (values: unknown[], at: number, unique: number | null, valid = (_value: string) => true) => meter.array(at, entry => {
+    if (unique !== null) projectedStrings(values, unique, valid, entry);
+    else for (const value of values) if (typeof value === "string") entry(value);
+  });
+  meter.object(depth, field => {
+    field("enabled", raw.enabled !== false);
+    field("generation", typeof raw.generation === "string" ? raw.generation : "legacy");
+    field("providers", undefined, () => array(Array.isArray(raw.providers) ? raw.providers : [], depth + 1, null));
+    if (Array.isArray(raw.models)) field("models", undefined, () => array(raw.models as unknown[], depth + 1, 1024));
+    else field("models", raw.models == null ? null : []);
+    field("poolStatus", raw.poolStatus === "visible" ? "visible" : "hidden");
+    field("tenantId", typeof raw.tenantId === "string" ? raw.tenantId : null);
+    field("tokenRole", typeof raw.tokenRole === "string" ? raw.tokenRole : null);
+    for (const key of ["monthlyBudgetMicros", "dailyBudgetMicros", "weeklyBudgetMicros"] as const) field(key, typeof raw[key] === "number" ? raw[key] : null);
+    field("serviceTiers", raw.serviceTiers ?? null);
+    field("limitHint", typeof raw.limitHint === "string" ? raw.limitHint : null);
+    field("requestCostMicros", typeof raw.requestCostMicros === "number" ? raw.requestCostMicros : null);
+    const costs = raw.requestCostsMicros;
+    if (costs == null) field("requestCostsMicros", null);
+    else {
+      if (!objectRecord(costs) || ownKeyCount(costs) > 64) fail("protocol");
+      field("requestCostsMicros", undefined, () => meter.object(depth + 1, cost => {
+        for (const key in costs) if (Object.hasOwn(costs, key)) {
+          const price = costs[key];
+          if (key.length > 128 || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(key) || typeof price !== "number" || !Number.isSafeInteger(price) || price < 0) fail("protocol");
+          cost(key, price);
+        }
+      }));
+    }
+    field("budgetScope", raw.budgetScope === "principal" ? "principal" : "policy");
+    if (raw.budgetMode === "soft" || raw.budgetMode === "reserve") field("budgetMode", raw.budgetMode);
+    const retention = raw.upstreamRetention;
+    if (projectedRetention(retention)) field("upstreamRetention", undefined, () => meter.object(depth + 1, member => {
+      member("version", retention.version);
+      member("allow", undefined, () => meter.array(depth + 2, entry => {
+        for (const row of retention.allow) entry(undefined, () => meter.object(depth + 3, item => { item("providerId", row.providerId); item("protocol", row.protocol); }));
+      }));
+    }));
+    const publication = raw.inputPublication;
+    if (projectedPublication(publication, Date.now())) field("inputPublication", undefined, () => meter.object(depth + 1, member => {
+      member("version", publication.version);
+      member("allow", undefined, () => meter.array(depth + 2, entry => {
+        for (const row of publication.allow) entry(undefined, () => meter.object(depth + 3, item => {
+          item("providerId", row.providerId); item("endpointId", row.endpointId); item("modelId", row.modelId);
+          item("publish", row.publish); item("forward", row.forward); item("expiresAt", new Date(Date.parse(row.expiresAt)).toISOString());
+        }));
+      }));
+    }));
+    field("retainRequestContent", typeof raw.retainRequestContent === "boolean" ? raw.retainRequestContent : retentionDefault);
+    field("grantRouting", undefined, () => visitRouting(meter, raw.grantRouting, depth + 1));
+  });
+}
+function visitRouting(meter: ReturnType<typeof jsonMeter>, input: unknown, depth: number): void {
+  const raw = objectRecord(input) ? input : {};
+  const strategy = (GRANT_SELECTION_STRATEGIES as readonly unknown[]).includes(raw.strategy) ? raw.strategy : DEFAULT_GRANT_ROUTING.strategy;
+  const visitGrants = (value: Record<string, unknown>, shared: boolean) => meter.object(depth + 1, field => {
+    let count = 0;
+    for (const providerId in value) if (Object.hasOwn(value, providerId) && validGrantSegment(providerId) && Array.isArray(value[providerId])) {
+      const refs = value[providerId] as unknown[];
+      // The existing plain-object normalizer assigns __proto__ without creating
+      // an own JSON member. For shared grants it still consumes the shared quota.
+      if (providerId === "__proto__") { if (shared) count += projectedStrings(refs, 32 - count, plannedGrantKey, () => undefined); continue; }
+      field(providerId, undefined, () => meter.array(depth + 2, entry => {
+        const retained = projectedStrings(refs, shared ? 32 - count : 32, shared ? plannedGrantKey : validGrantSegment, entry);
+        if (shared) count += retained;
+      }));
+    }
+  });
+  meter.object(depth, field => {
+    field("strategy", strategy);
+    field("stickiness", strategy === "threshold" ? "none" : raw.stickiness === "none" || raw.stickiness === "identity" || raw.stickiness === "session" ? raw.stickiness : DEFAULT_GRANT_ROUTING.stickiness);
+    field("failover", raw.failover !== false); field("environmentFallback", raw.environmentFallback === true);
+    field("includedQuotaReservePercent", typeof raw.includedQuotaReservePercent === "number" && Number.isInteger(raw.includedQuotaReservePercent) && raw.includedQuotaReservePercent >= 0 && raw.includedQuotaReservePercent <= 50 ? raw.includedQuotaReservePercent : 0);
+    field("staleState", raw.staleState === "deny" ? "deny" : "allow");
+    field("staleAfterSeconds", typeof raw.staleAfterSeconds === "number" && Number.isSafeInteger(raw.staleAfterSeconds) && raw.staleAfterSeconds >= 30 && raw.staleAfterSeconds <= 86400 ? raw.staleAfterSeconds : DEFAULT_GRANT_ROUTING.staleAfterSeconds);
+    field("switchAtUsedPercent", boundedPercent(raw.switchAtUsedPercent, DEFAULT_GRANT_ROUTING.switchAtUsedPercent));
+    field("hysteresisPercent", boundedPercent(raw.hysteresisPercent, DEFAULT_GRANT_ROUTING.hysteresisPercent));
+    field("eligibleGrants", undefined, () => visitGrants(objectRecord(raw.eligibleGrants) ? raw.eligibleGrants : {}, false));
+    if (objectRecord(raw.sharedGrants)) for (const providerId in raw.sharedGrants) {
+      if (Object.hasOwn(raw.sharedGrants, providerId) && providerId !== "__proto__" && validGrantSegment(providerId) && Array.isArray(raw.sharedGrants[providerId])) {
+        field("sharedGrants", undefined, () => visitGrants(raw.sharedGrants as Record<string, unknown>, true)); break;
+      }
+    }
+  });
+}
+export function policyCandidatePlan(): (id: string, policy: unknown, retentionDefault?: boolean) => void {
+  const meter = jsonMeter(2097152);
+  meter.add(2); meter.counts.values++; meter.counts.containers++;
+  return (id, policy, retentionDefault) => {
+    if (++meter.counts.entries + meter.counts.members > 32768) fail("limit");
+    if (meter.counts.entries > 1) meter.add(1);
+    meter.object(1, field => {
+      field("policyId", id);
+      if (retentionDefault === undefined) field("policy", policy);
+      else field("policy", undefined, () => visitNormalizedPolicy(meter, policy as Record<string, unknown>, retentionDefault, 2));
+    });
+  };
 }

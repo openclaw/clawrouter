@@ -55,14 +55,14 @@ export function accessBase64Bytes(value: string, maximum: number): Uint8Array<Ar
   return bytes;
 }
 
-type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user" | "user_record" | "user_query" | "user_init" | "assignment_source" | "policy_collection" | "policy_principals" | "policy_bindings" | "policy_ids" | "policy_seeds" | "policy_binding_reply";
+type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user" | "user_record" | "user_query" | "user_init" | "assignment_source" | "policy_collection" | "policy_principals" | "policy_bindings" | "policy_ids" | "policy_seeds" | "policy_binding_reply" | "policy_binding_record" | "policy_reply";
 export const authorityUserJsonLimits = Object.freeze({ wire: 1048576, text: 1048576 });
 export type UserSourceCounts = { values: number; containers: number; members: number; entries: number; units: number };
 const userSourceProfile = { wire: 2097152, depth: 16, values: 16384, containers: 4096, members: 8192, entries: 8192, units: 2097152, string: 2097152 } as const;
 const assignmentSourceProfile = { wire: 2097152, depth: 16, values: 65536, containers: 16384, members: 32768, entries: 32768, units: 2097152, string: 1048576 } as const;
 const profiles = {
   policy_collection: assignmentSourceProfile, policy_principals: assignmentSourceProfile, policy_bindings: assignmentSourceProfile,
-  policy_ids: assignmentSourceProfile, policy_seeds: assignmentSourceProfile, policy_binding_reply: assignmentSourceProfile,
+  policy_ids: assignmentSourceProfile, policy_seeds: assignmentSourceProfile, policy_binding_reply: assignmentSourceProfile, policy_binding_record: assignmentSourceProfile, policy_reply: assignmentSourceProfile,
   assignment_source: assignmentSourceProfile,
   user_record: userSourceProfile, user_query: userSourceProfile, user_init: userSourceProfile,
   header: { wire: 2048, depth: 4, values: 64, containers: 8, members: 32, entries: 16, units: 2048, string: 2048 },
@@ -86,9 +86,9 @@ function utf8Length(text: string, start = 0, end = text.length): number {
 // Closed recursive states (maximum depth sixteen), not a token vector. All raw
 // occurrences, including duplicate/discarded members, count before JSON.parse.
 export function parseAccessJson(text: string, profile: Profile, source?: UserSourceCounts): unknown {
-  const policy = profile === "policy_collection" || profile === "policy_principals" || profile === "policy_bindings" || profile === "policy_ids" || profile === "policy_seeds" || profile === "policy_binding_reply";
+  const policy = profile === "policy_collection" || profile === "policy_principals" || profile === "policy_bindings" || profile === "policy_ids" || profile === "policy_seeds" || profile === "policy_binding_reply" || profile === "policy_binding_record" || profile === "policy_reply";
   const p = profiles[profile], user = policy || profile === "authority_user" || profile === "user_record" || profile === "user_query" || profile === "user_init" || profile === "assignment_source";
-  if (source && profile !== "user_record" && profile !== "assignment_source" && profile !== "policy_collection") invalid();
+  if (source && profile !== "user_record" && profile !== "assignment_source" && profile !== "policy_collection" && profile !== "policy_binding_record") invalid();
   if (profile === "evidence" && text.length > accessEvidenceLimits.text) limit();
   // The user-reply owner counts ORIGINAL bytes before replacement decoding.
   // Re-encoding its decoded text would incorrectly charge replacement expansion.
@@ -127,7 +127,7 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
     }
     return invalid();
   };
-  const value = (depth: number, key = "", rootMember = false, jwkRow = false, insideJwk = false, requestRow = false, rawEmail = false): void => {
+  const value = (depth: number, key = "", rootMember = false, jwkRow = false, insideJwk = false, requestRow = false, rawEmail = false, position = ""): void => {
     space(); const start = at;
     if (++values > p.values) limit();
     const c = text[at];
@@ -139,11 +139,17 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
         if (object) {
           if (++members > p.members || (profile === "assignment_source" || policy) && members + entries > 32768) limit();
           space(); const child = string(user ? 1024 : 64, true); space(); if (text[at++] !== ":") invalid();
-          value(depth + 1, child, depth === 0, false, insideJwk || jwkRow, false, requestRow && child === "email");
+          const next = position === "principals-query" && child === "principals" || position === "binding-reply" && child === "missingPrincipals" ? "principals"
+            : position === "binding-reply" && child === "bindings" || position === "seed" && child === "bindings" ? "bindings"
+            : position === "seed" && child === "principal" ? "principal"
+            : position === "policies-query" && child === "policyIds" || position === "policy-reply" && child === "missingPolicyIds" ? "ids"
+            : position === "policy-init" && child === "entries" || position === "policy-reply" && child === "policies" ? "policy-entries"
+            : (position === "principal" || position === "binding") && child === "principalId" || (position === "binding" || position === "policy-entry") && child === "policyId" ? "id" : "";
+          value(depth + 1, child, depth === 0, false, insideJwk || jwkRow, false, requestRow && child === "email", next);
         } else {
           if (++entries > p.entries || (profile === "assignment_source" || policy) && members + entries > 32768) limit();
-          if ((profile === "policy_principals" && rootMember && key === "principals" || profile === "policy_bindings" && depth === 0) && ++principals > 1024) limit();
-          if ((profile === "policy_bindings" || profile === "policy_binding_reply" && rootMember) && key === "bindings" && ++bindings > 4096) limit();
+          if ((position === "principals" || position === "seeds") && ++principals > 1024) limit();
+          if (position === "bindings" && ++bindings > 4096) limit();
           const row = profile === "jwks" && rootMember && key === "keys";
           if (row && ++rows > accessLimits.keys || profile === "payload" && rootMember && key === "aud" && ++audiences > 32) limit();
           if (profile === "evidence" && rootMember && (key === "orgs" && ++orgs > accessEvidenceLimits.orgs
@@ -151,14 +157,16 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
           const queryEmail = profile === "user_query" && rootMember && key === "emails";
           const initRow = profile === "user_init" && depth === 0;
           if ((queryEmail || initRow) && ++occurrences > 4096) limit();
-          value(depth + 1, key, false, row, insideJwk || jwkRow, initRow, queryEmail);
+          const next = position === "principals" ? "principal" : position === "seeds" ? "seed" : position === "bindings" ? "binding"
+            : position === "ids" ? "id" : position === "policy-entries" || position === "policy-init" ? "policy-entry" : "";
+          value(depth + 1, key, false, row, insideJwk || jwkRow, initRow, queryEmail, next);
         }
         space(); if (text[at] === close) break;
         if (text[at++] !== ",") invalid();
       }
       at++;
     } else if (c === '"') {
-      const maximum = rawEmail || policy && (key === "principalId" || key === "policyId" || key === "policyIds") ? 1024 : profile !== "evidence" && !user && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
+      const maximum = rawEmail || position === "id" ? 1024 : profile !== "evidence" && !user && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
         : (profile === "payload" || profile === "evidence") && key === "email" ? 320 : p.string;
       // Every n/e occurrence counts before JSON.parse can discard duplicates.
       string(maximum, false, insideJwk && key === "n" ? 1024 : insideJwk && key === "e" ? 8 : undefined);
@@ -176,7 +184,9 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
     }
     if (jwkRow && utf8Length(text, start, at) > accessLimits.jwk) limit();
   };
-  value(0); space(); if (at !== text.length) invalid();
+  const rootPosition = profile === "policy_principals" ? "principals-query" : profile === "policy_bindings" ? "seeds" : profile === "policy_ids" ? "policies-query"
+    : profile === "policy_seeds" ? "policy-init" : profile === "policy_binding_reply" ? "binding-reply" : profile === "policy_binding_record" ? "binding" : profile === "policy_reply" ? "policy-reply" : "";
+  value(0, "", false, false, false, false, false, rootPosition); space(); if (at !== text.length) invalid();
   if (source) Object.assign(source, { values, containers, members, entries, units });
   return JSON.parse(text); // Normal parsed duplicate-member (last wins) semantics.
 }

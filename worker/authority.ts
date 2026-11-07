@@ -1,4 +1,4 @@
-import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
+import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { authorityAck, readAuthorityAck } from "./authority-ack-response.ts";
@@ -271,7 +271,8 @@ export class PolicyBindingIndexObject implements DurableObject {
   private initializeCollectedPolicies(input: AccessPolicyEntry[] | { entries: AccessPolicyEntry[]; retainRequestContentDefault: boolean }): void {
     if (this.hasMeta("policies_global_initialized")) return;
     const raw = !Array.isArray(input), entries = Array.isArray(input) ? input : input.entries;
-    const budget = policySourceBudget(), staged = new Set<string>(), plan = policySequencePlan();
+    const budget = policySourceBudget(), staged = new Set<string>(), plan = policyCandidatePlan();
+    const candidates: AccessPolicyEntry[] = [];
     const prepared: Array<{ policyId: string; text: string }> = [];
     for (const entry of entries) {
       policyId(entry.policyId);
@@ -281,10 +282,16 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (current || staged.has(entry.policyId)) continue;
       if (!entry.policyId) invalidAuthorityRequest("policyId is required");
       admitPolicyJson(entry.policy);
+      plan(entry.policyId, entry.policy, raw ? (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault : undefined);
+      candidates.push(entry); staged.add(entry.policyId);
+    }
+    // The COMPLETE prospective batch is admitted before even the first
+    // providers.filter/models Set/routing copy in the unchanged normalizer.
+    const actualPlan = policySequencePlan();
+    for (const entry of candidates) {
       const policy = raw ? normalizePolicyRecord(entry.policy as unknown as Record<string, unknown>, (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault) : entry.policy;
-      plan({ policyId: entry.policyId, policy });
-      const text = policyJsonText(policy);
-      prepared.push({ policyId: entry.policyId, text }); staged.add(entry.policyId);
+      actualPlan({ policyId: entry.policyId, policy });
+      prepared.push({ policyId: entry.policyId, text: policyJsonText(policy) });
     }
     // All candidate validation, complete-batch accounting and serialization finish
     // before the first write. SQL failure retains the existing partial-commit risk.
@@ -304,7 +311,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (!meta || !Number.isSafeInteger(meta.count) || meta.count < 0 || meta.count > 4096 - count) throw policyCollectionFailure("limit");
       count += meta.count; admitPolicyBytes(budget, meta.bytes);
       for (const row of this.sql.exec<{ binding_json: string }>("SELECT binding_json FROM policy_binding_entries WHERE principal_key = ?", key)) {
-        const value = parsePolicyRecord(row.binding_json, budget) as PolicyBinding;
+        const value = parsePolicyRecord(row.binding_json, budget, true) as PolicyBinding;
         // Full stored unknown graph is counted before the old binding projection.
         policyId(value?.principalId); policyId(value?.policyId);
         const binding = normalizeBinding(value); plan(binding); bindings.push(binding);
