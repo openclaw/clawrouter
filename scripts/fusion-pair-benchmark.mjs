@@ -12,7 +12,8 @@ export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect'];
-const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', 'contract-provided', 'contract-draft'];
+const providedPolicies = ['contract-provided', 'contract-draft', 'contract-provided-cheap', 'contract-provided-strong'];
+const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
 // The caller supplies repair scope before inference; never inspect test answers.
 export function scopeStrategy(task) {
@@ -34,9 +35,9 @@ export function validatePair(config, taskCount) {
 }
 
 export function pairModel(strategy, role, config) {
-  if (strategy === 'contract-cheap') return config.cheap;
-  if (strategy === 'contract-strong') return config.strong;
-  if (['contract', 'contract-private', 'contract-provided', 'contract-draft'].includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
+  if (['contract-cheap', 'contract-provided-cheap'].includes(strategy)) return config.cheap;
+  if (['contract-strong', 'contract-provided-strong'].includes(strategy)) return config.strong;
+  if (contractPolicies.includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
 }
@@ -50,15 +51,17 @@ export function pairExecution(strategy, config) {
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  cheapReasoning = 'none', cheapMaxCalls = 10, preloadSource = false, policy = 'architect', includeControls = true, env = process.env, fetcher = fetch, agent = runAgent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
+  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   if (!['architect', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
+  agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (policy !== 'architect') preloadSource = true;
   if (contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const trialStrategies = includeControls ? ['cheap', 'strong', policy] : [policy];
   const tasks = await loadTasks(taskManifest);
-  if (['contract-provided', 'contract-draft'].includes(policy) && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
+  if (providedPolicies.includes(policy) && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
   validatePair(config, tasks.length);
   if (!['none', 'medium'].includes(cheapReasoning)) throw new Error('invalid_cheap_reasoning');
   if (!Number.isSafeInteger(cheapMaxCalls) || cheapMaxCalls < 1 || cheapMaxCalls > 59) throw new Error('invalid_cheap_call_allowance');
@@ -68,7 +71,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls,
-    cheapReasoning, cheapMaxCalls, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
+    cheapReasoning, cheapMaxCalls, executor, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies: trialStrategies, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
@@ -134,8 +137,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         try {
           const result = contractPolicies.includes(strategy)
             ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),
-              { agent, ...(policy === 'contract-draft' ? { cheapAgent: runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: ['contract-provided', 'contract-draft'].includes(policy) ? task.reproducer : null })
-            : await agent(['contract-provided', 'contract-draft'].includes(policy) ? withReproducer(task, task.reproducer) : task,
+              { agent, ...(policy === 'contract-draft' ? { cheapAgent: runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
+            : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
               receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
@@ -168,7 +171,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', includeControls: process.env.FUSION_PAIR_CONTROLS !== '0' }).catch(() => {
+  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', includeControls: process.env.FUSION_PAIR_CONTROLS !== '0' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }

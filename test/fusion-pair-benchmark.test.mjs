@@ -231,7 +231,7 @@ test('contract policy meters the test author and worker inside the same trial', 
 
 
 test('provided probes are equally visible to fixed controls and skip the test-author role', async () => {
-  for (const policy of ['contract-provided', 'contract-draft']) {
+  for (const policy of ['contract-provided', 'contract-draft', 'contract-provided-cheap', 'contract-provided-strong']) {
   const { root, options } = await fixture();
   try {
     await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy }), /missing_reproducer/);
@@ -257,7 +257,7 @@ test('provided probes are equally visible to fixed controls and skip the test-au
     assert.equal(instructions.length, 2);
     assert.equal(instructions[0], instructions[1]);
     assert.match(instructions[0], /provided probe sentinel/);
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, policy === 'contract-provided-strong' ? config.strong : config.cheap]);
   } finally { await rm(root, { recursive: true, force: true }); }
   }
 });
@@ -359,5 +359,31 @@ test('a policy-only ablation never calls baseline workers or claims a paired rep
     assert.deepEqual(state.calls.map(call => call.model), [config.strong, config.strong]);
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.records[0].costMicros);
     assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8')).kind, 'native-policy-repository');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('single-draft executor is explicit, restricted to supplied checks, and persisted', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const executor of ['unknown', null, 3]) await assert.rejects(runPairBenchmark({ ...options, executor }), /invalid_pair_executor/);
+    await assert.rejects(runPairBenchmark({ ...options, executor: 'single-draft' }), /invalid_pair_executor/);
+    const manifest = JSON.parse(await readFile(options.taskManifest));
+    manifest.tasks[0].reproducer = 'supplied reproducer';
+    await writeFile(options.taskManifest, JSON.stringify(manifest));
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    qualification.receipts[0].taskDigest = hash(JSON.stringify(manifest.tasks[0]));
+    qualification.receipts[0].reproduction = { assertionFailed: true };
+    qualification.receipts[0].oracleReproduction = { passed: true };
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
+      executor: 'single-draft', policy: 'contract-provided', grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => { await invoke(id, roles.strong, body, signal); return repaired(); },
+      contractAgent: async (_task, _image, id, _settings, invoke) => { await invoke(id, roles.cheap, body, signal); return repaired(); },
+    });
+    assert.equal(state.executor, 'single-draft');
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).executor, 'single-draft');
+    assert.equal(pairModel('contract-provided-strong', roles.cheap, config), config.strong);
+    assert.equal(pairModel('contract-provided-cheap', roles.strong, config), config.cheap);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

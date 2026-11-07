@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a matched one-shot Fusion executor and supplied-check single-model ablations for controlled benchmark comparisons.
+
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 
 - Add an opt-in Fusion single-draft benchmark policy with executable verification and original-source strong fallback.
