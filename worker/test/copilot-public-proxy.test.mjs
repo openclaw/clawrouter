@@ -14,6 +14,8 @@ const paths = ["/chat/completions", "/responses", "/messages"], capabilities = [
 const profile = { integrationId: "fixture", editorVersion: "Fixture/1", editorPluginVersion: "Fixture/1", userAgent: "Fixture/1", initiator: "agent" };
 function provider() {
   const source = structuredClone(snapshot.providers.find(row => row.id === "openai"));
+  // Reuse the wire template, not OpenAI's provider-specific product identity.
+  delete source.products; delete source.offer_definitions;
   const endpoint = source.endpoints.find(row => row.request_format === formats[0]);
   return { ...source, id: "github-copilot", config_keys: [], optional_config_keys: [], auth: { schemes: [{ type: "oauth", tokenRef: "copilot" }], authorization: null, refresh: null, grantTransports: {} }, routing: { ...source.routing, modelPrefixes: ["github-copilot/"] },
     endpoints: formats.map((format, i) => ({ ...endpoint, id: "api_" + i, path: paths[i], request_format: format, response_format: format,
