@@ -132,10 +132,13 @@ configuration difference from earlier controls without it.
 The declared-scope experiment uses `scope-workloads.json`. All three fixtures
 pass original-visible and oracle-visible checks; broken acceptance fails in
 3, 4 and 10 tests respectively, and each oracle passes its full acceptance
-suite. The initial campaign and its single restart stopped during the first
-trial on an HTTP 503 and an unresolved transport failure. Neither is a complete
-cohort; there is no scope-routing performance result to promote. Preserve
-unknown-call reservations and include them in the next campaign budget.
+suite. The completed HTTP/1.1 campaign at source `df967b4` gave every arm
+24 calls and 600 seconds. Cheap-only solved 1/3 for $0.095080, strong-only 1/3
+for $0.999845, and scope routing 1/3 for $0.433089. Every arm solved Runway and
+missed both remaining repairs. Scope added no quality over cheap-only or the
+matched-cost random-mixture expectation. Earlier HTTP 503 and transport-failed
+attempts remain incomplete; their unknown-call reservations stay in the
+campaign spending ledger and are excluded from these per-arm comparisons.
 
 Current recommendation: inexpensive models are useful smoke-test workers, but
 keep correctness checks external and measure the quality loss on held-out
