@@ -2,6 +2,7 @@ import type { ModelAvailability } from "./model-availability";
 export type { ModelAvailability } from "./model-availability";
 import type { NativeModelCapabilities } from "./native-capabilities";
 import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-request-parameters";
+import type { ProviderOfferReference, ProviderProductSummary } from "./provider-products.ts";
 
 export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
 export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
@@ -22,6 +23,8 @@ export interface ImageTokenPricing {
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
 export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
+  // Compatible declarations under this offer's policy. No selected account or entitlement promise.
+  productOffers?: ProviderOfferReference[];
   // Configured server origin, not publication permission or automatic selection.
   publishedInputOrigin?: { version: "clawrouter.published-input.v1"; origin: string };
   // Encoding declaration only; runtime eligibility and authority remain separate.
@@ -54,6 +57,7 @@ export interface ClientCatalogProvider {
   policies: string[];
   readiness: ProviderReadiness;
   connectionTypes: string[];
+  products?: ProviderProductSummary[];
   routes: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
   models: ClientCatalogModel[];
   offers: CatalogOffer[];

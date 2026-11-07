@@ -66,6 +66,15 @@ tools are assessed again at dispatch. A form without a selected model remains
 request-dependent when an eligible declared model is available; it does not
 make a model-less or opaque request priced.
 
+When a provider declares products, an eligible offer can also include
+`productOffers: [{ id, productId }]`. These references identify compatible
+declarations for that exact operation and the selected policy's active grant
+candidates. They do not select an account or prove a subscription entitlement.
+The provider's optional `products` array supplies each referenced product's
+`id`, `displayName`, `commercialModel`, and `authenticationMethod`. Missing
+fields mean no product annotation, not that the existing offer is unsupported.
+Blocked offers do not carry these references; dispatch remains authoritative.
+
 The projection observes the actual principal's policy ledger and the provider
 ledger without reserving budget, selecting credentials, refreshing accounts, or
 probing upstream. Observations are advisory; HTTP dispatch and every WebSocket

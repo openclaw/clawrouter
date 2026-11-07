@@ -8,6 +8,8 @@
 
 - Add an experimental declared-scope routing control to the Fusion repair benchmark, with independent cheap and strong baselines.
 
+- Add optional product identities to eligible client catalog offers, scoped to the selected policy and active compatible grants, without changing routing or legacy catalog eligibility.
+
 - Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
 
 - Add two pinned Fusion repair tasks for prospective policy comparisons, with explicit exposure and qualification requirements.
