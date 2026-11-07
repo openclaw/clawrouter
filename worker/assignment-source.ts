@@ -14,7 +14,7 @@ export function assignmentSourceFailure(kind: AssignmentFailureKind): HttpError 
 export function isAssignmentSourceFailure(error: unknown): error is HttpError {
   return typeof error === "object" && error !== null && failures.has(error);
 }
-const fail = (kind: AssignmentFailureKind): never => { throw assignmentSourceFailure(kind); };
+const fail: (kind: AssignmentFailureKind) => never = (kind) => { throw assignmentSourceFailure(kind); };
 export type AssignmentSourceBudget = UserSourceCounts & { bytes: number; text: number };
 export function assignmentSourceBudget(): AssignmentSourceBudget {
   return { bytes: 0, text: 0, values: 0, containers: 0, members: 0, entries: 0, units: 0 };
