@@ -281,6 +281,26 @@ test('private contract policy preserves fixed controls and mixed role accounting
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('the declared cheap allowance is validated, propagated and recorded', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const cheapMaxCalls of [0, 60, 1.5, '20', NaN]) {
+      await assert.rejects(runPairBenchmark({ ...options, cheapMaxCalls }), /invalid_cheap_call_allowance/);
+    }
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 40 },
+      policy: 'contract', cheapMaxCalls: 20, grade, fetcher: success,
+      agent: async () => repaired(),
+      contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
+        assert.equal(agentOptions.cheapMaxCalls, 20);
+        await invoke(id, roles.cheap, body, signal);
+        return repaired();
+      } });
+    assert.equal(state.cheapMaxCalls, 20);
+    assert.equal(state.config.maxCalls, 40);
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8')).cheapMaxCalls, 20);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('contract ablations preserve the scaffold while routing every role to the declared model', async () => {
   const { root, options } = await fixture();
   try {

@@ -337,3 +337,12 @@ cascade cost 18.27% more than strong; clearer tools did not produce an
 economic gain. Summed elapsed was 140.495s, 102.845s and 174.969s, with
 Docker qualification overlapping part of this run. These timings are
 descriptive and are not isolated performance measurements.
+
+`FUSION_CHEAP_MAX_CALLS` sets the contract workflow's cheap-stage allowance
+(integer 1–59, default 10). The runner records it as `cheapMaxCalls`. The stage
+uses at most the remaining shared call budget minus one, preserving a fallback
+call. Test generation, when enabled, consumes that same shared budget. This
+setting changes allocation, not the trial spend ceiling or the fixed controls'
+call allowance. A larger value can help a cheap worker finish, but can also
+leave too little time or too few calls for the strong fallback. Freeze both
+this value and total `maxCalls` before comparing runs.

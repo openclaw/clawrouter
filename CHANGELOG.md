@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+
+- Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
+
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.

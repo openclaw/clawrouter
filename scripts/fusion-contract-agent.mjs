@@ -12,11 +12,12 @@ export function contractRequest(task, files, outputTokens, feedback = '') {
 }
 
 export async function runContractAgent(task, image, trialId, config, invoke, {
-  agent = runAgent, makeSandbox = sandbox, read = readSource, write = writeFiles, runProbe = probe, exposeProbe = true, providedProbe = null,
+  agent = runAgent, makeSandbox = sandbox, read = readSource, write = writeFiles, runProbe = probe, exposeProbe = true, providedProbe = null, cheapMaxCalls = 10,
 } = {}) {
   if (typeof exposeProbe !== 'boolean') throw new Error('invalid_contract_exposure');
   if (providedProbe !== null) validateReproducer(providedProbe);
   if (!Number.isSafeInteger(config.maxTurns) || config.maxTurns < 4) throw new Error('contract_requires_four_calls');
+  if (!Number.isSafeInteger(cheapMaxCalls) || cheapMaxCalls < 1 || cheapMaxCalls > 59) throw new Error('invalid_cheap_call_allowance');
   const started = performance.now(), signal = AbortSignal.timeout(config.deadlineMs);
   let calls = 0, attempts = 0, contract = providedProbe, feedback = '', toolMs = 0;
   const actions = [];
@@ -85,7 +86,7 @@ export async function runContractAgent(task, image, trialId, config, invoke, {
     actions: [...actions, ...result.actions], toolMs: Math.round(toolMs + result.toolMs),
     agentMs: Math.round(performance.now() - started) });
   if (contract) {
-    const cheap = await execute(models.cheap, Math.min(10, config.maxTurns - calls - 1));
+    const cheap = await execute(models.cheap, Math.min(cheapMaxCalls, config.maxTurns - calls - 1));
     const checked = await evaluate(cheap.files, contract);
     const checkedAction = { action: 'contract_check', status: checked.passed ? 'passed' : 'failed' };
     if (checked.passed && cheap.publicPassed) return finish({ ...cheap, actions: [...cheap.actions, checkedAction] }, checked, false);
