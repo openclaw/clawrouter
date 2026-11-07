@@ -12,7 +12,7 @@ const marker = { 'x-clawrouter-user-materialization': 'v1' }, maximum = 2097152;
 const email = 'source@example.invalid', raw = { role: 'user', tenantId: 'fixture', enabled: true, groups: [' A ', 'a'], contentRetentionDisabled: false };
 const bytes = text => accessBytesResponse(text, '').body;
 const denied = kind => error => { assert.equal(error.code, 'user_materialization_unavailable'); assert.equal(error.message, `User materialization failed (${kind})`); assert.equal(Object.hasOwn(error, 'cause'), false); return true; };
-const request = (path, text, headers = marker) => new Request('https://clawrouter.internal' + path, { method: 'POST', headers, body: bytes(text), duplex: 'half' });
+const request = (path, text, headers = marker) => new Request('https://clawrouter.internal' + path, { method: 'POST', headers, body: new Headers(headers).has('x-clawrouter-user-materialization') ? bytes(text) : text, duplex: 'half' });
 function fixture(t) {
   const { db, sql } = sqliteFixture(t), trace = [], state = { writes: 0, failWrite: 0, reads: 0, beforeGet: null, calls: [] }, store = new Map();
   const owner = new PolicyBindingIndexObject({ storage: { sql: { exec(query, ...args) {
