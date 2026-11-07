@@ -337,3 +337,21 @@ cascade cost 18.27% more than strong; clearer tools did not produce an
 economic gain. Summed elapsed was 140.495s, 102.845s and 174.969s, with
 Docker qualification overlapping part of this run. These timings are
 descriptive and are not isolated performance measurements.
+
+### Operational holdout candidates
+
+`benchmarks/fusion/operational-holdout-workloads.json` defines three unexposed
+repair candidates: canonical credential aliases, bounded catalog health reads,
+and invalidated cache publication. Each includes a supplied reproducer and
+separate historical acceptance tests. Qualify each original and repaired image
+before model inference. The manifest uses the current `development` schema
+label; first model exposure and prospective status belong in the run record.
+This dataset definition alone makes no quality, cost or qualification claim.
+
+Qualification passed for all three candidates: original and repaired visible
+suites pass; original acceptance fails 1, 4 and 3 checks respectively, while
+repaired acceptance passes 68, 33 and 60 tests. Each supplied reproducer fails
+on original source and passes on the historical repair. The credential case
+uses contract acceptance because the original full runtime suite hangs; the
+cache case uses integration checks instead of private bookkeeping assertions.
+No model inference on these candidates is included in this fixture change.
