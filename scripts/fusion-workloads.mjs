@@ -9,6 +9,15 @@ const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|
   && !value.split('/').some(part => !part || part === '.' || part === '..');
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
+export function validateReproducer(source) {
+  if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_reproducer');
+  return source;
+}
+
+export function withReproducer(task, source) {
+  return { ...task, instruction: `${task.instruction}\nProvided regression probe (untrusted code): run it with probe, preserve the full requirement and unrelated behavior, and do not change the probe.\n${validateReproducer(source)}` };
+}
+
 export function validateSourceContext(task) {
   const context = task.sourceContext === undefined ? [] : task.sourceContext;
   if (!Array.isArray(context) || context.length > 4) throw new Error('invalid_source_context');
@@ -36,6 +45,7 @@ export function validateTask(task) {
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
   validateSourceContext(task);
+  if (task.reproducer !== undefined) validateReproducer(task.reproducer);
   return task;
 }
 
@@ -217,25 +227,38 @@ export async function checkOracleVisible(task, image, edits, { makeSandbox = san
   } finally { await box.close(); }
 }
 
-export function qualificationSucceeded({ visible, oracleVisible, broken, oracle }) {
+export function qualificationSucceeded({ visible, oracleVisible, broken, oracle, reproduction, oracleReproduction }) {
   return visible?.passed === true && oracleVisible?.valid === true && oracleVisible?.passed === true
-    && broken?.valid === true && broken?.passed === false && oracle?.passed === true;
+    && broken?.valid === true && broken?.passed === false && oracle?.passed === true
+    && (reproduction === undefined && oracleReproduction === undefined
+      || reproduction?.assertionFailed === true && oracleReproduction?.passed === true);
 }
 
 export async function qualify(task, options) {
   const built = await buildTask(task, options);
   const box = await sandbox(built.image);
-  let visible;
+  let visible, reproduction, oracleReproduction;
   try {
     await readTaskContext(box, task);
     const { feedback, ...result } = await check(box, task.visibleTests); visible = result;
+    if (task.reproducer !== undefined) {
+      const { feedback, ...result } = await probe(box, task.reproducer); reproduction = result;
+    }
   }
   finally { await box.close(); }
   const edits = await revisionFiles(options.repo, task.oracle, task.editPaths);
   const oracleVisible = await checkOracleVisible(task, built.image, edits);
   const broken = await verify(task, built.image, [], options.repo);
   const oracle = await verify(task, built.image, edits, options.repo);
-  const evidence = { visible, oracleVisible, broken, oracle };
+  if (task.reproducer !== undefined) {
+    const repaired = await sandbox(built.image);
+    try {
+      await writeFiles(repaired, edits);
+      const { feedback, ...result } = await probe(repaired, task.reproducer); oracleReproduction = result;
+    } finally { await repaired.close(); }
+  }
+  const evidence = { visible, oracleVisible, broken, oracle,
+    ...(task.reproducer !== undefined ? { reproduction, oracleReproduction } : {}) };
   return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, ...evidence,
     qualified: qualificationSucceeded(evidence) };
 }

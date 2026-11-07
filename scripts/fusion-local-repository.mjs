@@ -32,6 +32,7 @@ export function validateLocalQualification(tasks, qualification) {
       || !Number.isSafeInteger(receipt.oracle.tests) || receipt.oracle.tests < 1
       || !Number.isSafeInteger(receipt.oracle.skipped) || receipt.oracle.skipped < 0
       || receipt.broken?.valid !== true || receipt.broken.passed !== false
+      || task.reproducer !== undefined && (receipt.reproduction?.assertionFailed !== true || receipt.oracleReproduction?.passed !== true)
       || !/^sha256:[a-f0-9]{64}$/.test(receipt.image)) throw new Error('unqualified_local_task');
     return { taskId: task.id, taskDigest: receipt.taskDigest, image: receipt.image,
       oracleTests: receipt.oracle.tests, oracleSkipped: receipt.oracle.skipped };
