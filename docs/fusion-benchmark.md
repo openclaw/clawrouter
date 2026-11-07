@@ -369,3 +369,16 @@ Both fixed controls receive the same supplied reproducer and shared ceiling.
 The cheap-stage allowance does not add draft calls: this policy always makes
 one draft attempt. This is an opt-in benchmark policy with no demonstrated
 quality or cost gain yet; production defaults are unchanged.
+
+Single-draft development results (three previously exposed repairs):
+
+| Cheap reasoning | Cheap solved / cost | Strong solved / cost | Cascade solved / cost |
+| --- | --- | --- | --- |
+| none | 2/3 / $0.086882 | 3/3 / $0.484602 | 3/3 / $0.472985 |
+| medium | 3/3 / $0.054392 | 3/3 / $0.489671 | 3/3 / $0.504312 |
+
+The no-reasoning cascade saved only 2.40%, below the 20% development threshold.
+The medium-reasoning cascade cost 2.99% more than strong and was dominated by
+cheap-only. Neither configuration advances to the untouched operational cohort.
+These results calibrate the benchmark scaffold; they do not establish general
+model superiority or justify changing production defaults.
