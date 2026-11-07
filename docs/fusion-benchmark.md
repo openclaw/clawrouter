@@ -454,3 +454,25 @@ is retained and the attempt counts as an error. Summed elapsed times were
 and took 2.09 times the strong control's elapsed time. It failed both the
 20% saving and two-times latency gates. Cheap-only was 83.38% cheaper than
 strong on these exposed cases; independent validation is still needed.
+
+### Operational holdout candidates
+
+`benchmarks/fusion/operational-holdout-workloads.json` defines three historical
+repair candidates: canonical credential aliases, bounded catalog health reads,
+and invalidated cache publication. Each includes a supplied reproducer and
+separate historical acceptance tests. Qualify each original and repaired image
+before model inference. The manifest uses the current `development` schema
+label; first model exposure and prospective status belong in the run record.
+This dataset definition alone makes no quality, cost or qualification claim.
+
+Qualification passed for all three candidates: original and repaired visible
+suites pass; original acceptance fails 1, 4 and 3 checks respectively, while
+repaired acceptance passes 68, 33 and 60 tests. Each supplied reproducer fails
+on original source and passes on the historical repair. The credential case
+uses contract acceptance because the original full runtime suite hangs; the
+cache case uses integration checks instead of private bookkeeping assertions.
+No model inference on these candidates is included in this fixture change.
+
+These candidates were unexposed at registration. Consult the benchmark run
+records before reuse; after model exposure, they are development cases rather
+than fresh holdouts.
