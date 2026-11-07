@@ -1,3 +1,4 @@
+import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { authorityAck, readAuthorityAck } from "./authority-ack-response.ts";
@@ -65,8 +66,25 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (request.method !== "POST" && !request.headers.has(userMaterializationHeader) && !request.headers.has(assignmentSourceHeader)) return errorResponse("route_not_found", "route not found", 404);
+    if (request.method !== "POST" && !request.headers.has(userMaterializationHeader) && !request.headers.has(assignmentSourceHeader) && !request.headers.has(policyCollectionHeader)) return errorResponse("route_not_found", "route not found", 404);
     try {
+      if (request.headers.has(policyCollectionHeader)) {
+        // A private protocol selector, not authority or a public caller header.
+        const input = await readPolicyRequest(request, path);
+        try {
+          if (path === "/resolve") return new Response(policyJsonText({ initialized: this.hasMeta("bindings_global_initialized"),
+            ...this.resolveCollectedBindings((input as { principals: Principal[] }).principals) }), { headers: { "content-type": "application/json" } });
+          if (path === "/policies/resolve") return new Response(policyJsonText(this.resolveCollectedPolicies((input as { policyIds: string[] }).policyIds)), { headers: { "content-type": "application/json" } });
+          if (path === "/initialize") this.initializeCollectedBindings(input as Seed[]);
+          else this.initializeCollectedPolicies(input as AccessPolicyEntry[] | { entries: AccessPolicyEntry[]; retainRequestContentDefault: boolean });
+          return new Response("initialized");
+        } catch (error) {
+          if (isPolicyCollectionFailure(error)) throw error;
+          // Query business errors keep the caller's sanitized generic-500 mapping;
+          // initialization errors still cross the existing initialized ACK owner.
+          throw policyCollectionFailure("protocol");
+        }
+      }
       if (request.headers.has(assignmentSourceHeader)) {
         // Reserve before acquiring the body. Fifth/invalid requests still own
         // their ORIGINAL body but cannot read or enter the semantic FIFO.
@@ -226,6 +244,117 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_cursors (pool_key TEXT PRIMARY KEY, grant_key TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS pool_submission_tickets (ticket_id TEXT PRIMARY KEY, ticket_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS oauth_authorization_states (state TEXT PRIMARY KEY, state_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
+  }
+
+  private collectedPolicy(id: string, budget: PolicySourceBudget): AccessPolicyEntry | null {
+    policyId(id);
+    const meta = rows<{ bytes: number }>(this.sql.exec("SELECT length(CAST(policy_json AS BLOB)) AS bytes FROM access_policies WHERE policy_id = ?", id))[0];
+    if (!meta) return null;
+    admitPolicyBytes(budget, meta.bytes); // Metadata before full value materialization.
+    const row = rows<{ policy_json: string }>(this.sql.exec("SELECT policy_json FROM access_policies WHERE policy_id = ?", id))[0];
+    if (!row) throw policyCollectionFailure("protocol");
+    return { policyId: id, policy: parsePolicyRecord(row.policy_json, budget) as AccessPolicy };
+  }
+
+  private resolveCollectedPolicies(ids: string[]): { initialized: boolean; policies: AccessPolicyEntry[]; missingPolicyIds: string[] } {
+    admitPolicyIds(ids);
+    const budget = policySourceBudget(), policies: AccessPolicyEntry[] = [], missingPolicyIds: string[] = [];
+    const policyPlan = policySequencePlan(), missingPlan = policySequencePlan();
+    for (const id of new Set(ids)) {
+      const entry = this.collectedPolicy(id, budget);
+      if (entry) { policyPlan(entry); policies.push(entry); } else { missingPlan(id); missingPolicyIds.push(id); }
+    }
+    const result = { initialized: this.hasMeta("policies_global_initialized"), policies, missingPolicyIds };
+    admitPolicyJson(result); return result;
+  }
+
+  private initializeCollectedPolicies(input: AccessPolicyEntry[] | { entries: AccessPolicyEntry[]; retainRequestContentDefault: boolean }): void {
+    if (this.hasMeta("policies_global_initialized")) return;
+    const raw = !Array.isArray(input), entries = Array.isArray(input) ? input : input.entries;
+    const budget = policySourceBudget(), staged = new Set<string>(), plan = policyCandidatePlan();
+    const candidates: AccessPolicyEntry[] = [];
+    const prepared: Array<{ policyId: string; text: string }> = [];
+    for (const entry of entries) {
+      policyId(entry.policyId);
+      // Canonical current records win before normalization of an ignored seed.
+      // A malformed existing JSON row still fails the complete preflight.
+      const current = this.collectedPolicy(entry.policyId, budget);
+      if (current || staged.has(entry.policyId)) continue;
+      if (!entry.policyId) invalidAuthorityRequest("policyId is required");
+      admitPolicyJson(entry.policy);
+      plan(entry.policyId, entry.policy, raw ? (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault : undefined);
+      candidates.push(entry); staged.add(entry.policyId);
+    }
+    // The COMPLETE prospective batch is admitted before even the first
+    // providers.filter/models Set/routing copy in the unchanged normalizer.
+    const actualPlan = policySequencePlan();
+    for (const entry of candidates) {
+      const policy = raw ? normalizePolicyRecord(entry.policy as unknown as Record<string, unknown>, (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault) : entry.policy;
+      if (raw) {
+        // Only fresh normalizer dictionaries: __proto__ consumed its quota but
+        // created no own JSON field. Preserve those bytes without touching seeds.
+        const routing = policy.grantRouting;
+        if (Array.isArray(Object.getPrototypeOf(routing.eligibleGrants))) Object.setPrototypeOf(routing.eligibleGrants, Object.prototype);
+        if (Object.hasOwn(routing, "sharedGrants") && Array.isArray(Object.getPrototypeOf(routing.sharedGrants!))) Object.setPrototypeOf(routing.sharedGrants!, Object.prototype);
+      }
+      actualPlan({ policyId: entry.policyId, policy });
+      prepared.push({ policyId: entry.policyId, text: policyJsonText(policy) });
+    }
+    // All candidate validation, complete-batch accounting and serialization finish
+    // before the first write. SQL failure retains the existing partial-commit risk.
+    for (const entry of prepared) this.sql.exec("INSERT OR REPLACE INTO access_policies (policy_id, policy_json) VALUES (?, ?)", entry.policyId, entry.text);
+  }
+
+  private resolveCollectedBindings(principals: Principal[]): { bindings: PolicyBinding[]; missingPrincipals: Principal[] } {
+    admitPolicyPrincipals(principals);
+    const budget = policySourceBudget(), bindings: PolicyBinding[] = [], missingPrincipals: Principal[] = [];
+    const plan = policySequencePlan(), missingPlan = policySequencePlan();
+    let count = 0;
+    for (const raw of principals) {
+      const principal = normalizePrincipal(raw); policyId(principal.principalId);
+      const key = principalKey(principal);
+      if (!this.hasPrincipal(key)) { missingPlan(principal); missingPrincipals.push(principal); continue; }
+      const meta = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(binding_json AS BLOB))), 0) AS bytes FROM policy_binding_entries WHERE principal_key = ?", key))[0];
+      if (!meta || !Number.isSafeInteger(meta.count) || meta.count < 0 || meta.count > 4096 - count) throw policyCollectionFailure("limit");
+      count += meta.count; admitPolicyBytes(budget, meta.bytes);
+      for (const row of this.sql.exec<{ binding_json: string }>("SELECT binding_json FROM policy_binding_entries WHERE principal_key = ?", key)) {
+        const value = parsePolicyRecord(row.binding_json, budget, true) as PolicyBinding;
+        // Full stored unknown graph is counted before the old binding projection.
+        policyId(value?.principalId); policyId(value?.policyId);
+        const binding = normalizeBinding(value); plan(binding); bindings.push(binding);
+      }
+    }
+    // Normalized once, with exactly the original stable comparator/tie behavior.
+    bindings.sort((a, b) => a.priority - b.priority || a.principalType.localeCompare(b.principalType) || a.principalId.localeCompare(b.principalId) || a.policyId.localeCompare(b.policyId));
+    const result = { bindings, missingPrincipals }; admitPolicyJson(result); return result;
+  }
+
+  private initializeCollectedBindings(seeds: Seed[]): void {
+    if (this.hasMeta("bindings_global_initialized")) return;
+    const staged = new Set<string>(), plan = policySequencePlan();
+    const prepared: Array<{ key: string; writes: Array<{ key: string; text: string }> }> = [];
+    for (const seed of seeds) {
+      const principal = normalizePrincipal(seed.principal); policyId(principal.principalId);
+      const key = principalKey(principal);
+      if (this.hasPrincipal(key) || staged.has(key)) continue;
+      const normalized: PolicyBinding[] = [], rowPlan = policySequencePlan();
+      for (const raw of seed.bindings) {
+        // Preserve RAW principal-match filtering before normalization. Duplicate
+        // binding keys are written in their original order, including last wins.
+        if (raw.principalType !== principal.principalType || raw.principalId !== principal.principalId) continue;
+        const binding = normalizeBinding(raw); rowPlan(binding); normalized.push(binding);
+      }
+      plan({ principal, bindings: normalized });
+      const writes = normalized.map(binding => ({ key: bindingKey(binding), text: policyJsonText(binding) }));
+      prepared.push({ key, writes }); staged.add(key);
+    }
+    for (const seed of prepared) {
+      for (const binding of seed.writes) {
+        this.sql.exec("INSERT OR REPLACE INTO policy_binding_entries (principal_key, binding_key, binding_json) VALUES (?, ?, ?)", seed.key, binding.key, binding.text);
+        this.sql.exec("INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)", seed.key);
+      }
+      this.sql.exec("INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)", seed.key);
+    }
   }
 
   private initializeBindings(seeds: Seed[]): void {
@@ -1079,10 +1208,18 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
       method: "POST", body: text, signal, headers: { [assignmentSourceHeader]: assignmentSourceVersion },
     }), signal) as T;
   }
+  const collection = objectName === "policy-bindings" && isPolicyCollectionPath(path);
+  if (collection) admitPolicyCall(path, body);
   const ack = objectName === "policy-bindings" ? authorityAck(path) : undefined;
   if (ack) {
-    const text = JSON.stringify(body);
-    return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal }), ack, signal) as T;
+    const text = collection ? policyJsonText(body) : JSON.stringify(body);
+    return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal,
+      ...(collection ? { headers: { [policyCollectionHeader]: policyCollectionVersion } } : {}) }), ack, signal) as T;
+  }
+  if (collection) {
+    const text = policyJsonText(body);
+    return await readPolicyResponse(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal,
+      headers: { [policyCollectionHeader]: policyCollectionVersion } }), signal, path) as T;
   }
   if (objectName === "policy-bindings" && path === "/users/resolve") {
     const text = userJsonText(body, "query");
@@ -1131,15 +1268,17 @@ export async function listBindings(env: Env): Promise<PolicyBinding[]> {
   await authorityCall(env, "/initialize-all", bindings);
   return (await authorityCall<{ bindings: PolicyBinding[] }>(env, "/list", {})).bindings;
 }
-export async function resolvePolicies(env: Env, ids: string[]): Promise<AccessPolicyEntry[]> {
+export async function resolvePolicies(env: Env, ids: string[], collection = new PolicyCollection()): Promise<AccessPolicyEntry[]> {
+  admitPolicyIds(ids);
   const result = await authorityCall<{ initialized: boolean; policies: AccessPolicyEntry[]; missingPolicyIds: string[] }>(env, "/policies/resolve", { policyIds: ids });
+  admitPolicyJson(result); admitPolicyIds(result.missingPolicyIds);
   if (result.initialized || !result.missingPolicyIds.length) return result.policies;
-  const seeded: AccessPolicyEntry[] = [];
+  const seeded: AccessPolicyEntry[] = [], plan = policySequencePlan();
   for (const policyId of result.missingPolicyIds) {
-    const value = await env.POLICY_KV.get<Record<string, unknown>>(`policies/${policyId}`, "json") ?? await genuineLegacyKey(env, policyId);
-    if (value) seeded.push({ policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
+    const value = await collection.read(env, `policies/${policyId}`) ?? await genuineLegacyKey(env, policyId, key => collection.read(env, key));
+    if (value) { const entry = { policyId, policy: value as unknown as AccessPolicy }; plan(entry); seeded.push(entry); }
   }
-  if (seeded.length) await authorityCall(env, "/policies/initialize", seeded);
+  if (seeded.length) await authorityCall(env, "/policies/initialize", { entries: seeded, retainRequestContentDefault: contentRetentionDefault(env) });
   return (await authorityCall<typeof result>(env, "/policies/resolve", { policyIds: ids })).policies;
 }
 export async function resolveCredentials(env: Env, ids: string[]): Promise<ProxyCredentialEntry[]> {
@@ -1171,16 +1310,20 @@ export async function resolveUsers(env: Env, emails: string[]): Promise<AccessCo
   }
   return (await authorityCall<typeof result>(env, "/users/resolve", { emails })).users;
 }
-export async function resolveBindings(env: Env, principals: Principal[]): Promise<PolicyBinding[]> {
+export async function resolveBindings(env: Env, principals: Principal[], collection = new PolicyCollection()): Promise<PolicyBinding[]> {
+  admitPolicyPrincipals(principals);
   const result = await authorityCall<{ initialized: boolean; bindings: PolicyBinding[]; missingPrincipals: Principal[] }>(env, "/resolve", { principals });
+  admitPolicyBindings(result.bindings); admitPolicyPrincipals(result.missingPrincipals);
   if (result.initialized || !result.missingPrincipals.length) return result.bindings;
-  const seeds: Seed[] = [];
+  const seeds: Seed[] = [], plan = policySequencePlan();
   for (const principal of result.missingPrincipals) {
     const prefix = `access/bindings/${principal.principalType}/${encodeURIComponent(principal.principalId)}/`;
-    seeds.push({ principal, bindings: (await listKvJson<PolicyBinding>(env, prefix)).map(([, binding]) => binding) });
+    const seed = { principal, bindings: await collection.listBindings(env, prefix) };
+    plan(seed); seeds.push(seed);
   }
   await authorityCall(env, "/initialize", seeds);
-  return (await authorityCall<typeof result>(env, "/resolve", { principals })).bindings;
+  const final = (await authorityCall<typeof result>(env, "/resolve", { principals })).bindings;
+  admitPolicyBindings(final); return final;
 }
 export async function resolveConnections(env: Env, providerIds: string[]): Promise<ProviderConnection[]> {
   const ids = [...new Set(providerIds)];
