@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
+
 - Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
 
 - Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.

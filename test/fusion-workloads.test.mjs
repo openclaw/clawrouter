@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
@@ -70,6 +71,18 @@ test('only a normal failing assertion qualifies a reproduction', async () => {
     const result = await probe({ exec: async () => ({ code, stdout: Buffer.alloc(0), stderr: Buffer.from(stderr) }) }, 'test');
     assert.equal(result.assertionFailed, expected);
   }
+});
+
+test('a real assertion after node:test setup qualifies a reproduction', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e',
+    "import { beforeEach } from 'node:test'; import assert from 'node:assert/strict'; beforeEach(() => {}); assert.equal(false, true);"],
+  { timeout: 5000 });
+  assert.equal(child.error, undefined);
+  assert.ok([1, 7].includes(child.status));
+  const result = await probe({ exec: async () => ({ code: child.status, stdout: child.stdout, stderr: child.stderr }) }, 'test');
+  assert.equal(result.assertionFailed, true);
+  assert.equal(result.passed, false);
 });
 
 
