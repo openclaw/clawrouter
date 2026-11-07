@@ -26,6 +26,9 @@ export interface ProviderOfferDefinition {
   qualification: "declared";
 }
 
+/** A declaration matched to a catalog offer, not a credential or dispatch authority. */
+export interface ProviderOfferReference { id: string; productId: string }
+
 /** Authored product metadata, not proof of entitlement, pricing, or onboarding support. */
 export interface ProviderProduct {
   id: string;
@@ -36,3 +39,5 @@ export interface ProviderProduct {
   endpoints: string[];
   offers?: ProviderProductOffer[];
 }
+
+export type ProviderProductSummary = Pick<ProviderProduct, "id" | "displayName" | "commercialModel" | "authenticationMethod">;

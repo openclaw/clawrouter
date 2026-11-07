@@ -205,8 +205,19 @@ attached to the resolved model, including explicit unpriced cards.
 The result is `compatible`, not authorized or affordable. The caller must still
 validate the request, apply tenant policy, materialize the selected credential,
 and check quota and budget. Resolution performs no network or storage access.
-Current routing and discovery do not select through this resolver yet; it is
-the compatibility boundary for that migration.
+Routing and discovery keep their existing selection rules. For an eligible
+catalog offer, discovery uses the resolver to attach optional `productOffers`
+references (`id`, `productId`). The references match the exact endpoint,
+capability, model identity, transport, and active configured candidates under
+that offer's selected policy. A model-selection form is not a model-free
+declaration.
+
+The provider's optional `products` array contains only the referenced products'
+ID, display name, commercial model, and authentication method. It excludes
+execution bindings and grant metadata. Blocked or recovering offers do not
+publish product references. Providers without declarations retain their existing
+catalog shape. These fields neither choose an account nor promise entitlement;
+dispatch still revalidates the request and its authority.
 
 ## Descriptor v1
 

@@ -10,6 +10,7 @@ import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { policyAllowsModel } from "./policy-models.ts";
+import { catalogProviderOfferReferences } from "./provider-offers.ts";
 import type { CatalogOffer, ClientCatalog, ClientCatalogModel, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
@@ -27,7 +28,7 @@ import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey, proxyAdmission } from "./proxy-auth";
 import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
-import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env } from "./types";
+import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
 import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
@@ -262,10 +263,14 @@ function catalogProjection(entitlements: ClientEntitlements, publicOrigin: strin
     if (!view.configured) return [];
     const endpoints = view.endpoints;
     const executable = view.offers.some((offer) => offer.eligible);
+    const productIds = new Set(view.offers.flatMap(offer => offer.productOffers?.map(reference => reference.productId) ?? []));
+    const products = provider.products?.filter(product => productIds.has(product.id))
+      .map(({ id, displayName, commercialModel, authenticationMethod }) => ({ id, displayName, commercialModel, authenticationMethod }));
     return [{
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: row.readiness, connectionTypes: compiledProjection(provider).connectionTypes,
+      ...(products?.length ? { products } : {}),
       routes: provider.endpoints.filter((endpoint) => endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id)).map((endpoint) => ({ ...compiledProjection(provider).routes.get(endpoint.id)!, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
       models: view.models, offers: view.offers.map(offer => {
         const model = view.models.find(model => model.id === offer.modelId);
@@ -496,6 +501,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const auth = selection.entry;
         let reasonCode: string | undefined;
         let temporarilyUnavailable = false;
+        let productGrants: Array<UpstreamGrant | null> = [];
         try {
           await assertProviderAccess(provider, auth, env, connection);
           const available = activeOperationCandidates(selection.candidates.available, env, requirement);
@@ -523,6 +529,10 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
             assertSearchTariff(auth);
             await assertSingleOpenAiAccount(auth, env, { transport: null, grantKey: configuredGrants[0]?.key ?? null, grant: configuredGrants[0]?.grant ?? null }, "search");
           }
+          // These candidates belong to this exact policy/operation. Empty configured
+          // pools must never acquire product metadata from environment fallback.
+          if (provider.offer_definitions?.length) productGrants = available.length ? available.map(entry => entry.grant)
+            : selection.candidates.hasConfiguredGrant ? [] : [null];
           configured = true;
         } catch (error) {
           reasonCode = error instanceof HttpError ? error.code : "provider_not_configured";
@@ -536,7 +546,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
           const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
           observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, weeklyRemaining: policy.weekly.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
         }
-        return { endpoint, mode, auth, reasonCode, temporarilyUnavailable, observation, modelIds: group.modelIds, passthrough: group.passthrough };
+        return { endpoint, mode, auth, reasonCode, temporarilyUnavailable, observation, productGrants, modelIds: group.modelIds, passthrough: group.passthrough };
       };
       const execution = await inspect(selected);
       // When every compatible pool is cooling, execution still falls back to
@@ -598,7 +608,9 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
         const supportedTiers = model?.nativeCapabilities?.endpoints[endpoint.id]?.supportedServiceTiers;
         const permittedServiceTiers = supportedTiers?.filter(tier => availability.status !== "exact-blocked" && allowedServiceTiers(auth.policy, model!.id, auth.serviceTiers).includes(tier));
-        const common = { ...(endpoint.inputProfile ? { inputProfile: endpoint.inputProfile } : {}), ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
+        const productOffers = availability.status !== "exact-blocked" && provider.offer_definitions?.length
+          ? catalogProviderOfferReferences({ provider, endpoint, mode, model, capability }, context.productGrants) : [];
+        const common = { ...(productOffers.length ? { productOffers } : {}), ...(endpoint.inputProfile ? { inputProfile: endpoint.inputProfile } : {}), ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
         const nativeEnabled = endpoint.native_proxy && !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog";
         const native: CatalogOffer = { ...common, routeKind: keyScope ? nativeEnabled ? "native" : "manifest" : "playground", route: keyScope && nativeEnabled ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog" && model && unifiedPathForEndpoint(provider, endpoint);
