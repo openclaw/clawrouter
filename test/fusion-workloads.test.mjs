@@ -85,6 +85,19 @@ test('a real assertion after node:test setup qualifies a reproduction', async ()
   assert.equal(result.passed, false);
 });
 
+test('an assertion caught by node:test qualifies when its reporter writes to stdout', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e',
+    "import test from 'node:test'; import assert from 'node:assert/strict'; test('reproduction', () => assert.equal(503, 200));"],
+  { timeout: 5000 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  assert.match(child.stdout.toString(), /ERR_ASSERTION/);
+  const result = await probe({ exec: async () => ({ code: child.status, stdout: child.stdout, stderr: child.stderr }) }, 'test');
+  assert.equal(result.assertionFailed, true);
+  assert.equal(result.passed, false);
+});
+
 
 test('transfer validation uses distinct pinned tasks without changing the original corpus', async () => {
   const original = await loadTasks();
