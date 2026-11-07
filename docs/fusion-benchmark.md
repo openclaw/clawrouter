@@ -194,3 +194,33 @@ its generated check but failed four independent acceptance tests. Native
 routing failed when test generation exceeded its output limit. This is no
 quality gain and no reason to activate the policy. Subsequent fallback changes
 are a new policy revision and need their own evaluation.
+
+
+### Context and independent contract results
+
+At source `fc759001d012cd9f5e0aa3274ddb83424d275d1e`, an exposed pricing
+repair received the same original compiler declarations and accounting consumer
+excerpt in every arm. Cheap-only failed; strong-only and contract each passed
+all 76 acceptance tests. Contract cost $0.081922 versus $0.266505 for strong,
+a 69.26% observed saving. It took 50.9 seconds versus 30.9 seconds. This is one
+development task, not evidence of general superiority or model-diversity benefit.
+
+The same policy was then frozen before first model exposure to the three tasks
+in `check-holdout-workloads.json`. Every arm had 24 calls, 600 seconds and an
+8192 output-token ceiling per trial. Costs include all policy calls and failures.
+
+| Arm | Correct repairs | Cost | Calls | Sum of trial time |
+| --- | --- | --- | --- | --- |
+| Cheap only | 1/3 | $0.071127 | 31 | 168.6 s |
+| Strong only | 2/3 | $1.211077 | 43 | 198.7 s |
+| Contract | 2/3 | $1.183577 | 52 | 394.9 s |
+
+Strong and contract both solved StepFun cache accounting and scalar fal MIME;
+all arms missed Cohere billed units. Cheap's StepFun trial ended with a
+known-cost truncated response and remains a failed trial. Contract's Cohere
+candidate passed its generated probe but failed independent acceptance.
+The 2.27% aggregate cost saving comes with nearly twice the elapsed time and
+no quality gain over strong-only. Three single-trial repairs do not establish
+a reliable cost advantage. Same-workflow single-model controls are needed
+before attributing any observed benefit to mixing models. These results do not
+justify changing production defaults.
