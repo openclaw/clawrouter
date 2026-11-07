@@ -12,6 +12,10 @@
 
 - Add an independent three-repair Fusion evaluation cohort for generated-check policies, with observed/billed usage and scalar validation cases.
 
+- Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+
+- Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
+
 - Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
 
 - Add an experimental Fusion benchmark policy that qualifies generated regression probes before cheap repair and bounded strong fallback.
