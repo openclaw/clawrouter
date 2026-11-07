@@ -5,14 +5,14 @@ import { runAgent, SpendLedger, toolErrorCode } from './fusion-agent-benchmark.m
 import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
-import { loadTasks, verify, hash, command } from './fusion-workloads.mjs';
+import { loadTasks, verify, hash, command, withReproducer } from './fusion-workloads.mjs';
 import { runContractAgent } from './fusion-contract-agent.mjs';
 
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect'];
-const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private'];
+const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', 'contract-provided'];
 
 // The caller supplies repair scope before inference; never inspect test answers.
 export function scopeStrategy(task) {
@@ -36,7 +36,7 @@ export function validatePair(config, taskCount) {
 export function pairModel(strategy, role, config) {
   if (strategy === 'contract-cheap') return config.cheap;
   if (strategy === 'contract-strong') return config.strong;
-  if (strategy === 'contract' || strategy === 'contract-private') return role === roles.cheap ? config.cheap : config.strong;
+  if (['contract', 'contract-private', 'contract-provided'].includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
 }
@@ -58,6 +58,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const trialStrategies = includeControls ? ['cheap', 'strong', policy] : [policy];
   const tasks = await loadTasks(taskManifest);
+  if (policy === 'contract-provided' && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
   validatePair(config, tasks.length);
   if (!['none', 'medium'].includes(cheapReasoning)) throw new Error('invalid_cheap_reasoning');
   if (typeof preloadSource !== 'boolean') throw new Error('invalid_source_preload');
@@ -131,8 +132,10 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         await save();
         try {
           const result = contractPolicies.includes(strategy)
-            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent, exposeProbe: policy !== 'contract-private' })
-            : await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
+            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),
+              { agent, exposeProbe: policy !== 'contract-private', providedProbe: policy === 'contract-provided' ? task.reproducer : null })
+            : await agent(policy === 'contract-provided' ? withReproducer(task, task.reproducer) : task,
+              receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests

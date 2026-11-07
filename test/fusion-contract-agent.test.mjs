@@ -73,6 +73,23 @@ test('private checks are withheld from cheap repair and revealed only after esca
     { exposeProbe: 'false' }), /invalid_contract_exposure/);
 });
 
+test('a supplied reproducer skips generation but still gates cheap repair in isolation', async () => {
+  const f = fixture([failed, passed]);
+  const output = await runContractAgent(task, 'image', 'case:provided', config, f.invoke,
+    { ...f.dependencies, providedProbe: 'provided probe sentinel' });
+  assert.deepEqual(f.seen.filter(entry => entry.role).map(entry => entry.role), [models.cheap]);
+  assert.match(f.seen.find(entry => entry.instruction).instruction, /provided probe sentinel/);
+  assert.equal(output.contractAttempts, 0);
+  assert.equal(output.contractSource, 'provided');
+  assert.equal(output.escalated, false);
+  assert.ok(f.boxes.every(box => box.closed));
+  const invalid = fixture([passed]);
+  await assert.rejects(runContractAgent(task, 'image', 'case:provided', config, invalid.invoke,
+    { ...invalid.dependencies, providedProbe: 'does not reproduce' }), /unqualified_reproducer/);
+  assert.equal(invalid.seen.length, 0);
+  assert.ok(invalid.boxes.every(box => box.closed));
+});
+
 test('a failed cheap check escalates within the same shared allowance', async () => {
   const f = fixture([failed, failed, passed]);
   const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke, f.dependencies);
