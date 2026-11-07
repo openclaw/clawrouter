@@ -265,22 +265,22 @@ test('actual public soft status keeps four owners, cache classification and post
   });
   const call = async path => { const r = await runtime.dispatchFetch('https://router.example' + path); const text = await r.text(); assert.equal(r.status, 200, text); return JSON.parse(text); };
   const state = () => call('/state');
-  const until = async (predicate, originating) => {
+  const until = async (predicate, originating, allowCompletion = false) => {
     for (let n = 0; n < 600; n++) {
       if (await predicate()) return;
-      if (originating?.failure) throw originating.failure;
-      if (originating?.done) assert.fail('originating request completed before expected phase');
+      if (originating?.failed) throw originating.failure;
+      if (originating?.done && !allowCompletion) assert.fail('originating request completed before expected phase');
       await delay(10);
     }
     assert.fail('bounded status fixture arrival: ' + JSON.stringify(await state()));
   };
   const send = (name, id = name, mode = name) => {
-    const record = { done: false, failure: null };
+    const record = { done: false, failed: false, failure: undefined };
     const work = runtime.dispatchFetch('https://router.example/proxy?case=' + name + '&id=' + id + '&mode=' + mode, {
       method: 'POST', signal: abort.signal, headers: { authorization: 'Bearer clawrouter-live-' + name.replaceAll('-', '_') + '-synthetic-secret', 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [], metadata: { user_id: id } }),
     }).then(async r => ({ status: r.status, body: await r.text(), timing: r.headers.get('server-timing') }));
-    clients.add(work); work.then(() => { record.done = true; clients.delete(work); }, e => { record.failure = e; clients.delete(work); clientFailures.push(e); });
+    clients.add(work); work.then(() => { record.done = true; clients.delete(work); }, e => { record.failed = true; record.failure = e; clients.delete(work); clientFailures.push(e); });
     return { work, record };
   };
   const drain = id => until(async () => { const r = (await state()).rows[id]; return r?.done && r.pending === 0; });
@@ -333,7 +333,12 @@ test('actual public soft status keeps four owners, cache classification and post
           cancels: row?.cancels, unlocks: row?.unlocks, unlocked: !!row?.unlocked,
           otherLegs: row?.otherLegs.length ?? 0, otherUnlocked: row?.otherLegs.reduce((n, leg) => n + Number(!!leg.unlocked), 0) ?? 0 };
         return row?.checkSettled;
-      }, exhausted.record);
+      }, exhausted.record, true); // A leg may deny publicly before sibling observations retire.
+      io.release('/provider/exhausted'); assert.equal((await exhausted.work).status, 402); await drain('exhausted');
+      r = (await state()).rows.exhausted; assert.equal(r.provider, 1); assert.equal(r.providerBeforeStatus, true);
+      assert.equal(r.starts, 4); assert.equal(r.checkRegistered, 1); assert.equal(r.checkSettled, true); assert.equal(r.pending, 0);
+      assert.equal(r.unlocked, true); assert.equal(r.otherLegs.length, 3);
+      for (const leg of r.otherLegs) { assert.equal(leg.unlocked, true); assert.equal(leg.readPending, 0); }
     } catch (error) {
       hasPrimary = true; primary = error;
       try { t.diagnostic(JSON.stringify({ phase: 'exhausted-check', originOutcome: exhaustedOutcome, clientFulfilled: exhausted.record.done,
@@ -341,9 +346,6 @@ test('actual public soft status keeps four owners, cache classification and post
       catch (diagnosticError) { diagnosticFailures.push(diagnosticError); }
       throw error;
     }
-    io.release('/provider/exhausted'); assert.equal((await exhausted.work).status, 402); await drain('exhausted');
-    r = (await state()).rows.exhausted; assert.equal(r.provider, 1); assert.equal(r.providerBeforeStatus, true);
-
     const parallel = send('parallel');
     await until(async () => { const r = (await state()).rows.parallel; return r?.readPending === 1 && r.readSettled >= 1 && r.checkRegistered === 1 && io.arrived.has('/provider/parallel'); }, parallel.record);
     await until(async () => (await state()).rows.parallel.otherLegs.filter(x => x.unlocked).length === 3, parallel.record);
