@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+
 - Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
 
 - Supply bounded original-source declaration context to Fusion repair workers, with unique selectors and unchanged edit permissions.

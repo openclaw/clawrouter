@@ -75,10 +75,10 @@ test('terminal provider states cannot masquerade as malformed action JSON', () =
 
 test('HTTP error diagnostics retain only finite labels, never echoed content', () => {
   const result = nativeErrorMetadata({ error: { type: 'invalid_request_error', message: 'Your credit balance is too low. private prompt and key' } });
-  assert.deepEqual(result, { errorType: 'invalid_request_error', errorHint: 'credit_balance' });
+  assert.deepEqual(result, { errorType: 'invalid_request_error', errorHint: 'credit_balance', providerCode: 'unknown', providerParam: 'unknown' });
   assert.deepEqual(nativeErrorMetadata({ error: { type: 'private unknown type', message: 'private arbitrary content' } }),
-    { errorType: 'unknown', errorHint: 'unknown' });
-  assert.deepEqual(nativeErrorMetadata(null), { errorType: 'unknown', errorHint: 'unknown' });
+    { errorType: 'unknown', errorHint: 'unknown', providerCode: 'unknown', providerParam: 'unknown' });
+  assert.deepEqual(nativeErrorMetadata(null), { errorType: 'unknown', errorHint: 'unknown', providerCode: 'unknown', providerParam: 'unknown' });
   for (const [message, hint] of [
     ['output_config.format schema unsupported', 'structured_output'],
     ['thinking must be supported', 'thinking_parameters'],
@@ -99,4 +99,20 @@ test('selected-model preflight requires only the selected providers', async () =
   assert.equal(calls.length, 2);
   await assert.rejects(nativePins({}, async () => {}, pair), /credentials_missing/);
   await assert.rejects(nativePins(env, async () => {}, ['unknown']), /model_unknown/);
+});
+
+
+test('structured error diagnostics admit known labels and discard arbitrary provider strings', () => {
+  for (const param of ['messages', 'messages.4.content', 'messages[4].content']) {
+    const result = nativeErrorMetadata({ error: { type: 'invalid_request_error', code: 'invalid_value', param } });
+    assert.equal(result.providerCode, 'invalid_value');
+    assert.equal(result.providerParam, 'messages');
+  }
+  for (const param of ['messages_private', 'private prompt sentinel', null, 42]) {
+    const result = nativeErrorMetadata({ error: { code: 'private secret sentinel', param } });
+    assert.equal(result.providerCode, 'unknown');
+    assert.equal(result.providerParam, 'unknown');
+    assert.ok(!JSON.stringify(result).includes('sentinel'));
+  }
+  assert.equal(nativeErrorMetadata({ error: { code: 'context_length_exceeded', param: 'max_tokens' } }).providerCode, 'context_length_exceeded');
 });

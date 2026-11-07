@@ -77,6 +77,7 @@ test('unknown charges stop the campaign once and retain the reservation', async 
       } }), /pair_benchmark_incomplete/);
     const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
     assert.equal(dispatched, 1); assert.equal(state.complete, false); assert.equal(state.failure, 'unknown_cost');
+    assert.equal(state.records[0].errorCode, 'unknown_cost');
     assert.equal(state.calls[0].costMicros, null);
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls[0].reservationMicros);
     assert.ok(!JSON.stringify(state).includes('sentinel'));

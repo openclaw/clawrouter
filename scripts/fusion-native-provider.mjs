@@ -113,6 +113,13 @@ export function nativeErrorMetadata(body) {
   const types = new Set(['invalid_request_error', 'authentication_error', 'billing_error',
     'permission_error', 'not_found_error', 'conflict_error', 'request_too_large',
     'rate_limit_error', 'api_error', 'timeout_error', 'overloaded_error']);
+  const codes = new Set(['context_length_exceeded', 'invalid_json_schema', 'invalid_value',
+    'unsupported_value', 'unsupported_parameter', 'missing_required_parameter', 'invalid_parameter',
+    'invalid_prompt', 'model_not_found', 'insufficient_quota', 'rate_limit_exceeded', 'server_error']);
+  const parameters = ['messages', 'response_format', 'max_tokens', 'max_completion_tokens',
+    'reasoning_effort', 'model', 'service_tier', 'temperature', 'tools', 'tool_choice', 'stream'];
+  const param = typeof body?.error?.param === 'string' ? body.error.param : '';
+  const providerParam = parameters.find(name => param === name || param.startsWith(name + '.') || param.startsWith(name + '[')) ?? 'unknown';
   const message = typeof body?.error?.message === 'string' ? body.error.message.toLowerCase() : '';
   const hints = [
     ['safety_notice', /this content can[’']t be shown|safety refusal/],
@@ -123,5 +130,6 @@ export function nativeErrorMetadata(body) {
     ['service_tier', /service_tier|service tier/],
   ];
   return { errorType: types.has(body?.error?.type) ? body.error.type : 'unknown',
-    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown' };
+    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
+    providerCode: codes.has(body?.error?.code) ? body.error.code : 'unknown', providerParam };
 }

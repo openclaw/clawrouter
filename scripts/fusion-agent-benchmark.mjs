@@ -70,7 +70,7 @@ export function replaceEdits(task, files, edits) {
   return validateEdits(task, [...current].map(([path, content]) => ({ path, content })));
 }
 
-const toolErrorCodes = new Set(['invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
+const toolErrorCodes = new Set(['unknown_cost', 'invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
   'invalid_read_paths', 'invalid_edits', 'invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size',
   'missing_query', 'invalid_probe', 'invalid_action', 'command_timeout', 'command_output_limit',
   'command_failed', 'context_header_too_large', 'ensemble_deadline',
