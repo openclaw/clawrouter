@@ -230,6 +230,28 @@ test('contract policy meters the test author and worker inside the same trial', 
 });
 
 
+test('private contract policy preserves fixed controls and mixed role accounting', async () => {
+  const { root, options } = await fixture();
+  try {
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
+      policy: 'contract-private', grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+      contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
+        assert.equal(agentOptions.exposeProbe, false);
+        await invoke(id, roles.strong, body, signal);
+        await invoke(id, roles.cheap, body, signal);
+        return repaired();
+      } });
+    assert.deepEqual(state.strategies, ['cheap', 'strong', 'contract-private']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.equal(state.records[2].calls, 2);
+    assert.equal(state.spentOrReservedMicros,
+      config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('contract ablations preserve the scaffold while routing every role to the declared model', async () => {
   const { root, options } = await fixture();
   try {

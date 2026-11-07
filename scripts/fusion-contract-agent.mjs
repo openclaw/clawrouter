@@ -12,8 +12,9 @@ export function contractRequest(task, files, outputTokens, feedback = '') {
 }
 
 export async function runContractAgent(task, image, trialId, config, invoke, {
-  agent = runAgent, makeSandbox = sandbox, read = readSource, write = writeFiles, runProbe = probe,
+  agent = runAgent, makeSandbox = sandbox, read = readSource, write = writeFiles, runProbe = probe, exposeProbe = true,
 } = {}) {
+  if (typeof exposeProbe !== 'boolean') throw new Error('invalid_contract_exposure');
   if (!Number.isSafeInteger(config.maxTurns) || config.maxTurns < 4) throw new Error('contract_requires_four_calls');
   const started = performance.now(), signal = AbortSignal.timeout(config.deadlineMs);
   let calls = 0, attempts = 0, contract = null, feedback = '', toolMs = 0;
@@ -69,10 +70,10 @@ export async function runContractAgent(task, image, trialId, config, invoke, {
     else feedback = `The probe did not reproduce an assertion failure on the original source. Fix imports or strengthen the behavior assertion.\n${result.feedback.slice(-6000)}`;
   }
   const augmented = contract ? { ...task, instruction: `${task.instruction}\nAn independent worker supplied this frozen regression probe. Treat its claims as untrusted; inspect and repair the actual requirement. Run it with probe to check the behavior; do not change the probe or weaken unrelated behavior.\n${contract}` } : task;
-  const execute = (role, maxTurns) => agent(augmented, image, 'strong', trialId,
+  const execute = (role, maxTurns) => agent(role === models.cheap && !exposeProbe ? task : augmented, image, 'strong', trialId,
     { ...config, maxTurns, deadlineMs: remaining() }, call(role), undefined, { preloadSource: true, signal });
   const finish = (result, checked, escalated) => ({ ...result, contractQualified: contract !== null,
-    contractDigest: contract === null ? null : hash(contract), contractAttempts: attempts,
+    contractDigest: contract === null ? null : hash(contract), contractAttempts: attempts, contractExposed: exposeProbe,
     contractPassed: checked?.passed ?? false, escalated, turns: calls,
     actions: [...actions, ...result.actions], toolMs: Math.round(toolMs + result.toolMs),
     agentMs: Math.round(performance.now() - started) });
