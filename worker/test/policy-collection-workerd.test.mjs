@@ -190,7 +190,7 @@ test('policy collection ORIGINAL KV/request/reply prerequisites and real public/
   t.signal.addEventListener('abort', releaseAll, { once: true });
   t.after(async () => {
     releaseAll(); const errors = [];
-    for (const result of await Promise.all(outcomes)) if (result.failed && (!hasPrimary || !Object.is(result.error, primary))) errors.push(result.error);
+    for (const result of await Promise.all(outcomes)) if (result.failed) errors.push(result.error);
     // All finite client/control/body/read/cancel roots have joined. Only the
     // explicitly unknown production owner may remain; disposal is fixture cleanup.
     try { if (runtime) await runtime.dispose(); } catch (error) { errors.push(error); }
