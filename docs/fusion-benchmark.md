@@ -313,3 +313,12 @@ for $0.524965, and supplied-reproducer cascade 3/3 for $0.581189. Summed
 elapsed times were 143.635s, 101.497s and 176.300s respectively. The cascade
 retained quality but cost 10.71% more than strong, failing the predeclared
 20% saving screen. This is a small pilot, not deployment evidence.
+
+`contract-handoff` keeps the supplied-reproducer workflow and call limits but
+installs a failed cheap candidate in the strong executor's fresh sandbox. The
+strong worker sees the current source and failure feedback, treats the patch as
+untrusted, and can repair it. Only allowed source files transfer; tests and
+predecessor conversation history do not. The supplied probe and final hidden
+acceptance still run independently. `contract-provided` continues to restart
+from original source. This opt-in benchmark is a development hypothesis, not a
+production routing default or demonstrated improvement.
