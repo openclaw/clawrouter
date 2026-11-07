@@ -271,3 +271,13 @@ paired comparison and the paired analyzer rejects it. Use this to avoid paying
 for repeated fixed controls, and disclose any comparison to earlier controls as
 non-contemporaneous. The default still runs all three arms. Budget admission
 retains the conservative three-arm reservation bound.
+
+### Workflow validation cohort
+
+`benchmarks/fusion/workflow-holdout-workloads.json` pins three further repairs:
+bounded grant reports, declared native model identities and scalar-only native
+music response context. Qualify the original visible suite, repaired visible
+suite, original acceptance failure and repaired acceptance success before use.
+The grant-report fixture checks functional bounds, not measured heap usage.
+Freeze the selected workflow and record first model exposure separately from
+the schema label. This manifest alone makes no performance claim.

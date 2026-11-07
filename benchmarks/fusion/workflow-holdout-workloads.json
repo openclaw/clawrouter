@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "bounded-grant-report",
+      "split": "development",
+      "base": "06ae9666227e416b705ecd8062d2eaa021109b4b",
+      "oracle": "f916c605f48eab6644f4af89b26637389aac47c5",
+      "editPaths": [
+        "worker/ledgers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/ledger-queue.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/grant-usage.test.mjs"
+      ],
+      "instruction": "Bound grant-usage reporting while preserving its response contract. Aggregate daily, grant and lane usage without retaining the full event rowset. Accept at most 8192 distinct daily groups; exceeding that limit returns HTTP 422 with usage_range_too_large and no partial totals. Preserve inclusive since/until bounds, policy filtering, binary identifier ordering, null identities, token/cache counters and per-group totals. This repair is evaluated for functional bounds and correctness; it does not claim a measured process-memory improvement."
+    },
+    {
+      "id": "declared-native-identity",
+      "split": "development",
+      "base": "caf0b6db0cf187fdd9a7ce00fff50496a1843306",
+      "oracle": "1545926a86203bddf56f1eb831b6ee2f516d7084",
+      "editPaths": [
+        "worker/providers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/provider-templates.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/declared-native-model-identity.test.mjs"
+      ],
+      "instruction": "Preserve exact public-ID and physical-upstream model lookup. Before native opaque passthrough, match a native identity to a registered literal model card only when the complete public ID equals a declared provider model prefix plus that exact identity. Reject multiple matches. Do not infer aliases by suffix, case folding, trimming, URL decoding, or configured ${model}/${deployment} placeholders in either public or upstream IDs. The selected card still controls endpoint eligibility, metadata, pricing and allowlist policy; dispatch uses its declared physical upstream alias. Unmatched native IDs retain existing literal passthrough behavior without registered metadata or authority."
+    },
+    {
+      "id": "native-music-scalar-context",
+      "split": "development",
+      "base": "2df30ef4fb3b81d5818b8c5fb928b16711ef4445",
+      "oracle": "e90749c31ad11bd780b5aaccc55d71781c39c05a",
+      "editPaths": [
+        "worker/native-openrouter-music.ts"
+      ],
+      "visibleTests": [
+        "worker/test/native-openrouter-music.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/native-openrouter-music.test.mjs"
+      ],
+      "instruction": "After validating a native OpenRouter music request, its returned response wrapper must retain only immutable scalar response context: the selected model and output format. It must not retain or reread ProxySelection, the prepared request, messages or request-body references during response parsing. Preserve the original destination/path, response ownership, MP3/WAV validation, streaming and error behavior. Later mutation of the caller request must not change response decoding."
+    }
+  ]
+}
