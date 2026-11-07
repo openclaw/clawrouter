@@ -224,3 +224,27 @@ no quality gain over strong-only. Three single-trial repairs do not establish
 a reliable cost advantage. Same-workflow single-model controls are needed
 before attributing any observed benefit to mixing models. These results do not
 justify changing production defaults.
+
+### Second independent contract cohort
+
+The same policy at source `3e4f0ad2d2dfa89fa766a207b9b38b131248586e`
+was tested on three newly exposed qualified repairs: Titan Multimodal errors,
+declared native identity and scalar-only native music response context. The
+call, output and time limits matched the first independent cohort.
+
+| Arm | Correct repairs | Cost |
+| --- | --- | --- |
+| Cheap only | 1/3 | $0.029479 |
+| Strong only | 2/3 | $0.403979 |
+| Contract | 1/3 | $0.494573 |
+
+All arms passed Titan and missed music. Strong alone passed native identity;
+contract accepted an incorrect cheap patch after its generated check passed.
+The music fallback also passed its generated check but failed acceptance.
+
+Across both independent cohorts, cheap solved 2/6 for $0.100606, strong 4/6
+for $1.615056, and contract 3/6 for $1.678150. Summed trial time was 312.2,
+300.0 and 696.1 seconds respectively. The original contract policy fails the
+predeclared screen: no strong-model regression, at least 20% cost saving,
+and no more than twice strong-model elapsed time. This rules out promoting
+that policy based on these experiments. Generated checks remain fallible.
