@@ -6,6 +6,9 @@
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
 
+- Add three pinned Fusion workflow-validation repairs covering embedding errors, native identity and response context.
+
+
 - Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
 
 - Add same-workflow cheap-only and strong-only controls for the experimental Fusion contract benchmark, with explicitly labeled standalone runs.
