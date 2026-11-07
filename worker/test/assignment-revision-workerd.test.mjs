@@ -45,8 +45,8 @@ export class PolicyBindingIndexObject extends Owner{
   const original=this.reconcileUserAssignments.bind(this);
   // Called only AFTER the production body parser. No await or replacement
   // promise is inserted between observation and synchronous FIFO enrollment.
-  this.reconcileUserAssignments=request=>{const state=states.get(request.rules[0]?.version);if(state)state.entries++;
-   const actual=original(request);if(state)void actual.then(()=>{state.settled++;},reason=>{state.settled++;state.rejected=true;state.undefinedReason=reason===undefined;});return actual;};
+  this.reconcileUserAssignments=(request,...options)=>{const state=states.get(request.rules[0]?.version);if(state)state.entries++;
+   const actual=original(request,...options);if(state)void actual.then(()=>{state.settled++;},reason=>{state.settled++;state.rejected=true;state.undefinedReason=reason===undefined;});return actual;};
  }
  fetch(request){const path=new URL(request.url).pathname;
   if(path==='/fixture-delete'){this.fixtureSql.exec('DELETE FROM access_users WHERE email = ?','member@example.com');return Response.json({deleted:true});}
@@ -169,7 +169,7 @@ test('actual public admin reconciliation writes compact revisions and preserves 
         release(first); assert.equal((await a).status, 200);
         await state(first + 1, row => row.held && row.nativeSettled === 1, b); assert.equal(cDone, false);
         assert.equal((await state(first + 2, () => true)).nativeSettled, 0);
-        release(first + 1); assert.equal((await b).status, 500); assert.equal((await c).status, 200);
+        release(first + 1); assert.equal((await b).status, 503); assert.equal((await c).status, 200);
         const failed = await state(first + 1, row => row.settled === 1);
         assert.equal(failed.rejected, true); assert.equal(failed.undefinedReason, id === 'undefined');
         assert.deepEqual(JSON.parse((await current(id)).rows[0].user_json).groups, ['new-manual', 'successor']);
@@ -179,7 +179,7 @@ test('actual public admin reconciliation writes compact revisions and preserves 
     const deleted = reconcile('deleted'); await state(401, row => row.held, deleted);
     assert.equal((await call('deleted', '/delete')).body.deleted, true, 'labelled raw SQL deletion, not an invented public endpoint');
     release(401); const deletionReply = await deleted;
-    assert.equal(deletionReply.status, 500); assert.equal(deletionReply.body.error.code, 'internal_error'); assert.deepEqual((await current('deleted')).rows, []);
+    assert.equal(deletionReply.status, 404); assert.equal(deletionReply.body.error.code, 'unknown_user'); assert.deepEqual((await current('deleted')).rows, []);
 
     const orgRules = [rule(1, { ruleId: 'revoking', kind: 'github_org', subject: 'example', groups: ['revoking'] }),
       rule(1, { ruleId: 'retained', kind: 'github_org', subject: 'example', groups: ['retained'], revokeOnLoss: false })].sort((a, b) => a.ruleId.localeCompare(b.ruleId));

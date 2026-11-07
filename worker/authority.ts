@@ -17,7 +17,7 @@ import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
   UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
 } from "./types";
-import { captureAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
+import { captureAssignmentRules, captureAdmittedAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, withAdmittedLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
@@ -27,6 +27,7 @@ import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 import { admitUserJson, admitUserRecordBytes, parseUserRecord, readUserKvRecord, readUserMaterializationRequest, userJsonText, userMaterializationFailure, userMaterializationHeader, userMaterializationVersion, userRecordBudget, type UserRecordBudget } from "./authority-user-materialization.ts";
 import { readAuthorityUserResponse } from "./authority-user-response.ts";
+import { admitAssignmentBytes, assignmentJsonText, assignmentSourceBudget, assignmentSourceFailure, assignmentSourceHeader, assignmentSourceVersion, isAssignmentSourceFailure, parseAssignmentSource, readAssignmentRequest, readAssignmentResponse } from "./assignment-source.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
@@ -53,6 +54,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   private env: Env;
   // Reconciliation entry order only; unrelated owner routes remain concurrent.
   private assignmentTail: Promise<void> = Promise.resolve();
+  private assignmentAdmissions = 0;
 
   constructor(state: DurableObjectState, env: Env) {
     this.env = env;
@@ -63,8 +65,22 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (request.method !== "POST" && !request.headers.has(userMaterializationHeader)) return errorResponse("route_not_found", "route not found", 404);
+    if (request.method !== "POST" && !request.headers.has(userMaterializationHeader) && !request.headers.has(assignmentSourceHeader)) return errorResponse("route_not_found", "route not found", 404);
     try {
+      if (request.headers.has(assignmentSourceHeader)) {
+        // Reserve before acquiring the body. Fifth/invalid requests still own
+        // their ORIGINAL body but cannot read or enter the semantic FIFO.
+        const admitted = this.assignmentAdmissions < 4;
+        if (admitted) this.assignmentAdmissions++;
+        try {
+          const input = await readAssignmentRequest(request, path, admitted) as AssignmentReconcileRequest;
+          const text = await this.reconcileUserAssignments(input, true) as string;
+          return new Response(text, { headers: { "content-type": "application/json; charset=utf-8" } });
+        } catch (error) {
+          const failure = isAssignmentSourceFailure(error) || error instanceof HttpError ? error : assignmentSourceFailure("protocol");
+          return errorResponse(failure.code, failure.message, failure.status);
+        } finally { if (admitted) this.assignmentAdmissions--; }
+      }
       if (request.headers.has(userMaterializationHeader)) {
         const input = await readUserMaterializationRequest(request, path);
         try {
@@ -362,24 +378,48 @@ export class PolicyBindingIndexObject implements DurableObject {
     return rows<{ email: string; user_json: string }>(this.sql.exec("SELECT email, user_json FROM access_users ORDER BY email")).map((row) => ({ email: row.email, record: JSON.parse(row.user_json) }));
   }
 
-  private reconcileUserAssignments(request: AssignmentReconcileRequest) {
+  private assignmentUser(email: string): AccessControlUser | null {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return null;
+    const size = rows<{ bytes: number }>(this.sql.exec("SELECT length(CAST(user_json AS BLOB)) AS bytes FROM access_users WHERE email = ?", normalized))[0];
+    if (!size) return null;
+    const budget = assignmentSourceBudget(); admitAssignmentBytes(budget, size.bytes);
+    const row = rows<{ user_json: string }>(this.sql.exec("SELECT user_json FROM access_users WHERE email = ?", normalized))[0];
+    if (!row) throw assignmentSourceFailure("protocol");
+    return { email: normalized, record: parseAssignmentSource(row.user_json, budget) as AccessUserRecord };
+  }
+
+  private reconcileUserAssignments(request: AssignmentReconcileRequest, bounded = false) {
     const predecessor = this.assignmentTail;
     let release!: () => void;
     this.assignmentTail = new Promise<void>(resolve => { release = resolve; });
     const actual = (async () => {
       let snapshot, captured, failed = false, reason: unknown;
       try {
-        snapshot = captureAssignmentRules(request.rules);
+        snapshot = bounded ? captureAdmittedAssignmentRules(request.rules) : captureAssignmentRules(request.rules);
         captured = { email: request.email, legacy: request.legacy, evidence: request.evidence, force: request.force };
       } catch (error) { failed = true; reason = error; }
       // Even a synchronous snapshot failure must not let a successor overtake.
       await predecessor;
       if (failed) throw reason;
       const prepared = await prepareAssignmentRules(snapshot!);
-      const user = this.getUser(captured!.email);
+      const user = bounded ? this.assignmentUser(captured!.email) : this.getUser(captured!.email);
       if (!user) throw new HttpError(404, "unknown_user", "access user not found");
-      const candidate = withLegacyAssignmentState(user, captured!.legacy);
+      const candidate = bounded ? withAdmittedLegacyAssignmentState(user, captured!.legacy) : withLegacyAssignmentState(user, captured!.legacy);
       const result = evaluatePreparedUserAssignments(candidate, prepared, captured!.evidence, captured!.force);
+      if (bounded) {
+        // Normalize ONCE, only for an already-required write. Preserve the
+        // existing projection, raw-group dedup/defaults, and full reply fields.
+        const normalized = result.changed ? normalizeUser(result.user) : undefined;
+        const stored = normalized ? assignmentJsonText(normalized.record, true) : undefined;
+        const reply = assignmentJsonText(result);
+        // Both serialized outputs precede the first mutation. No new rollback.
+        if (normalized && stored !== undefined) {
+          try { this.sql.exec("INSERT OR REPLACE INTO access_users (email, user_json) VALUES (?, ?)", normalized.email, stored); }
+          catch { throw assignmentSourceFailure("transport"); }
+        }
+        return reply;
+      }
       if (result.changed) this.putUser(result.user);
       return result;
     })();
@@ -1033,6 +1073,12 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
   if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
+  if (objectName === "policy-bindings" && path === "/users/reconcile-assignments") {
+    const text = assignmentJsonText(body);
+    return await readAssignmentResponse(() => stub.fetch("https://clawrouter.internal/users/reconcile-assignments", {
+      method: "POST", body: text, signal, headers: { [assignmentSourceHeader]: assignmentSourceVersion },
+    }), signal) as T;
+  }
   const ack = objectName === "policy-bindings" ? authorityAck(path) : undefined;
   if (ack) {
     const text = JSON.stringify(body);
