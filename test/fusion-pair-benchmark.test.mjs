@@ -204,3 +204,27 @@ test('scope policy selects from declared edit paths before any inference', async
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('contract policy meters the test author and worker inside the same trial', async () => {
+  const { root, options } = await fixture();
+  try {
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'contract' }), /four_calls/);
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy: 'contract',
+      grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke, _engine, agentOptions) => {
+        assert.equal(agentOptions.preloadSource, true);
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+      contractAgent: async (_task, _image, id, settings, invoke) => {
+        assert.equal(settings.maxTurns, 4);
+        await invoke(id, roles.strong, body, signal);
+        await invoke(id, roles.cheap, body, signal);
+        return { ...repaired(), contractQualified: true, contractPassed: true };
+      } });
+    assert.deepEqual(state.strategies, ['cheap', 'strong', 'contract']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.equal(state.records[2].calls, 2);
+    assert.equal(state.records[2].contractQualified, true);
+    assert.ok(state.records.every(row => row.score === 1));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

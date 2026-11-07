@@ -12,6 +12,8 @@
 
 - Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
 
+- Add an experimental Fusion benchmark policy that qualifies generated regression probes before cheap repair and bounded strong fallback.
+
 - Add an experimental declared-scope routing control to the Fusion repair benchmark, with independent cheap and strong baselines.
 
 - Add optional product identities to eligible client catalog offers, scoped to the selected policy and active compatible grants, without changing routing or legacy catalog eligibility.

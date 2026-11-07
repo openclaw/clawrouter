@@ -158,6 +158,7 @@ Current recommendation: inexpensive models are useful smoke-test workers, but
 keep correctness checks external and measure the quality loss on held-out
 repairs. No measured multi-model quality improvement has been established by
 these experiments, and no production default changes follow from them.
+
 ### Independent check-policy holdout
 
 `benchmarks/fusion/check-holdout-workloads.json` pins three further repairs:
@@ -168,3 +169,82 @@ model call. Freeze the policy before exposing these instructions to a model.
 The schema label `development` is not evidence of exposure history; record
 that history with results. Selection and qualification alone do not establish
 a performance improvement.
+
+### Executable-check experiment
+
+`FUSION_PAIR_POLICY=contract` replaces the third paired arm with a strong test
+author and cheap repair worker. The test author has up to two calls to produce
+a probe that fails with an assertion on the original source. The cheap worker
+gets at most ten calls and sees the frozen probe. A fresh sandbox checks its
+candidate; a failed check or visible suite triggers strong repair from the
+original source with the remaining call and time allowance. Invalid probes
+also fall back to strong repair. Known-cost truncated or empty test-author
+responses consume one of the same two attempts; uncertain charges and refusals
+still stop the campaign. Every model call uses the shared trial ledger.
+
+Generated checks can be incomplete or wrong. The fallback's probe result is
+reported but does not replace independent acceptance. Reports retain only the
+probe digest and finite outcomes, not its source. This experimental option
+does not change production routing or claim a quality improvement.
+
+The initial three-task executable-check development run at `694d0f4` solved
+1/3 in every arm: cheap-only $0.131493, strong-only $0.897908, generated-check
+policy $0.463669. Runway passed after escalation. The pricing candidate passed
+its generated check but failed four independent acceptance tests. Native
+routing failed when test generation exceeded its output limit. This is no
+quality gain and no reason to activate the policy. Subsequent fallback changes
+are a new policy revision and need their own evaluation.
+
+
+### Context and independent contract results
+
+At source `fc759001d012cd9f5e0aa3274ddb83424d275d1e`, an exposed pricing
+repair received the same original compiler declarations and accounting consumer
+excerpt in every arm. Cheap-only failed; strong-only and contract each passed
+all 76 acceptance tests. Contract cost $0.081922 versus $0.266505 for strong,
+a 69.26% observed saving. It took 50.9 seconds versus 30.9 seconds. This is one
+development task, not evidence of general superiority or model-diversity benefit.
+
+The same policy was then frozen before first model exposure to the three tasks
+in `check-holdout-workloads.json`. Every arm had 24 calls, 600 seconds and an
+8192 output-token ceiling per trial. Costs include all policy calls and failures.
+
+| Arm | Correct repairs | Cost | Calls | Sum of trial time |
+| --- | --- | --- | --- | --- |
+| Cheap only | 1/3 | $0.071127 | 31 | 168.6 s |
+| Strong only | 2/3 | $1.211077 | 43 | 198.7 s |
+| Contract | 2/3 | $1.183577 | 52 | 394.9 s |
+
+Strong and contract both solved StepFun cache accounting and scalar fal MIME;
+all arms missed Cohere billed units. Cheap's StepFun trial ended with a
+known-cost truncated response and remains a failed trial. Contract's Cohere
+candidate passed its generated probe but failed independent acceptance.
+The 2.27% aggregate cost saving comes with nearly twice the elapsed time and
+no quality gain over strong-only. Three single-trial repairs do not establish
+a reliable cost advantage. Same-workflow single-model controls are needed
+before attributing any observed benefit to mixing models. These results do not
+justify changing production defaults.
+
+### Second independent contract cohort
+
+The same policy at source `3e4f0ad2d2dfa89fa766a207b9b38b131248586e`
+was tested on three newly exposed qualified repairs: Titan Multimodal errors,
+declared native identity and scalar-only native music response context. The
+call, output and time limits matched the first independent cohort.
+
+| Arm | Correct repairs | Cost |
+| --- | --- | --- |
+| Cheap only | 1/3 | $0.029479 |
+| Strong only | 2/3 | $0.403979 |
+| Contract | 1/3 | $0.494573 |
+
+All arms passed Titan and missed music. Strong alone passed native identity;
+contract accepted an incorrect cheap patch after its generated check passed.
+The music fallback also passed its generated check but failed acceptance.
+
+Across both independent cohorts, cheap solved 2/6 for $0.100606, strong 4/6
+for $1.615056, and contract 3/6 for $1.678150. Summed trial time was 312.2,
+300.0 and 696.1 seconds respectively. The original contract policy fails the
+predeclared screen: no strong-model regression, at least 20% cost saving,
+and no more than twice strong-model elapsed time. This rules out promoting
+that policy based on these experiments. Generated checks remain fallible.
