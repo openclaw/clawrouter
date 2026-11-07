@@ -444,3 +444,15 @@ same bounded initial editable source. The default remains tool-driven source
 inspection. Reports record the setting. A handoff receives a fresh source
 snapshot; compare against preloaded fixed controls before attributing savings
 to multiple models rather than avoided file-reading calls.
+### Prospective repair holdout
+
+`benchmarks/fusion/holdout-workloads.json` pins two additional historical
+repairs: SigV4 query canonicalization and opaque Responses input accounting. The loader's `development` label keeps its
+existing schema; experimental reports must separately record whether a task
+was exposed before a policy was frozen. A filename is not proof of an unseen
+evaluation set.
+
+Qualify every task with the oracle-visible contract before model inference.
+Freeze the policy and training examples first, retain both fixed-model controls,
+and report incomplete attempts and transport reservations. Do not tune against
+acceptance failures and then describe the same tasks as held out.
