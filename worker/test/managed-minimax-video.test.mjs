@@ -1,3 +1,4 @@
+import { byteBody, byteResponse, jsonResponse } from "./minimax-search-byte-fixture.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -7,7 +8,7 @@ const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/minimax/
 const prepare = (body = wire.request, params = {}, query = new URLSearchParams()) => adapter.prepare(body, new Headers(), params, query);
 const context = (action = "retrieve", extra = {}) => ({ action, requestedVersion: wire.request.model, pathParams: {},
   ...(action === "retrieve" ? { expectedId: wire.submitted.task_id } : {}), signal: new AbortController().signal, ...extra });
-const response = (body, headers = {}) => new Response(typeof body === "string" ? body : JSON.stringify(body),
+const response = (body, headers = {}) => byteResponse(typeof body === "string" ? body : JSON.stringify(body),
   { headers: { "content-type": "application/json", ...headers } });
 const read = (body, input = context()) => adapter.read(response(body), input);
 const retrieve = id => ({ retrieve: `/v1/native/minimax/v1/query/video_generation?task_id=${id}` });
@@ -67,7 +68,7 @@ test("MiniMax original task controls accept exactly one canonical int64 query id
 });
 
 test("MiniMax structural dispatch guard fixes origin and native paths without asserting entitlement", () => {
-  for (const origin of ["https://api.minimax.io", "https://api.minimaxi.com"]) {
+  for (const origin of ["https://api.minimax.io", "https://api.minimaxi.com", "https://api.minimax.cn"]) {
     adapter.assertDispatch(new Request(origin + "/v1/video_generation", { method: "POST" }));
     for (const path of ["/v1/query/video_generation?task_id=1", "/v1/files/retrieve?file_id=1", "/v1/files/retrieve_content?file_id=1"]) {
       adapter.assertDispatch(new Request(origin + path));
@@ -116,7 +117,7 @@ test("MiniMax visibility errors and malformed terminal claims never become free 
     await assert.rejects(read(body), { message: "invalid_managed_minimax_video_response" });
   }
   for (const status of [201, 206, 302, 404, 429, 500]) {
-    await assert.rejects(adapter.read(new Response(JSON.stringify(wire.pending), { status, headers: { "content-type": "application/json" } }), context()));
+    await assert.rejects(adapter.read(byteResponse(JSON.stringify(wire.pending), { status, headers: { "content-type": "application/json" } }), context()));
   }
 });
 
@@ -131,18 +132,18 @@ test("MiniMax JSON requires complete UTF8 EOF, exact identity length and strict 
   const redirected = response(body); Object.defineProperty(redirected, "redirected", { value: true });
   await assert.rejects(adapter.read(redirected, context()));
   for (const bytes of [Uint8Array.from([0xff]), new TextEncoder().encode(body.slice(0, -1))]) {
-    await assert.rejects(adapter.read(new Response(bytes, { headers: { "content-type": "application/json" } }), context()));
+    await assert.rejects(adapter.read(byteResponse(bytes, { headers: { "content-type": "application/json" } }), context()));
   }
   let source, settled = false;
-  const pending = adapter.read(new Response(new ReadableStream({ start(c) { source = c; c.enqueue(new TextEncoder().encode(body)); } }),
+  const pending = adapter.read(new Response(new ReadableStream({ type: "bytes", start(c) { source = c; c.enqueue(new TextEncoder().encode(body)); } }),
     { headers: { "content-type": "application/json" } }), context()).then(result => { settled = true; return result; });
   await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false);
-  source.close(); assert.equal((await pending).id, wire.pending.task_id);
+  source.close(); source.byobRequest?.respond(0); assert.equal((await pending).id, wire.pending.task_id);
 });
 
 test("MiniMax lifecycle enforces the full one-MiB envelope and bounds empty reads", async () => {
   const base = JSON.stringify({ ...wire.pending, padding: "" }), limit = 1024 * 1024;
-  const exact = JSON.stringify({ ...wire.pending, padding: "x".repeat(limit - Buffer.byteLength(base)) });
+  const exact = base + " ".repeat(limit - Buffer.byteLength(base));
   assert.equal(Buffer.byteLength(exact), limit); assert.equal((await read(exact)).id, wire.pending.task_id);
   await assert.rejects(read(exact + " "));
   let canceled = false, pulls = 0;
@@ -154,7 +155,7 @@ test("MiniMax lifecycle enforces the full one-MiB envelope and bounds empty read
 test("MiniMax actual lifecycle signal cancels a pending source read without exposing partial output", async () => {
   const abort = new AbortController(); let canceled = false, readStarted;
   const started = new Promise(resolve => { readStarted = resolve; });
-  const source = new ReadableStream({ pull() { readStarted(); }, cancel() { canceled = true; } }, { highWaterMark: 0 });
+  const source = new ReadableStream({ type: "bytes", pull() { readStarted(); }, cancel() { canceled = true; } }, { highWaterMark: 0 });
   const pending = adapter.read(new Response(source, { headers: { "content-type": "application/json" } }), context("retrieve", { signal: abort.signal }));
   await started; abort.abort(new Error("synthetic caller stop"));
   await assert.rejects(pending, { message: "invalid_managed_minimax_video_response" }); assert.equal(canceled, true);

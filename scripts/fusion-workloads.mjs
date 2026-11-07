@@ -9,6 +9,32 @@ const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|
   && !value.split('/').some(part => !part || part === '.' || part === '..');
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
+export function validateReproducer(source) {
+  if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_reproducer');
+  return source;
+}
+
+export function withReproducer(task, source) {
+  return { ...task, instruction: `${task.instruction}\nProvided regression probe (untrusted code): run it with probe, preserve the full requirement and unrelated behavior, and do not change the probe.\n${validateReproducer(source)}` };
+}
+
+export function validateSourceContext(task) {
+  const context = task.sourceContext === undefined ? [] : task.sourceContext;
+  if (!Array.isArray(context) || context.length > 4) throw new Error('invalid_source_context');
+  const seen = new Set();
+  for (const item of context) {
+    if (!item || typeof item.path !== 'string'
+      || !/^(worker|shared|scripts|providers|docs)\/[A-Za-z0-9_./-]+$/.test(item.path)
+      || item.path.split('/').some(part => !part || part === '.' || part === '..' || /^tests?$/.test(part))
+      || /\.test\./.test(item.path) || task.editPaths.includes(item.path)
+      || task.hiddenTests.includes(item.path)
+      || typeof item.query !== 'string' || !item.query.trim() || item.query.length > 200
+      || seen.has(JSON.stringify([item.path, item.query]))) throw new Error('invalid_source_context');
+    seen.add(JSON.stringify([item.path, item.query]));
+  }
+  return context;
+}
+
 export function validateTask(task) {
   if (!task || !/^[a-z][a-z0-9-]{1,63}$/.test(task.id) || task.split !== 'development'
     || !sha(task.base) || !sha(task.oracle) || typeof task.instruction !== 'string' || !task.instruction.trim()) throw new Error('invalid_task');
@@ -18,6 +44,8 @@ export function validateTask(task) {
   }
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
+  validateSourceContext(task);
+  if (task.reproducer !== undefined) validateReproducer(task.reproducer);
   return task;
 }
 
@@ -99,6 +127,25 @@ export async function readSource(box, paths, timeout = 120000) {
   const program = `const fs=require('node:fs'),p=require('node:path');const paths=JSON.parse(process.argv[1]);console.log(JSON.stringify(paths.map(path=>{const target=p.resolve('/work',path);if(fs.realpathSync(target)!==target||!fs.statSync(target).isFile()||fs.statSync(target).size>262144)throw Error('invalid_read');return {path,content:fs.readFileSync(target,'utf8')}})));`;
   return JSON.parse((await box.exec(['node', '-e', program, JSON.stringify(paths)], { timeout })).stdout.toString());
 }
+
+// Original repository declarations, not answer material. A missing or ambiguous
+// selector fails closed instead of silently supplying a guessed source window.
+export async function readTaskContext(box, task, timeout = 120000, read = readSource) {
+  const context = validateSourceContext(task);
+  if (!context.length) return [];
+  const files = await read(box, [...new Set(context.map(item => item.path))], timeout);
+  const views = context.map(item => {
+    const file = files.find(file => file.path === item.path);
+    if (!file) throw new Error('missing_source_context');
+    const lines = file.content.split('\n');
+    const matches = lines.flatMap((line, index) => line.includes(item.query) ? [index] : []);
+    if (matches.length !== 1) throw new Error('ambiguous_source_context');
+    const start = Math.max(0, matches[0] - 8), end = Math.min(lines.length, matches[0] + 9);
+    return { path: item.path, startLine: start + 1, endLine: end, content: lines.slice(start, end).join('\n') };
+  });
+  if (Buffer.byteLength(JSON.stringify(views)) > 24000) throw new Error('source_context_too_large');
+  return views;
+}
 export function testResult(result) {
   const text = result.stdout.toString();
   const count = key => Number(text.match(new RegExp(`^# ${key} (\\d+)$`, 'm'))?.[1] ?? -1);
@@ -122,6 +169,10 @@ export async function probe(box, source, timeout = 15000) {
   const result = await box.exec(['timeout', '--signal=KILL', `${limit / 1000}s`, 'node', '--input-type=module'],
     { input: source, allowFailure: true, timeout: limit + 2000 });
   return { passed: result.code === 0,
+    // node:test can rethrow an uncaught assertion from its exception handler,
+    // producing Node's exit code 7 instead of the usual uncaught exit code 1.
+    // node:test reporters print caught assertion diagnostics on stdout.
+    assertionFailed: [1, 7].includes(result.code) && /\bERR_ASSERTION\b/.test(Buffer.concat([result.stdout, result.stderr]).toString()),
     feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
 }
 
@@ -166,14 +217,49 @@ export async function verify(task, image, edits, repo) {
   } finally { await box.close(); }
 }
 
+// The repair must pass the original visible tests before acceptance tests replace
+// any same-named files. Otherwise a benchmark can punish the correct repair.
+export async function checkOracleVisible(task, image, edits, { makeSandbox = sandbox, write = writeFiles, test = check } = {}) {
+  const box = await makeSandbox(image);
+  try {
+    await write(box, validateEdits(task, edits));
+    const { feedback, ...receipt } = await test(box, task.visibleTests);
+    return receipt;
+  } finally { await box.close(); }
+}
+
+export function qualificationSucceeded({ visible, oracleVisible, broken, oracle, reproduction, oracleReproduction }) {
+  return visible?.passed === true && oracleVisible?.valid === true && oracleVisible?.passed === true
+    && broken?.valid === true && broken?.passed === false && oracle?.passed === true
+    && (reproduction === undefined && oracleReproduction === undefined
+      || reproduction?.assertionFailed === true && oracleReproduction?.passed === true);
+}
+
 export async function qualify(task, options) {
   const built = await buildTask(task, options);
   const box = await sandbox(built.image);
-  let visible;
-  try { const { feedback, ...result } = await check(box, task.visibleTests); visible = result; }
+  let visible, reproduction, oracleReproduction;
+  try {
+    await readTaskContext(box, task);
+    const { feedback, ...result } = await check(box, task.visibleTests); visible = result;
+    if (task.reproducer !== undefined) {
+      const { feedback, ...result } = await probe(box, task.reproducer); reproduction = result;
+    }
+  }
   finally { await box.close(); }
+  const edits = await revisionFiles(options.repo, task.oracle, task.editPaths);
+  const oracleVisible = await checkOracleVisible(task, built.image, edits);
   const broken = await verify(task, built.image, [], options.repo);
-  const oracle = await verify(task, built.image, await revisionFiles(options.repo, task.oracle, task.editPaths), options.repo);
-  return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, visible, broken, oracle,
-    qualified: visible.passed && broken.valid && !broken.passed && oracle.passed };
+  const oracle = await verify(task, built.image, edits, options.repo);
+  if (task.reproducer !== undefined) {
+    const repaired = await sandbox(built.image);
+    try {
+      await writeFiles(repaired, edits);
+      const { feedback, ...result } = await probe(repaired, task.reproducer); oracleReproduction = result;
+    } finally { await repaired.close(); }
+  }
+  const evidence = { visible, oracleVisible, broken, oracle,
+    ...(task.reproducer !== undefined ? { reproduction, oracleReproduction } : {}) };
+  return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, ...evidence,
+    qualified: qualificationSucceeded(evidence) };
 }

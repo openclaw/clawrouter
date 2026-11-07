@@ -1,6 +1,7 @@
+import { discardVideoInput } from "./minimax-video-operation.ts";
 import type { ManagedControl, ManagedFileAction, ManagedFileAdapter, ManagedFileDescriptor } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject } from "./managed-media-json.ts";
-import { miniMaxVideoFiles, miniMaxVideoOrigins, observeMiniMaxVideo, prepareMiniMaxVideoFile, readMiniMaxVideoFile,
+import { isMiniMaxVideoOrigin, miniMaxVideoFiles, miniMaxVideoOrigins, observeMiniMaxVideo, prepareMiniMaxVideoFile, readMiniMaxVideoFile,
   readMiniMaxVideoFileState, validateMiniMaxMediaId } from "./minimax-video.ts";
 import type { CompiledEndpoint } from "./types.ts";
 
@@ -11,7 +12,7 @@ function descriptor(file: ManagedFileDescriptor): void {
   validateMiniMaxMediaId(file.id);
   requireFile(file.mimeType === "video/mp4" && Object.keys(file).every(key => key === "id" || key === "mimeType"));
 }
-function origin(value: string): void { requireFile(Object.values(miniMaxVideoOrigins).some(origin => origin === value)); }
+function origin(value: string): void { requireFile(isMiniMaxVideoOrigin(value)); }
 function control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
   file: ManagedFileDescriptor): Pick<ManagedControl, "path" | "query"> {
   descriptor(file);
@@ -44,28 +45,28 @@ export const miniMaxVideoFileAdapter: ManagedFileAdapter = {
     }
     return control(action, endpoint, file);
   },
-  async readState(response, file) {
+  async readState(response, file, context) {
     try {
       descriptor(file);
-      // Common boundedFileResponse supplies the original operation's physical
-      // reader cancellation. This codec signal does not invent caller authority.
-      const state = await readMiniMaxVideoFileState(boundedMiniMaxVideoResponse(response, ["application/json"], 64 * 1024),
-        file.id, new AbortController().signal);
+      // The registered runtime supplies direct original-reader custody.
+      const state = await readMiniMaxVideoFileState(response, file.id, context?.signal ?? new AbortController().signal, context?.registerInput);
       requireFile(!Object.hasOwn(state.body, "error"));
       // Project identity/state only: never return a native CDN URL or arbitrary
       // metadata that could become an input or credential destination.
       return { id: state.id, status: state.status, body: { file: { file_id: state.id, purpose: "video_generation",
         ...(state.byteSize === null ? {} : { bytes: state.byteSize }) }, base_resp: { status_code: 0 } } };
     } catch {
-      void response.body?.cancel().catch(() => undefined); throw new Error("invalid_managed_minimax_file_response");
+      await discardVideoInput(response, context?.registerInput).catch(() => undefined);
+      throw new Error("invalid_managed_minimax_file_response");
     }
   },
-  async readFile(response, file, maxBytes) {
+  async readFile(response, file, maxBytes, context) {
     try {
       descriptor(file); requireFile(Number.isSafeInteger(maxBytes) && maxBytes >= 16 && maxBytes <= fileLimit);
-      return await readMiniMaxVideoFile(boundedMiniMaxVideoResponse(response, downloadMimeTypes, maxBytes), maxBytes, new AbortController().signal);
+      return await readMiniMaxVideoFile(response, maxBytes, context?.signal ?? new AbortController().signal, context?.registerInput);
     } catch {
-      void response.body?.cancel().catch(() => undefined); throw new Error("invalid_managed_minimax_file_response");
+      await discardVideoInput(response, context?.registerInput).catch(() => undefined);
+      throw new Error("invalid_managed_minimax_file_response");
     }
   },
   rewrite(value, paths) {
@@ -79,38 +80,3 @@ export const miniMaxVideoFileAdapter: ManagedFileAdapter = {
     return { ...body, video_url: paths[0].download };
   },
 };
-
-// Strict transport envelope shared by these two inactive wrappers. Never fetch
-// a URL, infer billing, or allocate a separate lease here. Common owns capacity.
-export function boundedMiniMaxVideoResponse(response: Response, mimes: readonly string[], limit: number): Response {
-  const mime = response.headers.get("content-type"), encoding = response.headers.get("content-encoding");
-  const length = response.headers.get("content-length");
-  const media = /^([a-z0-9.+-]+\/[a-z0-9.+-]+)(?:\s*;\s*charset=utf-8)?$/i.exec(mime?.trim() ?? "");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
-    || !media || !mimes.includes(media[1].toLowerCase())
-    || encoding !== null && encoding.trim().toLowerCase() !== "identity"
-    || length !== null && (!/^(?:0|[1-9][0-9]*)$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limit)) {
-    void response.body?.cancel().catch(() => undefined); throw new Error("invalid_managed_minimax_response");
-  }
-  const headers = new Headers(response.headers); headers.delete("content-encoding");
-  const reader = response.body.getReader(); let reads = 0, size = 0;
-  const cancel = (reason?: unknown) => reader.cancel(reason).catch(() => undefined).finally(() => reader.releaseLock());
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        if (++reads > 8192) throw new Error("invalid_managed_minimax_response");
-        const chunk = await reader.read();
-        if (chunk.done) { reader.releaseLock(); controller.close(); return; }
-        size += chunk.value.byteLength;
-        if (size > limit) throw new Error("invalid_managed_minimax_response");
-        // Do not let a small view retain an arbitrarily large transport buffer.
-        const value = chunk.value;
-        controller.enqueue(value.byteOffset === 0 && value.byteLength === value.buffer.byteLength ? value : new Uint8Array(value));
-      } catch {
-        void cancel(); controller.error(new Error("invalid_managed_minimax_response"));
-      }
-    },
-    cancel,
-  }, { highWaterMark: 0 });
-  return new Response(body, { status: response.status, headers });
-}

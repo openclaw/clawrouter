@@ -1,3 +1,7 @@
+import { miniMaxSearchProjection } from "./minimax-search-credential.ts";
+import { miniMaxVideoProjection } from "./minimax-video-credential.ts";
+import { readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { readMiniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
 import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
@@ -11,6 +15,8 @@ import { readNativeMediaBinding } from "../shared/native-media-binding.ts";
 export function routingProjection(grant: UpstreamGrant): UpstreamGrant {
   const fields = ["version", "enabled", "priority", "weight", "kind", "provider", "label", "credentialStore", "credentialGeneration", "credentialLineage", "credentialStatus", "credentialRefreshBlockedUntil", "hasCredential", "credentialFields", "hasAccessToken", "hasRefreshToken", "tokenType", "expiresAt", "scopes", "accountId", "subscription", "createdAt", "updatedAt", "revokedAt"] as const;
   return { ...Object.fromEntries(fields.filter(field => grant[field] !== undefined).map(field => [field, grant[field]])),
+    minimaxSearchBinding: miniMaxSearchProjection(grant) ? readMiniMaxSearchBinding(grant.minimaxSearchBinding) : null,
+    minimaxVideoBinding: miniMaxVideoProjection(grant) ? readMiniMaxVideoBinding(grant.minimaxVideoBinding) : null,
     minimaxImageBinding: miniMaxImageProjection(grant) ? readMiniMaxImageBinding(grant.minimaxImageBinding) : null,
     vertexAnthropicBinding: vertexAnthropicProjection(grant),
     minimaxAnthropicBinding: miniMaxAnthropicProjection(grant),

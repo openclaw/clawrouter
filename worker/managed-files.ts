@@ -1,3 +1,5 @@
+import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
+import { isMiniMaxVideoOrigin } from "./minimax-video.ts";
 import type { BackgroundRecord } from "./background-store.ts";
 import { BodyLease } from "./body-budget.ts";
 import { backgroundCall } from "./http-background.ts";
@@ -47,7 +49,7 @@ export function managedFileBase(provider: CompiledProvider, value: string | unde
   const base = new URL(value);
   if (!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(base.hostname) || /^[\d.]+$/.test(base.hostname)
     || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(base.hostname)
-    || !Object.values(provider.base_urls).some(declared => { try { return new URL(declared).origin === base.origin; } catch { return false; } })) unavailable();
+    || !(provider.id === "minimax" ? isMiniMaxVideoOrigin(value) : Object.values(provider.base_urls).some(declared => { try { return new URL(declared).origin === base.origin; } catch { return false; } }))) unavailable();
   return value.replace(/\/$/, "");
 }
 
@@ -75,6 +77,13 @@ export function managedFilePublicBody(provider: CompiledProvider, create: Compil
   const path = (action: ManagedFileAction, file: ManagedFileDescriptor) => {
     const endpoint = endpoints[action];
     // Public paths use schema templates, never a Host header or native URI.
+    if (create.lifecycle?.protocol === "minimax.video" && adapter.publicControl) {
+      if (!endpoint || prediction.terminal !== "succeeded" || prediction.observationUnavailable) unavailable();
+      const control = adapter.publicControl(action, endpoint, file);
+      if (!control.path.startsWith("/") || /[\\%?#\s]/.test(control.path) || control.path !== endpoint.path
+        || control.query.size !== 1 || control.query.getAll("file_id").length !== 1 || control.query.get("file_id") !== file.id) unavailable();
+      return `/v1/native/${provider.id}${control.path}?${control.query.toString()}`;
+    }
     if (!endpoint || endpoint.path_params.length !== 1) unavailable();
     const route = endpoint.path.replace(`\${${endpoint.path_params[0]}}`, encodeURIComponent(file.id));
     if (!route.startsWith("/") || route.includes("${")) unavailable();
@@ -86,10 +95,11 @@ export function managedFilePublicBody(provider: CompiledProvider, create: Compil
 }
 
 export async function proxyManagedFile(request: Request, env: Env, provider: CompiledProvider, matches: ManagedFileMatch[], queryInput: ProxyQuery,
-  mode: "proxy_key" | "access", preauthenticated?: AuthorizedIdentity, session?: AccessSession, context?: ExecutionContext): Promise<Response> {
+  mode: "proxy_key" | "access", preauthenticated?: AuthorizedIdentity, session?: AccessSession, context?: ExecutionContext, video?: MiniMaxVideoOperation): Promise<Response> {
+  if (matches.some(match => match.create.lifecycle?.protocol === "minimax.video") && (!video || !preauthenticated || mode !== "proxy_key")) unavailable();
   const identities = await responseControlIdentities(request, env, mode, preauthenticated, session);
   if (identities instanceof Response) return identities;
-  const operation = new HttpOperation(request.signal, 30_000), deadline = Date.now() + 30_000, lease = new BodyLease();
+  const operation = video?.operation ?? new HttpOperation(request.signal, 30_000), deadline = video?.deadline ?? Date.now() + 30_000, lease = video ? undefined : new BodyLease();
   const fetching: Promise<void>[] = [], reading: Promise<void>[] = [];
   const inputs: ReturnType<typeof boundedFileResponse>[] = [];
   const unclaimed = new Set<Response>(), discarded = new WeakMap<Response, Promise<void>>();
@@ -127,30 +137,34 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
     let jobId: string;
     try { jobId = lifecycle.validateId(nativeId); } catch { unavailable(); }
     const binding = await resolveResponseControlOwner(env, identities, await managedJobKey(protocol, provider.id, jobId), operation,
-      provider.id, candidates.map(match => ({ createId: match.create.id, pathParams: match.pathParams })));
+      provider.id, candidates.map(match => ({ createId: match.create.id, pathParams: match.pathParams })), undefined, video);
     if (!binding.background) unavailable();
     const match = candidates.find(candidate => candidate.create.id === binding.owner.endpointId)!;
     const { adapter } = managedFileRoute(provider, match.create), fileId = match.fileId;
-    const job = await operation.wait(backgroundCall<BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }));
+    const job = await operation.wait(backgroundCall<BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }, video));
     const managed = job?.managed, file = managed?.files?.find(file => file.id === fileId);
     if (!job || !managed || managed.protocol !== protocol || managed.providerId !== provider.id || managed.upstreamId !== jobId
       || managed.policyGeneration !== binding.auth.policy.generation || managed.submission !== "bound" || managed.terminal !== "succeeded"
       || managed.observationUnavailable || !managed.route || !file || Date.now() >= job.replayUntil) unavailable();
     validateManagedFile(file);
-    await operation.wait(assertProviderAccess(provider, binding.auth, env));
+    await operation.wait(assertProviderAccess(provider, binding.auth, env, undefined, undefined, video));
     // Reserve one bounded response allocation before either upstream read.
-    if (!lease.grow(managedFileLimit)) throw new HttpError(503, "server_overloaded", "file delivery capacity is busy; retry shortly");
+    if (lease && !lease.grow(managedFileLimit)) throw new HttpError(503, "server_overloaded", "file delivery capacity is busy; retry shortly");
     const input: ResponseControlDispatch = { owner: binding.owner, route: managed.route, responseId: jobId, action: "retrieve", query: "", stream: false,
       protocol, requestedVersion: managed.requestedVersion, deadline: Math.min(deadline, job.replayUntil), authorization: publicControlAuthorization(binding.auth) };
     const fetchFile = async (action: ManagedFileAction, state?: ManagedFileState) => {
       operation.signal.throwIfAborted();
-      const pending = dispatchResponseControl(env, { ...input, file: { action, descriptor: file, state } }, operation.signal);
+      const pending = dispatchResponseControl(env, { ...input, file: { action, descriptor: file, state } }, operation.signal, undefined, video);
       const settled = pending.then(async response => {
         unclaimed.add(response);
-        if (operation.signal.aborted) await discard(response);
+        if (operation.signal.aborted) await (video ? video.discard(response) : discard(response));
       }, () => undefined);
       fetching.push(settled); void settled.catch(() => undefined);
-      const response = await operation.wait(pending, "upstream", late => { void discard(late).catch(() => undefined); });
+      const response = await operation.wait(video ? video.track(pending) : pending, "upstream", late => { void (video ? video.discard(late) : discard(late)).catch(() => undefined); });
+      if (video) {
+        // The codec acquires and registers the ORIGINAL body before all header gates.
+        unclaimed.delete(response); return response;
+      }
       if (response.status !== 200 || response.redirected) throw new HttpError(502, "managed_file_unavailable", "original file delivery failed; do not resubmit generation");
       const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
       if (action === "download" && ![file.mimeType, "application/octet-stream", "binary/octet-stream"].includes(mime ?? "")) {
@@ -163,19 +177,26 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
     const headers = { "cache-control": "no-store", "x-clawrouter-content-retention": "off", "x-clawrouter-upstream-provider": provider.id, "x-clawrouter-job-id": jobId };
     let state: ManagedFileState | undefined;
     if (adapter.mode !== "download_only") {
-      const pending = adapter.readState(await fetchFile("metadata"), file);
+      const metadataResponse = await fetchFile("metadata");
+      const pending = adapter.readState(metadataResponse, file, video ? { signal: operation.signal, registerInput: video.registerInput } : undefined);
+      if (video) { video.track(pending); void pending.finally(() => video.discardUnclaimed(metadataResponse)).catch(() => undefined); }
       reading.push(pending.then(() => undefined, () => undefined));
       state = await operation.wait(pending, "upstream");
       if (state.id !== file.id || !["processing", "active", "failed"].includes(state.status) || JSON.stringify(state.body).length > 16 * 1024) unavailable();
-      if (match.action === "metadata") return deliver(json(state.body, 200, headers));
+      if (video) videoJsonBytes(state.body, "metadata");
+      if (match.action === "metadata") return video ? video.publish(state.body, 200, { ...headers, "content-type": "application/json" }) : deliver(json(state.body, 200, headers));
+      if (video && state.status !== "active") return video.publish({ error: { code: state.status === "processing" ? "managed_file_processing" : "managed_file_failed" } }, 409, { ...headers, "content-type": "application/json" });
       if (state.status !== "active") return errorResponse(state.status === "processing" ? "managed_file_processing" : "managed_file_failed",
         state.status === "processing" ? "file is still processing; retry this file request" : "file processing failed; generation settlement is unchanged", 409, undefined,
         { ...headers, ...(state.status === "processing" ? { "retry-after": "5" } : {}) });
     } else if (match.action !== "download") unavailable();
-    const pending = adapter.readFile(await fetchFile("download", state), file, managedFileLimit);
+    const downloadResponse = await fetchFile("download", state);
+    const pending = adapter.readFile(downloadResponse, file, managedFileLimit, video ? { signal: operation.signal, registerInput: video.registerInput } : undefined);
+    if (video) { video.track(pending); void pending.finally(() => video.discardUnclaimed(downloadResponse)).catch(() => undefined); }
     reading.push(pending.then(() => undefined, () => undefined));
     const bytes = await operation.wait(pending, "upstream");
     if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > managedFileLimit) unavailable();
+    if (video) return video.publishFile(bytes, { ...headers, "content-type": file.mimeType, "content-length": String(bytes.byteLength), "x-content-type-options": "nosniff" });
     let output: Uint8Array | undefined = bytes;
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -188,6 +209,10 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
     operation.stop("upstream", error);
     throw error instanceof HttpError ? error : new HttpError(request.signal.aborted ? 499 : 502, "managed_file_unavailable", "original file delivery failed; retry file retrieval without resubmitting generation");
   } finally {
+    if (video) {
+      // The outer invocation owns retirement through unclaimed output/deadline.
+      for (const response of unclaimed) video.track(video.discardUnclaimed(response));
+    } else {
     operation.stop("complete");
     const retirement = (async () => {
       // Start source cancellation before joining adapter work: the adapter can
@@ -200,11 +225,12 @@ export async function proxyManagedFile(request: Request, env: Env, provider: Com
       if ([...fetched, ...disposed, ...retired].some(result => result.status === "rejected")
         || inputs.some(input => input.response.body?.locked)) throw new Error("managed file input retirement failed");
       await delivery;
-      lease.release();
+      lease!.release();
     })();
     if (context) context.waitUntil(retirement);
     else if (!delivery) await retirement;
     else void retirement.catch(() => undefined);
+    }
   }
 }
 

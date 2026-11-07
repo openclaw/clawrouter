@@ -39,6 +39,12 @@ export function qualifyMiniMaxFirstFrame(value: unknown): MiniMaxFirstFrame {
     if (output < size) bytes[output++] = b << 4 | c >>> 2;
     if (output < size) bytes[output++] = c << 6 | d;
   }
+  return qualifyMiniMaxFirstFrameBytes(bytes, mimeType);
+}
+
+// The caller retains the original buffer; validation neither copies nor decodes.
+export function qualifyMiniMaxFirstFrameBytes(bytes: Uint8Array<ArrayBuffer>, mimeType: MiniMaxFirstFrame["mimeType"]): MiniMaxFirstFrame {
+  if (!bytes.length || bytes.length > maxBytes || !["image/png", "image/jpeg", "image/webp"].includes(mimeType)) invalid();
   try { qualifyImageContainer(bytes, mimeType); } catch { invalid(); }
   const [width, height] = dimensions(bytes, mimeType);
   if (Math.min(width, height) <= 300 || width * 5 < height * 2 || width * 2 > height * 5) invalid();

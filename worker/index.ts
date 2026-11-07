@@ -64,7 +64,8 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     // Mutations served by this isolate take effect here at once; other isolates
     // converge within the hot-cache max age.
     if (mutatesHotState(request.method, path)) { clearHotCaches(); fenceSharedHotCache(); }
-    // Stale-cache refreshes and coalesced counters registered during this request.
+    // Best-effort facade over a scalar sequence cohort, including interleaved
+    // registrations. Its own timers never join another request's native I/O.
     const background = pendingBackgroundWork(backgroundMark);
     if (background) context.waitUntil(background);
     response = withNativeLocalError(response, path, correlated.requestId);
@@ -113,7 +114,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/me") return meResponse(request, env);
   if (request.method === "GET" && path === "/v1/pool") return poolResponse(request, env);
   if (request.method === "GET" && path === "/v1/usage") return userUsage(request, env);
-  if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env);
+  if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env, context);
   if (request.method === "GET" && path.startsWith("/v1/models/")) {
     const id = decodePathSegment(path.slice("/v1/models/".length));
     const match = id.match(/^(openai|anthropic)\/(.+)$/);
@@ -123,7 +124,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     }
     return proxyNative(request, env, context, `/v1/native/${match[1]}/v1/models/${encodeURIComponent(match[2])}`);
   }
-  if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env);
+  if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env, context);
   if (request.method === "GET" && path === "/v1/oauth/callback") return oauthCallback(request, env);
   if (path.startsWith("/v1/pool-submissions/")) return poolSubmissionApi(request, env, path);
   if (path.startsWith("/v1/admin/")) return adminApi(request, env, path);

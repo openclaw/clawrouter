@@ -49,7 +49,7 @@ test('corrupt accounting evidence reserves the set ceiling and stops', async () 
       execute: async options => { calls++; await mkdir(options.out); await writeFile(join(options.out, 'provenance.json'), '{broken'); } }), /incomplete/);
     const state = JSON.parse(await readFile(join(root, 'run/campaign.json')));
     assert.equal(calls, 1); assert.equal(state.accountingUnknown, true);
-    assert.equal(state.spentOrReservedMicros, minimumPriorCostMicros + 800000);
+    assert.equal(state.spentOrReservedMicros, minimumPriorCostMicros + 600000);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -60,7 +60,7 @@ test('missing accounting evidence cannot release the set allowance', async () =>
       execute: async () => { calls++; throw Error('interrupted'); } }), /incomplete/);
     const state = JSON.parse(await readFile(join(root, 'run/campaign.json')));
     assert.equal(calls, 1); assert.equal(state.accountingUnknown, true);
-    assert.equal(state.spentOrReservedMicros, minimumPriorCostMicros + 800000);
+    assert.equal(state.spentOrReservedMicros, minimumPriorCostMicros + 600000);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
+import { musicAccessFixture } from "./minimax-music-admin-fixture.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 async function barriers(t) {
   const held = new Map(), released = new Set();
   const server = createServer((request, response) => {
-    if (request.method !== "GET" || request.headers.authorization || !/^\/[a-z-]+\/(abort|read|cleanup|delivery)$/.test(request.url)) { response.writeHead(400); response.end(); return; }
+    if (request.method !== "GET" || request.headers.authorization || !/^\/[a-z-]+\/(abort|read|cleanup|delivery|admission)$/.test(request.url)) { response.writeHead(400); response.end(); return; }
     if (released.has(request.url)) response.end("released"); else held.set(request.url, response);
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
@@ -27,17 +28,21 @@ import {inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-cre
 import {sha256Hex} from './worker/utils.ts';
 import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
 import {usageStub} from './worker/ledgers.ts';
+import {setHotCacheClock} from './worker/hot-cache.ts';
 import {configureMusic,musicBody,musicModels} from './worker/test/minimax-music-runtime-fixture.mjs';
 configureMusic(snapshot.providers.find(p=>p.id==='minimax'));
 const original=globalThis.fetch.bind(globalThis),deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-let initialized,active,pending=new Set();
+let initialized,active,pending=new Set(),cacheControl,cacheOffset=0,materializations=0;
+setHotCacheClock(()=>Date.now()+cacheOffset);
 const state=()=>active?{mode:active.mode,status:active.status,error:active.error,results:active.results,fetches:active.fetches,
  reads:active.reads,byob:active.byob,detached:active.detached,maxBacking:active.maxBacking,wire:active.wire,eof:active.eof,
  cancels:active.cancels,cleanup:active.cleanup,readRetired:active.readRetired,locked:active.source?.locked??false,
- charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size,callerAborted:active.callerAborted,requestId:active.requestId}:{};
+ charged:bodyBudgetCharged(),atFetch:active.atFetch,outputBytes:active.outputBytes,pending:pending.size,callerAborted:active.callerAborted,requestId:active.requestId,
+ materializations,admissionHeld:cacheControl?.entered??false,admissionReleased:cacheControl?.released??false,timing:active.timing}:{};
 const gate=(a,phase)=>original('https://music-gate.example/'+a.mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw new Error('fixture gate');await r.text();});
 globalThis.fetch=async(input,init)=>{
  const request=new Request(input,init),a=active;
+ if(request.url==='https://music-admin-fixture.cloudflareaccess.com/cdn-cgi/access/certs')return original(request);
  if(request.url!=='https://api.minimax.io/v1/music_generation')throw new Error('unexpected fixture destination');
  a.fetches++;a.atFetch=bodyBudgetCharged();const response=await original(request);a.source=response.body;
  // Instrument the ACTUAL DO-returned body without replacing it or changing its
@@ -57,16 +62,38 @@ globalThis.fetch=async(input,init)=>{
  return response;
 };
 export default {async fetch(request,bindings,context){
- const env={...bindings,MINIMAX_API_KEY:'synthetic-forbidden-environment-key'};
+ const env={...bindings,...MUSIC_ACCESS_ENV,MINIMAX_API_KEY:'synthetic-forbidden-environment-key'};
+ const credentials=env.GRANT_CREDENTIALS;env.GRANT_CREDENTIALS={idFromName:n=>credentials.idFromName(n),get:id=>{const stub=credentials.get(id);return {fetch(input,init){
+  if(new URL(input).pathname==='/materialize')materializations++;return stub.fetch(input,init);
+ }}}};
+ const authority=env.ACCESS_CONTROL;env.ACCESS_CONTROL={idFromName:n=>authority.idFromName(n),get:id=>{const stub=authority.get(id);return {async fetch(input,init){
+  const response=await stub.fetch(input,init),held=cacheControl;
+  if(new URL(input).pathname==='/admission/resolve'&&held&&!held.released){held.entered=true;active.ready.resolve();
+   await gate({mode:held.mode},'admission');held.released=true;}
+  return response;
+ }}}};
  env.CLAWROUTER_ADMIN_TOKEN_SHA256=await sha256Hex('synthetic-admin');
  const policy={enabled:true,generation:'g1',providers:['minimax'],models:musicModels,tenantId:'fixture',monthlyBudgetMicros:100000,
   requestCostMicros:700,retainRequestContent:false,grantRouting:{eligibleGrants:{minimax:['music']},environmentFallback:true,failover:true}};
  initialized??=(async()=>{
+  await authorityCall(env,'/users/initialize-all',[{email:'music-admin@example.invalid',record:{role:'admin',enabled:true,tenantId:'fixture',groups:[],contentRetentionDisabled:false}}]);
   await authorityCall(env,'/policies/initialize-all',[{policyId:'fixture',policy}]);
   await authorityCall(env,'/credentials/initialize-all',[{credentialId:'fixture',credential:{enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:'fixture',policyGeneration:'g1'}}]);
   await authorityCall(env,'/connections/initialize-all',[{providerId:'minimax',enabled:true,monthlyBudgetMicros:100000}]);
  })();await initialized;
  const url=new URL(request.url);
+ if(url.pathname==='/cache/prepare'){
+  const change=url.searchParams.get('change'),route=url.searchParams.get('route');
+  if(!['price','caller'].includes(change)||!['native','manifest'].includes(route))return new Response(null,{status:400});
+  // These are real authority-DO mutations, not frontend admin requests. The
+  // original router isolate keeps its successful selection hint unchanged.
+  if(change==='price')await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,requestCostMicros:null}});
+  else {const result=await authorityCall(env,'/credentials/mutate',{credentialId:'fixture',scope:'admin',
+   actor:{auth:'cloudflare_access',role:'admin',email:'music-admin@example.invalid'},operation:'revoke'});
+   if(result.outcome!=='updated')throw new Error('fixture caller revocation failed');}
+  cacheOffset+=61000;materializations=0;cacheControl={mode:'prefetch-'+route+'-'+change,entered:false,released:false};
+  return Response.json({prepared:true});
+ }
  if(url.pathname==='/state')return Response.json(state());
  if(url.pathname==='/events')return usageStub(env,'fixture','fixture').fetch('https://usage/snapshot?events=admin');
  if(url.pathname==='/contend'){const lease=new BodyLease(),allowed=lease.grow(17*1024*1024);lease.release();return Response.json({allowed,charged:bodyBudgetCharged()});}
@@ -74,7 +101,7 @@ export default {async fetch(request,bindings,context){
  const mode=url.searchParams.get('mode'),a=active={mode,ready:deferred(),status:null,error:null,results:0,fetches:0,reads:0,byob:0,detached:0,maxBacking:0,wire:0,eof:false,cancels:0,cleanup:false,readRetired:false,outputBytes:0};
  if(mode==='unpriced')await authorityCall(env,'/policies/put',{policyId:'fixture',policy:{...policy,requestCostMicros:null}});
  const ledger=env.BUDGET_LEDGER;env.BUDGET_LEDGER={idFromName:n=>ledger.idFromName(n),get:id=>{const stub=ledger.get(id);return {async fetch(input,init){
-  const r=await stub.fetch(input,init);if(new URL(input).pathname==='/dispatch'&&mode==='revoke')await revokeGrantCredentials(env,'oauth/fixture/music');return r;
+  const r=await stub.fetch(input,init);if(new URL(input).pathname==='/dispatch'&&mode==='revoke')await revokeGrantCredentials(env,'oauth/fixture/music',undefined,undefined,{auth:'cloudflare_access',role:'admin',email:'music-admin@example.invalid'});return r;
  }}}};
  const controller=new AbortController(),stream=mode!=='unary',manifest=mode==='manifest',body=musicBody(stream,manifest?'music-2.6-free':'music-2.6');
  body.prompt=mode==='maximum'?'maximum':'Synthetic music';
@@ -84,7 +111,7 @@ export default {async fetch(request,bindings,context){
   const response=await worker.fetch(new Request('https://router.example'+(manifest?'/v1/proxy/minimax/music':'/v1/native/minimax/v1/music_generation'),{
    method:'POST',headers:{authorization:'Bearer clawrouter-live-fixture-fixture-secret','content-type':'application/json'},
    body:JSON.stringify(manifest?{body:{...body,model:'minimax/music-2.6-free'}}:body),signal:controller.signal}),env,{waitUntil:track});
-  a.status=response.status;a.requestId=response.headers.get('x-clawrouter-request-id');
+  a.status=response.status;a.requestId=response.headers.get('x-clawrouter-request-id');a.timing=response.headers.get('server-timing');
   if(!response.ok){const text=await response.text();try{a.error=JSON.parse(text).error?.code??null;}catch{}return;}
   const reader=response.body.getReader();let first=true;
   try{for(;;){const part=await reader.read();if(part.done)break;a.outputBytes+=part.value.byteLength;
@@ -93,7 +120,7 @@ export default {async fetch(request,bindings,context){
  })().catch(error=>{a.error=error.name;}).finally(()=>{a.results++;a.ready.resolve();}));
  await a.ready.promise;return Response.json(state());
 },queue:worker.queue};`;
-function upstream(origin) { return String.raw`
+function upstream(origin,jwk) { return String.raw`
 const encoder=new TextEncoder(),maxAudio=8*1024*1024,maxWire=40*1024*1024+65536;
 export class MusicSource {async fetch(request){
  const body=await request.json();
@@ -113,20 +140,22 @@ export class MusicSource {async fetch(request){
  const iterator=chunks();return new Response(new ReadableStream({type:'bytes',pull(c){const next=iterator.next();if(next.done){c.close();c.byobRequest?.respond(0);return;}const bytes=encoder.encode(next.value);wire+=bytes.length;c.enqueue(bytes);},cancel(){iterator.return();}},{highWaterMark:0}),{headers:{'content-type':'text/event-stream','content-encoding':'identity'}});
 }}
 export default {async fetch(request,env){const url=new URL(request.url);
+ if(url.href==='https://music-admin-fixture.cloudflareaccess.com/cdn-cgi/access/certs')return Response.json({keys:[MUSIC_JWK]});
  if(url.hostname==='music-gate.example')return fetch(BARRIER_ORIGIN+url.pathname,{redirect:'manual'});
  if(url.href!=='https://api.minimax.io/v1/music_generation')throw new Error('unexpected fixture destination');
  return env.MUSIC_SOURCE.get(env.MUSIC_SOURCE.idFromName('synthetic')).fetch(request);
-}};`.replace('BARRIER_ORIGIN',JSON.stringify(origin)); }
+}};`.replace('BARRIER_ORIGIN',JSON.stringify(origin)).replace('MUSIC_JWK',JSON.stringify(jwk)); }
 
 test("MiniMax music registered workerd DO body, both routes, exact maximum, retirement and fresh authority", { timeout: 120000 }, async t => {
   const temporary=await mkdtemp(join(tmpdir(),"minimax-music-workerd-"));t.after(()=>rm(temporary,{recursive:true,force:true}));
-  const controls=await barriers(t),runtime=await startWorkerdFixture(temporary,router,upstream(controls.origin),{
+  const access=await musicAccessFixture();
+  const controls=await barriers(t),runtime=await startWorkerdFixture(temporary,router.replace('MUSIC_ACCESS_ENV',JSON.stringify(access.env)),upstream(controls.origin,access.jwk),{
     preventEviction:true,upstreamDurableObjects:{MUSIC_SOURCE:{className:"MusicSource",useSQLite:true}}});
   t.after(async()=>{for(const mode of ['held-input','delivery-eof','delivery-cancel'])for(const phase of ['abort','read','cleanup','delivery'])controls.release(mode,phase);await runtime.dispose();});
   const call=async path=>{const r=await runtime.dispatchFetch('https://router.example'+path);assert.equal(r.status,200,await r.clone().text());return r.json();};
   const until=async predicate=>{let s;for(let i=0;i<200;i++){s=await call('/state');if(predicate(s))return s;await delay(10);}assert.fail(JSON.stringify(s));};
   const put=async(replace=false)=>{const r=await runtime.dispatchFetch('https://router.example/v1/admin/upstream-grants/policies/fixture/music'+(replace?'?mode=replace':''),{
-    method:'PUT',headers:{authorization:'Bearer synthetic-admin','content-type':'application/json'},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-music-key',nativeMediaAuthorization:'minimax-global-music'})});
+    method:'PUT',headers:{...access.headers,'content-type':'application/json'},body:JSON.stringify({provider:'minimax',kind:'api_key',enabled:true,credential:'synthetic-music-key',nativeMediaAuthorization:'minimax-global-music'})});
     assert.equal(r.status,200,await r.clone().text());assert.doesNotMatch(await r.text(),/synthetic-music-key/);};
   await put();let events=0,abortedRequestId;
   for(const mode of ['unary','manifest','maximum','held-input','delivery-eof','delivery-cancel','revoke','unpriced']){
@@ -157,4 +186,42 @@ test("MiniMax music registered workerd DO body, both routes, exact maximum, reti
   assert.equal(rows.filter(e=>e.actual_cost_micros===0).length,2);assert.ok(rows.every(e=>e.total_tokens===null));
   const canceled=rows.filter(e=>e.request_id===abortedRequestId);assert.equal(canceled.length,1);
   assert.equal(canceled[0].status,'client_error');assert.equal(canceled[0].actual_cost_micros,700);
+});
+
+for (const route of ["native", "manifest"]) for (const change of ["price", "caller"])
+test(`MiniMax music workerd expired ${route} hint waits for fresh ${change} admission without materialization`, { timeout: 30000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "minimax-music-prefetch-workerd-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const access = await musicAccessFixture(), controls = await barriers(t), barrier = `prefetch-${route}-${change}`;
+  const runtime = await startWorkerdFixture(temporary, router.replace("MUSIC_ACCESS_ENV", JSON.stringify(access.env)), upstream(controls.origin, access.jwk), {
+    preventEviction: true, hotCache: true, upstreamDurableObjects: { MUSIC_SOURCE: { className: "MusicSource", useSQLite: true } },
+  });
+  t.after(async () => { controls.release(barrier, "admission"); await runtime.dispose(); });
+  const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path);
+    assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
+  const until = async predicate => { let state; for (let i = 0; i < 200; i++) { state = await call("/state"); if (predicate(state)) return state; await delay(10); } assert.fail(JSON.stringify(state)); };
+  const grant = await runtime.dispatchFetch("https://router.example/v1/admin/upstream-grants/policies/fixture/music", {
+    method: "PUT", headers: { ...access.headers, "content-type": "application/json" },
+    body: JSON.stringify({ provider: "minimax", kind: "api_key", enabled: true, credential: "synthetic-music-key", nativeMediaAuthorization: "minimax-global-music" }),
+  });
+  assert.equal(grant.status, 200, await grant.text());
+  const mode = route === "native" ? "unary" : "manifest";
+  await call("/start?mode=" + mode);
+  const seeded = await until(state => state.results === 1 && state.pending === 0);
+  assert.equal(seeded.status, 200, JSON.stringify(seeded)); assert.equal(seeded.fetches, 1); assert.equal(seeded.materializations, 1);
+  assert.match(seeded.timing, /cr-cache;desc=miss/); assert.equal(seeded.charged, 0);
+  await call(`/cache/prepare?route=${route}&change=${change}`);
+  let final;
+  try {
+    const held = await call("/start?mode=" + mode);
+    assert.equal(held.admissionHeld, true, JSON.stringify(held)); assert.equal(held.admissionReleased, false);
+    assert.equal(held.results, 0); assert.equal(held.fetches, 0);
+    assert.equal(held.materializations, 0, "expired Music hint must not materialize before the held authority reply");
+  } finally {
+    controls.release(barrier, "admission");
+    final = await until(state => state.results === 1 && state.pending === 0);
+  }
+  assert.equal(final.status, change === "price" ? 400 : 403, JSON.stringify(final));
+  assert.equal(final.error, change === "price" ? "pricing_required" : "proxy_key_revoked");
+  assert.equal(final.admissionReleased, true); assert.equal(final.materializations, 0); assert.equal(final.fetches, 0); assert.equal(final.charged, 0);
 });

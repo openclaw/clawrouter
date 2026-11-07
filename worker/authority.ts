@@ -1,3 +1,11 @@
+import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
+import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { authorityAck, readAuthorityAck } from "./authority-ack-response.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import type { InputRetirement } from "./input-retirement.ts";
+import type { SearchGrantAttestation, MusicGrantAttestation, VideoGrantAttestation } from "./authority-contracts.ts";
+import { searchJsonBytes, searchUnavailable, searchControlBytes, inspectSearchJson, searchControlVersion, type MiniMaxSearchOperation, searchControlHeader, readSearchJson } from "./minimax-search-operation.ts";
+import type { WanManagedOperation } from "./managed-media-json.ts";
 import { normalizePolicyRecord } from "./authority-policy.ts";
 import { normalizeUser, profileUpdate } from "./authority-users.ts";
 import { mutateBudgetCaps } from "./authority-budgets.ts";
@@ -6,10 +14,10 @@ import { storedCredentialName } from "./credential-name.ts";
 import { finishAdmissionSelection } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
 import type {
-  AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
+  AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
+  UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
 } from "./types";
-import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
+import { captureAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
@@ -17,9 +25,20 @@ import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { chooseGrantKey, normalizedChoiceCandidates } from "./grant-selection-strategies.ts";
 import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
+import { readAuthorityUserResponse } from "./authority-user-response.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
+type AuthorityReadBound = { bytes: number; records?: number; video?: boolean;
+  videoCounts?: { values: number; members: number; entries: number; units: number } };
+function inspectVideoRecord(text: string, bound: AuthorityReadBound): void {
+  const next = inspectVideoJson(text), total = bound.videoCounts ??= { values: 0, members: 0, entries: 0, units: 0 };
+  for (const key of ["values", "members", "entries", "units"] as const) {
+    total[key] += next[key];
+    if (total[key] > (key === "units" ? 32768 : 512)) searchUnavailable();
+  }
+}
+
 export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
 
@@ -31,6 +50,8 @@ export class PolicyBindingIndexObject implements DurableObject {
   private storage: DurableObjectStorage;
   private responses?: Promise<ResponsesScopeStore>;
   private env: Env;
+  // Reconciliation entry order only; unrelated owner routes remain concurrent.
+  private assignmentTail: Promise<void> = Promise.resolve();
 
   constructor(state: DurableObjectState, env: Env) {
     this.env = env;
@@ -43,20 +64,40 @@ export class PolicyBindingIndexObject implements DurableObject {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
+      const cover = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion;
+      if (cover && !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
+      const coverInput = cover ? await readCoverControlRequest(request) : undefined;
       if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
       if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
-      if (path === "/authorization/snapshot") return json(this.authorizationSnapshot(await readJson<AuthorizationSnapshotRequest>(request)));
-      if (path === "/admission/resolve") return json(await resolveAdmission(this.env, await readJson<AdmissionRequest>(request), {
-        getCredential: id => this.getCredential(id), getPolicy: id => this.getPolicy(id), getUser: id => this.getUser(id), hasMeta: key => this.hasMeta(key),
+      if (path === "/grant-search/authorize") return json(this.authorizeSearchGrant(await readJson<SearchGrantAttestation>(request, undefined, 16 * 1024)));
+      if (path === "/grant-music/authorize") return json(this.authorizeMusicGrant(await readJson<MusicGrantAttestation>(request, undefined, 16 * 1024)));
+      if (path === "/grant-video/authorize") return json(this.authorizeVideoGrant(await readJson<VideoGrantAttestation>(request, undefined, 16 * 1024)));
+      if (path === "/authorization/snapshot") {
+        const input = (cover ? coverInput : await readJson<AuthorizationSnapshotRequest & { video?: string }>(request, undefined, 64 * 1024)) as AuthorizationSnapshotRequest & { video?: string };
+        const bound = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion || input.video === videoControlVersion ? { bytes: 0, video: true }
+          : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
+        const result = this.authorizationSnapshot(input, bound);
+        if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
+      }
+      if (path === "/admission/resolve") {
+        const input = (cover ? coverInput : await readJson<AdmissionRequest>(request)) as AdmissionRequest;
+        if (cover !== (input.cover === musicCoverControlVersion)) musicCoverUnavailable();
+        const bound = cover ? { bytes: 0 } : input.video === videoControlVersion ? { bytes: 0, video: true } : input.search === searchControlVersion ? { bytes: 0 } : undefined;
+        const result = await resolveAdmission(this.env, input, {
+        getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: id => this.getUser(id, bound), hasMeta: key => this.hasMeta(key),
         seedCredential: (id, value) => this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]),
         seedPolicy: (id, value) => this.initializePolicies([{ policyId: id, policy: normalizePolicyRecord(value, contentRetentionDefault(this.env)) }]),
         initializeUsers: users => this.initializeUsers(users), initializeConnections: connections => this.initializeConnections(connections),
-        resolveConnections: ids => this.resolveConnections(ids), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
-          getCredential: id => this.getCredential(id), getPolicy: id => this.getPolicy(id), getUser: email => this.getUser(email),
-          resolveConnections: ids => this.resolveConnections(ids), resolveGrantPool: request => this.resolveGrantPool(request),
-          grantAttachment: key => this.grantAttachment(key), selectGrant: request => this.selectGrant(request), selectionState: poolKey => this.selectionState(poolKey),
+        resolveConnections: ids => this.resolveConnections(ids, bound), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input, bound), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
+          getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: email => this.getUser(email, bound),
+          resolveConnections: ids => this.resolveConnections(ids, bound), resolveGrantPool: request => this.resolveGrantPool(request, bound),
+          grantAttachment: key => this.grantAttachment(key), consumeProjectionBytes: (bytes, text) => { if (bound && (bound.bytes += bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable(); if (bound?.video && text !== undefined) inspectVideoRecord(text, bound); },
+          selectGrant: request => this.selectGrant(request, bound), selectionState: poolKey => this.selectionState(poolKey),
         }),
-      }));
+        });
+        if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result);
+        return json(result);
+      }
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
       if (path === "/initialize-all") { this.initializeAllBindings(await readJson<PolicyBinding[]>(request)); return new Response("initialized"); }
@@ -71,7 +112,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       });
       if (path === "/users/update-profile") return json(this.updateUserProfile(await readJson<AccessControlUser>(request)));
       if (path === "/users/create") return json(this.createUser(await readJson<AccessControlUser>(request)));
-      if (path === "/users/reconcile-assignments") return json(this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
+      if (path === "/users/reconcile-assignments") return json(await this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
       if (path === "/users/put-bindings") return json(this.putUserBindings(await readJson<UserBindingsRequest>(request)));
       if (path === "/users/list") return json({ initialized: this.hasMeta("users_global_initialized"), users: this.listUsers() });
       if (path === "/policies/resolve") return json(this.resolvePolicies((await readJson<{ policyIds: string[] }>(request)).policyIds));
@@ -90,7 +131,13 @@ export class PolicyBindingIndexObject implements DurableObject {
         }
       }
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
-      if (path === "/connections/resolve") return json(this.resolveConnections((await readJson<{ providerIds: string[] }>(request)).providerIds));
+      if (path === "/connections/resolve") {
+        const bound = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion ? { bytes: 0, video: true }
+          : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
+        const input = (cover ? coverInput : await readJson<{ providerIds: string[] }>(request)) as { providerIds: string[] };
+        if (bound && (input.providerIds.length !== 1 || input.providerIds[0] !== "minimax")) searchUnavailable();
+        const result = this.resolveConnections(input.providerIds, bound); if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
+      }
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
       if (path === "/connections/put") return json(this.putConnection(await readJson<ProviderConnectionMutation>(request)));
@@ -227,9 +274,21 @@ export class PolicyBindingIndexObject implements DurableObject {
     return this.getUser(defaults.email)!;
   }
 
-  private getUser(email: string): AccessControlUser | null {
+  private searchStored(table: string, column: string, keyColumn: string, key: string, bound: AuthorityReadBound): unknown {
+    const size = rows<{ bytes: number }>(this.sql.exec(`SELECT length(CAST(${column} AS BLOB)) AS bytes FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
+    if (!size) return null;
+    if ((bound.records = (bound.records ?? 0) + 1) > 32) searchUnavailable();
+    if (!Number.isSafeInteger(size.bytes) || size.bytes < 1 || (bound.bytes += size.bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
+    const row = rows<{ value: string }>(this.sql.exec(`SELECT ${column} AS value FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
+    if (!row) searchUnavailable();
+    if (bound.video) inspectVideoRecord(row.value, bound); else inspectSearchJson(row.value);
+    return JSON.parse(row.value);
+  }
+
+  private getUser(email: string, bound?: AuthorityReadBound): AccessControlUser | null {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;
+    if (bound) { const record = this.searchStored("access_users", "user_json", "email", normalized, bound) as AccessUserRecord | null; return record ? { email: normalized, record } : null; }
     const row = rows<{ user_json: string }>(this.sql.exec("SELECT user_json FROM access_users WHERE email = ?", normalized))[0];
     return row ? { email: normalized, record: JSON.parse(row.user_json) } : null;
   }
@@ -248,12 +307,30 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private reconcileUserAssignments(request: AssignmentReconcileRequest) {
-    const user = this.getUser(request.email);
-    if (!user) throw new HttpError(404, "unknown_user", "access user not found");
-    const candidate = withLegacyAssignmentState(user, request.legacy);
-    const result = evaluateUserAssignments(candidate, request.rules, request.evidence, request.force);
-    if (result.changed) this.putUser(result.user);
-    return result;
+    const predecessor = this.assignmentTail;
+    let release!: () => void;
+    this.assignmentTail = new Promise<void>(resolve => { release = resolve; });
+    const actual = (async () => {
+      let snapshot, captured, failed = false, reason: unknown;
+      try {
+        snapshot = captureAssignmentRules(request.rules);
+        captured = { email: request.email, legacy: request.legacy, evidence: request.evidence, force: request.force };
+      } catch (error) { failed = true; reason = error; }
+      // Even a synchronous snapshot failure must not let a successor overtake.
+      await predecessor;
+      if (failed) throw reason;
+      const prepared = await prepareAssignmentRules(snapshot!);
+      const user = this.getUser(captured!.email);
+      if (!user) throw new HttpError(404, "unknown_user", "access user not found");
+      const candidate = withLegacyAssignmentState(user, captured!.legacy);
+      const result = evaluatePreparedUserAssignments(candidate, prepared, captured!.evidence, captured!.force);
+      if (result.changed) this.putUser(result.user);
+      return result;
+    })();
+    // A separate void slot observes every outcome without retaining result/error
+    // graphs in the tail. Never clear a successor's slot from an older completion.
+    void actual.then(() => release(), () => release());
+    return actual;
   }
 
   private putUserBindings(request: UserBindingsRequest): { user: AccessControlUser; bindings: PolicyBinding[] } {
@@ -276,7 +353,8 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (this.hasMeta("policies_global_initialized")) return;
     for (const entry of entries) if (!this.getPolicy(entry.policyId)) this.putPolicy(entry);
   }
-  private getPolicy(id: string): AccessPolicyEntry | null {
+  private getPolicy(id: string, bound?: AuthorityReadBound): AccessPolicyEntry | null {
+    if (bound) { const policy = this.searchStored("access_policies", "policy_json", "policy_id", id, bound) as AccessPolicy | null; return policy ? { policyId: id, policy } : null; }
     const row = rows<{ policy_json: string }>(this.sql.exec("SELECT policy_json FROM access_policies WHERE policy_id = ?", id))[0];
     return row ? { policyId: id, policy: JSON.parse(row.policy_json) } : null;
   }
@@ -287,6 +365,66 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
   private listPolicies(): AccessPolicyEntry[] {
     return rows<{ policy_id: string; policy_json: string }>(this.sql.exec("SELECT policy_id, policy_json FROM access_policies ORDER BY policy_id")).map((row) => ({ policyId: row.policy_id, policy: JSON.parse(row.policy_json) }));
+  }
+
+  private authorizeSearchGrant(input: SearchGrantAttestation, tombstone = false): SearchGrantAttestation {
+    searchJsonBytes(input);
+    if (!input || Object.keys(input).sort().join(",") !== "actor,admissionRevision,digest,key,original,resultGeneration,resultLineage"
+      || !input.actor || Object.keys(input.actor).sort().join(",") !== "auth,email,role"
+      || !["local", "cloudflare_access"].includes(input.actor.auth) || input.actor.role !== "admin"
+      || typeof input.actor.email !== "string" || typeof input.key !== "string" || input.key.length > 512
+      || typeof input.digest !== "string" || !/^[a-f0-9]{64}$/.test(input.digest)
+      || typeof input.resultLineage !== "string" || !input.resultLineage || input.resultLineage.length > 128
+      || !input.original || Object.keys(input.original).sort().join(",") !== "exists,generation,lineage,revision"
+      || typeof input.original.exists !== "boolean" || !Number.isSafeInteger(input.original.generation) || input.original.generation < 0
+      || !Number.isSafeInteger(input.original.revision) || input.original.revision < 0
+      || !Number.isSafeInteger(input.admissionRevision) || input.admissionRevision < 0
+      || !Number.isSafeInteger(input.resultGeneration)
+      || input.resultGeneration !== input.original.generation + (tombstone ? 0 : 1)
+      || tombstone && (!input.original.exists || input.resultLineage !== input.original.lineage)
+      || !input.original.exists && (input.original.generation !== 0 || input.original.lineage !== null)
+      || input.original.exists && (typeof input.original.lineage !== "string" || !input.original.lineage || input.original.lineage.length > 128)) searchUnavailable();
+    return this.storage.transactionSync(() => {
+      const principal = normalizeEmail(input.actor.email), user = principal ? this.getUser(principal, { bytes: 0 }) : null;
+      if (!user || user.record.enabled !== true || user.record.role !== "admin")
+        throw new HttpError(403, "access_admin_required", "Current administrator authority is required");
+      const attachment = this.grantAttachment(input.key);
+      if (attachment.generation !== input.original.generation || attachment.revision !== input.admissionRevision
+        || input.admissionRevision < input.original.revision) searchUnavailable();
+      return input;
+    });
+  }
+
+  private authorizeMusicGrant(input: MusicGrantAttestation): MusicGrantAttestation {
+    searchJsonBytes(input);
+    if (!input || Object.keys(input).sort().join(",") !== "actor,admissionRevision,digest,domain,key,mode,original,resultGeneration,resultLineage,scope"
+      || input.domain !== "clawrouter.minimax-music-mutation.v1"
+      || !["preserve", "replace", "revoke", "tombstone"].includes(input.mode)
+      || !Array.isArray(input.scope) || input.scope.length !== 3
+      || JSON.stringify(input.scope) !== JSON.stringify(grantPoolIdentity(input.key)))
+      throw new HttpError(403, "minimax_music_admin_required", "Current Music mutation authority is required");
+    const { domain: _domain, scope: _scope, mode, ...proof } = input;
+    // Same last SQL role/revision check, with only the Music tombstone's
+    // idempotent generation rule. Search's mutation contract stays unchanged.
+    this.authorizeSearchGrant(proof, mode === "tombstone");
+    if ((mode === "revoke" || mode === "tombstone") && this.grantAttachment(input.key).pending)
+      throw new HttpError(403, "minimax_music_admin_required", "Pending Music mutations require explicit recovery");
+    return input;
+  }
+
+  private authorizeVideoGrant(input: VideoGrantAttestation): VideoGrantAttestation {
+    searchJsonBytes(input);
+    if (!input || Object.keys(input).sort().join(",") !== "actor,admissionRevision,digest,domain,key,mode,original,resultGeneration,resultLineage,scope"
+      || input.domain !== "clawrouter.minimax-video-mutation.v1"
+      || !["preserve", "replace", "revoke", "tombstone"].includes(input.mode)
+      || !Array.isArray(input.scope) || input.scope.length !== 3
+      || JSON.stringify(input.scope) !== JSON.stringify(grantPoolIdentity(input.key)))
+      throw new HttpError(403, "minimax_video_admin_required", "Current video mutation authority is required");
+    const { domain: _domain, scope: _scope, mode, ...proof } = input;
+    this.authorizeSearchGrant(proof, mode === "tombstone");
+    if ((mode === "revoke" || mode === "tombstone") && this.grantAttachment(input.key).pending)
+      throw new HttpError(403, "minimax_video_admin_required", "Pending video mutations require explicit recovery");
+    return input;
   }
 
   private putCredential(entry: ProxyCredentialEntry): void {
@@ -300,6 +438,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (actor.auth !== "admin_token" && (!user || user.record.enabled === false)) return { outcome: "actor_disabled" };
     if (scope === "admin" && (actor.role !== "admin" || actor.auth === "local" && user?.record.role !== "admin")) return { outcome: "admin_required" };
     if (scope === "personal" && (!principalId || actor.auth === "admin_token")) return { outcome: "actor_disabled" };
+    if (Object.hasOwn(request, "copilotPublicIdentity") && scope !== "admin") return { outcome: "admin_required" };
     const existing = this.getCredential(credentialId);
     // A create collision must not prune retained rows or replace any part of the key.
     if (operation === "create" && existing) return { outcome: "exists" };
@@ -333,18 +472,25 @@ export class PolicyBindingIndexObject implements DurableObject {
   private deleteCredential(id: string): void { this.sql.exec("DELETE FROM proxy_credentials WHERE credential_id = ?", id); }
   private initializeCredentials(entries: ProxyCredentialEntry[]): void {
     if (this.hasMeta("credentials_global_initialized")) return;
-    for (const entry of entries) if (!this.getCredential(entry.credentialId)) this.putCredential(entry);
+    for (const entry of entries) if (!this.getCredential(entry.credentialId)) {
+      // Legacy KV/import metadata has no administrator attestation provenance.
+      const { copilotPublicIdentity: _untrusted, ...credential } = entry.credential;
+      this.putCredential({ ...entry, credential });
+    }
   }
-  private getCredential(id: string): ProxyCredentialEntry | null {
+  private getCredential(id: string, bound?: AuthorityReadBound): ProxyCredentialEntry | null {
+    if (bound) { const credential = this.searchStored("proxy_credentials", "credential_json", "credential_id", id, bound) as ProxyCredential | null; return credential ? { credentialId: id, credential } : null; }
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];
     return row ? { credentialId: id, credential: JSON.parse(row.credential_json) } : null;
   }
-  private authorizationSnapshot(input: AuthorizationSnapshotRequest): AuthorizationSnapshot {
+  private authorizationSnapshot(input: AuthorizationSnapshotRequest, bound?: AuthorityReadBound): AuthorizationSnapshot {
     // No KV import or await: this is the authority admission point after a
     // queued control's preparation, using current stored groups and bindings.
-    const credential = input.credentialId ? this.getCredential(input.credentialId)?.credential ?? null : null;
-    const policy = this.getPolicy(input.policyId), user = input.principalId ? this.getUser(input.principalId) : null;
-    return { credential, policy, principalEnabled: user ? user.record.enabled !== false : null, policyHeld: this.holdsPolicy(user, policy) };
+    const credential = input.credentialId ? this.getCredential(input.credentialId, bound)?.credential ?? null : null;
+    const policy = this.getPolicy(input.policyId, bound), user = input.principalId ? this.getUser(input.principalId, bound) : null;
+    if (bound && input.principalId && !user) searchUnavailable();
+    const currentPolicy = bound && policy ? { ...policy, policy: effectiveBudgetPolicy(policy.policyId, policy.policy, user?.record.budgetOverrides) } : policy;
+    return { credential, policy: currentPolicy, principalEnabled: user ? user.record.enabled !== false : null, policyHeld: bound && input.credentialId ? false : this.holdsPolicy(user, policy) };
   }
   private holdsPolicy(user: AccessControlUser | null, policy: AccessPolicyEntry | null): boolean {
     if (!user || user.record.enabled === false || !policy?.policy.enabled) return false;
@@ -373,23 +519,34 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (this.hasMeta("connections_global_initialized")) return;
     for (const item of items) if (!this.getConnection(item.providerId)) this.putConnection(item);
   }
-  private getConnection(id: string): ProviderConnection | null {
+  private getConnection(id: string, bound?: AuthorityReadBound): ProviderConnection | null {
+    if (bound) return this.searchStored("provider_connections", "connection_json", "provider_id", id, bound) as ProviderConnection | null;
     const row = rows<{ connection_json: string }>(this.sql.exec("SELECT connection_json FROM provider_connections WHERE provider_id = ?", id))[0];
     return row ? JSON.parse(row.connection_json) : null;
   }
-  private resolveConnections(ids: string[]): { initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] } {
+  private resolveConnections(ids: string[], bound?: AuthorityReadBound): { initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] } {
     const connections: ProviderConnection[] = [], missingProviderIds: string[] = [];
-    for (const id of [...new Set(ids)]) { const entry = this.getConnection(id); if (entry) connections.push(entry); else missingProviderIds.push(id); }
+    for (const id of [...new Set(ids)]) { const entry = this.getConnection(id, bound); if (entry) connections.push(entry); else missingProviderIds.push(id); }
     return { initialized: this.hasMeta("connections_global_initialized"), connections, missingProviderIds };
   }
 
-  private resolveGrantPool(input: GrantPoolResolveRequest): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean } {
+  private resolveGrantPool(input: GrantPoolResolveRequest, bound?: AuthorityReadBound): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean } {
     const providerId = grantSegment(input.providerId, "providerId");
     const policyId = grantPoolScopeId(input.policyId);
     const tenantId = grantPoolScopeId(input.tenantId);
     // Only the stored consumer policy can share another scope's owner. Never
     // accept membership from a request or follow another policy's references.
-    const shared = policyId ? this.getPolicy(policyId)?.policy.grantRouting?.sharedGrants?.[providerId] ?? [] : [];
+    const shared = policyId ? this.getPolicy(policyId, bound)?.policy.grantRouting?.sharedGrants?.[providerId] ?? [] : [];
+    if (bound) {
+      if (shared.length) searchUnavailable();
+      let members = 0, bytes = 0;
+      for (const [scope, id] of [["policies", policyId], ["tenants", tenantId]]) {
+        if (!id) continue;
+        const count = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(token_ref AS BLOB))),0) AS bytes FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ?", scope, id, providerId))[0];
+        members += count.count; bytes += count.bytes;
+      }
+      if (members > 32 || bytes > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
+    }
     const sharedKeys = shared.filter(key => {
       if (this.attachmentMember(grantPoolIdentity(key), providerId)?.status !== "active") return false;
       const row = rows<{ projection_json: string | null }>(this.sql.exec("SELECT projection_json FROM upstream_grant_projections WHERE grant_key = ? AND legacy = 0", key))[0];
@@ -397,13 +554,14 @@ export class PolicyBindingIndexObject implements DurableObject {
       return grant?.kind === "subscription" && grant.provider === providerId;
     });
     const keys = [...new Set([
-      ...(input.defaultKeys ?? []).map((key) => grantKey(key)),
+      ...(bound ? [] : (input.defaultKeys ?? []).map((key) => grantKey(key))),
       ...(policyId ? this.poolTokenRefs("policies", policyId, providerId).map((tokenRef) => `oauth/${policyId}/${tokenRef}`) : []),
       ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
       ...sharedKeys,
     ])];
     const hasAttachment = shared.length > 0 || [policyId && ["policies", policyId], tenantId && ["tenants", tenantId]].some((scope) => scope && rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? LIMIT 1", ...scope, providerId)).length > 0);
-    return { keys, states: this.grantRuntimeStates(keys), hasAttachment };
+    if (bound && keys.length > 32) searchUnavailable();
+    return { keys, states: this.grantRuntimeStates(keys, bound), hasAttachment };
   }
 
   private grantAttachment(key: string): GrantAttachmentSnapshot {
@@ -530,19 +688,27 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("INSERT OR REPLACE INTO upstream_grant_runtime (grant_key, state_json) VALUES (?, ?)", key, JSON.stringify(merged));
   }
 
-  private grantRuntimeStates(rawKeys: unknown): Record<string, GrantRuntimeState> {
+  private grantRuntimeStates(rawKeys: unknown, bound?: AuthorityReadBound): Record<string, GrantRuntimeState> {
     if (!Array.isArray(rawKeys) || rawKeys.length > 98) invalidAuthorityRequest("grant runtime keys must be a bounded array");
     const states: Record<string, GrantRuntimeState> = {};
     for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
+      if (bound) {
+        const state = this.searchStored("upstream_grant_runtime", "state_json", "grant_key", key, bound);
+        if (state) states[key] = normalizeGrantRuntimeState(state); continue;
+      }
       const row = rows<{ state_json: string }>(this.sql.exec("SELECT state_json FROM upstream_grant_runtime WHERE grant_key = ?", key))[0];
       if (row) states[key] = normalizeGrantRuntimeState(JSON.parse(row.state_json));
     }
     return states;
   }
 
-  private selectGrant(input: GrantPoolSelectRequest): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
+  private selectGrant(input: GrantPoolSelectRequest, bound?: AuthorityReadBound): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
     const poolKey = grantSelectionPoolKey(input.poolKey);
     if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 98) invalidAuthorityRequest("grant selection candidates must be a bounded array");
+    if (bound) {
+      const size = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(grant_key AS BLOB))),0) AS bytes FROM upstream_grant_selection WHERE pool_key = ?", poolKey))[0];
+      if (size.count > 32 || (bound.bytes += size.bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
+    }
     const candidates = normalizedChoiceCandidates(input.candidates, grantKey);
     const cursorKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
     const counts = input.strategy === "least_used" ? this.selectionCounts(poolKey) : new Map<string, { count: number; lastMs: number }>();
@@ -791,8 +957,35 @@ function invalidAuthorityValue(message: string): never {
 }
 
 
-export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal): Promise<T> {
+export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
+  if (cover) {
+    if (!isMusicCoverControl(cover) || objectName !== "policy-bindings" || !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
+    return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text,
+      signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal, path === "/admission/resolve");
+  }
+  if (path === "/grant-search/authorize" || path === "/grant-music/authorize" || path === "/grant-video/authorize") {
+    searchJsonBytes(body);
+    const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal, redirect: "manual", headers: { "content-type": "application/json" } });
+    let input: InputRetirement | undefined;
+    try {
+      const result = await readSearchJson(response, signal ?? new AbortController().signal, "control", owner => { input = owner; });
+      if (!response.ok) throw new HttpError(403, "access_admin_required", "Current administrator authority is required");
+      return result as T;
+    } finally { await input?.retired.catch(() => undefined); }
+  }
+  if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
+  if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
+  if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
+  const ack = objectName === "policy-bindings" ? authorityAck(path) : undefined;
+  if (ack) {
+    const text = JSON.stringify(body);
+    return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal }), ack, signal) as T;
+  }
+  if (objectName === "policy-bindings" && path === "/users/resolve") {
+    const text = JSON.stringify(body);
+    return await readAuthorityUserResponse(() => stub.fetch("https://clawrouter.internal/users/resolve", { method: "POST", body: text, signal }), signal) as T;
+  }
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) throw new Error(`authority ${path} failed (${response.status}): ${text}`);
@@ -897,7 +1090,32 @@ export async function listConnections(env: Env, providerIds: string[]): Promise<
   return (await authorityCall<typeof result>(env, "/connections/resolve", { providerIds: ids })).connections;
 }
 
-export async function resolveConnection(env: Env, providerId: string): Promise<ProviderConnection | null> {
+export async function resolveConnection(env: Env, providerId: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<ProviderConnection | null> {
+  if (cover) {
+    const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
+      "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", cover.operation.signal, undefined, undefined, undefined, cover);
+    if (providerId !== "minimax" || result.missingProviderIds.length || result.connections.length !== 1 || result.connections[0].providerId !== providerId) musicCoverUnavailable();
+    return result.connections[0];
+  }
+  if (video) {
+    const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
+      "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", video.controlSignal, undefined, undefined, video);
+    if (result.missingProviderIds.length || result.connections.length !== 1 || result.connections[0].providerId !== providerId) searchUnavailable();
+    return result.connections[0];
+  }
+  if (search) {
+    const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env, "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", search.operation.signal, undefined, search);
+    if (result.missingProviderIds.length || result.connections.length !== 1) searchUnavailable();
+    return result.connections[0];
+  }
+  if (wan) {
+    const result = await authorityCall<{ initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] }>(env,
+      "/connections/resolve", { providerIds: [providerId] }, "policy-bindings", wan.controlSignal, wan);
+    // Admission may initialize only this provider, without marking every
+    // connection initialized. A present row is authoritative; never seed a miss.
+    if (result.missingProviderIds.length) throw new Error("Wan requires an initialized original connection");
+    return result.connections.find(connection => connection.providerId === providerId) ?? null;
+  }
   return (await resolveConnections(env, [providerId]))[0] ?? null;
 }
 

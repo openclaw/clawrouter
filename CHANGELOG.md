@@ -3,6 +3,110 @@
 ## Unreleased
 
 - Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry one eligible same-provider grant before delivery, preserving healthy session stickiness and scoped quota state.
+- Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+- Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
+
+- Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+- Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
+
+- Add three pinned Fusion workflow-validation repairs covering embedding errors, native identity and response context.
+
+- Add an experimental Fusion contract policy that withholds the verifier probe from the cheap repair worker until escalation.
+
+- Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
+
+- Add same-workflow cheap-only and strong-only controls for the experimental Fusion contract benchmark, with explicitly labeled standalone runs.
+
+
+- Supply bounded original-source declaration context to Fusion repair workers, with unique selectors and unchanged edit permissions.
+
+- Add an independent three-repair Fusion evaluation cohort for generated-check policies, with observed/billed usage and scalar validation cases.
+
+- Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+
+- Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
+
+- Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
+
+- Add an experimental Fusion benchmark policy that qualifies generated regression probes before cheap repair and bounded strong fallback.
+
+- Add an experimental declared-scope routing control to the Fusion repair benchmark, with independent cheap and strong baselines.
+
+- Add optional product identities to eligible client catalog offers, scoped to the selected policy and active compatible grants, without changing routing or legacy catalog eligibility.
+
+- Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
+
+- Add two pinned Fusion repair tasks for prospective policy comparisons, with explicit exposure and qualification requirements.
+
+- Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
+
+- Require known Fusion repairs to pass unchanged visible tests before accepting workload qualification; remove three contradictory tasks.
+
+- Add an opt-in, budget-capped native model-pair benchmark with fixed controls and a strong-planner/cheap-editor policy.
+
+- Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.
+
+- Include both fixed-model controls in local Fusion function-smoke summaries so mixed policies can be compared against the stronger baseline.
+
+- Add an experimental local Fusion reproduction gate with isolated probes, frozen checks, and explicit acceptance accounting.
+
+- Add an opt-in grounded local Fusion repair scaffold with bounded current-source views and observed edit anchors, preserving the original benchmark profile.
+
+- Add internal product-offer compatibility resolution using the existing grant, model, endpoint, and lifecycle checks without switching routing or discovery.
+
+- Fence in-flight hot-cache and admission publications after local invalidation, including pending-only credential versions evicted by upstream 401/403. Keep original snapshot age and preserve coalesced runtime/counter writes.
+
+- Bound Access JWT and JWKS admission before decoding, parsing and key import; join original fetch, reader, cancellation and crypto retirement across one deadline, and prevent operational denials from falling back to other authentication. Broader session/evidence allocation remains separate.
+
+- Bound Access GitHub identity evidence before accumulation and parsing, retire original response readers on every outcome, and prevent limits, cleanup failures or caller aborts from falling back to other authentication. Preserve clean-unknown assignment retention and valid-empty revocation.
+
+- Bound generic soft-budget status requests and JSON observations, joining original response reads, FIRST cancellation and unlock without delaying provider dispatch. Preserve partial replies, exhaustion-cache classification and the existing delivery grace period.
+
+- Bound the seventeen generic authority acknowledgments to their exact protocol strings and join original fetch, response reads, FIRST cancellation and unlock. Preserve specialized transports and advisory catches; an invoked mutation with a lost acknowledgment remains uncertain and is never replayed.
+
+- Join every concurrent cold credential import before returning its first failure or issuing a mutation. Preserve admin/personal hydration and original error identity without retrying or rolling back completed imports.
+
+- Join alternate grant preparation before completing a canceled failover, and recheck the original signal after that join. Preserve the first provider rejection when preparation fails without cancellation; never dispatch a late alternate.
+
+- Admit at most 64 live cache background tasks before starting work, retain registrations until actual logical settlement, and poll bounded scalar cohorts on caller-owned timers. Saturation skips speculative work and retains unstarted coalesced writes for a later eligible flush.
+
+- Write compact, versioned assignment-rule revisions only when reconciliation already changes canonical state. Preserve unchanged legacy records and serialize owner-local reconciliation through immutable rule snapshots, hashing before the final current-user read without locking unrelated owner operations.
+
+- Bound selected user-resolution replies to a complete 1 MiB JSON profile and join original fetch, read, FIRST cancellation and unlock before publication. Preserve bounded legacy records, unknown fields and cold-import behavior; oversized or uncertain replies deny without authentication fallback. Producer allocations remain separate.
+
+- Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
+
+- Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
+
+- Add inactive, explicitly attested MiniMax cover authority and bounded canonical control ownership, with current SQL mutation checks, pre-secret monetary admission, generic-eligibility denial and joined accounting cleanup. Cover routing, upload and vendor audio compatibility remain closed.
+
+- Add an inactive private MiniMax cover input/hash foundation with incremental decimal50MB intake, a fixed operational reservation and joined read/cancel/hash retirement. Audio compatibility, cover authority and routing remain unqualified.
+
+- Exclude declared MiniMax Music routes from speculative credential prefetch so an expired admission hint cannot read secrets before current caller, pricing and original-operation checks. Ordinary-provider prefetch is unchanged.
+
+- Add explicit current-CN six-model inline video attestation. Every V5 create requires owned first-frame input before secrets and at final dispatch; prior bindings and T2V permissions remain unchanged, with original-job controls independent of retired input. Declarations and native-client activation remain separate.
+
+- Add explicit current-CN MiniMax video attestation for `api.minimax.cn`, limited to the original two text-to-video models and original-job files. Legacy CN and global bindings keep their destinations; re-attestation invalidates old jobs. Public declarations, native-client activation and live credential portability remain separate.
+- Compile explicit product offers into stable, model-specific declarations while keeping runtime admission and legacy routes unchanged.
+
+- Add a local-only repository repair benchmark with pinned model routing, bounded actions, explicit context failures and coder-to-general handoff comparisons.
+
+- Add explicit global six-model MiniMax video authority for the four frozen required-first-frame models, with pre-secret model membership, exact discovery identity and original-job controls after image retirement. Existing V1/V2 permissions and capacity profiles remain unchanged; declarations and native-client activation stay separate.
+
+- Add explicitly re-attested global Hailuo first-frame input for the two qualified models, with incremental full-size inline decoding, content-bound idempotency, pre-secret input authority and joined upload/hash/response retirement under the existing operational reservation. Public activation and platform-native transport allocation qualification remain separate.
+
+- Add a local Fusion generation screen with isolated execution, withheld grading and paired small-model retry baselines before paid benchmarks.
+
+- Add explicitly attested regional MiniMax Hailuo text-to-video execution and original-job file retrieval, with current SQL mutation authority, generation-bound job routes, bounded per-invocation ownership and conservative dispatch-acknowledgment handling. Public declarations and native-client activation remain separate. Resolve exact declared native and manifest model identities, pin current fixed tariffs into durable admission and preserve readable known-unsent denials after confirmed dispatch admission.
+
+- Recheck current SQL administrator authority after MiniMax Music grant preparation and pool admission, fencing exact mutations and revocation retries while preserving the old owner on denial.
+
+- Add administrator-attested regional MiniMax TokenPlan Search authority and bounded native/manifest execution, with current-role mutation fencing, original-key freshness, conservative unknown-cost accounting and retained physical cleanup. Declarations and client activation remain separate.
+
+- Bound Wan managed input, control exchanges and lifecycle delivery under one retained operation lease; pin the original grant revision and distinguish confirmed unsent dispatch from lost acknowledgments.
+
+- Add administrator-attested Copilot proxy identity, owner-bound native and manifest inference, and scoped live discovery with bounded cross-isolate retirement; provider declarations and native-client activation remain separate.
+- Serve usage snapshots from exact, transactionally maintained rollups after a resumable historical backfill, avoiding retained-event aggregate scans.
 
 - Add a local small-model selector smoke test with counterbalanced candidates, abstention checks and content-free replay metrics.
 
@@ -24,6 +128,8 @@
 - Qualify Copilot account identity privately under the original credential owner, with atomic binding, bounded streaming intake and cancellation-safe retirement; catalog and inference remain closed.
 
 - Acquire Copilot catalogs privately with fresh original-token account and model checks, bounded two-response retirement and current-policy selection; keep public discovery and inference activation closed.
+
+- Add private original-owner Copilot inference for advertised Chat, Messages and Responses APIs with atomic composite capacity, fresh model authority and conservative settlement; public and native-client activation remain closed, with owner-scoped cancel/status control that remains admissible at full inference capacity.
 
 - Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
 - Add a separate pinned Fusion transfer-validation corpus and qualify every bundled workload set, fetching missing pinned history in shallow CI checkouts.

@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -42,7 +43,7 @@ function harness(context) {
   } });
   for (const name of ["log", "info", "warn", "error", "debug"]) context.mock.method(console, name, (...args) => state.logs.push(args));
   context.mock.method(globalThis, "fetch", async (url, init) => {
-    if (url === `${issuer}/cdn-cgi/access/certs`) { state.certs++; return Response.json({ keys: [jwk] }); }
+    if (url === `${issuer}/cdn-cgi/access/certs`) { state.certs++; return accessCertsResponse({ keys: [jwk] }, `${issuer}/cdn-cgi/access/certs`); }
     if (url === `${issuer}/cdn-cgi/access/get-identity`) {
       state.identities++;
       assert.equal(init.redirect, "manual");
@@ -177,7 +178,12 @@ for (const phase of ["fetch", "body"]) for (const cause of ["timeout", "abort"])
   test(`identity ${phase} ${cause} fails closed and cancels without echoing assertion`, async (context) => {
     const { state, run } = harness(context);
     const entered = Promise.withResolvers(), abort = new AbortController(), deadline = new AbortController();
-    if (cause === "timeout") context.mock.method(AbortSignal, "timeout", (ms) => { assert.equal(ms, 10000); return deadline.signal; });
+    const timeouts = [], timeout = AbortSignal.timeout.bind(AbortSignal);
+    if (cause === "timeout") context.mock.method(AbortSignal, "timeout", (ms) => {
+      timeouts.push(ms);
+      if (ms === 10000) return deadline.signal; // Original shorter caller deadline.
+      assert.equal(ms, 30000); return timeout(ms); // Independent JWT ceiling.
+    });
     let canceled = false;
     state.lookup = (init) => {
       entered.resolve();
@@ -189,6 +195,7 @@ for (const phase of ["fetch", "body"]) for (const cause of ["timeout", "abort"])
     if (phase === "body") await new Promise((resolve) => setImmediate(resolve));
     if (cause === "abort") abort.abort(); else deadline.abort(new DOMException("synthetic deadline", "TimeoutError"));
     await denied(await pending); assert.equal(canceled, true); noPrivateUse(state);
+    if (cause === "timeout") assert.deepEqual(timeouts, [10000, 30000]);
   });
 }
 
@@ -322,7 +329,7 @@ test("expired verification or pre-aborted requests cannot start identity lookup"
   context.mock.method(globalThis, "fetch", async (url) => {
     assert.equal(url, `${issuer}/cdn-cgi/access/certs`);
     clock = now + 400000;
-    return Response.json({ keys: [jwk] });
+    return accessCertsResponse({ keys: [jwk] }, `${issuer}/cdn-cgi/access/certs`);
   });
   await denied(await run(assertion));
   assert.equal(state.identities, 0); noPrivateUse(state);

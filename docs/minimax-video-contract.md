@@ -30,6 +30,9 @@ uncertain-create handling without POST replay, original policy/grant binding,
 reservation/idempotency/outbox and exactly-once terminal settlement.
 
 Text creation supports frozen Hailuo-2.3/02; Fast and I2V models require an image.
+Production permission for the four required-frame models requires separate
+GLOBAL V3 administrator attestation; V1/V2 retain their two-model permissions.
+See [inline authority](minimax-video-inline-contract.md).
 Hailuo 768P supports 6/10 seconds, 1080P only 6. Legacy I2V uses 6 seconds and
 720P. No nearest-value rounding or silent resolution rewrite. The frozen client
 needs these model/mode combinations; source 11.2 owns that correction. The newer
@@ -66,17 +69,44 @@ inflate or decode pixels, prove raster integrity or establish playable media.
 Tests label dimension-mutated JPEG/WebP fixtures accordingly; the generated
 301x301 grayscale PNG also has its complete raster checked with a local inflater.
 
-This is an inactive leaf. Existing preparation/managed callers remain unchanged
-and all image routes stay closed. One decoded 8MiB allocation does not qualify
-complete 12MiB JSON admission or the whole-lifetime budget in the existing pool.
-Source1 owns those copies/leases, input digest and original caller, regional
-video grant generation/lineage, exact model/route/slot binding, current policy,
-actual signals and transport. No input publication, upload, fetch, retention
+The pure qualifier supplies no runtime authority or complete admission proof.
+The explicit global V2 runtime uses its byte/container validator after one
+incremental decode; see [inline input ownership](minimax-video-inline-contract.md).
+That contract owns the input digest, original caller and video generation/lineage,
+exact model/route/slot, current policy, signals and observable transport.
+The pure qualifier supplies no input publication, upload, fetch, retention
 permission or owned-asset receipt is supplied. OpenRouter publication consent,
 receipts, URLs and namespaces cannot authorize MiniMax input. HTTPS remains
 closed; Messages OAuth, speech and TokenPlan Search grants do not authorize video.
 
 ## Original-job files
+
+### Explicit current-CN T2V authority
+
+`minimax-current-cn-video` is a separate administrator intent. Its closed
+`clawrouter.minimax-video.v4` binding selects exactly `https://api.minimax.cn`,
+region `cn`, scalar API-key credentials, and the original Hailuo-2.3/02 models.
+It has no input profile. Inline images and the four required-first-frame models
+remain denied before credential materialization. V1/V2/V3 constructors, their
+destinations and request digests remain unchanged; the legacy CN map still uses
+`https://api.minimaxi.com`.
+
+The existing owner computes the complete mutation digest, admits the pool, then
+checks current SQL administrator authority before storage. Changing the binding
+rotates lineage. Existing jobs fail their original-owner/route digest checks;
+they do not migrate. A separately retained legacy owner keeps its binding.
+Imported/forged binding fields do not attest authority. Shape validation accepts
+only the three exact origin strings; it supplies no credential authority. Create,
+poll, metadata and download use the original validated binding origin and current
+policy, never a declared-base fallback, redirect or alternate-host retry.
+
+The per-invocation 96 MiB application reservation, exchange profiles, original
+deadline and reader/FIRST-cancel/late-response/delivery joins are unchanged.
+Synthetic tests cover the two models on native/manifest routes, actual durable
+restart and current-CN file bytes, re-attestation/demotion and zero-secret denials.
+They do not prove live vendor availability, credential portability, entitlement,
+tariffs or native-platform allocation bounds. CN inline/six-model support,
+declarations and native-client activation remain separate work.
 
 Only a successful original task supplies a generated `file_id` descriptor.
 The primary metadata/download schemas declare int64 IDs. The bounded native
@@ -112,8 +142,9 @@ replacement job store, global job index or raw task/file-ID route is introduced.
 
 Source 11.3 owns existing MiniMax YAML/schema/catalog; source 11.4/11.1 own
 regional native-media product/grant qualification. The selected origin is
-explicitly global api.minimax.io or CN api.minimaxi.com, independent of any
-Anthropic resource prefix. Source 11.2 owns actual native consumption and
+explicitly global api.minimax.io, legacy CN api.minimaxi.com, or separately
+attested V4 current-CN api.minimax.cn, independent of any Anthropic resource
+prefix. Source 11.2 owns actual native consumption and
 source 11.6 owns integrated proof. Codecs alone do not activate this route.
 
 The public card lists Hailuo per-video USD prices and separate resource-pack

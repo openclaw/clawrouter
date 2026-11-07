@@ -1,3 +1,6 @@
+import { searchJsonBytes } from "./minimax-search-operation.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
@@ -5,6 +8,7 @@ import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, En
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
 import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
+import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
 export interface UsageIngestReceipt {
@@ -16,7 +20,7 @@ const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
 const usageWindowDays = 30;
 const usageRetentionMs = usageWindowDays * usageDayMs;
-const usageAttributionBatchSize = 2_000;
+const usageAttributionBatchSize = 250;
 
 export class BudgetLedgerObject implements DurableObject {
   private sql: SqlStorage;
@@ -30,12 +34,33 @@ export class BudgetLedgerObject implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const cover = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion;
+    if (cover) {
+      try {
+        if (request.method === "GET" && url.pathname === "/status") {
+          if (url.href.length > 4096 || [...url.searchParams.keys()].some(key => !["policy_id", "window_key", "scope_key", "limit_micros"].includes(key))) musicCoverUnavailable();
+          searchJsonBytes(Object.fromEntries(url.searchParams));
+        } else {
+          if (request.method !== "POST" || !["/reserve", "/dispatch", "/settle", "/charge"].includes(url.pathname)) musicCoverUnavailable();
+          const body = await readCoverControlRequest(request) as BudgetReserveRequest & BudgetChargeRequest & BudgetSettleRequest;
+          const id = body.reservationId ?? body.chargeId;
+          if (typeof id !== "string" || !id.length || id.length > 512) musicCoverUnavailable();
+          const old = first<{ bytes: number }>(this.sql.exec("SELECT COALESCE(length(CAST(policy_id AS BLOB)),0) + COALESCE(length(CAST(window_key AS BLOB)),0) + COALESCE(length(CAST(budget_scope_key AS BLOB)),0) AS bytes FROM budget_reservations WHERE reservation_id = ?", id));
+          if (old && (!Number.isSafeInteger(old.bytes) || old.bytes > 4096)) musicCoverUnavailable();
+          this.maintain();
+          return url.pathname === "/reserve" ? this.reserve(body, true) : url.pathname === "/dispatch" ? this.dispatch(body)
+            : url.pathname === "/settle" ? this.settle(body) : this.charge(body);
+        }
+      } catch { return errorResponse("minimax_music_cover_unavailable", "Cover ledger request is unavailable", 503); }
+    }
     this.maintain();
     if (request.method === "GET" && url.pathname === "/status") {
       const policyId = url.searchParams.get("policy_id"), windowKey = url.searchParams.get("window_key"), limit = numberParam(url, "limit_micros");
       if (!policyId || !windowKey || limit == null) return errorResponse("invalid_budget_request", "policy_id, window_key, and limit_micros are required", 400);
       const spent = this.effectiveSpent(windowKey, url.searchParams.get("scope_key"));
-      return json({ policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) });
+      const result = { policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) };
+      if (cover) searchJsonBytes(result);
+      return json(result);
     }
     if (request.method === "POST" && url.pathname === "/charge") return this.charge(await request.json<BudgetChargeRequest>());
     if (request.method === "POST" && url.pathname === "/reserve") return this.reserve(await request.json<BudgetReserveRequest>());
@@ -59,20 +84,21 @@ export class BudgetLedgerObject implements DurableObject {
     return json({ charged: true, chargeId: request.chargeId });
   }
 
-  private reserve(request: BudgetReserveRequest): Response {
+  private reserve(request: BudgetReserveRequest, cover = false): Response {
+    const reply = (value: unknown) => { if (cover) searchJsonBytes(value); return json(value); };
     const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null; dispatch_started: number; settled: number; created_at_ms: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key, dispatch_started, settled, created_at_ms FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
     if (existing) {
       const spent = this.effectiveSpent(existing.window_key, existing.budget_scope_key);
       const dispatched = request.dispatched === true && existing.dispatch_started === 1 && existing.settled === 0 && existing.created_at_ms + reservationLeaseMs > Date.now();
-      return json({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent), ...(dispatched ? { dispatched: true } : {}) });
+      return reply({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent), ...(dispatched ? { dispatched: true } : {}) });
     }
     const spent = this.effectiveSpent(request.windowKey, request.scopeKey);
     const remaining = Math.max(0, request.limitMicros - spent);
-    if (request.costMicros > remaining) return json({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
+    if (request.costMicros > remaining) return reply({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
     this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 0, ?, ?)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now(), request.dispatched === true ? 1 : 0, request.scopeKey ?? null);
     void this.scheduleAlarm();
     const next = spent + request.costMicros;
-    return json({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next), ...(request.dispatched === true ? { dispatched: true } : {}) });
+    return reply({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next), ...(request.dispatched === true ? { dispatched: true } : {}) });
   }
 
   private dispatch(request: { reservationId: string }): Response {
@@ -151,10 +177,11 @@ export class UsageLedgerObject implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/ingest") {
-      const event = await request.json<UsageEvent>();
+      const event = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion
+        ? await readCoverControlRequest(request) as UsageEvent : await request.json<UsageEvent>();
       if (typeof event?.id !== "string" || !event.id.length || !Number.isSafeInteger(event.occurred_at_ms) || event.occurred_at_ms < 0) return errorResponse("invalid_usage_event", "id must be a nonempty string and occurred_at_ms must be a nonnegative safe integer", 400);
-      const receipt = this.ingest(event);
-      if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
+      const now = Date.now(), receipt = this.ingest(event, now);
+      await this.scheduleUsageAlarm(now);
       return json(receipt);
     }
     // Internal DO transport only; never forwarded from a public mutation route.
@@ -179,10 +206,7 @@ export class UsageLedgerObject implements DurableObject {
       if (kind !== "admin" && !(kind === "principal" && id !== null) && !(kind === "credential" && id)) return errorResponse("invalid_usage_scope", "an explicit usage event scope is required", 400);
       const pending = this.backfillAttribution();
       const snapshot = this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100), pending);
-      if (pending) {
-        const next = Date.now() + 60_000, alarm = await this.state.storage.getAlarm();
-        if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
-      }
+      await this.scheduleUsageAlarm();
       return json(snapshot);
     }
     return errorResponse("route_not_found", "route not found", 404);
@@ -190,12 +214,31 @@ export class UsageLedgerObject implements DurableObject {
 
   async alarm(): Promise<void> {
     this.cleanup();
-    const pending = this.backfillAttribution();
-    if (pending || first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + (pending ? 60_000 : 86_400_000));
+    const attributionPending = this.backfillAttribution();
+    const before = usageRollupProgress(this.sql).last_rowid;
+    backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
+    const progress = usageRollupProgress(this.sql);
+    if (!progress.complete || attributionPending) {
+      // COUNT(*) walks a whole index: never on this sub-second migration cadence.
+      if (Math.floor(progress.last_rowid / 100_000) !== Math.floor(before / 100_000)) console.log(JSON.stringify({ event: "usage_rollup_maintenance", databaseSize: this.sql.databaseSize, ...progress }));
+      await this.state.storage.setAlarm(Date.now() + usageRollupAlarmMs);
+      return;
+    }
+    const count = first<{ row_count: number }>(this.sql.exec("SELECT COUNT(*) AS row_count FROM usage_events"))!.row_count;
+    console.log(JSON.stringify({ event: "usage_rollup_maintenance", rowCount: count, databaseSize: this.sql.databaseSize, ...progress }));
+    if (count) await this.state.storage.setAlarm(Date.now() + 86_400_000);
   }
 
-  private ingest(event: UsageEvent): UsageIngestReceipt {
-    const cutoff = Date.now() - usageRetentionMs;
+  private async scheduleUsageAlarm(now = Date.now()): Promise<void> {
+    const progress = usageRollupProgress(this.sql);
+    const attribution = first<{ complete: number }>(this.sql.exec("SELECT complete FROM usage_attribution_migration WHERE id = 1"))!;
+    const next = now + (!progress.complete || !attribution.complete ? usageRollupAlarmMs : 86_400_000);
+    const alarm = await this.state.storage.getAlarm();
+    if (alarm === null || alarm > next) await this.state.storage.setAlarm(next);
+  }
+
+  private ingest(event: UsageEvent, now: number): UsageIngestReceipt {
+    const cutoff = now - usageRetentionMs;
     this.cleanup(cutoff);
     // A retained ID owns its first payload and time, even if a replay carries an
     // expired timestamp. Cleanup and admission use the same retention boundary.
@@ -278,8 +321,9 @@ export class UsageLedgerObject implements DurableObject {
   // requested policies; recent events and personal totals are limited to the
   // caller's own rows; the admin scope instead gets a per-principal breakdown.
   private snapshot(policyIds: string[], scope: UsageEventScope, limit: number, pending: string | null): UsageSnapshot {
-    this.cleanup();
-    const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
+    const now = Date.now();
+    this.cleanup(now - usageRetentionMs);
+    const cutoffs = usageCutoffs(now, usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
     const range = { where, params: [...uniquePolicyIds, cutoffs.rolling] };
@@ -288,6 +332,16 @@ export class UsageLedgerObject implements DurableObject {
     // Ownership is filtered in SQL before LIMIT so other principals' rows never displace the caller's.
     const eventRange = owner ? restrict(range, owner) : range;
     const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventRange.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventRange.params, limit)).map((row) => JSON.parse(row.event_json));
+    if (usageRollupProgress(this.sql).complete) {
+      const rollupRange = { where: uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")})` : "1", params: uniquePolicyIds };
+      const daily = restrict(rollupRange, { where: "day_start_ms >= ?", params: [cutoffs.daily] });
+      const columns = { total: rollupTotalColumns, summary: rollupSummaryColumns };
+      const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(rollupRange, daily, columns, true), events };
+      const rollupOwner = rollupOwnerCondition(this.sql, scope);
+      if (rollupOwner) snapshot.personal = this.totals(restrict(rollupRange, rollupOwner), restrict(daily, rollupOwner), columns, true);
+      else snapshot.principals = this.rollupPrincipalTotals(rollupRange);
+      return snapshot;
+    }
     const columns = usageSummaryColumns(pending ? `CASE WHEN ${pending} THEN json_extract(event_json, '$.cost_basis') ELSE cost_basis END` : "cost_basis");
     const snapshot: UsageSnapshot = { ledger: "durable_object", ...this.totals(range, dailyRange, columns), events };
     if (owner) snapshot.personal = this.totals(restrict(range, owner), restrict(dailyRange, owner), columns);
@@ -296,11 +350,24 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   // Aggregates request, token, and spend totals overall, per provider, and per UTC day.
-  private totals(range: SqlRange, dailyRange: SqlRange, columns: { total: string; summary: string }): UsageTotals {
-    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${columns.summary} FROM usage_events WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
-    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${columns.total} FROM usage_events WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
-    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, ${columns.total} FROM usage_events WHERE ${dailyRange.where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
+  private totals(range: SqlRange, dailyRange: SqlRange, columns: { total: string; summary: string }, rollups = false): UsageTotals {
+    const table = rollups ? "usage_rollups" : "usage_events";
+    const day = rollups ? "day_start_ms" : "CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000";
+    const summary = first<SummaryRow>(this.sql.exec(`SELECT ${columns.summary} FROM ${table} WHERE ${range.where}`, ...range.params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
+    const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, ${columns.total} FROM ${table} WHERE ${range.where} GROUP BY provider ORDER BY request_count DESC`, ...range.params) as unknown as Iterable<ProviderRow>);
+    const daily = rows<DailyRow>(this.sql.exec(`SELECT ${day} AS day_start_ms, ${columns.total} FROM ${table} WHERE ${dailyRange.where} GROUP BY ${day} ORDER BY day_start_ms`, ...dailyRange.params) as unknown as Iterable<DailyRow>);
     return { summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily) };
+  }
+
+  private rollupPrincipalTotals(range: SqlRange): PrincipalUsage[] {
+    const grouped = rows<PrincipalRow>(this.sql.exec(`SELECT json_extract(principal_key, '$') AS principal_id,
+      CASE WHEN principal_key = 'null' THEN json_extract(credential_key, '$') END AS credential_id,
+      ${rollupSummaryColumns} FROM usage_rollups WHERE ${range.where} GROUP BY 1, 2`, ...range.params) as unknown as Iterable<PrincipalRow>);
+    return mergePrincipalUsage(grouped.map(({ principal_id, credential_id, ...summary }) => ({
+      principalId: principal_id === null ? null : normalizeEmail(principal_id) ?? principal_id,
+      credentialId: principal_id === null ? credential_id : null,
+      summary: camelSummary(summary),
+    })));
   }
 
   // Groups totals by attributed principal, or by credential for events without one.
@@ -374,6 +441,7 @@ export class UsageLedgerObject implements DurableObject {
       }
     });
     this.state.storage.transactionSync(() => ensureUsageReportSchema(this.sql));
+    this.state.storage.transactionSync(() => ensureUsageRollups(this.sql));
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy_principal ON usage_events (policy_id, principal_key, occurred_at_ms DESC)");
@@ -426,23 +494,51 @@ export class BudgetSettlementError extends Error {
   constructor(disposition: BudgetSettlementError["disposition"]) { super("budget ledger did not acknowledge settlement"); this.disposition = disposition; }
 }
 
-export async function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest): Promise<void> {
+export async function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  if (cover) {
+    const receipt = await musicCoverLedgerControl<{ charged?: boolean; chargeId?: string }>(env, objectName, "/charge", request, cover, true);
+    if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+    return;
+  }
+  if (search) {
+    const receipt = await search.controlJson<{ charged?: boolean; chargeId?: string }>(request,
+      (body, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body, signal }), true);
+    if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+    return;
+  }
   const response = await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body: JSON.stringify(request) });
   const receipt = response.ok ? await response.json<{ charged?: boolean; chargeId?: string }>().catch(() => null) : null;
   if (receipt?.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
 }
 
-export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal): Promise<void> {
+export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  if (cover) {
+    const receipt = await musicCoverLedgerControl<{ settled?: boolean }>(env, objectName, "/settle", request, cover, true);
+    if (receipt.settled !== true) throw new BudgetSettlementError("unavailable");
+    return;
+  }
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
+  if (search) {
+    const receipt = await search.controlJson<{ settled?: boolean }>(request,
+      (body, active) => stub.fetch("https://clawrouter.internal/settle", { method: "POST", body, signal: active }), true);
+    if (receipt.settled !== true) throw new BudgetSettlementError("unavailable");
+    return;
+  }
   const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request), signal });
   if (!response.ok) throw new BudgetSettlementError(response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unavailable");
   if ((await response.json<{ settled: boolean }>().catch(() => null))?.settled !== true) throw new BudgetSettlementError("unavailable");
 }
 
-export async function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal): Promise<UsageIngestReceipt> {
-  const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
-  if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
-  const receipt = await response.json<unknown>().catch(() => null);
+export async function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<UsageIngestReceipt> {
+  const receipt: unknown = cover
+    ? await cover.controlJson(event, (body, active) => usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), true)
+    : search
+    ? await search.controlJson<unknown>(event, (body, active) => usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active }), true)
+    : await (async () => {
+      const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
+      if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
+      return response.json<unknown>().catch(() => null);
+    })();
   // A 2xx from an older producer does not confirm this event's disposition.
   // Queue retry and direct-fallback failure keep their existing owners.
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
@@ -550,3 +646,11 @@ function emptySummary(): SummaryRow { return { request_count: 0, success_count: 
 function camelSummary(row: SummaryRow) { return { requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, inputTokens: row.input_tokens, outputTokens: row.output_tokens, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
 function camelProvider(row: ProviderRow) { return { provider: row.provider, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
 function camelDaily(row: DailyRow) { return { dayStartMs: row.day_start_ms, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
+
+// Inactive cover caller only. Slot acquisition precedes serialization and fetch.
+export function musicCoverLedgerControl<T>(env: Env, objectName: string, path: "/reserve" | "/dispatch" | "/settle" | "/charge", body: unknown,
+  owner: MiniMaxMusicCoverControl, mandatory = false): Promise<T> {
+  return owner.controlJson<T>(body, (text, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName))
+    .fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal, redirect: "manual",
+      headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), mandatory);
+}

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "stepfun-cache-context",
+      "split": "development",
+      "base": "4cbafc25c9e35b9a56994b366cb0da1b1fb838ce",
+      "oracle": "05980ff9609e18b421627aa444e5fc14616880eb",
+      "editPaths": [
+        "worker/token-usage.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-usage.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/stepfun-cached-usage.test.mjs"
+      ],
+      "instruction": "StepFun standard OpenAI-compatible Chat reports usage.cached_tokens as a subset of inclusive prompt_tokens. Recognize this field only when trusted provider context is stepfun or stepfun-cn and both request and response formats are openai.chat_completions. Thread the same context through JSON and cumulative SSE usage extraction. Preserve inclusive input totals, existing cache-evidence conflict validation, and every other provider and format; response model names alone must not grant this interpretation."
+    },
+    {
+      "id": "google-audio-pricing-context",
+      "split": "development",
+      "base": "10bbd4f5e31e6b3de5d3d0e3e1e2d0afd6c74c2a",
+      "oracle": "4458c6b0ef3962ab1d60ae3043ce2c0a2950e7d6",
+      "editPaths": [
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/google-audio-pricing-context.test.mjs",
+        "worker/test/google-speech-pricing-gap.test.mjs"
+      ],
+      "instruction": "Trusted selected Google native speech/music models must remain explicitly unpriced in direct pricing and reservation paths until output-audio tariffs and measured usage are qualified. Apply the shared output-audio classification before treating a supplied text, zero-rate or foreign image price card as sufficient. Preserve ordinary Google text and image pricing and the existing responseModalities audio guard."
+    }
+  ]
+}

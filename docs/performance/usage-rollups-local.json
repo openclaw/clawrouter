@@ -1,0 +1,65 @@
+{
+  "node": "v26.12.1",
+  "platform": "darwin/arm64",
+  "events": 1000000,
+  "averageEventBytes": 1514,
+  "samples": 5,
+  "statistic": "median; process CPU and wall milliseconds; external-volume SQLite; before is projected #337 aggregate SQL",
+  "schemaCpuMs": 2091.78,
+  "rollupRows": 28875,
+  "backfill": {
+    "batches": 500,
+    "rowsPerBatch": 2000,
+    "medianCpuMs": 27.33,
+    "maxCpuMs": 38.63,
+    "projectedThreeMillionMinutes": 12.5
+  },
+  "ingest": {
+    "withoutRollupCpuMs": 1.2931,
+    "withRollupCpuMs": 1.5788,
+    "addedCpuMs": 0.2858,
+    "overheadPercent": 22.1,
+    "samples": {
+      "without": [
+        1.582945,
+        1.29306,
+        1.2779049999999998,
+        1.22327,
+        1.31517
+      ],
+      "with": [
+        1.67658,
+        1.368,
+        1.578835,
+        1.46184,
+        1.779715
+      ]
+    }
+  },
+  "results": [
+    {
+      "scope": "principal",
+      "before": {
+        "cpuMs": 2343.47,
+        "wallMs": 2369.42
+      },
+      "after": {
+        "cpuMs": 14.87,
+        "wallMs": 14.36
+      },
+      "cpuSpeedup": 157.6
+    },
+    {
+      "scope": "admin",
+      "before": {
+        "cpuMs": 3584.52,
+        "wallMs": 3608.47
+      },
+      "after": {
+        "cpuMs": 18.93,
+        "wallMs": 18.97
+      },
+      "cpuSpeedup": 189.36
+    }
+  ]
+}

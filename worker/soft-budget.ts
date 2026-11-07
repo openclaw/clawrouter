@@ -1,8 +1,14 @@
+import { searchJsonBytes } from "./minimax-search-operation.ts";
+import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import type { BudgetReservationPlan } from "./accounting.ts";
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { planBudgetReservation, type BudgetReservation } from "./accounting.ts";
 import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy-limits.ts";
 import type { AuthorizedIdentity, Env, ProviderConnection } from "./types";
 import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
 import { HttpError } from "./utils.ts";
+import { admitSoftStatusRequest } from "./soft-budget-json.ts";
+import { readSoftStatus } from "./soft-budget-response.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
 // is asynchronous. Stored policies without a mode keep reserve (hard caps); new
@@ -38,7 +44,7 @@ export function softBudgetPreflight(env: Env, auth: AuthorizedIdentity, capabili
   return undefined;
 }
 
-export function softBudget(env: Env, auth: AuthorizedIdentity, capability: string, connection: ProviderConnection, requestId: string, abort?: (error: HttpError) => void) {
+export function softBudget(env: Env, auth: AuthorizedIdentity, capability: string, connection: ProviderConnection, requestId: string, abort?: (error: HttpError) => void, search?: MiniMaxSearchOperation) {
   const config = hotCacheConfig(env);
   const plan = planBudgetReservation(auth, capability, { reserveMicros: 0, basis: "none", inputTokens: null, outputTokens: null }, connection, Date.now(), true);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: 0, charges: plan.legs.map(({ objectName, request }) => ({ objectName, request: {
@@ -49,13 +55,17 @@ export function softBudget(env: Env, auth: AuthorizedIdentity, capability: strin
   let complete = false;
   const check = Promise.all(plan.legs.map(async leg => {
     try {
+      const limit = String(leg.request.limitMicros);
+      if (!search && leg.request.limitMicros !== 0) admitSoftStatusRequest(leg.objectName, leg.request.policyId,
+        leg.request.windowKey, leg.request.scopeKey!, limit);
       const url = new URL("https://clawrouter.internal/status");
       url.searchParams.set("policy_id", leg.request.policyId);
       url.searchParams.set("window_key", leg.request.windowKey);
       url.searchParams.set("scope_key", leg.request.scopeKey!);
-      url.searchParams.set("limit_micros", String(leg.request.limitMicros));
-      const response = leg.request.limitMicros === 0 ? null : await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url);
-      const status = response?.ok ? await response.json<{ spentMicros: number }>() : null;
+      url.searchParams.set("limit_micros", limit);
+      const status = leg.request.limitMicros === 0 ? null : search
+        ? await search.controlJson<{ spentMicros: number }>({}, (_body, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url, { signal }))
+        : await readSoftStatus(() => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url)) as { spentMicros: number } | null;
       // Zero is a configured block even when its reporting ledger is unavailable.
       if (leg.request.limitMicros !== 0 && (!status || !Number.isSafeInteger(status.spentMicros) || status.spentMicros < leg.request.limitMicros)) {
         exhausted.delete(legId(leg));
@@ -85,4 +95,24 @@ export function softBudget(env: Env, auth: AuthorizedIdentity, capability: strin
     },
     close() { delivered = true; },
   };
+}
+
+// Cover completes and physically retires every observation BEFORE its final
+// authority tail. No grace-period, cache or post-dispatch background work.
+export async function musicCoverSoftBudget(env: Env, plan: BudgetReservationPlan, connection: ProviderConnection, owner: MiniMaxMusicCoverControl): Promise<void> {
+  if (plan.legs.length > 4) musicCoverUnavailable();
+  searchJsonBytes(plan);
+  for (const leg of plan.legs) {
+    if (leg.request.limitMicros === 0) throw softDenial(leg, connection);
+    const status = await owner.controlJson<{ spentMicros: number }>({}, (_body, signal) => {
+      const url = new URL("https://clawrouter.internal/status");
+      for (const [key, value] of Object.entries({ policy_id: leg.request.policyId, window_key: leg.request.windowKey,
+        scope_key: leg.request.scopeKey!, limit_micros: String(leg.request.limitMicros) })) url.searchParams.set(key, value);
+      if (url.href.length > 4096) musicCoverUnavailable();
+      return env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(leg.objectName)).fetch(url, { signal, redirect: "manual",
+        headers: { [musicCoverControlHeader]: musicCoverControlVersion } });
+    });
+    if (!Number.isSafeInteger(status.spentMicros) || status.spentMicros < 0) musicCoverUnavailable();
+    if (status.spentMicros >= leg.request.limitMicros) throw softDenial(leg, connection);
+  }
 }

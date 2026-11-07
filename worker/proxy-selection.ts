@@ -1,3 +1,5 @@
+import { prepareMiniMaxSearch } from "./minimax-search.ts";
+import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
 import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
 import { prepareVeniceChatResponse } from "./venice-chat-runtime.ts";
 import { prepareNativeMiniMaxImage } from "./native-minimax-images.ts";
@@ -55,6 +57,14 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.endpoint.request_format === "minimax.search") {
+    if (selection.model !== null || !miniMaxSearchRequirement({ provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: null })
+      || selection.capability !== "search.web" || selection.method !== "POST" || Object.keys(selection.pathParams).length) miniMaxSearchDenied();
+    prepareMiniMaxSearch(selection.provider.base_urls.default === "https://api.minimax.io" ? "global" : "cn", selection.body);
+    return; // Factory receives its original owner-qualified origin during preparation.
+  }
+  if (selection.provider.id === "github-copilot")
+    throw new HttpError(400, "copilot_public_route_required", "Copilot requires its exact owner-bound native or manifest route");
   if (selection.provider.id === "minimax"
     && ["music-2.6", "music-2.6-free", "music-cover", "music-cover-free"].includes(selection.model?.upstream ?? (!Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : ""))
     && (selection.endpoint.request_format !== "minimax.music" || selection.capability !== "music.generate"))

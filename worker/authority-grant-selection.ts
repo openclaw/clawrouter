@@ -1,3 +1,5 @@
+import { videoControlVersion, videoControlBytes, videoJsonBytes } from "./minimax-video-operation.ts";
+import { inspectSearchJson, searchControlVersion, searchControlBytes, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import type { AccessControlUser, AccessPolicyEntry, CompiledEndpoint, CompiledProvider, Env, GrantRuntimeState, ProviderConnection, ProviderSnapshot, ProxyCredentialEntry, UpstreamGrant } from "./types";
@@ -10,8 +12,11 @@ import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, 
 import { grantQuotaRatio } from "./grant-quota.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { normalizeEmail, safeEqual, sha256Hex } from "./utils.ts";
+import { musicCoverControlVersion, musicCoverUnavailable } from "./minimax-music-cover-control.ts";
+import { miniMaxMusicCoverProjection } from "./native-media-credential.ts";
 
 interface SelectionStore {
+  consumeProjectionBytes?(bytes: number, text?: string): void;
   getCredential(id: string): ProxyCredentialEntry | null;
   getPolicy(id: string): AccessPolicyEntry | null;
   getUser(email: string): AccessControlUser | null;
@@ -24,6 +29,7 @@ interface SelectionStore {
 function rows<T>(cursor: Iterable<T>): T[] { return Array.from(cursor); }
 
 export async function finishAdmissionSelection(env: Env, storage: DurableObjectStorage, input: AdmissionRequest, result: AdmissionResult, store: SelectionStore): Promise<AdmissionResult> {
+  if (input.cover === musicCoverControlVersion) return finishCoverSelection(env, storage, input, result, store);
   const sql = storage.sql;
   const request = input.selection!;
   const provider = (snapshotJson as unknown as ProviderSnapshot).providers.find(item => item.id === request.providerId);
@@ -33,7 +39,9 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
   const keys = store.resolveGrantPool(poolInput).keys;
   // One bounded import attempt per key. Recheck both the row marker and the
   // attachment revision after KV yields; an owner publication always wins.
+  if ((input.search === searchControlVersion || input.video === videoControlVersion) && keys.length > 32) searchUnavailable();
   const missing = keys.filter(key => !rows(sql.exec("SELECT 1 FROM upstream_grant_projections WHERE grant_key = ?", key)).length);
+  if ((input.search === searchControlVersion || input.video === videoControlVersion) && missing.length) searchUnavailable();
   const versions = new Map(missing.map(key => [key, store.grantAttachment(key).revision]));
   let backfillFailed = false;
   if (missing.length) {
@@ -68,10 +76,29 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     const pool = store.resolveGrantPool(poolInput);
     fresh.pools = { ...fresh.pools, [provider.id]: pool };
     if (backfillFailed) return fresh;
+    const video = input.video === videoControlVersion;
+    const search = input.search === searchControlVersion || video;
+    const controlBytes = video ? videoControlBytes : searchControlBytes;
+    if (search) {
+      if (pool.keys.length > 32) searchUnavailable();
+      let bytes = 0;
+      // Count before retrieving projection_json, on the post-hash reread too.
+      for (const key of pool.keys) {
+        const bound = rows<{ bytes: number; legacy: number }>(sql.exec("SELECT length(CAST(projection_json AS BLOB)) AS bytes, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
+        const attachment = store.grantAttachment(key);
+        if (!bound || bound.legacy || !Number.isSafeInteger(bound.bytes) || bound.bytes < 1
+          || (bytes += bound.bytes) > controlBytes || attachment.pending) searchUnavailable();
+      }
+      store.consumeProjectionBytes?.(bytes);
+    }
     const candidates: AdmissionPoolCandidate[] = [];
     for (const key of pool.keys) {
       const row = rows<{ projection_json: string | null; legacy: number }>(sql.exec("SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
       if (!row || row.legacy) return fresh;
+      if (search && row.projection_json) {
+        if (video) store.consumeProjectionBytes?.(0, row.projection_json);
+        else inspectSearchJson(row.projection_json);
+      }
       candidates.push({ key, grant: row.projection_json ? JSON.parse(row.projection_json) as UpstreamGrant : null });
     }
     const poolKey = `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(poolInput.tenantId)}`;
@@ -82,7 +109,62 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     };
     if (input.snapshot === "only") return { ...fresh, snapshots: { [provider.id]: snapshot() } };
     const selection = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey, candidates, states: pool.states, identityHash, fallbackSessionHash }, choice => store.selectGrant(choice), revision);
+    if (search) (video ? videoJsonBytes : searchJsonBytes)({ ...fresh, selection });
     return { ...fresh, selection, ...(input.snapshot === "select" ? { snapshots: { [provider.id]: snapshot() } } : {}) };
+  });
+}
+
+// Private canonical selection does not depend on, or add to, generated cards.
+// Its profile is not eligible through the generic provider grant predicate.
+async function finishCoverSelection(env: Env, storage: DurableObjectStorage, input: AdmissionRequest, result: AdmissionResult, store: SelectionStore): Promise<AdmissionResult> {
+  if (!result.credential || !result.policy || result.ownerUnavailable || result.connectionsUnavailable || result.pools.minimax?.unavailable) musicCoverUnavailable();
+  const identity = result.credential.credential.principalId ?? result.credential.credentialId;
+  const identityHash = await sha256Hex(`identity:${identity}`);
+  return storage.transactionSync(() => {
+    const credential = store.getCredential(input.credentialId), policy = credential ? store.getPolicy(credential.credential.policyId) : null;
+    const principal = credential?.credential.principalId;
+    const owner = principal ? store.getUser(principal) : null;
+    if (!credential || !policy || !credential.credential.enabled || credentialExpired(credential.credential)
+      || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation
+      || principal && owner?.record.enabled !== true || !input.secretSha256 || !safeEqual(input.secretSha256, credential.credential.secretSha256)
+      || credential.credential.principalId !== result.credential!.credential.principalId || policy.policyId !== result.policy!.policyId
+      || policy.policy.providers.length && !policy.policy.providers.includes("minimax")
+      || policy.policy.models != null && !policy.policy.models.includes("minimax/music-cover")) musicCoverUnavailable(403);
+    const connections = store.resolveConnections(["minimax"]).connections;
+    if (connections.length !== 1 || connections[0].providerId !== "minimax" || !connections[0].enabled) musicCoverUnavailable();
+    const pool = store.resolveGrantPool({ providerId: "minimax", policyId: policy.policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: [] });
+    if (pool.unavailable || !pool.hasAttachment || !pool.keys.length || pool.keys.length > 32) musicCoverUnavailable();
+    let bytes = 0;
+    // Whole candidate preflight precedes retrieving/parsing ANY projection.
+    for (const key of pool.keys) {
+      const bound = rows<{ bytes: number; legacy: number }>(storage.sql.exec("SELECT length(CAST(projection_json AS BLOB)) AS bytes, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
+      const attachment = store.grantAttachment(key);
+      if (!bound || bound.legacy || attachment.pending || !attachment.attached || !Number.isSafeInteger(bound.bytes)
+        || bound.bytes < 1 || (bytes += bound.bytes) > searchControlBytes) musicCoverUnavailable();
+    }
+    store.consumeProjectionBytes?.(bytes);
+    const candidates = pool.keys.map(key => {
+      const row = rows<{ projection_json: string }>(storage.sql.exec("SELECT projection_json FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
+      inspectSearchJson(row.projection_json);
+      const grant = JSON.parse(row.projection_json) as UpstreamGrant;
+      return { key, grant: miniMaxMusicCoverProjection(grant) && grant.credentialGeneration === store.grantAttachment(key).generation ? grant : null,
+        runtimeState: currentGrantRuntime(grant, pool.states[key]) };
+    });
+    const routing = grantRoutingPolicy(policy.policy.grantRouting), now = Date.now();
+    const filtered = filterGrantCandidates("minimax", candidates, new Set(), routing, undefined, undefined, now);
+    const active = activeOperationCandidates(filtered.available, env);
+    if (!active.length) musicCoverUnavailable(403);
+    const poolKey = `${encodeURIComponent("minimax")}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(policy.policy.tenantId ?? "default")}`;
+    const choice = store.selectGrant({ poolKey, strategy: routing.strategy,
+      stickyHash: routing.stickiness === "identity" || routing.stickiness === "session" ? identityHash : null,
+      switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
+      candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant),
+        remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, "music-cover") })) });
+    const selected = active.find(item => item.key === choice.selectedKey);
+    if (!selected) musicCoverUnavailable();
+    const fresh: AdmissionResult = { credential, policy, owner, connections, pools: { minimax: pool },
+      selection: { selected: { ...selected, authorityRevision: store.grantAttachment(selected.key).revision }, hasConfiguredGrant: true } };
+    searchJsonBytes(fresh); return fresh;
   });
 }
 

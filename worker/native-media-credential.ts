@@ -22,6 +22,9 @@ export function mutateNativeMediaBinding(record: CredentialRecord, previous: Cre
     binding = intent === null ? null : readNativeMediaBinding(intent);
     if (intent !== null && (!binding || record.providerId !== "minimax" || !miniMaxApiKeySecret(record)))
       throw new HttpError(400, "invalid_native_media_authorization", "Global MiniMax media requires explicit operation authorization for the original scalar API key");
+    if (binding?.version === "clawrouter.native-media.v2" && (typeof record.accountId !== "string"
+      || !record.accountId.length || record.accountId.length > 512 || record.accountId.trim() !== record.accountId))
+      throw new HttpError(400, "invalid_native_media_authorization", "Music cover requires the original bounded account identity");
   }
   if (record.providerId !== "minimax" || !miniMaxApiKeySecret(record)) binding = null;
   record.nativeMediaBinding = binding;
@@ -29,11 +32,33 @@ export function mutateNativeMediaBinding(record: CredentialRecord, previous: Cre
 }
 
 export function miniMaxMediaProjection(grant: UpstreamGrant, operation: NativeMediaBinding["operation"] = "minimax.speech"): boolean {
+  const binding = readNativeMediaBinding(grant.nativeMediaBinding);
   return grant.provider === "minimax" && grant.kind === "api_key" && grant.credentialStore === "durable_object"
     && grant.enabled === true && !grant.revokedAt && grant.credentialStatus === "active"
     && !!grant.hasCredential && !grant.hasAccessToken && !grant.hasRefreshToken && !grant.subscription
     && Array.isArray(grant.credentialFields) && grant.credentialFields.length === 0
-    && readNativeMediaBinding(grant.nativeMediaBinding)?.operation === operation;
+    && binding?.version === "clawrouter.native-media.v1" && binding.operation === operation;
+}
+
+// Cover is a separate inactive profile, never V1 text, free, speech or env authority.
+export function miniMaxMusicCoverProjection(grant: UpstreamGrant): boolean {
+  const binding = readNativeMediaBinding(grant.nativeMediaBinding);
+  return grant.provider === "minimax" && grant.kind === "api_key" && grant.credentialStore === "durable_object"
+    && grant.enabled === true && !grant.revokedAt && grant.credentialStatus === "active" && !!grant.hasCredential
+    && !grant.hasAccessToken && !grant.hasRefreshToken && !grant.subscription
+    && Array.isArray(grant.credentialFields) && grant.credentialFields.length === 0
+    && typeof grant.accountId === "string" && grant.accountId.length > 0 && grant.accountId.length <= 512
+    && grant.accountId.trim() === grant.accountId && binding?.version === "clawrouter.native-media.v2"
+    && Number.isSafeInteger(grant.credentialGeneration) && grant.credentialGeneration! > 0
+    && typeof grant.credentialLineage === "string" && grant.credentialLineage.length > 0 && grant.credentialLineage.length <= 128
+    && grant.credentialRefreshBlockedUntil !== null
+    && (!grant.expiresAt || Number.isFinite(Date.parse(grant.expiresAt)) && Date.parse(grant.expiresAt) > Date.now());
+}
+
+export function miniMaxMusicCoverIdentity(grant: UpstreamGrant): string {
+  if (!miniMaxMusicCoverProjection(grant)) throw new HttpError(403, "minimax_music_cover_authority_required", "The original Music cover owner is unavailable");
+  return JSON.stringify([grant.provider, grant.kind, grant.accountId, grant.credentialGeneration, grant.credentialLineage,
+    grant.expiresAt ?? null, readNativeMediaBinding(grant.nativeMediaBinding)]);
 }
 
 export function miniMaxMusicRequirement({ provider, endpoint, model, mode }: GrantRequirement): boolean {

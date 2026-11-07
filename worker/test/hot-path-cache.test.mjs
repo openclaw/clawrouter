@@ -7,7 +7,7 @@ import { sqlBudgetNamespace } from './sql-budget-namespace.mjs';
 import { usageEnv, proxyKey } from './usage-budget-fixture.mjs';
 import { putGrantCredentials, revokeGrantCredentials } from '../grant-credentials.ts';
 import { resolveGrantSelection } from '../grant-selection.ts';
-import { HotCache, hotCacheConfig, hotCacheNow, pendingBackgroundWork, setHotCacheClock } from '../hot-cache.ts';
+import { HotCache, hotCacheConfig, hotCacheNow, pendingBackgroundWork, setHotCacheClock, tryRunInBackground, backgroundMark, clearHotCaches, BACKGROUND_WORK_LIMIT, BACKGROUND_WORK_BOUND_MS, DRAIN_BOUND_MS } from '../hot-cache.ts';
 import { applyLocalGrantRuntime, resolveAdmission } from '../admission-cache.ts';
 import { cachedGrantCredentials } from '../credential-cache.ts';
 import { providerById } from '../providers.ts';
@@ -311,15 +311,200 @@ test('same-isolate invalidation never drops coalesced selection counters', async
   assert.equal(counts[0].selected_count, 2);
 });
 
-test('a hung background call leaves the pending set after its bound', async t => {
+// Every synthetic root is owned and released by its test, including failed paths.
+function heldRegistrations(t, count = BACKGROUND_WORK_LIMIT) {
+  const roots = [];
+  t.after(async () => { for (const root of roots) root.resolve(); await Promise.all(roots.map(root => root.promise.then(() => {}, () => {}))); });
+  for (let i = 0; i < count; i++) {
+    const root = Promise.withResolvers(); roots.push(root);
+    assert.equal(tryRunInBackground(() => root.promise), true);
+  }
+  return { roots, async release() { for (const root of roots) root.resolve(); await Promise.all(roots.map(root => root.promise.then(() => {}, () => {}))); } };
+}
+
+test('facade timers survive wall-clock rollback without releasing actual registrations', async t => {
+  let elapsed = 0, wall = 100_000;
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { runInBackground, BACKGROUND_WORK_BOUND_MS } = await import('../hot-cache.ts');
-  runInBackground(new Promise(() => {}));
-  const pending = pendingBackgroundWork();
-  assert.ok(pending);
-  t.mock.timers.tick(BACKGROUND_WORK_BOUND_MS);
-  await pending;
+  t.mock.method(performance, 'now', () => elapsed);
+  t.mock.method(Date, 'now', () => wall);
+  const held = heldRegistrations(t);
+  let starts = 0, finished = false;
+  const pending = pendingBackgroundWork(); assert.ok(pending);
+  pending.then(() => { finished = true; });
+  wall = -1_000_000; clearHotCaches();
+  elapsed = DRAIN_BOUND_MS - 1; t.mock.timers.tick(DRAIN_BOUND_MS - 1); await Promise.resolve();
+  assert.equal(finished, false);
+  elapsed++; t.mock.timers.tick(1); await pending;
+  assert.equal(finished, true, 'the ORIGINAL hard timer, not Date.now, bounds this facade');
+  assert.equal(tryRunInBackground(() => { starts++; }), false);
+  const inspections = performance.now.mock.callCount();
+  elapsed = BACKGROUND_WORK_BOUND_MS; t.mock.timers.tick(BACKGROUND_WORK_BOUND_MS - DRAIN_BOUND_MS);
+  assert.equal(performance.now.mock.callCount(), inspections, 'completed facade cleared its polling timer');
+  const aged = pendingBackgroundWork(); assert.ok(aged); await aged;
+  assert.equal(tryRunInBackground(() => { starts++; }), false, '25s visibility expiry does not retire actual work');
+  assert.equal(starts, 0);
+  await held.release();
   assert.equal(pendingBackgroundWork(), null);
+  assert.equal(tryRunInBackground(() => { starts++; }), true); await Promise.resolve();
+  assert.equal(starts, 1);
+});
+
+test('registration reserves before reentrant start and observes sync throw, undefined and rejection once', async t => {
+  const held = heldRegistrations(t, BACKGROUND_WORK_LIMIT - 1);
+  let invoked = 0;
+  assert.equal(tryRunInBackground(() => {
+    assert.equal(tryRunInBackground(() => { invoked++; }), false);
+    throw undefined;
+  }), true, 'accepted is not successful');
+  assert.equal(tryRunInBackground(() => undefined), true);
+  assert.equal(tryRunInBackground(() => { invoked++; }), false, 'undefined still has an actual settlement turn');
+  await Promise.resolve();
+  const rejected = Promise.withResolvers();
+  assert.equal(tryRunInBackground(() => rejected.promise), true);
+  rejected.reject(undefined); rejected.resolve('ignored'); await Promise.resolve();
+  assert.equal(tryRunInBackground(() => { invoked++; }), true); await Promise.resolve();
+  assert.equal(invoked, 1);
+  await held.release(); assert.equal(pendingBackgroundWork(), null);
+});
+
+test('overflow skips stale refresh and preserves age, expiry and foreground loading', async t => {
+  const time = clock(), config = hotCacheConfig({}), cache = new HotCache(4);
+  cache.set('age', 'old', config); cache.set('expiry', 'short', config, hotCacheNow() + 15_000);
+  const held = heldRegistrations(t); let loads = 0;
+  const loader = async () => ({ value: ++loads, cacheable: true });
+  time.advance(10_001);
+  assert.deepEqual(await cache.get('age', config, loader), { value: 'old', state: 'stale' });
+  assert.equal(cache.publication('age'), undefined); assert.equal(loads, 0);
+  assert.deepEqual(await cache.get('foreground', config, loader), { value: 1, state: 'miss' });
+  time.advance(5_000); assert.equal(cache.peek('expiry', config), undefined);
+  time.advance(45_000); assert.equal(cache.peek('age', config), undefined, 'denied refresh did not renew original age');
+  await held.release();
+});
+
+test('overflow performs no speculative materialization or colo hash, serialization, response or put', async t => {
+  const { prefetchGrantCredentials } = await import('../credential-cache.ts');
+  const { coloPut } = await import('../colo-cache.ts');
+  const colo = fakeColo(t), held = heldRegistrations(t);
+  let materializations = 0, hashes = 0, serializations = 0, responses = 0;
+  const digest = crypto.subtle.digest.bind(crypto.subtle), OriginalResponse = Response;
+  t.mock.method(crypto.subtle, 'digest', (...args) => { hashes++; return digest(...args); });
+  globalThis.Response = class extends OriginalResponse { constructor(...args) { responses++; super(...args); } };
+  t.after(() => { globalThis.Response = OriginalResponse; });
+  prefetchGrantCredentials({}, keyA, grant(), async () => { materializations++; return grant(); });
+  coloPut('fixture', 'overflow', { toJSON() { serializations++; return {}; } }, hotCacheNow(), hotCacheConfig({}));
+  await Promise.resolve();
+  assert.deepEqual([materializations, hashes, serializations, responses, colo.stats.puts], [0, 0, 0, 0, 0]);
+  await held.release();
+});
+
+test('denied repair does not consume its cooldown; a later eligible request repairs once', async t => {
+  const f = await fixture(); await f.put(keyA, grant());
+  const legacy = () => f.authority.sql.exec('UPDATE upstream_grant_projections SET legacy = 1, projection_json = NULL WHERE grant_key = ?', keyA);
+  const isLegacy = () => [...f.authority.sql.exec('SELECT legacy FROM upstream_grant_projections WHERE grant_key = ?', keyA)][0].legacy;
+  legacy(); const held = heldRegistrations(t);
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  assert.equal((await f.send()).response.status, 200); assert.equal(isLegacy(), 1);
+  await held.release();
+  assert.equal((await f.send()).response.status, 200); assert.equal(isLegacy(), 0);
+  legacy(); assert.equal((await f.send()).response.status, 200); assert.equal(isLegacy(), 1, 'accepted repair consumed cooldown');
+});
+
+test('an accepted failed repair keeps its cooldown', async t => {
+  const f = await fixture(); await f.put(keyA, grant());
+  f.authority.sql.exec('UPDATE upstream_grant_projections SET legacy = 1, projection_json = NULL WHERE grant_key = ?', keyA);
+  const get = f.env.GRANT_CREDENTIALS.get; let repairs = 0;
+  f.env.GRANT_CREDENTIALS.get = id => { const stub = get(id); return { fetch(input, init) {
+    if (new URL(input).pathname === '/reconcile') { repairs++; throw undefined; }
+    return stub.fetch(input, init);
+  } }; };
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  assert.equal((await f.send()).response.status, 200); assert.equal(repairs, 1);
+  assert.equal((await f.send()).response.status, 200); assert.equal(repairs, 1);
+});
+
+test('overflow creates no flush timer and retains coalesced counters and local feedback for a later flush', async t => {
+  const { queueGrantRuntime, flushSelections, setCoalesceWindowMs } = await import('../admission-cache.ts');
+  const f = await fixture(); await f.put(keyA, grant());
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send(); f.reset();
+  const held = heldRegistrations(t); let timers = 0;
+  setCoalesceWindowMs(431); t.after(() => setCoalesceWindowMs(0));
+  const timer = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (...args) => { if (args[1] === 431) timers++; return timer(...args); });
+  const response = await f.request(); assert.equal(response.status, 200); await response.text(); await Promise.all(f.pending);
+  const state = { status: 'cooldown', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'rate_limited', cooldownUntil: new Date(Date.now() + 60_000).toISOString(), grantRevision: null, windows: [] };
+  queueGrantRuntime(f.env, keyA, state);
+  assert.equal(timers, 0, 'denied schedule creates no timer');
+  assert.equal(f.calls.includes('/grant-pools/record'), false); assert.equal(f.calls.includes('/grant-pools/feedback'), false);
+  await held.release();
+  setCoalesceWindowMs(0); queueGrantRuntime(f.env, keyA, state); await pendingBackgroundWork();
+  assert.equal(f.calls.filter(path => path === '/grant-pools/record').length, 1);
+  assert.equal(f.calls.filter(path => path === '/grant-pools/feedback').length, 1);
+  assert.equal([...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')][0].selected_count, 2);
+  f.reset(); await flushSelections(f.env); assert.deepEqual(f.calls, [], 'attempted additive counts are not replayed');
+});
+
+test('synchronous timer failure retains unstarted feedback and an old schedule cannot clear its successor', async t => {
+  const { queueGrantRuntime, flushSelections, setCoalesceWindowMs } = await import('../admission-cache.ts');
+  const f = await fixture(); await f.put(keyA, grant());
+  const state = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null, grantRevision: null, windows: [] };
+  const timers = [], originalTimer = globalThis.setTimeout; let fail = true;
+  setCoalesceWindowMs(431); t.after(() => setCoalesceWindowMs(0));
+  t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) => {
+    if (ms !== 431) return originalTimer(callback, ms, ...args);
+    if (fail) { fail = false; throw undefined; }
+    timers.push(callback); return { fixtureTimer: timers.length };
+  });
+  t.after(async () => { for (const callback of timers) callback(); await flushSelections(f.env); await pendingBackgroundWork(); });
+  queueGrantRuntime(f.env, keyA, state); await pendingBackgroundWork();
+  assert.equal(f.calls.includes('/grant-pools/feedback'), false);
+  queueGrantRuntime(f.env, keyA, state); assert.equal(timers.length, 1);
+  await flushSelections(f.env); // Invalidates the still-unstarted first schedule.
+  queueGrantRuntime(f.env, keyA, { ...state, observedAt: new Date(Date.now() + 1).toISOString() });
+  assert.equal(timers.length, 2);
+  timers[0](); for (let i = 0; i < 4; i++) await Promise.resolve();
+  queueGrantRuntime(f.env, keyA, { ...state, observedAt: new Date(Date.now() + 2).toISOString() });
+  assert.equal(timers.length, 2, 'old finally did not clear the newer schedule');
+  timers[1](); await pendingBackgroundWork();
+  assert.equal(f.calls.filter(path => path === '/grant-pools/feedback').length, 2);
+});
+
+test('a settling flush cannot delete newer feedback retained while registration is full', async t => {
+  const { queueGrantRuntime, flushSelections } = await import('../admission-cache.ts');
+  const f = await fixture(); await f.put(keyA, grant());
+  const held = heldRegistrations(t, 63), entered = Promise.withResolvers(), release = Promise.withResolvers();
+  t.after(async () => { release.resolve(); await held.release(); await pendingBackgroundWork(); await flushSelections(f.env); });
+  const get = f.env.ACCESS_CONTROL.get, observations = [];
+  f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(input, init) {
+    try {
+      if (new URL(input).pathname !== '/grant-pools/feedback') return await stub.fetch(input, init);
+      observations.push(JSON.parse(init.body).state.observedAt);
+      const response = await stub.fetch(input, init); if (observations.length === 1) { entered.resolve(); await release.promise; } return response;
+    }
+    catch (error) { entered.reject(error); throw error; }
+  } }; };
+    const old = { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null, grantRevision: null, windows: [] };
+  const newer = { ...old, observedAt: new Date(Date.now() + 1).toISOString() };
+  const mark = backgroundMark(); queueGrantRuntime(f.env, keyA, old);
+  const arrivalFacade = pendingBackgroundWork(mark); assert.ok(arrivalFacade, 'scheduled flush must register a cohort');
+  await cacheBarrierArrival(entered.promise, arrivalFacade, 'registered feedback');
+  queueGrantRuntime(f.env, keyA, newer);
+  assert.equal(tryRunInBackground(() => assert.fail('overflow start')), false);
+  release.resolve(); await pendingBackgroundWork(mark);
+  assert.equal(pendingBackgroundWork(mark), null, 'original flush actually settled');
+  await flushSelections(f.env);
+  assert.deepEqual(observations, [old.observedAt, newer.observedAt]);
+  await held.release();
+});
+
+test('cache-disabled feedback remains foreground even when background admission is full', async t => {
+  const { queueGrantRuntime } = await import('../admission-cache.ts');
+  const f = await fixture({ CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0' }); await f.put(keyA, grant()); f.reset();
+  const held = heldRegistrations(t);
+  const actual = queueGrantRuntime(f.env, keyA, { status: 'available', observedAt: new Date().toISOString(), source: 'provider_response', lastSignal: 'quota', cooldownUntil: null, grantRevision: null, windows: [] });
+  assert.ok(actual); await actual;
+  assert.equal(f.calls.filter(path => path === '/grant-pools/feedback').length, 1);
+  await held.release();
 });
 
 test('quota feedback and selection counters coalesce into one flush per window', async t => {
@@ -596,18 +781,167 @@ test('a concurrent load waits for the shared entry instead of awaiting another r
   assert.equal((await retry).value, 'second', 'an uncacheable leader result sends the follower to its own load');
 });
 
-test('a request drains only its own background work, bounded by its own timer', async t => {
+test('a facade polls a snapshot sequence cohort including interleaved registrations on its own timers', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const { runInBackground, backgroundMark, DRAIN_BOUND_MS } = await import('../hot-cache.ts');
-  runInBackground(new Promise(() => {})); // another request's stuck work
+  const earlier = heldRegistrations(t, 1);
   const mark = backgroundMark();
-  assert.equal(pendingBackgroundWork(mark), null, 'work registered before this request is not drained');
-  runInBackground(new Promise(() => {})); // this request's own stuck work
+  assert.equal(pendingBackgroundWork(mark), null, 'the sequence boundary excludes earlier work');
+  const interleaved = heldRegistrations(t, 1); // Not necessarily this request's work.
   const drain = pendingBackgroundWork(mark);
   assert.ok(drain);
+  const later = heldRegistrations(t, 1); // After snapshot: not part of this facade.
   let finished = false; drain.then(() => { finished = true; });
-  t.mock.timers.tick(DRAIN_BOUND_MS - 1); await Promise.resolve();
+  t.mock.timers.tick(1); await Promise.resolve();
   assert.equal(finished, false);
-  t.mock.timers.tick(1); await drain;
-  assert.equal(finished, true, 'the drain ends at its own bound even though the work never settles');
+  await interleaved.release(); t.mock.timers.tick(2); await drain;
+  assert.equal(finished, true, 'snapshot completion does not join the earlier or later roots');
+  await earlier.release(); await later.release();
+});
+
+// Register release/drain before starting an operation. Node reports an original
+// assertion and any cleanup-hook failure separately; neither is suppressed.
+function ownCacheBarrier(t, release, fixture) {
+  const work = [];
+  t.after(async () => {
+    release.resolve();
+    const errors = [];
+    for (const result of await Promise.allSettled(work)) {
+      if (result.status === 'rejected') errors.push(result.reason);
+      else if (result.value instanceof Response && !result.value.bodyUsed) {
+        try { await result.value.arrayBuffer(); } catch (error) { errors.push(error); }
+      }
+    }
+    for (const result of await Promise.allSettled(fixture.pending)) if (result.status === 'rejected') errors.push(result.reason);
+    if (errors.length) throw new AggregateError(errors, 'cache barrier client/background cleanup failed');
+  });
+  return start => { const pending = Promise.resolve().then(start); work.push(pending); return pending; };
+}
+async function cacheBarrierArrival(arrival, originating, phase) {
+  let timer;
+  const bound = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`expected ${phase} barrier did not arrive`)), 2000); });
+  // A colo put belongs to background publication and can start after foreground
+  // completion. A foreground barrier cannot: completion there is a fixture error.
+  const terminal = originating.then(() => phase === 'background colo put'
+    ? new Promise(() => {}) : Promise.reject(new Error(`request completed before ${phase} barrier`)));
+  try { await Promise.race([arrival, terminal, bound]); }
+  finally { clearTimeout(timer); }
+}
+
+for (const clockShift of [0, -120_000]) test(`a new admission owner publishes at the original fenced clock (${clockShift})`, async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache, sharedHotCacheFence } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  clearHotCaches(); fenceSharedHotCache(); time.advance(clockShift);
+  const acquiredAt = hotCacheNow(); assert.ok(acquiredAt <= sharedHotCacheFence());
+  assert.equal((await f.send()).response.status, 200);
+  assert.equal(colo.stats.puts, 1, 'current publication identity may write after invalidation');
+  assert.equal(JSON.parse([...colo.entries.values()][0]).fetchedAt, acquiredAt, 'no timestamp renewal');
+  clearHotCaches(); f.reset();
+  assert.equal((await f.send()).response.status, 200);
+  assert.equal(colo.stats.hits, 1, 'the shared response is physically read');
+  assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, 'fenced timestamp still denies adoption');
+});
+
+for (const clockShift of [0, -120_000]) test(`a late admission cannot republish hints or colo after invalidation (clock ${clockShift})`, async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const get = f.env.ACCESS_CONTROL.get; let first = true;
+  f.env.ACCESS_CONTROL.get = id => { const stub = get(id); return { async fetch(url, init) {
+    const response = await stub.fetch(url, init);
+    if (new URL(url).pathname === '/admission/resolve' && first) { first = false; entered.resolve(); await release.promise; }
+    return response;
+  } }; };
+  const start = ownCacheBarrier(t, release, f), old = start(() => f.request());
+  try {
+    await cacheBarrierArrival(entered.promise, old, 'foreground admission');
+    time.advance(clockShift); clearHotCaches(); fenceSharedHotCache();
+    f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+    assert.equal((await f.request()).status, 403, 'new request progresses without old I/O');
+  } finally { release.resolve(); }
+  await (await old).text(); await Promise.all(f.pending);
+  assert.equal(colo.stats.puts, 0, 'invalidated completion cannot start a shared publication');
+  time.advance(61_000); f.reset();
+  assert.equal((await f.send()).response.status, 403);
+  assert.equal(f.ownerCalls, 0, 'old completion cannot recreate the remembered credential hint');
+});
+
+test('already-issued late colo put retains acquisition time across equal/rollback invalidation', async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache, sharedHotCacheFence } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), put = globalThis.caches.default.put;
+  let fetchedAt;
+  globalThis.caches.default.put = async (url, response) => {
+    const text = await response.text(); fetchedAt = JSON.parse(text).fetchedAt; entered.resolve(); await release.promise;
+    return put(url, new Response(text));
+  };
+  const start = ownCacheBarrier(t, release, f), originating = start(() => f.request());
+  const response = await originating; await response.text();
+  try {
+    await cacheBarrierArrival(entered.promise, originating, 'background colo put'); time.advance(-120_000); clearHotCaches(); fenceSharedHotCache();
+    assert.ok(fetchedAt <= sharedHotCacheFence());
+    f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  } finally { release.resolve(); }
+  await Promise.all(f.pending);
+  assert.equal(colo.stats.puts, 1, 'the original physical put really completes late');
+  f.reset(); assert.equal((await f.send()).response.status, 403);
+  assert.equal(f.calls.filter(path => path === '/admission/resolve').length, 1, 'late entry is fenced, not adopted');
+});
+
+test('invalidation during a held colo read prevents adoption and drains coalesced writes normally', async t => {
+  const time = clock(), colo = fakeColo(t), f = await fixture(); await f.put(keyA, grant());
+  const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
+  t.mock.method(globalThis, 'fetch', async () => ok());
+  await f.send(); clearHotCaches();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), match = globalThis.caches.default.match;
+  globalThis.caches.default.match = async url => { const response = await match(url); entered.resolve(); await release.promise; return response; };
+  const start = ownCacheBarrier(t, release, f), pending = start(() => f.request());
+  try {
+    await cacheBarrierArrival(entered.promise, pending, 'foreground colo read'); time.advance(1); clearHotCaches(); fenceSharedHotCache();
+    f.policy.enabled = false; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  } finally { release.resolve(); }
+  const response = await pending; assert.equal(response.status, 403); await response.text(); await Promise.all(f.pending);
+  assert.ok(colo.stats.hits > 0, 'a REAL cached response was held before invalidation');
+  const rows = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
+  assert.equal(rows[0].selected_count, 1, 'the earlier successful selection write was not discarded');
+});
+
+test('cache invalidation preserves pending runtime, selection and cursor writes', async t => {
+  const f = await fixture();await f.put(keyA, grant());await f.put(keyB, grant());
+  f.policy.grantRouting = { strategy: 'round_robin', stickiness: 'none' };await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  const { clearHotCaches, fenceSharedHotCache } = await import('../hot-cache.ts');
+  const { flushSelections } = await import('../admission-cache.ts');
+  const roots = [], waitUntil = f.context.waitUntil.bind(f.context);
+  f.context.waitUntil = promise => {
+    // Observe every original immediately; undefined rejection is still failure.
+    roots.push(Promise.resolve(promise).then(() => ({ failed: false }), reason => ({ failed: true, reason })));
+    waitUntil(promise);
+  };
+  const join = () => Promise.all(roots); // All observers fulfill, so no first-rejection exit.
+  let retirementChecked = false;
+  t.after(async () => {
+    const outcomes = await join(), failures = outcomes.filter(outcome => outcome.failed).map(outcome => outcome.reason);
+    if (!retirementChecked) {
+      try { assert.equal(pendingBackgroundWork(), null, 'actual registrations retired, not merely their facades'); }
+      catch (error) { failures.push(error); }
+    }
+    // Node retains the original assertion/rejection (including undefined) and
+    // reports this independent cleanup-hook failure separately.
+    if (failures.length) throw new AggregateError(failures, 'original background cleanup failed');
+  });
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }, { headers: {
+    'anthropic-ratelimit-unified-5h-utilization': '0.25',
+    'anthropic-ratelimit-unified-5h-reset': String(Math.floor(Date.now() / 1000) + 3600),
+  } }));
+  await (await f.request()).text();await (await f.request()).text();
+  clearHotCaches();fenceSharedHotCache();await flushSelections(f.env);
+  await join();
+  retirementChecked = true;
+  assert.equal(pendingBackgroundWork(), null, 'actual registrations retired, not merely their facades');
+  const rows = [...f.authority.sql.exec('SELECT selected_count FROM upstream_grant_selection')];
+  assert.equal(rows.reduce((sum, row) => sum + row.selected_count, 0), 2);
+  assert.ok(f.calls.includes('/grant-pools/feedback'));
+  assert.ok(f.calls.includes('/grant-pools/record'));
 });

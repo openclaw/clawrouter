@@ -149,3 +149,312 @@ one small worker, and include all-fail tasks. Freeze the policy before evaluatin
 fresh task families. Require a gain over the best fixed worker at the same total
 budget, including verification and failed calls, before frontier confirmation.
 Keep production Fusion opt-in until a held-out coding comparison earns promotion.
+
+## Local generation with executable checks
+
+`scripts/fusion-execution-smoke.mjs` tests eight fresh, small development
+families. It generates one tiny-model draft and two small-model drafts per task.
+The fixed policies compare the first small draft, public-test selection between
+two small drafts, and public-test selection between the tiny draft and the first
+small draft. Each retry policy stops at the first public pass; hidden grading
+does not influence selection. These are equal maximum attempt counts, not equal
+monetary or compute budgets. Report tokens and selection-check counts separately.
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-execution-smoke.mjs \
+  /path/to/fresh-results node@sha256:PINNED_DIGEST \
+  qwen3:0.6b qwen3:4b-instruct-2507-q4_K_M
+```
+
+Use the local loopback Ollama server and a cached, digest-pinned Node image.
+The runner builds a minimal dependency-free image. Before generation, every
+reference must pass both test sets and every deliberately flawed implementation
+must pass public tests while failing withheld tests. CI runs this qualification.
+The generator sees the contract and two examples, never the withheld inputs.
+
+Generated modules execute only in fresh, unprivileged Docker containers with
+network disabled, read-only root, no host mounts, resource limits and a four-second
+evaluation watchdog. Expected values stay in the parent grader. Candidate
+stdout cannot declare its own test result. The report retains verdicts, hashes,
+usage and timing; generated modules and raw model responses are not retained.
+
+The run makes 24 local calls, limited to 512 output tokens each. Its 15-minute
+generation-loop deadline is checked before each call; fixture qualification is
+separate. Invalid or failed candidates count against their policy. Transport,
+identity, usage or infrastructure failures stop the campaign without retry.
+These tasks test generation and verification mechanics, not repository repair.
+
+The first run (2026-11-06, source
+`51f0a281526f8c562cbeb8a06e7fe13a8b75a643`, corpus
+`1360aa974eb4a3dd2799ee17bb19402e6f4cede0557d93fa47f7c709d841f02b`)
+completed all 24 calls at zero API spend using the same Qwen model pins above.
+
+| Policy | Solved / 8 | Wrong accepted | Replay calls | Replay tokens |
+| --- | ---: | ---: | ---: | ---: |
+| 4B first draft | 4 | 4 | 8 | 2,626 |
+| Up to two 4B drafts, public-test selection | 4 | 2 | 10 | 3,334 |
+| Tiny then 4B, public-test selection | 4 | 2 | 16 | 4,648 |
+
+The tiny model solved none of the tasks. Even hindsight selection across the
+two 4B samples solved only four: no selector could recover an additional win
+from this pool. Public checks rejected two wrong answers, but still accepted
+two others that failed withheld cases. More samples and the tiny first stage
+did not improve correctness. Improve worker capability and test coverage before
+adding orchestration. A later output-limit handling fix does not affect these
+results: no candidate in this complete run hit the output limit.
+
+## Local repository repairs
+
+`scripts/fusion-local-repository.mjs` runs the existing repository action harness
+against the four development tasks in `validation-workloads.json`. It compares
+a general local model, a coding local model, and a coder-to-general handoff.
+Each arm gets at most eight actions, 1,536 output tokens per call, a 32,768-token
+context and three minutes. The handoff uses the existing early-submit or
+two-thirds-turn transfer rule. Task order rotates the three arms.
+
+```sh
+GITHUB_SHA=$(git rev-parse HEAD) node scripts/fusion-local-repository.mjs \
+  /path/to/transfer-qualification.json /path/to/fresh-results \
+  qwen3:4b-instruct-2507-q4_K_M qwen2.5-coder:3b-instruct-q4_K_M
+```
+
+Run from a clean committed checkout. Qualification must match each task digest,
+have a passing oracle and failing broken baseline, and identify cached immutable
+Docker images. A passing repair must execute the same test and skipped-test
+counts as the qualified oracle. The runner does not download models, images or dependencies.
+The local transport validates both model identities before execution and checks
+their digests again afterward. It never invokes a paid provider. Role labels
+inside the reused harness map explicitly to these local model pins.
+
+A conservative input-byte bound rejects oversized contexts before dispatch.
+Truncation, context limits and trial deadlines produce unsuccessful trial rows;
+transport, identity, usage and infrastructure failures stop the campaign. There
+is no fallback after a safety notice. Reports distinguish attempted actions from
+dispatched requests, retain tokens and finite action outcomes, and omit prompts,
+completions and patches. The same isolated acceptance grader checks every arm.
+
+These are previously used development tasks, not a new holdout. Equal turn caps
+do not imply equal token, latency or compute costs. Use the measured totals and
+error categories to decide whether a larger fresh-task comparison is warranted.
+
+### Coding-specialist results, 2026-11-06
+
+Both runs used source `7a578df60b3efb30ca6a76e0c2f62a64ffb55712`, the
+same 4B pin above, and `qwen2.5-coder:3b-instruct-q4_K_M` pinned to
+`f72c60cabf6237b07f6e632b2c48d533cef25eda2efbd34bed21c5e9c01e6225`.
+The function corpus was unchanged from the first execution run.
+
+| Function policy | Solved / 8 | Calls | Tokens |
+| --- | ---: | ---: | ---: |
+| Coder 3B first draft | 2 | 8 | 2,197 |
+| General 4B first draft | 4 | 8 | 2,626 |
+| General 4B public-test retry | 4 | 10 | 3,334 |
+| Coder then general, public-test selection | 4 | 13 | 3,984 |
+
+The two verified policies each accepted two incorrect answers and abstained on
+two cases. Hindsight selection across all generated candidates still solved
+only four. The coding specialist added no unique solved cases. The complete
+screen used 24 actual calls and 7,375 tokens; table rows replay overlapping
+candidates and must not be summed as campaign spend.
+
+| Repository arm | Solved / 4 | Dispatched calls | Tokens | Trial outcomes |
+| --- | ---: | ---: | ---: | --- |
+| General 4B | 0 | 14 | 43,715 | One truncated, two context limits, one turn limit |
+| Coder 3B | 0 | 32 | 50,445 | Four turn limits |
+| Coder-to-general handoff | 0 | 26 | 49,915 | Two truncated, one context limit, one turn limit |
+
+All twelve repository trials completed recording. There were 75 attempted
+actions, 72 dispatched calls and 144,075 reported tokens, with no unknown
+usage. Three actions were rejected before dispatch by the context limit. Both
+campaigns used zero paid API inference; local compute and downloads still cost
+resources.
+
+These results do not establish that the models cannot repair repositories.
+The fixed harness exposed repeated non-matching edits, insufficient output
+space and conservative context limits. They do establish that this pool and
+handoff do not justify a paid expansion yet. Next, compare an unchanged
+baseline against a scaffold that requires source inspection before editing,
+uses bounded source ranges and preserves compact state across handoff. Measure
+valid edits, executable probes and limit failures as well as final solves.
+Freeze that policy before a fresh-task evaluation; keep production Fusion opt-in.
+
+### Grounded repair scaffold
+
+Function-smoke summaries include both fixed-model controls: `tiny-single` for
+the first pinned model and `small-single` for the second. These are positional
+policy labels; consult the model pins for actual model names and sizes. Compare
+a mixed policy against the stronger control, not only the second model. A mixed
+policy that always accepts the first model has not demonstrated a fusion gain.
+
+Append `grounded` to the local repository command to use a compact repair
+interface. It supplies numbered current source windows on every turn, requires
+line replacements to match observed current source, and gives the next worker the current edited
+source with bounded tool feedback. `inspect` selects another window; `probe`
+runs in the same isolated environment. The original `legacy` profile remains
+the default. Both profiles use the same action, output and total trial deadline
+caps. The grounded profile uses explicit sampled non-thinking generation
+(`temperature=0.7`, `top_p=0.8`, `top_k=20`, `min_p=0`, presence penalty 1.5,
+repeat penalty 1), following the [Qwen3.5 model-card recommendation](https://huggingface.co/Qwen/Qwen3.5-4B).
+Its per-call timeout is 120 seconds inside the unchanged 180-second trial cap;
+legacy retains 60 seconds and greedy generation. Cross-profile comparisons
+therefore measure both interface and sampling changes.
+An optional final argument selects another qualified task manifest; receipt
+digests and oracle test-count checks still apply.
+
+This experiment draws on [Agentless](https://arxiv.org/abs/2407.01489), which
+separates localization, repair and validation, and [Aider's editing
+formats](https://aider.chat/docs/more/edit-formats.html), which separate concise
+edits from full-file output. [SWE-agent's interface
+design](https://swe-agent.com/latest/background/aci/) motivates bounded source
+views. [SWE-Protégé](https://www.cs-pk.com/preprint-swe-protege-meta.pdf) studies
+trained selective expert collaboration; its result does not establish that an
+untrained small model will benefit from a handoff here.
+
+First compare the grounded single-model and handoff arms on the existing
+development tasks. Improvement over the legacy scaffold is a harness gain,
+not evidence of model fusion. Fusion must beat the best grounded fixed-model
+control on new tasks, with total model calls and tokens included.
+
+
+### Reproduction-gated local profile
+
+Use `checked` in place of `grounded` to require a failing reproduction before
+editing. The first worker gets at most three actions to inspect or produce a
+Node assertion of the reported behavior. The harness supplies `assert` and
+each editable module as `source0`, `source1`, and so on; the model writes the
+JavaScript check body. A passing probe, import failure or
+syntax error does not qualify. Each probe executes in a fresh disposable
+sandbox; its writes cannot change the repair workspace.
+
+Once a reproduction fails with an assertion on the original source, freeze it
+and allow repairs. Rerun it on each candidate in another disposable sandbox.
+Submit automatically only when the reproduction and visible tests pass. Hidden
+acceptance tests still decide correctness: a model-generated check can be weak
+or wrong. Reports expose both the public gate and hidden result without storing
+probe source. The handoff arm assigns reproduction to the first model and repair
+to the second; fixed-model controls use the same phases and budgets.
+
+The completed preceding grounded development run solved 0/4 tasks in all three
+arms: Qwen3.5 4B used 8 calls and 37,925 tokens; Qwen3 4B used 32 calls and
+127,978 tokens; old-to-new handoff used 32 calls and 132,030 tokens. All 72 calls
+had complete usage and zero paid API spend. This negative result motivates a
+verification loop; it does not establish a fusion benefit. Evaluate the new
+policy on development tasks before using the separately qualified fresh set.
+
+### Independent review of a checked candidate
+
+The programmatic grounded agent also accepts `strategy: 'review'` with
+`requireReproducer: true`. The first model reproduces and repairs the issue.
+After its probe and visible tests pass, or after three author actions, the
+second model takes over and reviews the candidate against the complete issue.
+If no reproduction exists, the second model gets up to three actions to create
+one within the shared budget. It can inspect, edit, or finish. A review edit or
+submission reruns the frozen probe and visible tests. Both phases share the
+same turn and deadline limits; `reviewed` stays false until review succeeds.
+
+This is an experimental benchmark strategy, not a production endpoint mode.
+A failing baseline assertion may also fail on correct code, and a passing
+candidate can omit requirements. Independent review adds a check, not a proof.
+Continue scoring with withheld acceptance tests and comparing both fixed-model
+controls; count all author and reviewer calls in cost and latency.
+
+The Bedrock development task explicitly includes supported aliases of the
+canonical image model. Earlier runs using the shorter canonical-model wording
+are a different task revision and must not be silently combined with these
+results. Neither revision is an unseen validation task.
+
+Grounded repair workers can inspect up to 32 declared relative source imports
+under `worker/` and `shared/`. Imports discovered in inspected modules extend
+that bounded list. Test directories, hidden tests and paths outside those
+source roots remain excluded. Dependencies are read-only; only the original
+editable paths accept changes. The action schema lists readable paths so an
+agent does not have to guess which navigation requests the harness permits.
+
+Grounded workers retain a nonempty bounded working summary between turns and across a
+handoff. The notes are untrusted, limited to 2000 characters and 4096 bytes,
+and excluded from benchmark reports. This preserves discoveries without
+retaining full transcripts or rereading each dependency on every turn.
+
+### Compatible visible tests
+
+Qualification now requires `oracleVisible`: the known source repair must pass
+the original visible tests before acceptance tests replace any same-named
+files. Regenerate older qualification receipts before running models. A passing
+updated acceptance suite alone does not prove that visible feedback is valid.
+
+The Copilot catalog-identity task was removed from the original corpus; the
+Cerebras redirect-mode and MiniMax regional-availability tasks were removed
+from the fresh corpus because their original visible tests reject the known
+repair. Earlier scores involving those tasks are not reliable comparisons.
+
+## Native planner/editor comparison
+
+Use the existing repository agent with two fixed-model controls and one
+architect policy. The architect spends one call on a strong-model source plan;
+the cheap model executes the remaining actions. The plan consumes one of the
+same total calls available to each control. All calls and failed attempts count
+against the trial and campaign budgets. This is an experimental policy, not a
+claim of improvement.
+
+Run from a committed task checkout with qualified workload receipts and an
+explicit JSON configuration. Only credentials for the selected models are
+required. Supply credentials through the existing secret injector; do not put
+them in configuration files.
+
+```sh
+node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
+```
+
+The configuration must contain every field below. Set `priorCostMicros` to the
+campaign's accumulated spend and unresolved reservations before starting.
+
+```json
+{
+  "cheap": "openai/gpt-6-luna",
+  "strong": "openai/gpt-6.1-sol",
+  "maxCalls": 12,
+  "outputTokens": 8192,
+  "deadlineMs": 300000,
+  "trialBudgetMicros": 1000000,
+  "campaignBudgetMicros": 100000000,
+  "priorCostMicros": 0
+}
+```
+
+`pair.json` records exact source and dataset digests, declared splits, model
+pins, both controls, action metadata, acceptance counts, elapsed time and actual
+usage-based charges. It excludes prompts, completions and generated source.
+An unknown charge retains its reservation and stops the campaign. Provider
+refusal also stops the campaign, without retry or model fallback.
+
+The [Aider architect/editor work](https://aider.chat/2024/09/26/architect.html)
+is the rationale for separating reasoning from edits. Validate this model pair
+on fresh tasks before treating a development improvement as a useful result.
+
+The cheap Luna worker defaults to `none` reasoning for the original low-latency
+comparison. Set `FUSION_CHEAP_REASONING=medium` explicitly to calibrate its
+reasoning capability before drawing conclusions about model coordination. The
+checkpoint records the setting. These actions use structured text, not Chat
+Completions function calling; the latter requires `none` for Luna. Compare both
+quality and total cost rather than assuming that disabling reasoning saves money.
+
+
+Set `FUSION_PRELOAD_SOURCE=1` for a paired ablation that gives every arm the
+same bounded initial editable source. The default remains tool-driven source
+inspection. Reports record the setting. A handoff receives a fresh source
+snapshot; compare against preloaded fixed controls before attributing savings
+to multiple models rather than avoided file-reading calls.
+### Prospective repair holdout
+
+`benchmarks/fusion/holdout-workloads.json` pins two additional historical
+repairs: SigV4 query canonicalization and opaque Responses input accounting. The loader's `development` label keeps its
+existing schema; experimental reports must separately record whether a task
+was exposed before a policy was frozen. A filename is not proof of an unseen
+evaluation set.
+
+Qualify every task with the oracle-visible contract before model inference.
+Freeze the policy and training examples first, retain both fixed-model controls,
+and report incomplete attempts and transport reservations. Do not tune against
+acceptance failures and then describe the same tasks as held out.
+
+Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.

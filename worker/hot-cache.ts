@@ -45,41 +45,60 @@ export function hotCacheNow(): number { return clock(); }
 /** Test hook: inject a clock; call with no argument to restore Date.now. */
 export function setHotCacheClock(next?: () => number): void { clock = next ?? (() => Date.now()); }
 
-// Work that must outlive the current response (stale refreshes, coalesced
-// counters). The Worker entry hands the pending set to ctx.waitUntil. A hung
-// backend call leaves the set after the bound, so later requests never keep
-// extending their waitUntil for it.
+// Registration bounds logical background custody, not platform execution or
+// originating-request I/O lifetime. Facades never release a live registration.
+export const BACKGROUND_WORK_LIMIT = 64;
 export const BACKGROUND_WORK_BOUND_MS = 25_000;
-// A request drains only work registered after its own start, and bounds the wait
-// with a timer created in its own context. Work owned by another request (whose
-// own timers may never fire there, e.g. after a client disconnect) can otherwise
-// pin this request's waitUntil past the platform limit, and Cloudflare then
-// cancels every remaining task of this request, including its usage accounting.
 export const DRAIN_BOUND_MS = 10_000;
 let workSeq = 0;
-const background = new Map<Promise<unknown>, number>();
-export function runInBackground(work: Promise<unknown>): void {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, BACKGROUND_WORK_BOUND_MS); });
-  const tracked: Promise<unknown> = Promise.race([work.catch(() => undefined), bound]).finally(() => { clearTimeout(timer); background.delete(tracked); });
-  background.set(tracked, ++workSeq);
+const background = new Map<number, number>();
+/** Accepted registration, not task success. Overflow never invokes start. */
+export function tryRunInBackground(start: () => unknown): boolean {
+  if (background.size >= BACKGROUND_WORK_LIMIT) return false;
+  const identity = ++workSeq;
+  background.set(identity, performance.now());
+  const settled = () => { background.delete(identity); };
+  try { void Promise.resolve(start()).then(settled, settled); }
+  catch { settled(); }
+  return true;
 }
-/** Mark taken at request entry; pass it to pendingBackgroundWork at the end. */
+/** Scalar sequence boundary, not request identity; interleaved work is included. */
 export function backgroundMark(): number { return workSeq; }
 export function pendingBackgroundWork(since = 0): Promise<unknown> | null {
-  const mine = [...background].filter(([, seq]) => seq > since).map(([work]) => work);
-  if (!mine.length) return null;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const bound = new Promise<void>(resolve => { timer = setTimeout(resolve, DRAIN_BOUND_MS); });
-  return Promise.race([Promise.allSettled(mine), bound]).finally(() => clearTimeout(timer));
+  // Monotonic visibility age, independent of the cache TTL/wall clock. Snapshot
+  // only scalars; the hard bound and polling timers belong to THIS caller.
+  const cohort = [...background].filter(([seq]) => seq > since)
+    .map(([seq, at]) => [seq, at + BACKGROUND_WORK_BOUND_MS] as const);
+  if (!cohort.length) return null;
+  return new Promise<void>(resolve => {
+    let poll: ReturnType<typeof setTimeout> | undefined;
+    let step = 1, finished = false;
+    const finish = () => { finished = true; clearTimeout(bound); clearTimeout(poll); resolve(); };
+    const bound = setTimeout(finish, DRAIN_BOUND_MS);
+    const inspect = () => {
+      if (finished) return;
+      if (cohort.every(([seq, until]) => !background.has(seq) || performance.now() >= until)) finish();
+      else {
+        try { poll = setTimeout(inspect, step); step = Math.min(step * 2, 16); }
+        catch { finish(); } // Best-effort facade only; actual custody is unchanged.
+      }
+    };
+    inspect();
+  });
 }
 
 interface Entry<V> { value: V; storedAt: number; expiresAt: number }
-export interface Loaded<V> { value: V; cacheable: boolean; expiresAt?: number }
+export interface Loaded<V> { value: V; cacheable: boolean; expiresAt?: number; storedAt?: number }
+const publicationBrand = Symbol("cache publication");
+export interface CachePublication { readonly [publicationBrand]: true; readonly acquiredAt: number }
+type Loader<V> = (publication?: CachePublication) => Promise<Loaded<V>>;
 
 export class HotCache<V> {
   private readonly entries = new Map<string, Entry<V>>();
-  private readonly inflight = new Map<string, { promise: Promise<Loaded<V>>; settled: boolean }>();
+  private readonly publications = new Map<string, CachePublication>();
+  // Invalidated owners remain charged here until their own work settles. Never
+  // evict fencing evidence to admit another leader; overflow runs uncached.
+  private readonly livePublications = new Set<CachePublication>();
   private readonly limit: number;
   constructor(limit: number) { this.limit = limit; }
 
@@ -99,55 +118,99 @@ export class HotCache<V> {
 
   /** `storedAt` lets an entry adopted from the colo cache keep its original fetch time. */
   set(key: string, value: V, config: HotCacheConfig, expiresAt = Number.POSITIVE_INFINITY, storedAt = hotCacheNow()): void {
+    this.publications.delete(key);
+    this.store(key, value, config, expiresAt, storedAt);
+  }
+
+  private store(key: string, value: V, config: HotCacheConfig, expiresAt: number, storedAt: number): void {
     if (!config.maxAgeMs) return;
     if (expiresAt <= storedAt) { this.entries.delete(key); return; }
+    // A foreign colo timestamp may exceed this isolate's acquisition clock.
+    // Observe it before publication so a later rollback cannot lower the fence.
+    if (Number.isFinite(storedAt)) issuedWatermark = Math.max(issuedWatermark, storedAt);
     this.entries.delete(key);
     this.entries.set(key, { value, storedAt, expiresAt });
     while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value!);
   }
 
   values(): IterableIterator<V> { return [...this.entries.values()].map(entry => entry.value)[Symbol.iterator](); }
-  delete(key: string): void { this.entries.delete(key); }
+  delete(key: string): void { this.entries.delete(key); this.publications.delete(key); }
+  /** Key-only invalidation also covers versions which have never stored a value. */
+  deleteKeys(predicate: (key: string) => boolean): void {
+    for (const key of this.entries.keys()) if (predicate(key)) this.entries.delete(key);
+    for (const key of this.publications.keys()) if (predicate(key)) this.publications.delete(key);
+  }
   deleteWhere(predicate: (key: string, value: V) => boolean): void {
+    // Pending values are unknown. Revoke their publication rights conservatively;
+    // do not retain predicates or discard unrelated already-stored values.
+    this.publications.clear();
     for (const [key, entry] of this.entries) if (predicate(key, entry.value)) this.entries.delete(key);
   }
-  clear(): void { this.entries.clear(); this.inflight.clear(); }
+  clear(): void { this.entries.clear(); this.publications.clear(); }
 
-  /**
-   * Single-flight load; a cacheable result is stored before callers resume. A
-   * caller that finds another load in flight never awaits that promise (see
-   * waitForOtherRequest): it waits for the shared entry, then loads itself if
-   * the other load failed or produced nothing cacheable.
-   */
-  async load(key: string, config: HotCacheConfig, loader: () => Promise<Loaded<V>>): Promise<Loaded<V>> {
-    const pending = this.inflight.get(key);
-    if (pending) {
-      await waitForOtherRequest(() => pending.settled);
-      const entry = this.entries.get(key);
-      const now = hotCacheNow();
-      if (entry && now < entry.expiresAt && now - entry.storedAt < config.maxAgeMs) return { value: entry.value, cacheable: true, expiresAt: entry.expiresAt };
-      if (this.inflight.get(key) === pending) this.inflight.delete(key);
+  publication(key: string): CachePublication | undefined { return this.publications.get(key); }
+  ownsPublication(key: string, publication: CachePublication | undefined): boolean {
+    return publication !== undefined && this.publications.get(key) === publication;
+  }
+  beginPublication(key: string): CachePublication | undefined {
+    this.publications.delete(key);
+    if (this.livePublications.size >= this.limit) return undefined;
+    const publication: CachePublication = Object.freeze({ [publicationBrand]: true as const, acquiredAt: hotCacheAcquiredAt() });
+    this.livePublications.add(publication);
+    this.publications.set(key, publication);
+    return publication;
+  }
+  endPublication(key: string, publication: CachePublication | undefined): void {
+    if (!publication) return;
+    if (this.ownsPublication(key, publication)) this.publications.delete(key);
+    this.livePublications.delete(publication);
+  }
+  /** Conditional commits never invalidate their own leader. */
+  publish(key: string, publication: CachePublication | undefined, value: V, config: HotCacheConfig, expiresAt = Number.POSITIVE_INFINITY, storedAt = publication?.acquiredAt ?? hotCacheNow()): boolean {
+    if (!this.ownsPublication(key, publication)) return false;
+    this.store(key, value, config, expiresAt, storedAt);
+    return true;
+  }
+  discardPublished(key: string, publication: CachePublication | undefined): void {
+    if (this.ownsPublication(key, publication)) this.entries.delete(key);
+  }
+
+  /** Poll markers on this request's timers, including replacement leadership. */
+  async waitForPublication(key: string, config: HotCacheConfig): Promise<{ value: V; fresh: boolean } | undefined> {
+    const deadline = Date.now() + JOIN_WAIT_MS;
+    for (let pending = this.publication(key); pending; pending = this.publication(key)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await waitForOtherRequest(() => !this.ownsPublication(key, pending), remaining);
+      const entry = this.peek(key, config);
+      if (entry) return entry;
     }
-    const flight = { settled: false } as { promise: Promise<Loaded<V>>; settled: boolean };
-    flight.promise = (async () => {
-      try {
-        const loaded = await loader();
-        if (loaded.cacheable) this.set(key, loaded.value, config, loaded.expiresAt);
-        else this.entries.delete(key);
-        return loaded;
-      } finally { flight.settled = true; if (this.inflight.get(key) === flight) this.inflight.delete(key); }
-    })();
-    this.inflight.set(key, flight);
-    return flight.promise;
+    return this.peek(key, config);
+  }
+
+  async load(key: string, config: HotCacheConfig, loader: Loader<V>): Promise<Loaded<V>> {
+    if (this.publication(key)) {
+      await this.waitForPublication(key, config);
+      const entry = this.peek(key, config);
+      if (entry) return { value: entry.value, cacheable: true };
+    }
+    // Install ownership before invoking even the synchronous part of the loader.
+    const publication = this.beginPublication(key);
+    try {
+      const loaded = await loader(publication);
+      if (loaded.cacheable) this.publish(key, publication, loaded.value, config, loaded.expiresAt, loaded.storedAt ?? publication?.acquiredAt);
+      else this.discardPublished(key, publication);
+      return loaded;
+    } finally { this.endPublication(key, publication); }
   }
 
   /** Start one background refresh unless a load for this key is already running. */
-  revalidate(key: string, config: HotCacheConfig, loader: () => Promise<Loaded<V>>): void {
-    if (!this.inflight.has(key)) runInBackground(this.load(key, config, loader));
+  revalidate(key: string, config: HotCacheConfig, loader: Loader<V>): void {
+    if (!this.publication(key)) tryRunInBackground(() => this.load(key, config, loader));
   }
 
   /** Serve fresh entries, serve stale entries while one background refresh runs, else load. */
-  async get(key: string, config: HotCacheConfig, loader: () => Promise<Loaded<V>>): Promise<{ value: V; state: HotCacheState }> {
+  async get(key: string, config: HotCacheConfig, loader: Loader<V>): Promise<{ value: V; state: HotCacheState }> {
     if (!config.maxAgeMs) return { value: (await loader()).value, state: "off" };
     const cached = this.peek(key, config);
     if (cached?.fresh) return { value: cached.value, state: "hit" };
@@ -167,7 +230,14 @@ export function clearHotCaches(): void { for (const cache of caches) cache.clear
 // Shared (colo) entries fetched before a mutation served by this isolate are
 // ignored here, so this isolate's own changes still apply immediately.
 let sharedFence = 0;
-export function fenceSharedHotCache(): void { sharedFence = hotCacheNow(); }
+let issuedWatermark = 0;
+/** Original acquisition time, never a completion-time freshness extension. */
+export function hotCacheAcquiredAt(): number {
+  const acquiredAt = hotCacheNow();
+  issuedWatermark = Math.max(issuedWatermark, acquiredAt);
+  return acquiredAt;
+}
+export function fenceSharedHotCache(): void { sharedFence = Math.max(sharedFence, issuedWatermark, hotCacheNow()); }
 export function sharedHotCacheFence(): number { return sharedFence; }
 /** Test hook: forget the fence between independent tests. */
-export function resetSharedHotCacheFence(): void { sharedFence = 0; }
+export function resetSharedHotCacheFence(): void { sharedFence = 0; issuedWatermark = 0; }

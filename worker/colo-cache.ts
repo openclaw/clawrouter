@@ -1,4 +1,4 @@
-import { hotCacheNow, runInBackground, sharedHotCacheFence, type HotCacheConfig } from "./hot-cache.ts";
+import { hotCacheNow, tryRunInBackground, sharedHotCacheFence, type HotCacheConfig } from "./hot-cache.ts";
 import { sha256Hex } from "./utils.ts";
 
 // Per-colo layer under the isolate hot cache, backed by the Workers Cache API:
@@ -33,10 +33,10 @@ export async function coloGet<V>(namespace: string, key: string, config: HotCach
 export function coloPut(namespace: string, key: string, value: unknown, fetchedAt: number, config: HotCacheConfig): void {
   const cache = sharedCache();
   if (!cache || !config.maxAgeMs) return;
-  const ttl = Math.max(1, Math.ceil((config.maxAgeMs - (hotCacheNow() - fetchedAt)) / 1_000));
-  runInBackground((async () => {
+  tryRunInBackground(async () => {
+    const ttl = Math.max(1, Math.ceil((config.maxAgeMs - (hotCacheNow() - fetchedAt)) / 1_000));
     await cache.put(await entryUrl(namespace, key), new Response(JSON.stringify({ version: VERSION, fetchedAt, value }), {
       headers: { "content-type": "application/json", "cache-control": `max-age=${ttl}` },
     }));
-  })());
+  });
 }

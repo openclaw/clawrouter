@@ -1,3 +1,9 @@
+import type { MiniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
+import type { MiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { miniMaxVideoOwnerBinding } from "./minimax-video-credential.ts";
+import { miniMaxSearchOwnerBinding } from "./minimax-search-credential.ts";
+import type { SearchGrantMutationActor } from "./authority-contracts.ts";
+import type { MusicCoverControlProfile } from "./authority-contracts.ts";
 import type { CopilotAccountAttempt, CopilotAccountBinding } from "./copilot-account-flow.ts";
 import { miniMaxImageOwnerBinding } from "./minimax-image-credential.ts";
 import type { MiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
@@ -27,6 +33,10 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
   vertexPrivateKey?: string;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: NativeMediaBinding | null;
+  // Keeps repeated Music revocation under current administrator authority.
+  minimaxMusicTombstone?: true;
+  minimaxSearchBinding?: MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: MiniMaxVideoBinding | null;
   minimaxImageBinding?: MiniMaxImageBinding | null;
   version: 1;
   generation: number;
@@ -56,6 +66,8 @@ export interface CredentialProjection extends CredentialMetadata {
   vertexAnthropicBinding: VertexAnthropicBinding | null;
   minimaxAnthropicBinding: MiniMaxAnthropicBinding | null;
   nativeMediaBinding: NativeMediaBinding | null;
+  minimaxSearchBinding: MiniMaxSearchBinding | null;
+  minimaxVideoBinding: MiniMaxVideoBinding | null;
   minimaxImageBinding: MiniMaxImageBinding | null;
   credentialStore: "durable_object";
   credentialGeneration: number;
@@ -75,7 +87,8 @@ export interface OwnerResponse {
 }
 
 export interface MaterializeRequest {
-  operation?: "minimax.images" | "minimax.music";
+  coverOriginal?: MusicCoverControlProfile;
+  operation?: "minimax.images" | "minimax.music" | "minimax.search" | "minimax.video";
   key: string;
   grant: UpstreamGrant;
   legacy?: UpstreamGrant | null;
@@ -89,6 +102,11 @@ export interface PutRequest {
   // Only the privileged admin mutation supplies this owner intent. Grant
   // metadata, legacy imports, OAuth completion and pool submissions do not.
   nativeMediaIntent?: NativeMediaBinding | null;
+  minimaxSearchIntent?: MiniMaxSearchBinding | null;
+  minimaxVideoIntent?: MiniMaxVideoBinding | null;
+  videoActor?: SearchGrantMutationActor;
+  searchActor?: SearchGrantMutationActor;
+  musicActor?: SearchGrantMutationActor;
   minimaxImageIntent?: MiniMaxImageBinding | null;
   vertexAnthropicIntent?: VertexAnthropicBinding | null;
   vertexPrivateKey?: string;
@@ -104,6 +122,8 @@ export interface PutRequest {
 
 export function credentialProjection(record: CredentialRecord): CredentialProjection {
   return {
+    minimaxSearchBinding: miniMaxSearchOwnerBinding(record),
+    minimaxVideoBinding: miniMaxVideoOwnerBinding(record),
     minimaxImageBinding: miniMaxImageOwnerBinding(record),
     vertexAnthropicBinding: vertexOwnerBinding(record),
     minimaxAnthropicBinding: miniMaxOwnerBinding(record),
@@ -141,6 +161,8 @@ export function hasFreshPrimaryCredentials(previous: CredentialRecord, replaceme
 export function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
   return {
     ...metadata,
+    minimaxSearchBinding: miniMaxSearchOwnerBinding(record),
+    minimaxVideoBinding: miniMaxVideoOwnerBinding(record),
     minimaxImageBinding: miniMaxImageOwnerBinding(record),
     vertexAnthropicBinding: vertexOwnerBinding(record),
     minimaxAnthropicBinding: miniMaxOwnerBinding(record),

@@ -6,6 +6,10 @@ import { attachGrantCredentialNamespace } from './grant-credential-mock.mjs';
 import { putGrantCredentials } from '../grant-credentials.ts';
 import { clearHotCaches } from '../hot-cache.ts';
 import { flushSelections } from '../admission-cache.ts';
+import { observeProviderGrantQuota } from '../provider-quota.ts';
+import { mergeGrantRuntimeState } from '../grant-runtime.ts';
+import { providerById } from '../providers.ts';
+import { grantQuotaExhausted } from '../grant-quota.ts';
 const { default: worker } = await import('../index.ts');
 
 const creditBody = JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } });
@@ -139,4 +143,51 @@ for (const width of [17, 1]) test(`fragmented credit errors respect the 128-read
   assert.equal(result.status, width === 17 ? 200 : 400);
   assert.equal(calls, width === 17 ? 2 : 1);
   if (width === 1) assert.equal(result.body, creditBody);
+});
+
+test('late pre-credit admission refresh cannot replace the warm exclusion after feedback flush', async t => {
+  const f = await fixture(t);
+  await f.send(); const original = f.calls[0];
+  const captured = Promise.withResolvers(), release = Promise.withResolvers();
+  const get = f.env.ACCESS_CONTROL.get;
+  let hold = true;
+  f.env.ACCESS_CONTROL.get = id => {
+    const stub = get(id);
+    return { async fetch(url, init) {
+      const response = await stub.fetch(url, init);
+      if (hold && new URL(url).pathname === '/admission/resolve') {
+        hold = false; captured.resolve(); await release.promise;
+      }
+      return response;
+    } };
+  };
+  t.after(() => release.resolve());
+  f.advance(10_001);
+  // This stale hit starts a refresh which captured the pre-credit authority state.
+  const pending = worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: { ...admissionHeaders, 'x-clawrouter-session-id': 'sticky-fixture' },
+    body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [] }) }), f.env, f.context);
+  await captured.promise;
+  await (await pending).text();
+  f.reject(key => key === original);
+  assert.equal((await f.send()).status, 200);
+  await flushSelections(f.env);
+  release.resolve(); await Promise.all(f.pending.splice(0));
+  const before = f.calls.length;
+  assert.equal((await f.send()).status, 200);
+  assert.equal(f.calls.length, before + 1, 'late refresh must not cause another depleted attempt');
+  assert.notEqual(f.calls.at(-1), original);
+});
+
+
+for (const creditFirst of [true, false]) test(`credit and weekly-only feedback merge without overwriting either window (creditFirst=${creditFirst})`, () => {
+  const now = Date.parse('2030-01-01T00:00:00Z'), quota = providerById('anthropic').quota;
+  const credit = observeProviderGrantQuota('anthropic', { status: 400, headers: new Headers() }, quota, 'claude-sonnet-5', now + (creditFirst ? 0 : 1), true);
+  const weekly = observeProviderGrantQuota('anthropic', { status: 200, headers: new Headers({
+    'anthropic-ratelimit-unified-7d-utilization': '1',
+    'anthropic-ratelimit-unified-7d-reset': new Date(now + 3600000).toISOString(),
+  }) }, quota, 'claude-sonnet-5', now + (creditFirst ? 1 : 0));
+  const merged = mergeGrantRuntimeState(creditFirst ? credit : weekly, creditFirst ? weekly : credit, now + 2);
+  assert.deepEqual(merged.windows.map(window => window.id).sort(), ['credit-balance', 'subscription-seven-day']);
+  assert.equal(grantQuotaExhausted(merged, 'claude-sonnet-5', 0, true, now + 300002), true);
+  assert.equal(grantQuotaExhausted(merged, 'claude-sonnet-5', 0, true, now + 3600001), false);
 });

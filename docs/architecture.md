@@ -187,8 +187,11 @@ usage event and delegates independent settlement and delivery to `accounting.ts`
    generation is replayed after response bytes are delivered. When the alternate
    also rejects, return its credit error. Subsequent requests with no eligible
    grant receive the existing pool-unavailable error and earliest Retry-After.
-   Other isolates learn feedback through the existing bounded admission-cache
-   refresh, and expired credit exclusions permit a normal request to try again.
+   Same-isolate hot admission snapshots apply feedback immediately, including
+   pending observations during alternate selection. Other isolates learn feedback
+   after publication through the bounded admission-cache refresh; colo-shared
+   snapshots retain their original acquisition time (60-second default max age).
+   Expired credit exclusions permit a normal request to try again.
 9. Settle budget and publish the single final usage event independently. Recovery
    for either task never masks the provider response or suppresses the other task.
 

@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -70,7 +71,7 @@ async function fixture(t) {
   t.mock.method(globalThis, "fetch", async (input, options) => {
     const url = input instanceof Request ? input.url : String(input);
     const init = input instanceof Request ? { method: input.method, headers: input.headers, signal: input.signal, ...options } : options;
-    if (url === `${issuer}/cdn-cgi/access/certs`) return Response.json({ keys: [jwk] });
+    if (url === `${issuer}/cdn-cgi/access/certs`) return accessCertsResponse({ keys: [jwk] }, `${issuer}/cdn-cgi/access/certs`);
     assert.match(url, /^https:\/\/(?:github\.com|fixture\.ghe\.com|api\.github\.com|api\.fixture\.ghe\.com)\/(?:login\/(?:device\/code|oauth\/access_token)|copilot_internal\/user)$/);
     assert.equal(init.redirect, "manual"); assert.ok(init.signal instanceof AbortSignal);
     assert.equal(new Headers(init.headers).has("cf-access-jwt-assertion"), false);
@@ -250,4 +251,66 @@ for(const end of ['eof','cancel'])test('Copilot account owner reply holds charge
  const reader=response.body.getReader(),first=await reader.read();assert.equal(first.done,false);assert.equal(bodyBudgetCharged(),64*1024*1024);
  if(end==='cancel')await reader.cancel();else assert.equal((await reader.read()).done,true);
  reader.releaseLock();await f.retired();assert.equal(bodyBudgetCharged(),0);assert.equal(f.accountSent().length,1);
+});
+
+async function chargedInferenceControl(t) {
+ const f=await acquired(t);assert.equal((await body(await f.account())).status,'qualified');await f.retired();
+ const record=f.record(),allocation=new BodyLease();assert.ok(allocation.grow(48*1024*1024));
+ const control=f.owner().object.copilotCatalog.inferenceControl,cleanup=[],responses=[];
+ const account=f.account;f.account=async(...args)=>{const response=await account(...args);responses.push(response);return response;};
+ control.register({key,generation:record.generation,lineage:record.lineage,actor:record.copilotAccountBinding.actor});
+ t.after(async()=>{for(const release of cleanup)await release();for(const response of responses)if(response.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();await control.close();allocation.release();await f.retired();assert.equal(bodyBudgetCharged(),0);});
+ return {...f,control,allocation,cleanup};
+}
+test('full inference charge admits only current owner account status/cancel over private HTTP',async t=>{
+ const f=await chargedInferenceControl(t),before=f.record(),count=f.sent.length;
+ assert.equal((await body(await f.account('status'))).status,'qualified');assert.equal(bodyBudgetCharged(),96*1024*1024);
+ await body(await f.account('qualify'),409);
+ await body(await f.account('cancel',{expectedGeneration:before.generation+1}),409);
+ await body(await f.account('cancel',{expectedLineage:'foreign-lineage-0000'}),409);
+ await body(await f.account('cancel',{}, {actor:otherEmail}),409);
+ await body(await f.account('cancel',{}, {headers:{origin:null}}),403);
+ await body(await f.account('cancel',{}, {path:path.replace('/copilot/','/foreign/')}),503);
+ assert.deepEqual(f.record(),before);assert.equal(f.sent.length,count);
+ assert.equal((await body(await f.account('cancel'))).status,'cancelled');
+ assert.equal(f.record().copilotAccountBinding,undefined);assert.deepEqual(f.record().copilotDeviceCredential,before.copilotDeviceCredential);
+ assert.equal(bodyBudgetCharged(),96*1024*1024);assert.equal(f.sent.length,count);
+});
+test('full-charge control publication cannot release its slot before producer EOF',async t=>{
+ const f=await chargedInferenceControl(t),response=await f.account('status');
+ assert.equal(response.status,200);await body(await f.account('status'),503);
+ let closed=false;const closing=f.control.close().then(()=>{closed=true;});await Promise.resolve();assert.equal(closed,false);
+ const reader=response.body.getReader();assert.equal((await reader.read()).done,false);assert.equal(closed,false);
+ assert.equal((await reader.read()).done,true);reader.releaseLock();await closing;assert.equal(closed,true);assert.equal(bodyBudgetCharged(),96*1024*1024);
+});
+for(const reject of [false,true])test('full-charge control joins ORIGINAL pending read and FIRST cancel, cleanup rejection='+reject,async t=>{
+ const f=await chargedInferenceControl(t),entered=deferred(),reading=deferred(),cancelling=deferred(),abort=new AbortController();let cancels=0,unlocks=0;
+ const wire=new ReadableStream({type:'bytes',pull(){entered.resolve();},async cancel(){cancels++;await cancelling.promise;if(reject)throw Error('synthetic cleanup failure');}});
+ const request=new Request(origin+path+'?flow=copilot-account.v1',{method:'POST',headers:{origin,'content-type':'application/json','cf-access-jwt-assertion':await jwt()},body:wire,duplex:'half',signal:abort.signal});
+ const get=request.body.getReader.bind(request.body);request.body.getReader=options=>{const r=get(options);return{async read(view){try{return await r.read(view);}finally{await reading.promise;}},cancel:reason=>r.cancel(reason),releaseLock(){r.releaseLock();unlocks++;}};};
+ let pending;f.cleanup.push(async()=>{reading.resolve();cancelling.resolve();const response=await pending;if(response?.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();});
+ pending=adminApi(request,f.env,path);let reached=false;await Promise.race([entered.promise.then(()=>{reached=true;}),pending.then(async response=>{if(reached)return;const text=await response.text();throw Error('control ended before held read: '+response.status+' '+text);})]);abort.abort();let done=false;pending.then(()=>{done=true;});
+ await Promise.resolve();assert.equal(done,false);assert.equal(bodyBudgetCharged(),96*1024*1024);assert.equal(request.body.locked,true);
+ cancelling.resolve();await Promise.resolve();assert.equal(done,false);assert.equal(request.body.locked,true);reading.resolve();
+ const response=await pending;assert.ok(response.status>=400);await response.text();await f.control.close();assert.equal(cancels,1);assert.equal(unlocks,1);assert.equal(request.body.locked,false);
+});
+test('control record limits include every retained string, node and serialized representation',()=>{
+ assert.throws(()=>assertCopilotAccountRecord({x:'x'.repeat(96*1024)}));
+ assert.throws(()=>assertCopilotAccountRecord(Object.fromEntries(Array.from({length:129},(_,i)=>['k'+i,0]))));
+ assert.throws(()=>assertCopilotAccountRecord({x:'\u0001'.repeat(16384)}));
+ assert.throws(()=>assertCopilotAccountRecord({get x(){throw Error('must not invoke accessor');}}));
+ assertCopilotAccountRecord({key:'bounded',nested:{enabled:true,generation:2}});
+});
+
+test('admin disabled during control owner read cannot invalidate inference or mutate account',async t=>{
+ const f=await chargedInferenceControl(t),before=f.record(),entered=deferred(),release=deferred();
+ const account=f.owner().object.copilotAccount,read=account.owner.read;let reads=0,invalidations=0;
+ t.mock.method(account.owner,'read',async()=>{const record=await read();if(++reads===2){entered.resolve();await release.promise;}return record;});
+ const catalog=f.owner().object.copilotCatalog,invalidate=catalog.invalidate.bind(catalog);
+ t.mock.method(catalog,'invalidate',()=>{invalidations++;invalidate();});
+ const pending=f.account('cancel');f.cleanup.push(async()=>{release.resolve();const response=await pending;if(response.body&&!response.bodyUsed&&!response.body.locked)await response.body.cancel();});
+ let reached=false;await Promise.race([entered.promise.then(()=>{reached=true;}),pending.then(async response=>{if(reached)return;const text=await response.text();throw Error('control ended before owner read: '+response.status+' '+text);})]);
+ assert.equal(bodyBudgetCharged(),96*1024*1024);await f.user(false);release.resolve();
+ await body(await pending,403);assert.equal(invalidations,0);assert.deepEqual(f.record(),before);
+ assert.deepEqual(f.record().copilotAccountBinding,before.copilotAccountBinding);assert.deepEqual(f.record().copilotAccountAttempt,before.copilotAccountAttempt);
 });

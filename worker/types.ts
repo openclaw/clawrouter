@@ -86,6 +86,8 @@ export interface AccessPolicy {
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
 
 export interface ProxyCredential {
+  /** Private administrator attestation. Never projected as caller authority. */
+  copilotPublicIdentity?: import("./copilot-public-identity.ts").CopilotPublicIdentityAttestation;
   name?: string | null;
   enabled: boolean;
   secretSha256: string;
@@ -147,6 +149,8 @@ export interface OAuthState {
 }
 
 export interface UpstreamGrant {
+  minimaxSearchBinding?: import("../shared/minimax-search-binding").MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: import("../shared/minimax-video-binding").MiniMaxVideoBinding | null;
   minimaxImageBinding?: import("../shared/minimax-image-binding").MiniMaxImageBinding | null;
   vertexAnthropicBinding?: import("./vertex-anthropic-binding.ts").VertexAnthropicBinding | null;
   minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;

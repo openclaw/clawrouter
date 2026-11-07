@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult } from '../scripts/fusion-workloads.mjs';
+import { spawnSync } from 'node:child_process';
+import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
   const tasks = await loadTasks();
-  assert.equal(tasks.length, 4);
+  assert.equal(tasks.length, 3);
   assert.equal(new Set(tasks.map(task => task.base)).size, tasks.length);
   for (const task of tasks) assert.equal(validateTask(task), task);
   for (const path of ['../test.js', '/tmp/escape.ts', 'worker/../test.js', 'worker//file.ts']) {
@@ -54,12 +55,47 @@ test('behavior probes use bounded stdin in the task sandbox and retain no script
   const calls = [];
   const box = { exec: async (args, options) => { calls.push({args, options}); return { code: 1, stdout: Buffer.from('assertion failed'), stderr: Buffer.alloc(0) }; } };
   const source = 'throw new Error("regression");';
-  assert.deepEqual(await probe(box, source, 1000), { passed: false, feedback: 'assertion failed' });
+  assert.deepEqual(await probe(box, source, 1000), { passed: false, assertionFailed: false, feedback: 'assertion failed' });
   assert.deepEqual(calls[0].args, ['timeout', '--signal=KILL', '1s', 'node', '--input-type=module']);
   assert.equal(calls[0].options.input, source);
   assert.equal(calls[0].options.timeout, 3000);
   await assert.rejects(probe(box, 'x'.repeat(16001)), /invalid_probe/);
   assert.equal(calls.length, 1);
+});
+
+test('only a normal failing assertion qualifies a reproduction', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  for (const [code, stderr, expected] of [[1, 'AssertionError [ERR_ASSERTION]', true],
+    [7, 'AssertionError [ERR_ASSERTION]', true], [7, 'TypeError', false],
+    [1, 'SyntaxError', false], [137, 'ERR_ASSERTION', false], [0, 'ERR_ASSERTION', false]]) {
+    const result = await probe({ exec: async () => ({ code, stdout: Buffer.alloc(0), stderr: Buffer.from(stderr) }) }, 'test');
+    assert.equal(result.assertionFailed, expected);
+  }
+});
+
+test('a real assertion after node:test setup qualifies a reproduction', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e',
+    "import { beforeEach } from 'node:test'; import assert from 'node:assert/strict'; beforeEach(() => {}); assert.equal(false, true);"],
+  { timeout: 5000 });
+  assert.equal(child.error, undefined);
+  assert.ok([1, 7].includes(child.status));
+  const result = await probe({ exec: async () => ({ code: child.status, stdout: child.stdout, stderr: child.stderr }) }, 'test');
+  assert.equal(result.assertionFailed, true);
+  assert.equal(result.passed, false);
+});
+
+test('an assertion caught by node:test qualifies when its reporter writes to stdout', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e',
+    "import test from 'node:test'; import assert from 'node:assert/strict'; test('reproduction', () => assert.equal(503, 200));"],
+  { timeout: 5000 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  assert.match(child.stdout.toString(), /ERR_ASSERTION/);
+  const result = await probe({ exec: async () => ({ code: child.status, stdout: child.stdout, stderr: child.stderr }) }, 'test');
+  assert.equal(result.assertionFailed, true);
+  assert.equal(result.passed, false);
 });
 
 
@@ -73,4 +109,38 @@ test('transfer validation uses distinct pinned tasks without changing the origin
     assert.equal(known.has(task.id), false);
     assert.equal(known.has(task.oracle), false);
   }
+});
+
+test('qualification rejects a known repair that conflicts with the unchanged visible tests', async () => {
+  const fixture = { editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  let content = 'old', closed = false;
+  const oracleVisible = await checkOracleVisible(fixture, 'image', [{ path: fixture.editPaths[0], content: 'new' }], {
+    makeSandbox: async () => ({ close: async () => { closed = true; } }),
+    write: async (_box, files) => { content = files[0].content; },
+    test: async (_box, paths) => {
+      assert.deepEqual(paths, fixture.visibleTests);
+      assert.equal(content, 'new');
+      return { valid: true, passed: false, tests: 1, failures: 1, feedback: 'private output' };
+    },
+  });
+  assert.equal(closed, true); assert.equal('feedback' in oracleVisible, false);
+  const evidence = { visible: { passed: true }, broken: { valid: true, passed: false }, oracle: { passed: true }, oracleVisible };
+  assert.equal(qualificationSucceeded(evidence), false);
+  assert.equal(qualificationSucceeded({ ...evidence, oracleVisible: { valid: true, passed: true } }), true);
+  assert.equal(qualificationSucceeded({ ...evidence, oracleVisible: undefined }), false);
+});
+
+test('provided reproducer qualification requires an original assertion and a repaired pass', () => {
+  const evidence = { visible: { passed: true }, oracleVisible: { valid: true, passed: true },
+    broken: { valid: true, passed: false }, oracle: { passed: true } };
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true }, oracleReproduction: { passed: true } }), true);
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true } }), false);
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: false }, oracleReproduction: { passed: true } }), false);
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true }, oracleReproduction: { passed: false } }), false);
+});
+
+test('fresh corpus excludes repairs contradicted by their original visible tests', async () => {
+  const tasks = await loadTasks(new URL('../benchmarks/fusion/fresh-workloads.json', import.meta.url));
+  assert.equal(tasks.length, 2);
+  assert.ok(tasks.every(task => !['cerebras-worker-redirect-mode', 'minimax-regional-availability'].includes(task.id)));
 });

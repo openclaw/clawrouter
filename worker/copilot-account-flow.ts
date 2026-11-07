@@ -4,6 +4,7 @@ import { copilotAccountRequest, qualifyCopilotIdentity, type CopilotIdentity } f
 import { readCopilotAccountResponse } from "./copilot-account-response.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { copilotControlHeaders, assertCopilotControlHeaders, qualifiedCopilotControlHeaders, type CopilotInferenceControl, type CopilotControlSlot } from "./copilot-inference-control.ts";
 import { BodyLease } from "./body-budget.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
@@ -27,6 +28,7 @@ export interface CopilotAccountOwner {
   publish(record: CredentialRecord): Promise<void>;
   retain(work: Promise<void>): void;
   invalidateCatalog?(): void;
+  inferenceControl?: CopilotInferenceControl;
 }
 type Exchange = { attempt: CopilotAccountAttempt; operation: HttpOperation; work: Promise<void>; response?: Response; identity?: CopilotIdentity };
 
@@ -34,9 +36,10 @@ type Exchange = { attempt: CopilotAccountAttempt; operation: HttpOperation; work
 // no arrays, accessors, toJSON hooks or unbounded discarded metadata. Counts and
 // escaped UTF-8 size include keys and all copies of the small account scope.
 export function assertCopilotAccountRecord(record: CredentialRecord): void {
-  let nodes = 0, members = 0, bytes = 0;
+  let nodes = 0, members = 0, bytes = 0, stringUnits = 0;
   const add = (n: number) => { bytes += n; if (bytes > 96 * 1024) throw accountConflict(); };
   const string = (s: string) => {
+    stringUnits += s.length; if (stringUnits > 96 * 1024) throw accountConflict();
     add(2);
     for (let i = 0; i < s.length; i++) {
       const c = s.charCodeAt(i);
@@ -90,10 +93,16 @@ export class CopilotAccountFlow {
   }
 
   async fetch(internal: Request): Promise<Response> {
-    const lease = new BodyLease(); let physical = Promise.resolve();
-    const reply = (value: unknown, status = 200) => copilotDeviceReply(value, status, lease, physical, work => this.owner.retain(work));
+    const phase = internal.headers.get(copilotControlHeaders.phase);
+    if (phase !== null) return this.control(internal, phase);
+    const lease = new BodyLease(); let physical = Promise.resolve(), slot: CopilotControlSlot | undefined;
+    const reply = (value: unknown, status = 200) => copilotDeviceReply(value, status, slot ? { release: () => slot!.ownerDone() } : lease, physical, work => this.owner.retain(work));
     try {
-      if (!lease.grow(1024 * 1024)) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
+      if (!lease.grow(1024 * 1024)) {
+        slot = this.owner.inferenceControl?.claimLocal();
+        if (!slot) throw new HttpError(503, "body_capacity_exhausted", "Request capacity unavailable");
+      }
+      assertCopilotControlHeaders(internal.headers);
       const body = await readCopilotDeviceJson(internal) as { key?: unknown; sourceUrl?: unknown; input?: unknown };
       if (!body || typeof body !== "object" || Object.keys(body).some(k => !["key", "sourceUrl", "input"].includes(k))
         || typeof body.key !== "string" || body.key.length > 512 || !/^oauth\/(?:tenants\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(body.key)
@@ -104,6 +113,10 @@ export class CopilotAccountFlow {
         || source.searchParams.get("flow") !== copilotAccountFlow) throw accountConflict();
       const request = new Request(source, { method: "POST", headers: copilotAccountHeaders(internal.headers), signal: internal.signal });
       const actor = await copilotDeviceAdmin(request, this.env);
+      if (slot) {
+        if (input.operation === "qualify") throw accountConflict();
+        return reply(await this.controlAction(request, key, input, actor, slot));
+      }
       const reserved = await this.owner.order(async () => {
         await copilotDeviceAdmin(request, this.env, actor);
         const record = await this.owner.read();
@@ -192,9 +205,92 @@ export class CopilotAccountFlow {
         }));
       } finally { exchange.operation.stop("complete"); settle(); }
     } catch (error) {
+      if (internal.body && !internal.bodyUsed && !internal.body.locked) await inputRetirement(internal.body.getReader()).retire("cancel", error);
       if (internal.body?.locked) physical = Promise.reject(new Error("copilot_account_input_not_retired"));
       const failure = copilotAccountFailure(error); return reply(failure.value, failure.status);
     }
+  }
+
+  // Private HTTP protocol: capacity registration is owned by THIS object, not
+  // shared globals. The frontend's retirement acknowledgment carries no token,
+  // input authority or credential mutation and may follow admin revocation.
+  private async control(internal: Request, phase: string): Promise<Response> {
+    let slot: CopilotControlSlot | undefined;
+    const reply = (value: unknown, status = 200) => copilotDeviceReply(value, status,
+      { release: () => slot?.ownerDone() }, internal.body?.locked ? Promise.reject(new Error("copilot_control_input_not_retired")) : Promise.resolve(), work => this.owner.retain(work));
+    try {
+      assertCopilotControlHeaders(internal.headers);
+      const id = internal.headers.get(copilotControlHeaders.id) ?? "", key = internal.headers.get(copilotControlHeaders.key) ?? "";
+      const source = internal.headers.get(copilotControlHeaders.source) ?? "";
+      if (!/^[a-f0-9]{32}$/.test(id) || key.length > 512 || !/^oauth\/(?:tenants\/)?[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(key) || source.length > 2048) throw accountConflict();
+      const url = new URL(source), route = key.startsWith("oauth/tenants/") ? "tenants/" + key.slice(14) : "policies/" + key.slice(6);
+      if (url.pathname !== `/v1/admin/upstream-grants/${route}/authorize` || url.searchParams.size !== 1 || url.searchParams.get("flow") !== copilotAccountFlow) throw accountConflict();
+      if (!this.owner.inferenceControl) throw accountConflict();
+      if (phase === "retire") {
+        if (internal.body) throw accountConflict();
+        this.owner.inferenceControl.retireRemote(id, key);
+        return new Response(null, { status: 204 }); // Never waits for allocation retirement.
+      }
+      const sourceRequest = () => {
+        const headers = qualifiedCopilotControlHeaders(internal.headers);
+        headers.delete("content-length"); headers.delete("content-encoding");
+        return new Request(url, { method: "POST", headers, signal: internal.signal });
+      };
+      if (phase === "reserve") {
+        if (internal.body) throw accountConflict();
+        const reserved = this.owner.inferenceControl.claim(id, key, true);
+        let accepted = false;
+        try {
+          const request = sourceRequest();
+          const actor = await copilotDeviceAdmin(request, this.env);
+          await this.owner.order(() => reserved.record(async () => {
+            await copilotDeviceAdmin(request, this.env, actor);
+            const record = await this.owner.read(); if (!record || typeof record.lineage !== "string") throw accountConflict();
+            assertCopilotAccountRecord(record);
+            reserved.assert({ key, generation: record.generation, lineage: record.lineage, actor });
+            if (record.grantKey !== key || !record.copilotDeviceAttempt || !record.copilotAccountAttempt) throw accountConflict();
+            const input = { flow: copilotAccountFlow, provider: "github-copilot", operation: "status", attemptId: record.copilotDeviceAttempt.id,
+              expectedGeneration: record.generation, expectedLineage: record.lineage } satisfies CopilotAccountInput;
+            this.assertAttempt(this.scope(record, key, input, actor), record.copilotAccountAttempt);
+          }));
+          accepted = true; return new Response(null, { status: 204 });
+        } finally { reserved.reserved(accepted); }
+      }
+      if (phase !== "execute") throw accountConflict();
+      slot = this.owner.inferenceControl.join(id, key);
+      const request = sourceRequest();
+      const actor = await copilotDeviceAdmin(request, this.env);
+      const input = readCopilotAccountInput(await readCopilotDeviceJson(internal));
+      if (input.operation === "qualify") throw accountConflict();
+      await copilotDeviceAdmin(request, this.env, actor);
+      return reply(await this.controlAction(request, key, input, actor, slot));
+    } catch (error) {
+      // If parsing was never claimed, retire that ORIGINAL input before its
+      // slot may finish. The shared reader already joins claimed reads/cancel.
+      if (internal.body && !internal.bodyUsed && !internal.body.locked) await inputRetirement(internal.body.getReader()).retire("cancel", error);
+      const failure = copilotAccountFailure(error); return reply(failure.value, failure.status);
+    }
+  }
+
+  private controlAction(request: Request, key: string, input: CopilotAccountInput, actor: string, slot: CopilotControlSlot): Promise<unknown> {
+    return this.owner.order(() => slot.record(async () => {
+      await copilotDeviceAdmin(request, this.env, actor);
+      const record = await this.owner.read(); if (!record) throw accountConflict();
+      assertCopilotAccountRecord(record);
+      const scope = this.scope(record, key, input, actor);
+      slot.assert({ key, generation: scope.generation, lineage: scope.lineage, actor });
+      let attempt = record.copilotAccountAttempt;
+      if (!attempt) throw accountConflict(); this.assertAttempt(scope, attempt);
+      await copilotDeviceAdmin(request, this.env, actor);
+      if (input.operation === "cancel") {
+        this.owner.invalidateCatalog?.(); this.inFlight?.operation.stop("caller");
+        attempt = record.copilotAccountAttempt = { ...attempt, phase: "cancelled" };
+        delete record.copilotAccountBinding;
+        await slot.save(() => this.owner.save(record));
+      } else if (input.operation !== "status") throw accountConflict();
+      await copilotDeviceAdmin(request, this.env, actor);
+      return this.view(record, attempt);
+    }));
   }
 
   private start(request: Request, attempt: CopilotAccountAttempt, token: string): Exchange {

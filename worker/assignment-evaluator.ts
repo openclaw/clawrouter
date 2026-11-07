@@ -9,6 +9,43 @@ export interface AssignmentEvidence {
 
 export interface AssignmentRuleEntry extends AssignmentRule { ruleId: string; generatedGroup: string }
 
+const snapshotBrand = Symbol("assignment rules snapshot"), preparedBrand = Symbol("prepared assignment rules");
+export interface AssignmentRuleSnapshot { readonly [snapshotBrand]: true }
+export interface PreparedAssignmentRules { readonly [preparedBrand]: true }
+type RuleSnapshot = { rules: AssignmentRuleEntry[]; legacyRevision: string };
+const snapshots = new WeakMap<AssignmentRuleSnapshot, RuleSnapshot>();
+const preparedRules = new WeakMap<PreparedAssignmentRules, RuleSnapshot & { revision: string }>();
+
+/** Private owner interface: snapshot before waiting, hash only after its FIFO turn. */
+export function captureAssignmentRules(rules: AssignmentRuleEntry[]): AssignmentRuleSnapshot {
+  const copied = rules.map(rule => {
+    const copy = { ruleId: rule.ruleId, version: rule.version, enabled: rule.enabled, kind: rule.kind,
+      subject: rule.subject, groups: [...rule.groups], policyIds: [...rule.policyIds], priority: rule.priority,
+      revokeOnLoss: rule.revokeOnLoss, provenance: rule.provenance, generatedGroup: rule.generatedGroup };
+    Object.freeze(copy.groups); Object.freeze(copy.policyIds); return Object.freeze(copy);
+  });
+  Object.freeze(copied);
+  const capsule: AssignmentRuleSnapshot = Object.freeze({ [snapshotBrand]: true as const });
+  snapshots.set(capsule, { rules: copied, legacyRevision: assignmentRulesRevision(copied) });
+  return capsule;
+}
+
+export async function prepareAssignmentRules(snapshot: AssignmentRuleSnapshot): Promise<PreparedAssignmentRules> {
+  const state = snapshots.get(snapshot);
+  if (!state) throw new TypeError("invalid assignment rules snapshot");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(state.legacyRevision));
+  const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+  const capsule: PreparedAssignmentRules = Object.freeze({ [preparedBrand]: true as const });
+  preparedRules.set(capsule, { ...state, revision: `assignment-rules.v1:sha256:${hex}` });
+  return capsule;
+}
+
+export function evaluatePreparedUserAssignments(user: AccessControlUser, prepared: PreparedAssignmentRules, evidence?: AssignmentEvidence, force = false) {
+  const state = preparedRules.get(prepared);
+  if (!state) throw new TypeError("invalid prepared assignment rules");
+  return evaluateAssignments(user, state.rules, state.legacyRevision, state.revision, evidence, force);
+}
+
 export function assignmentEvidenceFromAccessIdentity(value: unknown, expectedEmail: string): AssignmentEvidence | undefined {
   if (!value || typeof value !== "object") return undefined;
   const identity = value as Record<string, unknown>;
@@ -52,8 +89,13 @@ export function withLegacyAssignmentState(user: AccessControlUser, legacy: Parti
 
 export function evaluateUserAssignments(user: AccessControlUser, rules: AssignmentRuleEntry[], evidence?: AssignmentEvidence, force = false) {
   const revision = assignmentRulesRevision(rules);
+  return evaluateAssignments(user, rules, revision, revision, evidence, force);
+}
+
+function evaluateAssignments(user: AccessControlUser, rules: AssignmentRuleEntry[], legacyRevision: string, revision: string, evidence?: AssignmentEvidence, force = false) {
   const previous = user.record.assignmentState ?? { version: 1, revision: "", assignments: {}, updatedAt: null } satisfies AssignmentState;
-  if (!force && previous.revision === revision) return { changed: false as const, user, matchedRuleIds: Object.keys(previous.assignments).sort(), retainedRuleIds: [] as string[] };
+  const sameRevision = previous.revision === legacyRevision || previous.revision === revision;
+  if (!force && sameRevision) return { changed: false as const, user, matchedRuleIds: Object.keys(previous.assignments).sort(), retainedRuleIds: [] as string[] };
   const assignments: Record<string, AssignmentStateEntry> = {};
   const matchedRuleIds: string[] = [], retainedRuleIds: string[] = [];
   for (const rule of rules) {
@@ -71,7 +113,7 @@ export function evaluateUserAssignments(user: AccessControlUser, rules: Assignme
   const previousGroups = new Set(Object.values(previous.assignments).flatMap((entry) => entry.groups));
   const manual = (user.record.groups ?? []).filter((group) => !previousGroups.has(group) && !group.startsWith("assignment."));
   const groups = normalizeGroups([...manual, ...Object.values(assignments).flatMap((entry) => entry.groups)]);
-  if (previous.revision === revision && JSON.stringify(previous.assignments) === JSON.stringify(assignments) && JSON.stringify(normalizeGroups(user.record.groups ?? [])) === JSON.stringify(groups)) {
+  if (sameRevision && JSON.stringify(previous.assignments) === JSON.stringify(assignments) && JSON.stringify(normalizeGroups(user.record.groups ?? [])) === JSON.stringify(groups)) {
     return { changed: false as const, user, matchedRuleIds, retainedRuleIds };
   }
   const assignmentState: AssignmentState = { version: 1, revision, assignments, updatedAt: new Date().toISOString() };

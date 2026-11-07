@@ -147,8 +147,77 @@ products and endpoint references. Manifests without products retain the same
 snapshot output. This first slice only preserves declarations in the compiled
 snapshot. Discovery, routing, authorization, pricing, and budgets still use
 their existing checks; products do not yet restrict or enable routes. A later
-offer compiler must qualify model, protocol, lifecycle, and account compatibility
+runtime migration must qualify protocol, lifecycle, and account compatibility
 before these declarations can become execution authority.
+
+### Explicit offer definitions
+
+A product can declare `offers` for its endpoints. Every entry must select an
+existing capability bound to that endpoint and supply `models` explicitly:
+
+```yaml
+offers:
+  - endpoint: invoke
+    capability: tool.invoke
+    models: null
+```
+
+Use `models: null` to declare a model-free operation, or a nonempty list of exact
+router model IDs to select registered models. Model IDs are opaque; an ID such
+as `gateway/vendor/model` is not split or rewritten. Each selected model must
+declare the selected capability. Missing `offers` generates no definitions;
+there is no wildcard selection or automatic admission of future model rows.
+
+The compiler rejects duplicate endpoint/capability bindings within a product,
+out-of-product endpoints, unknown models, and capability mismatches. It emits
+`offer_definitions` with one entry per product/endpoint/capability/model tuple.
+The IDs are opaque and remain stable across declaration ordering and display
+name changes. Distinct products receive distinct IDs even for the same model.
+
+Every definition has `qualification: declared`. This is a build-time description,
+not a caller-scoped offer from `/v1/catalog`. A model-free declaration is not
+proof that a protocol permits an omitted model. Stopped model handling, protocol
+and lifecycle constraints, pricing, credentials, and tenant policy still need
+the existing runtime checks. These definitions neither enable routes nor alter
+selection, budgets, or subscription onboarding. Their IDs identify an offer;
+the deployed snapshot must still identify its revision.
+
+### Binding compatibility
+
+`shared/provider-bindings.ts` owns the existing grant-transport, endpoint
+allowlist, lifecycle dependency, and WebSocket compatibility checks. The Worker
+uses these checks through its existing `grantSupports` entry point; specialized
+provider checks remain in that entry point.
+
+`worker/provider-offers.ts` provides an internal `resolveProviderOffer` projection.
+It resolves an explicit definition against the current product, endpoint, and
+exact model reference, then applies model availability and the existing grant
+qualification checks. A default product matches the default provider transport,
+including scoped grants without an override. A grant-transport product requires
+its exact declared grant kind and transport. Neither match infers commercial
+terms or an authentication flow.
+
+For lifecycle operations, the product must include the required retrieve,
+cancel, result, and file endpoints as well as the create endpoint. The selected
+transport must also permit those controls. Endpoint-specific pricing remains
+attached to the resolved model, including explicit unpriced cards.
+
+The result is `compatible`, not authorized or affordable. The caller must still
+validate the request, apply tenant policy, materialize the selected credential,
+and check quota and budget. Resolution performs no network or storage access.
+Routing and discovery keep their existing selection rules. For an eligible
+catalog offer, discovery uses the resolver to attach optional `productOffers`
+references (`id`, `productId`). The references match the exact endpoint,
+capability, model identity, transport, and active configured candidates under
+that offer's selected policy. A model-selection form is not a model-free
+declaration.
+
+The provider's optional `products` array contains only the referenced products'
+ID, display name, commercial model, and authentication method. It excludes
+execution bindings and grant metadata. Blocked or recovering offers do not
+publish product references. Providers without declarations retain their existing
+catalog shape. These fields neither choose an account nor promise entitlement;
+dispatch still revalidates the request and its authority.
 
 ## Descriptor v1
 

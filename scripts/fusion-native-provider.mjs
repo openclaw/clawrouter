@@ -84,10 +84,15 @@ export function requireCompleteResponse(result) {
   return result;
 }
 
-export async function nativePins(env, fetcher = fetch) {
-  if (!env.OPENAI_API_KEY || !env.ANTHROPIC_API_KEY) throw new Error('native_credentials_missing');
+export async function nativePins(env, fetcher = fetch, selected = Object.keys(nativeModels)) {
+  if (!Array.isArray(selected) || !selected.length || new Set(selected).size !== selected.length
+    || selected.some(id => !Object.hasOwn(nativeModels, id))) throw new Error('native_model_unknown');
+  if (selected.some(id => !env[nativeModels[id].provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'])) {
+    throw new Error('native_credentials_missing');
+  }
   const pins = {};
-  for (const [id, entry] of Object.entries(nativeModels)) {
+  for (const id of selected) {
+    const entry = nativeModels[id];
     const request = nativeRequest(id, { messages: [], max_tokens: 4096 }, env);
     const origin = entry.provider === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com';
     const response = await fetcher(`${origin}/v1/models/${entry.upstream}`, { headers: request.headers, signal: AbortSignal.timeout(30000) });
@@ -108,6 +113,13 @@ export function nativeErrorMetadata(body) {
   const types = new Set(['invalid_request_error', 'authentication_error', 'billing_error',
     'permission_error', 'not_found_error', 'conflict_error', 'request_too_large',
     'rate_limit_error', 'api_error', 'timeout_error', 'overloaded_error']);
+  const codes = new Set(['context_length_exceeded', 'invalid_json_schema', 'invalid_value',
+    'unsupported_value', 'unsupported_parameter', 'missing_required_parameter', 'invalid_parameter',
+    'invalid_prompt', 'model_not_found', 'insufficient_quota', 'rate_limit_exceeded', 'server_error']);
+  const parameters = ['messages', 'response_format', 'max_tokens', 'max_completion_tokens',
+    'reasoning_effort', 'model', 'service_tier', 'temperature', 'tools', 'tool_choice', 'stream'];
+  const param = typeof body?.error?.param === 'string' ? body.error.param : '';
+  const providerParam = parameters.find(name => param === name || param.startsWith(name + '.') || param.startsWith(name + '[')) ?? 'unknown';
   const message = typeof body?.error?.message === 'string' ? body.error.message.toLowerCase() : '';
   const hints = [
     ['safety_notice', /this content can[’']t be shown|safety refusal/],
@@ -118,5 +130,6 @@ export function nativeErrorMetadata(body) {
     ['service_tier', /service_tier|service tier/],
   ];
   return { errorType: types.has(body?.error?.type) ? body.error.type : 'unknown',
-    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown' };
+    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
+    providerCode: codes.has(body?.error?.code) ? body.error.code : 'unknown', providerParam };
 }
