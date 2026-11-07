@@ -454,8 +454,8 @@ function projectedRetention(value: unknown): value is { version: string; allow: 
   return true;
 }
 type PublicationProjection = { version: string; allow: Array<{ providerId: string; endpointId: string; modelId: string; publish: boolean; forward: boolean; expiresAt: string }> };
-function projectedPublication(value: unknown, now: number): value is PublicationProjection {
-  if (!Number.isFinite(now) || !exactKeys(value, ["version", "allow"]) || value.version !== "clawrouter.input-publication.v1" || !Array.isArray(value.allow) || value.allow.length > 2) return false;
+function projectedPublication(value: unknown): value is PublicationProjection {
+  if (!exactKeys(value, ["version", "allow"]) || value.version !== "clawrouter.input-publication.v1" || !Array.isArray(value.allow) || value.allow.length > 2) return false;
   let previous: unknown;
   for (const entry of value.allow) {
     if (!exactKeys(entry, ["providerId", "endpointId", "modelId", "publish", "forward", "expiresAt"])
@@ -464,15 +464,18 @@ function projectedPublication(value: unknown, now: number): value is Publication
       || typeof entry.publish !== "boolean" || typeof entry.forward !== "boolean" || typeof entry.expiresAt !== "string"
       || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(entry.expiresAt)) return false;
     const expires = Date.parse(entry.expiresAt);
-    if (!Number.isFinite(expires) || expires <= now || new Date(expires).toISOString().replace(".000Z", "Z") !== entry.expiresAt.replace(".000Z", "Z")
+    if (!Number.isFinite(expires) || new Date(expires).toISOString().replace(".000Z", "Z") !== entry.expiresAt.replace(".000Z", "Z")
       || previous === entry.modelId) return false;
     previous = entry.modelId;
   }
   return true;
 }
 
-// Exact serialized/graph projection of authority-policy.ts. The visitor uses
-// borrowed raw fields and bounded selection state, not the allocating normalizer.
+// Prospective serialized/graph projection of authority-policy.ts. Structurally
+// valid publication permissions reserve their potential field even when expired;
+// the unchanged normalizer alone decides current expiry. This prevents clock
+// rollback from adding an unadmitted branch. The visitor borrows raw fields and
+// bounded selection state without invoking the allocating normalizer.
 // Sorting retained strings/permission rows changes order, never these totals.
 function visitNormalizedPolicy(meter: ReturnType<typeof jsonMeter>, raw: Record<string, unknown>, retentionDefault: boolean, depth: number): void {
   const array = (values: unknown[], at: number, unique: number | null, valid = (_value: string) => true) => meter.array(at, entry => {
@@ -514,7 +517,7 @@ function visitNormalizedPolicy(meter: ReturnType<typeof jsonMeter>, raw: Record<
       }));
     }));
     const publication = raw.inputPublication;
-    if (projectedPublication(publication, Date.now())) field("inputPublication", undefined, () => meter.object(depth + 1, member => {
+    if (projectedPublication(publication)) field("inputPublication", undefined, () => meter.object(depth + 1, member => {
       member("version", publication.version);
       member("allow", undefined, () => meter.array(depth + 2, entry => {
         for (const row of publication.allow) entry(undefined, () => meter.object(depth + 3, item => {

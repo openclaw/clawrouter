@@ -154,3 +154,31 @@ test('candidate visitor matches exact normalized UTF8/text escaping limits and s
     assert.throws(() => admitPolicyJson([{ policyId: 'p', policy: normalizePolicyRecord(raw, true) }]), denied('limit'));
   }
 });
+
+test('expired publication reserves its structural branch before normalization across clock rollback', t => {
+  let now = Date.parse('2031-01-01T00:00:00Z'), clockReads = 0, copies = 0;
+  t.mock.method(Date, 'now', () => { clockReads++; return now; });
+  const original = Array.prototype.filter;
+  t.mock.method(Array.prototype, 'filter', function (...args) { if (this[0] === 'clock-projection') copies++; return Reflect.apply(original, this, args); });
+  const publication = { version: 'clawrouter.input-publication.v1', allow: [
+    { providerId: 'openrouter', endpointId: 'music_generate', modelId: 'openrouter/google/lyria-3-pro-preview', publish: true, forward: false, expiresAt: '2030-01-01T00:00:00Z' },
+    { providerId: 'openrouter', endpointId: 'music_generate', modelId: 'openrouter/google/lyria-3-clip-preview', publish: false, forward: true, expiresAt: '2030-01-01T00:00:00.001Z' },
+  ] };
+  const first = { providers: Array(16000).fill('clock-projection'), inputPublication: publication };
+  const last = { providers: Array(16674).fill('clock-projection'), inputPublication: publication };
+  const plan = policyCandidatePlan(); plan('first', first, false); plan('last', last, false);
+  assert.equal(clockReads, 0); assert.equal(copies, 0);
+  // Preflight happened AFTER expiry. The actual unchanged normalizer now sees
+  // BEFORE expiry, so the optional field really appears in the materialized graph.
+  now = Date.parse('2029-01-01T00:00:00Z');
+  const result = [{ policyId: 'first', policy: normalizePolicyRecord(first, false) }, { policyId: 'last', policy: normalizePolicyRecord(last, false) }];
+  assert.equal(copies, 2); assert.ok(clockReads > 0); assert.doesNotThrow(() => admitPolicyJson(result));
+  assert.equal(result[0].policy.inputPublication.allow.length, 2);
+  assert.ok(result[0].policy.inputPublication.allow.every(row => row.expiresAt.length === 24));
+  now = Date.parse('2031-01-01T00:00:00Z'); copies = 0; clockReads = 0;
+  const overflow = policyCandidatePlan(); overflow('first', first, false);
+  assert.throws(() => overflow('last', { ...last, providers: [...last.providers, 'clock-projection'] }, false), denied('limit'));
+  assert.equal(copies, 0); assert.equal(clockReads, 0); // Pre-copy, not just zero SQL.
+  // The intentional conservative denial does not extend expired permissions.
+  assert.equal(normalizePolicyRecord(last, false).inputPublication, undefined);
+});

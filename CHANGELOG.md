@@ -84,6 +84,8 @@
 
 - Bound selected assignment rule/KV/SQL sources, exact revision capture and complete stored/reply representations before materialization or writes. Admit four reconciliations through original-stream retirement and the existing FIFO; preserve legacy no-ops and projected storage without migration or rollback claims. Selected callers now propagate sanitized owner `404 unknown_user` and `400/500 authority_error` instead of the old generic public `500 internal_error` wrapper; unmarked flows are unchanged.
 
+- Bound selected policy collections with shared caller KV admission, private SQL/request/reply profiles, original-stream retirement and prospective candidate checks before normalization or writes. Conservatively reserve structurally valid publication permissions even when expired; actual expiry and permissions remain unchanged, with existing query/ACK public-error mappings preserved.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
