@@ -76,6 +76,8 @@
 
 - Bound selected user-resolution replies to a complete 1 MiB JSON profile and join original fetch, read, FIRST cancellation and unlock before publication. Preserve bounded legacy records, unknown fields and cold-import behavior; oversized or uncertain replies deny without authentication fallback. Producer allocations remain separate.
 
+- Bound selected user-record SQL/KV materialization and private cold initialization with cumulative source admission, original-stream retirement and complete batch checks before writes. Preserve canonical winners, full legacy records and unmarked bulk flows; resource failures deny without truncation, migration or rollback claims.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
