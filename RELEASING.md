@@ -38,7 +38,8 @@ locally and push the tag. The tag push is the publication entrypoint; do not run
 `gh release create` or a local publish helper.
 
 `.github/workflows/release.yml` calls
-`openclaw/release-workflows/.github/workflows/release-source.yml@v1`. It verifies
+`openclaw/release-workflows/.github/workflows/release-source.yml` at the commit
+pinned in the caller. It verifies
 the signed tag, protected-branch ancestry, exact version metadata, dated notes,
 and green push CI, then builds and verifies the frozen source before publishing.
 Live dispatches also require a pre-existing signed tag; an unsigned workflow-created
