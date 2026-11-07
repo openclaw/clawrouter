@@ -456,3 +456,5 @@ Qualify every task with the oracle-visible contract before model inference.
 Freeze the policy and training examples first, retain both fixed-model controls,
 and report incomplete attempts and transport reservations. Do not tune against
 acceptance failures and then describe the same tasks as held out.
+
+Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.

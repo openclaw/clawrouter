@@ -15,6 +15,19 @@ test('source windows are bounded and explicit inspection reaches later lines', (
   assert.ok(pair.reduce((sum, view) => sum + Buffer.byteLength(view.content), 0) <= 3000);
 });
 
+test('literal inspection reports missing queries without substituting unrelated source', () => {
+  const file = { path: 'worker/example.ts', content: 'const enabled = false;\nconst other = true;' };
+  const missing = sourceWindows([file], 'Fix enabled', { path: file.path, query: 'enabled|other' })[0];
+  assert.equal(missing.queryMatched, false);
+  assert.equal(missing.content, '');
+  assert.equal(missing.endLine, 0);
+  assert.throws(() => groundedEdits({ editPaths: [file.path] }, [file], [missing],
+    { path: file.path, line: 1, endLine: 1, replace: 'const enabled = true;' }), /unseen_edit/);
+  const found = sourceWindows([file], 'Fix enabled', { path: file.path, query: 'enabled' })[0];
+  assert.equal(found.queryMatched, true);
+  assert.match(found.content, /enabled/);
+});
+
 test('numbered edits require current observed lines and reject stale views', () => {
   const task = { editPaths: ['worker/example.ts'] };
   const files = [{ path: task.editPaths[0], content: 'const x = false;\nconst y = false;' }];
