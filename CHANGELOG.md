@@ -5,6 +5,7 @@
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+- Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
 
 - Add three pinned Fusion workflow-validation repairs covering embedding errors, native identity and response context.
 

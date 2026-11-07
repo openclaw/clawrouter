@@ -230,6 +230,35 @@ test('contract policy meters the test author and worker inside the same trial', 
 });
 
 
+test('provided probes are equally visible to fixed controls and skip the test-author role', async () => {
+  const { root, options } = await fixture();
+  try {
+    await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy: 'contract-provided' }), /missing_reproducer/);
+    const manifest = JSON.parse(await readFile(options.taskManifest));
+    const task = manifest.tasks[0]; task.reproducer = 'provided probe sentinel';
+    await writeFile(options.taskManifest, JSON.stringify(manifest));
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    Object.assign(qualification.receipts[0], { taskDigest: hash(JSON.stringify(task)),
+      reproduction: { assertionFailed: true }, oracleReproduction: { passed: true } });
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    const instructions = [];
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
+      policy: 'contract-provided', grade, fetcher: success,
+      agent: async (task, _image, _strategy, id, _settings, invoke) => {
+        instructions.push(task.instruction);
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+      contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
+        assert.equal(agentOptions.providedProbe, task.reproducer);
+        await invoke(id, roles.cheap, body, signal); return repaired();
+      } });
+    assert.equal(instructions.length, 2);
+    assert.equal(instructions[0], instructions[1]);
+    assert.match(instructions[0], /provided probe sentinel/);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.cheap]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('private contract policy preserves fixed controls and mixed role accounting', async () => {
   const { root, options } = await fixture();
   try {

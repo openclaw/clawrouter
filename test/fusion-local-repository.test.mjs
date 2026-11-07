@@ -55,6 +55,18 @@ test('context overflow is rejected before fetch and identity/usage errors stop t
   await assert.rejects(localActionRequest({ ...options, endpoint: 'https://example.test' }), /local_endpoint/);
 });
 
+test('a provided reproducer requires both execution receipts before inference', () => {
+  const task = { id: 'example', reproducer: 'assert(false)' };
+  const receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
+    qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true },
+    oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
+  const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
+  assert.throws(() => validateLocalQualification([task], q), /unqualified_local_task/);
+  receipt.reproduction = { assertionFailed: true };
+  receipt.oracleReproduction = { passed: true };
+  assert.equal(validateLocalQualification([task], q).length, 1);
+});
+
 test('qualification requires matching task digests, passing oracle and failing baseline', () => {
   const task = { id: 'example' }, receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
     qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };

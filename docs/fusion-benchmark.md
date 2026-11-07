@@ -302,3 +302,19 @@ A proposed grant-report fixture was excluded before model exposure because its
 original code already passed the selected acceptance suite.
 Freeze the selected workflow and record first model exposure separately from
 the schema label. This manifest alone makes no performance claim.
+
+### Supplied-reproducer workflow
+
+`contract-provided` evaluates a distinct coding workflow where the request
+already contains a regression reproducer. The fixture records the bounded
+probe in `reproducer`. Qualification requires it to fail with an assertion on
+the original source and pass on the historical repair, alongside all existing
+visible and independent acceptance checks. Every baseline receives the same
+probe. The cascade executes it against each candidate and escalates after a
+failed check; it makes no model call to author a test.
+
+The GMI selectors, literal Responses path and Voyage usage fixtures pin this
+input contract. Their supplied reproducers cover an observable reported bug;
+the separate acceptance suites cover additional behavior. Do not compare this
+workflow with tests-hidden baselines or call its reproducers independent final
+acceptance. Generated-check results remain separate and unchanged.

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "provided-gmi-unified-selectors",
+      "split": "development",
+      "base": "aef09502cf9726adab59827fdf4dc22da7ba62ba",
+      "oracle": "06530c262b8957aa0dc5763e94c83e68fa991e51",
+      "editPaths": [
+        "worker/gmi-organization-binding.ts"
+      ],
+      "visibleTests": [
+        "worker/test/gmi-organization-binding.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/gmi-organization-binding.test.mjs"
+      ],
+      "instruction": "Permit the internally supplied model and deployment selectors for GMI unified POST /v1/chat/completions when both exactly equal the selected nonempty physical model and the body model. Keep the literal upstream /chat/completions path. Reject extra, missing or mismatched selectors, non-unified paths and caller query parameters. Preserve native and manifest behavior, model policy, original grant ownership, credentials and organization binding.",
+      "reproducer": "import assert from 'node:assert/strict';\nimport test from 'node:test';\nimport { fixture } from './worker/test/managed-runtime-fixture.mjs';\nconst { snapshot } = await import('./worker/providers.ts');\ntest('unified GMI selectors', async t => {\n const source=structuredClone(snapshot.providers.find(p=>p.id==='gmi'));\n const f=await fixture(t,{providerId:'gmi',pooled:false,configure(p){Object.assign(p,source)}});\n f.env.GMI_API_KEY='synthetic-gmi-key';\n f.upstream=()=>Response.json({model:'deepseek-ai/DeepSeek-V4-Pro',choices:[{message:{role:'assistant',content:'ok'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}});\n const response=await f.call('/v1/chat/completions',{model:'gmi/deepseek-ai/DeepSeek-V4-Pro',messages:[{role:'user',content:'synthetic'}]});\n assert.equal(response.status,200); await response.arrayBuffer(); await f.drain();\n});"
+    },
+    {
+      "id": "provided-responses-path",
+      "split": "development",
+      "base": "c5c1cd19834b6e7f1df65f2d6604210ae7e372e8",
+      "oracle": "d35d4bd683aa5dc36367141a05303bd3d64ba86c",
+      "editPaths": [
+        "worker/endpoint-path.ts"
+      ],
+      "visibleTests": [
+        "worker/test/endpoint-upstream-path.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/responses-upstream-path.test.mjs"
+      ],
+      "instruction": "Allow qualified literal upstreamPath remapping for POST openai.responses endpoints whose caller-facing path is exactly /v1/responses. Preserve matching request/response format, literal canonical paths and base URL checks, no endpoint query parameters, no parameterized paths, no lifecycle or pricing overrides, and no transport path conflict. Keep other endpoint formats unchanged.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict';\nconst { configuredEndpointPath }=await import('./worker/endpoint-path.ts');\nconst endpoint={path:'/v1/responses',upstreamPath:'/responses',request_format:'openai.responses',response_format:'openai.responses',method:'POST',methods:['POST'],path_params:[],path_param_styles:{},query:{}};\nassert.doesNotThrow(()=>configuredEndpointPath(endpoint,undefined,'https://example.test/v1'));\nassert.equal(configuredEndpointPath(endpoint,undefined,'https://example.test/v1'),'/responses');\nassert.throws(()=>configuredEndpointPath({...endpoint,query:{x:'y'}}));\n"
+    },
+    {
+      "id": "provided-voyage-usage",
+      "split": "development",
+      "base": "0b5543d8f3972ba70f1227380e008214ce274a3c",
+      "oracle": "2521bc22f030174326324d4ef6c7e43f7e330cbc",
+      "editPaths": [
+        "worker/proxy-response.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-response.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/voyage-usage-dispatch.test.mjs"
+      ],
+      "instruction": "For complete successful application/json voyage.embeddings responses, dispatch the existing Voyage-specific usage extractor so total_tokens is counted as embedding input tokens and output is zero. Preserve response bytes and generic OpenAI total-only unknown splits. Invalid HTTP status, native error, malformed or missing evidence, wrong MIME, oversized, incomplete and interrupted delivery must not invent an input/output split. Preserve downstream policy-fixed costs and settlement.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nconst { observeUsage }=await import('./worker/proxy-response.ts');\nconst wire=JSON.parse(readFileSync('./providers/_fixtures/voyage/embeddings.json','utf8'));\nconst body={...wire.response,usage:{total_tokens:7}};\nconst observed=observeUsage(Response.json(body),undefined,undefined,'voyage.embeddings');\nassert.deepEqual(JSON.parse(await observed.response.text()),body);\nconst usage=await observed.result;\nassert.equal(usage.tokens.input,7); assert.equal(usage.tokens.output,0);\n"
+    }
+  ]
+}

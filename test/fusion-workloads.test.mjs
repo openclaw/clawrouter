@@ -130,6 +130,15 @@ test('qualification rejects a known repair that conflicts with the unchanged vis
   assert.equal(qualificationSucceeded({ ...evidence, oracleVisible: undefined }), false);
 });
 
+test('provided reproducer qualification requires an original assertion and a repaired pass', () => {
+  const evidence = { visible: { passed: true }, oracleVisible: { valid: true, passed: true },
+    broken: { valid: true, passed: false }, oracle: { passed: true } };
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true }, oracleReproduction: { passed: true } }), true);
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true } }), false);
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: false }, oracleReproduction: { passed: true } }), false);
+  assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true }, oracleReproduction: { passed: false } }), false);
+});
+
 test('fresh corpus excludes repairs contradicted by their original visible tests', async () => {
   const tasks = await loadTasks(new URL('../benchmarks/fusion/fresh-workloads.json', import.meta.url));
   assert.equal(tasks.length, 2);
