@@ -352,3 +352,20 @@ The first exposed-task allocation run (20 cheap calls within 40 total) solved
 The cascade saved 39.65% but accepted an incomplete GMI repair and therefore
 failed the no-regression screen. The default allowance remains 10. These are
 three development tasks, not independent holdout evidence.
+
+### Single-draft supplied checks
+
+`FUSION_PAIR_POLICY=contract-draft` uses one cheap-model call to propose
+1–8 exact source edits. It receives the original editable source, declared
+read-only context, visible test examples and the supplied reproducer. The
+runner applies valid edits in an isolated sandbox and runs visible tests;
+the existing contract gate checks the candidate in a separate fresh sandbox.
+A failed or malformed draft falls back to the original-source strong worker,
+with the remaining shared call and time budget. Unknown charges and refusals
+stop execution. A settled empty or truncated draft consumes its call and falls
+back without applying partial output.
+
+Both fixed controls receive the same supplied reproducer and shared ceiling.
+The cheap-stage allowance does not add draft calls: this policy always makes
+one draft attempt. This is an opt-in benchmark policy with no demonstrated
+quality or cost gain yet; production defaults are unchanged.
