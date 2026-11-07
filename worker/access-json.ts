@@ -55,12 +55,14 @@ export function accessBase64Bytes(value: string, maximum: number): Uint8Array<Ar
   return bytes;
 }
 
-type Profile = "header" | "payload" | "jwks" | "evidence";
+type Profile = "header" | "payload" | "jwks" | "evidence" | "authority_user";
+export const authorityUserJsonLimits = Object.freeze({ wire: 1048576, text: 1048576 });
 const profiles = {
   header: { wire: 2048, depth: 4, values: 64, containers: 8, members: 32, entries: 16, units: 2048, string: 2048 },
   payload: { wire: 8192, depth: 8, values: 512, containers: 64, members: 256, entries: 128, units: 8192, string: 8192 },
   jwks: { wire: 262144, depth: 8, values: 4096, containers: 256, members: 2048, entries: 1024, units: 65536, string: 4096 },
   evidence: { wire: 262144, depth: 8, values: 4096, containers: 256, members: 2048, entries: 1024, units: 65536, string: 1024 },
+  authority_user: { wire: 1048576, depth: 16, values: 8192, containers: 2048, members: 4096, entries: 4096, units: 1048576, string: 1048576 },
 } as const;
 
 function utf8Length(text: string, start = 0, end = text.length): number {
@@ -74,12 +76,14 @@ function utf8Length(text: string, start = 0, end = text.length): number {
   return bytes;
 }
 
-// Bounded recursive states (maximum depth eight), not a token vector. All raw
+// Closed recursive states (maximum depth sixteen), not a token vector. All raw
 // occurrences, including duplicate/discarded members, count before JSON.parse.
 export function parseAccessJson(text: string, profile: Profile): unknown {
   const p = profiles[profile];
   if (profile === "evidence" && text.length > accessEvidenceLimits.text) limit();
-  if (text.length > p.wire || utf8Length(text) > p.wire) limit();
+  // The user-reply owner counts ORIGINAL bytes before replacement decoding.
+  // Re-encoding its decoded text would incorrectly charge replacement expansion.
+  if (text.length > p.wire || profile !== "authority_user" && utf8Length(text) > p.wire) limit();
   let at = 0, values = 0, containers = 0, members = 0, entries = 0, units = 0, rows = 0, audiences = 0, orgs = 0, teams = 0;
   const space = () => { while (at < text.length) { const c = text.charCodeAt(at); if (c !== 32 && c !== 9 && c !== 10 && c !== 13) break; at++; } };
   const string = (maximum: number, retain: boolean, binaryMaximum?: number): string => {
@@ -124,7 +128,7 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
       if (text[at] !== close) for (;;) {
         if (object) {
           if (++members > p.members) limit();
-          space(); const child = string(64, true); space(); if (text[at++] !== ":") invalid();
+          space(); const child = string(profile === "authority_user" ? 1024 : 64, true); space(); if (text[at++] !== ":") invalid();
           value(depth + 1, child, depth === 0, false, insideJwk || jwkRow);
         } else {
           if (++entries > p.entries) limit();
@@ -139,7 +143,7 @@ export function parseAccessJson(text: string, profile: Profile): unknown {
       }
       at++;
     } else if (c === '"') {
-      const maximum = profile !== "evidence" && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
+      const maximum = profile !== "evidence" && profile !== "authority_user" && key === "kid" ? 256 : profile === "payload" && (key === "iss" || key === "sub" || key === "aud") ? 1024
         : (profile === "payload" || profile === "evidence") && key === "email" ? 320 : p.string;
       // Every n/e occurrence counts before JSON.parse can discard duplicates.
       string(maximum, false, insideJwk && key === "n" ? 1024 : insideJwk && key === "e" ? 8 : undefined);

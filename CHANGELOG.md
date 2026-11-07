@@ -38,6 +38,8 @@
 
 - Write compact, versioned assignment-rule revisions only when reconciliation already changes canonical state. Preserve unchanged legacy records and serialize owner-local reconciliation through immutable rule snapshots, hashing before the final current-user read without locking unrelated owner operations.
 
+- Bound selected user-resolution replies to a complete 1 MiB JSON profile and join original fetch, read, FIRST cancellation and unlock before publication. Preserve bounded legacy records, unknown fields and cold-import behavior; oversized or uncertain replies deny without authentication fallback. Producer allocations remain separate.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
