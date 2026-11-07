@@ -9,6 +9,23 @@ const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|
   && !value.split('/').some(part => !part || part === '.' || part === '..');
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 
+export function validateSourceContext(task) {
+  const context = task.sourceContext === undefined ? [] : task.sourceContext;
+  if (!Array.isArray(context) || context.length > 4) throw new Error('invalid_source_context');
+  const seen = new Set();
+  for (const item of context) {
+    if (!item || typeof item.path !== 'string'
+      || !/^(worker|shared|scripts|providers|docs)\/[A-Za-z0-9_./-]+$/.test(item.path)
+      || item.path.split('/').some(part => !part || part === '.' || part === '..' || /^tests?$/.test(part))
+      || /\.test\./.test(item.path) || task.editPaths.includes(item.path)
+      || task.hiddenTests.includes(item.path)
+      || typeof item.query !== 'string' || !item.query.trim() || item.query.length > 200
+      || seen.has(JSON.stringify([item.path, item.query]))) throw new Error('invalid_source_context');
+    seen.add(JSON.stringify([item.path, item.query]));
+  }
+  return context;
+}
+
 export function validateTask(task) {
   if (!task || !/^[a-z][a-z0-9-]{1,63}$/.test(task.id) || task.split !== 'development'
     || !sha(task.base) || !sha(task.oracle) || typeof task.instruction !== 'string' || !task.instruction.trim()) throw new Error('invalid_task');
@@ -18,6 +35,7 @@ export function validateTask(task) {
   }
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
+  validateSourceContext(task);
   return task;
 }
 
@@ -98,6 +116,25 @@ export async function readSource(box, paths, timeout = 120000) {
   if (!paths.every(readable) || paths.length > 12) throw new Error('invalid_read_paths');
   const program = `const fs=require('node:fs'),p=require('node:path');const paths=JSON.parse(process.argv[1]);console.log(JSON.stringify(paths.map(path=>{const target=p.resolve('/work',path);if(fs.realpathSync(target)!==target||!fs.statSync(target).isFile()||fs.statSync(target).size>262144)throw Error('invalid_read');return {path,content:fs.readFileSync(target,'utf8')}})));`;
   return JSON.parse((await box.exec(['node', '-e', program, JSON.stringify(paths)], { timeout })).stdout.toString());
+}
+
+// Original repository declarations, not answer material. A missing or ambiguous
+// selector fails closed instead of silently supplying a guessed source window.
+export async function readTaskContext(box, task, timeout = 120000, read = readSource) {
+  const context = validateSourceContext(task);
+  if (!context.length) return [];
+  const files = await read(box, [...new Set(context.map(item => item.path))], timeout);
+  const views = context.map(item => {
+    const file = files.find(file => file.path === item.path);
+    if (!file) throw new Error('missing_source_context');
+    const lines = file.content.split('\n');
+    const matches = lines.flatMap((line, index) => line.includes(item.query) ? [index] : []);
+    if (matches.length !== 1) throw new Error('ambiguous_source_context');
+    const start = Math.max(0, matches[0] - 8), end = Math.min(lines.length, matches[0] + 9);
+    return { path: item.path, startLine: start + 1, endLine: end, content: lines.slice(start, end).join('\n') };
+  });
+  if (Buffer.byteLength(JSON.stringify(views)) > 24000) throw new Error('source_context_too_large');
+  return views;
 }
 export function testResult(result) {
   const text = result.stdout.toString();
@@ -189,7 +226,10 @@ export async function qualify(task, options) {
   const built = await buildTask(task, options);
   const box = await sandbox(built.image);
   let visible;
-  try { const { feedback, ...result } = await check(box, task.visibleTests); visible = result; }
+  try {
+    await readTaskContext(box, task);
+    const { feedback, ...result } = await check(box, task.visibleTests); visible = result;
+  }
   finally { await box.close(); }
   const edits = await revisionFiles(options.repo, task.oracle, task.editPaths);
   const oracleVisible = await checkOracleVisible(task, built.image, edits);

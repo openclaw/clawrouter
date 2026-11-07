@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadTasks, hash, sandbox, readSource, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
+import { loadTasks, hash, sandbox, readSource, readTaskContext, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 import { runCandidateEnsemble, compareCandidates, candidateSummaries } from './fusion-candidate-ensemble.mjs';
@@ -156,6 +156,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
+    const context = await readTaskContext(box, task, remaining());
+    if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
       messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(sourceView(files, task.editPaths))}`;
