@@ -6,7 +6,7 @@ import { accessBytesResponse } from './access-byte-fixture.mjs';
 import { PolicyBindingIndexObject, authorityCall, resolveBindings, resolvePolicies } from '../authority.ts';
 import { normalizePolicyRecord } from '../authority-policy.ts';
 import { parseAccessJson } from '../access-json.ts';
-import { PolicyCollection, admitPolicyJson, admitPolicyBytes, parsePolicyRecord, policySourceBudget, policyCandidatePlan } from '../policy-collection.ts';
+import { PolicyCollection, admitPolicyIds, admitEffectivePolicies, admitPolicyJson, admitPolicyBytes, parsePolicyRecord, policySourceBudget, policyCandidatePlan } from '../policy-collection.ts';
 
 const marker = { 'x-clawrouter-policy-collection': 'v1' }, maximum = 2097152;
 const bytes = text => accessBytesResponse(text, '').body;
@@ -181,4 +181,40 @@ test('expired publication reserves its structural branch before normalization ac
   assert.equal(copies, 0); assert.equal(clockReads, 0); // Pre-copy, not just zero SQL.
   // The intentional conservative denial does not extend expired permissions.
   assert.equal(normalizePolicyRecord(last, false).inputPublication, undefined);
+});
+
+test('one caller budget spans binding/policy/legacy streams and raw page/key counters never reset', async () => {
+  const collection = new PolicyCollection(), text = ' '.repeat(maximum - 2) + '{}';
+  let gets = 0;
+  const env = { POLICY_KV: { async get(_key, type) { assert.equal(type, 'stream'); gets++; return bytes(text); } } };
+  assert.deepEqual(await collection.read(env, 'access/bindings/group/g/p'), {});
+  assert.deepEqual(await collection.read(env, 'policies/p'), {});
+  await assert.rejects(collection.read(env, 'keys/p'), denied('limit')); assert.equal(gets, 3);
+  let lists = 0;
+  env.POLICY_KV.list = async ({ limit }) => { assert.equal(limit, 64); lists++; return { keys: [], list_complete: false, cursor: 'again' }; };
+  await assert.rejects(new PolicyCollection().listBindings(env, 'access/bindings/group/g/'), denied('limit')); assert.equal(lists, 4096);
+  lists = 0; gets = 0;
+  env.POLICY_KV.get = async () => { gets++; return null; };
+  env.POLICY_KV.list = async () => ({ keys: Array(64).fill({ name: 'same' }), list_complete: ++lists % 32 === 0, cursor: 'next' });
+  const shared = new PolicyCollection();
+  assert.deepEqual(await shared.listBindings(env, 'first/'), []); assert.deepEqual(await shared.listBindings(env, 'second/'), []);
+  assert.equal(gets, 4096); await assert.rejects(shared.listBindings(env, 'third/'), denied('limit')); assert.equal(gets, 4096);
+  for (const cursor of ['', null, 1, 'x'.repeat(16385), 'é'.repeat(8193)]) {
+    env.POLICY_KV.list = async () => ({ keys: [], list_complete: false, cursor });
+    await assert.rejects(new PolicyCollection().listBindings(env, 'prefix/'), denied(typeof cursor === 'string' && cursor ? 'limit' : 'protocol'));
+  }
+  env.POLICY_KV.list = async () => ({ keys: [null], list_complete: true });
+  await assert.rejects(new PolicyCollection().listBindings(env, 'prefix/'), denied('protocol')); // Shape denial dominates any later key-count ceiling.
+});
+
+test('raw principals precede dedup; referenced IDs and complete overrides precede effective copies', () => {
+  assert.doesNotThrow(() => new PolicyCollection('a@b', Array(1023).fill('same')));
+  assert.throws(() => new PolicyCollection('a@b', Array(1024).fill('same')), denied('limit'));
+  assert.throws(() => new PolicyCollection('a@b', ['x'.repeat(1025)]), denied('limit'));
+  const ids = Array.from({ length: 2048 }, (_, i) => 'p' + i);
+  assert.doesNotThrow(() => admitPolicyIds(ids)); assert.doesNotThrow(() => admitPolicyIds([...ids, ...ids]));
+  assert.throws(() => admitPolicyIds([...ids, 'extra']), denied('limit'));
+  const entry = { policyId: 'p', policy: { enabled: true, budgetScope: 'principal', dailyBudgetMicros: 99, unknown: 'x'.repeat(1048576) } };
+  assert.doesNotThrow(() => admitEffectivePolicies([entry], ['p'], { unreferenced: { unknown: 'x'.repeat(1048577) }, p: { dailyBudgetMicros: 0, weeklyBudgetMicros: null, unknown: { policyId: 'x'.repeat(1025) } } }));
+  assert.throws(() => admitEffectivePolicies([entry], ['p'], { p: { unknown: 'y'.repeat(1048576) } }), denied('limit'));
 });

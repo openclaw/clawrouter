@@ -39,6 +39,10 @@ export async function fixture(t, entries = [], { held = true, legacy = false } =
         state.beforeMutation = null;
         await action?.(JSON.parse(init.body));
       }
+      if (new Headers(init.headers).has("x-clawrouter-policy-collection")) {
+        const response = await owner.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+        return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
+      }
       return owner.fetch(new Request(url, init));
     } }) },
     POLICY_KV: {
