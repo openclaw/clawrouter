@@ -24,6 +24,66 @@ auth:
         ChatGPT-Account-ID: "${grant.accountId}"
         OpenAI-Beta: responses=experimental
         originator: clawrouter
+products:
+  - id: platform-api
+    displayName: OpenAI API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [chat_completions, decisions, embeddings, images_generations, models_list, models_retrieve, moderations, realtime, responses, responses_cancel, responses_compact, responses_input_tokens, responses_retrieve, speech, standalone_search, transcriptions]
+    offers:
+      - endpoint: moderations
+        capability: llm.moderations
+        models: [openai/omni-moderation-latest, openai/omni-moderation-2024-09-26]
+      - endpoint: models_list
+        capability: models.list
+        models: null
+      - endpoint: models_retrieve
+        capability: models.retrieve
+        models: null
+      - endpoint: realtime
+        capability: audio.realtime
+        models: [openai/gpt-realtime-2.1]
+      - endpoint: standalone_search
+        capability: search.web
+        models: null
+      - endpoint: responses_compact
+        capability: llm.responses.compact
+        models: [openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra]
+      - endpoint: decisions
+        capability: llm.decisions
+        models: [openai/gpt-6-luna]
+      - endpoint: responses_input_tokens
+        capability: llm.count_tokens
+        models: [openai/gpt-5.6, openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra, openai/gpt-6-sol, openai/gpt-6-luna, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.5, openai/gpt-4.1-mini, openai/gpt-5.4]
+      - endpoint: responses
+        capability: llm.responses
+        models: &openaiResponseProductModels [openai/gpt-5.6, openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra, openai/gpt-6-sol, openai/gpt-6-luna, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.5, openai/gpt-4.1-mini, openai/gpt-5.4]
+      - endpoint: chat_completions
+        capability: llm.chat
+        models: [openai/gpt-5.6, openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra, openai/gpt-6-sol, openai/gpt-6-luna, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.5, openai/gpt-4.1-mini, openai/gpt-5.4]
+      - endpoint: embeddings
+        capability: llm.embeddings
+        models: [openai/text-embedding-3-small, openai/text-embedding-3-large]
+      - endpoint: transcriptions
+        capability: audio.transcription
+        models: [openai/gpt-4o-transcribe, openai/gpt-4o-mini-transcribe]
+      - endpoint: speech
+        capability: audio.speech
+        models: [openai/tts-1]
+      - endpoint: images_generations
+        capability: image.generation
+        models: [openai/gpt-image-2.5-sunburst, openai/gpt-image-2.5-sunburst-2026-09-08, openai/gpt-image-2.5-flare, openai/gpt-image-2.5-flare-2026-09-08]
+  - id: chatgpt-subscription
+    displayName: ChatGPT subscription
+    commercialModel: subscription
+    authenticationMethod: oauth2
+    binding: { type: grant-transport, grantKind: subscription }
+    endpoints: [responses]
+    offers:
+      - endpoint: responses
+        capability: llm.responses
+        models: *openaiResponseProductModels
 baseUrls: { default: https://api.openai.com }
 routing:
   nativePrefixes: [clawrouter-openai, openai]
