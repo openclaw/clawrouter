@@ -249,6 +249,26 @@ predeclared screen: no strong-model regression, at least 20% cost saving,
 and no more than twice strong-model elapsed time. This rules out promoting
 that policy based on these experiments. Generated checks remain fallible.
 
+### Private contract checks
+
+Set `FUSION_PAIR_POLICY=contract-private` to keep the generated regression
+probe out of the cheap worker's context. The author still writes and qualifies
+the probe against original source, then the cheap worker repairs independently.
+The coordinator checks the returned patch in a fresh sandbox. On failure, the
+strong fallback receives the probe and diagnostic feedback. Call and spending
+limits, fixed controls, and final independent acceptance remain unchanged.
+
+This tests whether exposing an incomplete generated check steers the worker
+toward that check rather than the full requirement. It does not make generated
+checks complete or trustworthy. The report names the policy and records
+`contractExposed: false`; no quality or cost improvement is presumed.
+
+The first development ablation with private checks solved 2/3 repairs for
+$0.697378 and took 357.2 seconds. It recovered the native-identity failure but
+still missed music. The earlier direct strong control solved 2/3 for $0.403979
+in 101.3 seconds. These non-contemporaneous observations show no economic
+advantage and do not justify promotion.
+
 ### Same-workflow contract controls
 
 Set `FUSION_PAIR_POLICY=contract-cheap` or `contract-strong` to run the same

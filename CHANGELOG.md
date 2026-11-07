@@ -8,6 +8,7 @@
 
 - Add three pinned Fusion workflow-validation repairs covering embedding errors, native identity and response context.
 
+- Add an experimental Fusion contract policy that withholds the verifier probe from the cheap repair worker until escalation.
 
 - Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
 

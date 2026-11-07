@@ -12,7 +12,7 @@ export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect'];
-const contractPolicies = ['contract', 'contract-cheap', 'contract-strong'];
+const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private'];
 
 // The caller supplies repair scope before inference; never inspect test answers.
 export function scopeStrategy(task) {
@@ -36,7 +36,7 @@ export function validatePair(config, taskCount) {
 export function pairModel(strategy, role, config) {
   if (strategy === 'contract-cheap') return config.cheap;
   if (strategy === 'contract-strong') return config.strong;
-  if (strategy === 'contract') return role === roles.cheap ? config.cheap : config.strong;
+  if (strategy === 'contract' || strategy === 'contract-private') return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
 }
@@ -131,7 +131,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         await save();
         try {
           const result = contractPolicies.includes(strategy)
-            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
+            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent, exposeProbe: policy !== 'contract-private' })
             : await agent(task, receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
