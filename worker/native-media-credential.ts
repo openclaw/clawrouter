@@ -1,3 +1,4 @@
+import type { PreparationAdmission } from "./provider-templates.ts";
 import { minimaxMusicBinding, minimaxSpeechBinding, readNativeMediaBinding, type NativeMediaBinding } from "../shared/native-media-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { GrantRequirement } from "./provider-auth.ts";
@@ -77,8 +78,9 @@ export function miniMaxMusicRequirement({ provider, endpoint, model, mode }: Gra
     && scheme.format === "Bearer ${secret}" && scheme.secretKind === "api_key";
 }
 
-export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, operation: NativeMediaBinding["operation"] = "minimax.speech"): { binding: string; secret: string; fingerprint: string } | null {
+export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, operation: NativeMediaBinding["operation"] = "minimax.speech", preparation?: PreparationAdmission): { binding: string; secret: string; fingerprint: string } | null {
   const raw = env.CLAWROUTER_MINIMAX_NATIVE_MEDIA_BINDING;
+  preparation?.primitive("CLAWROUTER_MINIMAX_NATIVE_MEDIA_BINDING", raw);
   if (typeof raw !== "string" || raw.length > 2048) return null;
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
@@ -91,8 +93,9 @@ export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, 
   // Match the actual configured selector's first available API-key source, not
   // merely another environment value that happens to contain the same bytes.
   const source = provider.config_keys.filter(key => /_(?:API_KEY|API_TOKEN)$/.test(key))
-    .find(key => typeof env[key] === "string" && env[key]);
+    .find(key => { const value = env[key]; preparation?.primitive(key, value); return typeof value === "string" && value; });
   const secret = env.MINIMAX_API_KEY;
+  preparation?.primitive("MINIMAX_API_KEY", secret);
   if (source !== "MINIMAX_API_KEY" || typeof secret !== "string" || !secret.length || secret.length > 8192 || /[^\x21-\x7e]/.test(secret)) return null;
   return { binding: JSON.stringify({ ...expected, credentialSha256: row.credentialSha256 }), secret, fingerprint: row.credentialSha256 };
 }
@@ -100,9 +103,9 @@ export function miniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, 
 
 // Both public eligibility and dispatch use the same actual fingerprint check.
 // The second read closes rotation during the asynchronous digest operation.
-export async function qualifyMiniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, operation: NativeMediaBinding["operation"] = "minimax.speech") {
-  const selected = miniMaxEnvironmentBinding(provider, env, operation);
+export async function qualifyMiniMaxEnvironmentBinding(provider: CompiledProvider, env: Env, operation: NativeMediaBinding["operation"] = "minimax.speech", preparation?: PreparationAdmission) {
+  const selected = miniMaxEnvironmentBinding(provider, env, operation, preparation);
   if (!selected || await sha256Hex(selected.secret) !== selected.fingerprint) return null;
-  const current = miniMaxEnvironmentBinding(provider, env, operation);
+  const current = miniMaxEnvironmentBinding(provider, env, operation, preparation);
   return current && current.secret === selected.secret && current.binding === selected.binding ? current : null;
 }

@@ -192,7 +192,7 @@ test("MiniMax final owner check rejects an old credential cache revision", async
   await putGrantCredentials(f.env, grantKey, { enabled: false }, true);
   const cached = await cachedGrantCredentials(f.env, grantKey, projection, () => { throw new Error("unexpected cache miss"); });
   assert.equal(cached.credential, selected.credential);
-  await assert.rejects(() => check(new AbortController().signal), error => error.code === "native_media_authorization_required");
+  await assert.rejects(() => check(f.env, new AbortController().signal), error => error.code === "native_media_authorization_required");
   assert.equal(f.sent.length, 0);
 });
 

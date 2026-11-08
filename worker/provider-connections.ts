@@ -1,5 +1,11 @@
 import type { ProviderConnection } from "./types";
 import { HttpError } from "./utils.ts";
+import type { PreparationAdmission } from "./provider-templates.ts";
+
+export function providerConfigurationList(value: string, owner?: PreparationAdmission): string[] {
+  owner?.csv(value);
+  return value.split(",").map(item => item.trim()).filter(Boolean);
+}
 
 export type ProviderConnectionMutation = Pick<ProviderConnection, "providerId"> & Partial<Pick<ProviderConnection, "enabled" | "label" | "monthlyBudgetMicros">>;
 
