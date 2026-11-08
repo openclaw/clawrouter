@@ -10,6 +10,17 @@ import { startBundledWorkerdFixture } from './helpers/workerd.mjs';
 const require = createRequire(import.meta.resolve('wrangler/package.json'));
 const { build } = require('esbuild');
 
+function ownSocket(ws) {
+  let peerClosed = false, attempted = false, failed = false, failure;
+  ws.addEventListener('close', () => { peerClosed = true; });
+  return { close() {
+    if (failed) throw failure;
+    if (peerClosed || attempted) return;
+    attempted = true;
+    try { ws.close(1000); } catch (error) { failed = true; failure = error; throw error; }
+  } };
+}
+
 // Fixed 15ms authority RPC / 30ms status RPC delays wrap real production
 // authority and SQLite ledgers. Neither authorization nor accounting is mocked.
 const router = String.raw`
@@ -17,6 +28,7 @@ import handler, { BudgetLedgerObject as RealBudgetLedger } from './worker/index.
 import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { isPreparationLimit } from './worker/provider-templates.ts';
 export * from './worker/index.ts';
+${ownSocket}
 let delay = { authority: 15, ledger: 30 }, calls = { authority: 0, ledger: 0, held: 0 };
 let holdPath = '', releases = [], observations = [], observing = false;
 let holdInspection = false, heldInspection = false;
@@ -101,7 +113,7 @@ export default { async fetch(r, env, ctx) {
   if (path === '/fixture-hold') { const mode = await r.text(); holdPath = mode === 'on' ? '/status' : mode === 'dispatch' ? '/dispatch' : ''; if (!holdPath) { for (const release of releases) release(); releases = []; } return new Response('ok'); }
   const current={...env,ACCESS_CONTROL:delayed(env.ACCESS_CONTROL,'authority'),BUDGET_LEDGER:delayed(env.BUDGET_LEDGER,'ledger')};
   if(path==='/fixture-owned-inspection'){
-   const mode=await r.text(),probe=preparationProbe(ctx,mode==='overflow');let ws,hasPrimary=false,primary,errors=[];
+   const mode=await r.text(),probe=preparationProbe(ctx,mode==='overflow');let ws,socket,hasPrimary=false,primary,errors=[];
    const events=[];let closed=false,hasEventFailure=false,eventFailure;
    const next=async type=>{for(let i=0;i<1500;i++){if(hasEventFailure)throw eventFailure;const at=events.findIndex(e=>e.type===type);if(at>=0)return events.splice(at,1)[0];
      if(closed)throw Error('fixture socket closed before expected event');await pause(5);}throw Error('fixture socket event missing');};
@@ -109,7 +121,7 @@ export default { async fetch(r, env, ctx) {
     const headers=new Headers(r.headers);headers.set('upgrade','websocket');
     const reply=await probe.entry(handler.fetch(new Request('https://router/v1/realtime?model=gpt-realtime-2.1',{headers,signal:r.signal}),current,probe.context));
     if(reply.status!==101){await reply.text();throw Error('fixture upgrade failed');}
-    ws=reply.webSocket;ws.addEventListener('message',e=>{try{const value=JSON.parse(e.data);events.push(value);if(value.type==='error')errors.push(value.error.code);}catch(error){hasEventFailure=true;eventFailure=error;}});
+    ws=reply.webSocket;socket=ownSocket(ws);ws.addEventListener('message',e=>{try{const value=JSON.parse(e.data);events.push(value);if(value.type==='error')errors.push(value.error.code);}catch(error){hasEventFailure=true;eventFailure=error;}});
     ws.addEventListener('close',()=>{closed=true;});ws.accept();
     if(mode==='overflow')ws.send(JSON.stringify({type:'session.update',session:__ASR_SESSION__}));
     else {ws.send(JSON.stringify({type:'session.update',session:__INITIAL_SESSION__}));await next('session.updated');
@@ -121,7 +133,7 @@ export default { async fetch(r, env, ctx) {
    }catch(error){hasPrimary=true;primary=error;}
    finally{
     preparation.operationSettled=true;preparation.operationFailed=hasPrimary;
-    const failures=hasEventFailure?[eventFailure]:[];try{ws?.close(1000);}catch(error){failures.push(error);}
+    const failures=hasEventFailure?[eventFailure]:[];try{socket?.close();}catch(error){failures.push(error);}
     try{await probe.join();}catch(error){failures.push(error);}
     preparation.joined=true;
     if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'cadence primary and cleanup failures');
@@ -213,7 +225,7 @@ async function fixture(t, options = {}) {
   const release = () => { released = true; gate?.end('released'); gate = undefined; };
   t.after(async () => {
     release(); const failures = [];
-    for (const ws of sockets) try { ws.close(1000); } catch (error) { failures.push(error); }
+    for (const socket of sockets) try { socket.close(); } catch (error) { failures.push(error); }
     try { await drainProbe?.(); } catch (error) { failures.push(error); }
     for (const observed of clients) { const outcome = await observed; if (outcome.failed) failures.push(outcome.error); }
     try { await mf?.dispose(); } catch (error) { failures.push(error); }
@@ -260,9 +272,9 @@ async function fixture(t, options = {}) {
     stats() { return track(svc.fetch('https://upstream/fixture-stats').then(response => response.json())); },
     open(asr, response = true, authHeaders = headers) { return track((async () => {
       const r = await mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } }); assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
-      const ws = r.webSocket, q = observe(ws); sockets.push(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
+      const ws = r.webSocket, socket = ownSocket(ws); sockets.push(socket); const q = observe(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
       if (response) { ws.send(JSON.stringify({ type: 'response.create' })); await q.next('response.output_item.added'); }
-      return { ws, q };
+      return { ws, q, close: socket.close };
     })()); }
   };
   } catch (error) { hasPrimary = true; primary = error; throw error; }
@@ -287,7 +299,7 @@ async function cadence(t, asr, frames, rpc) {
     limits: 'Production shared16-event/256KiB queue, aggregate/idle limits and4096 bidirectional event cap unchanged. Synthetic workerd/SQL only; no physical/provider acceptance.' };
   t.diagnostic(JSON.stringify(result));
   if (process.env.REALTIME_CADENCE_REPORT_PREFIX) await writeFile(process.env.REALTIME_CADENCE_REPORT_PREFIX + '-' + (asr ? 'asr' : 'no-asr') + (rpc ? '-a' + rpc.authority + '-l' + rpc.ledger : '') + '.json', JSON.stringify({ ...result, delayRows: stats.appends.map((x, i) => ({ index: x.index, at: x.at, offeredAt: offeredAt[x.index], delayMs: delay[i] })), downstreamDelays: c.q.outputDelay }, null, 2) + String.fromCharCode(10));
-  if (!c.q.closed) c.ws.close(1000);
+  c.close();
   assert.deepEqual(result.errors, []); assert.equal(result.closed, false); assert.equal(result.egress, frames); assert.equal(result.acknowledgments, frames);
   assert.ok(result.receivedAudioFrames >= frames * 0.9, JSON.stringify(result)); assert.ok(result.maxEgressMs <= 250, JSON.stringify(result)); assert.ok(result.maxDownstreamMs <= 250, JSON.stringify(result));
   assert.ok(result.maxSenderScheduleLagMs <= 100, 'host did not sustain native cadence: ' + JSON.stringify(result));
@@ -382,7 +394,7 @@ test('socket-local media authority cannot be refreshed by a different key', { ti
   const before = (await f.stats()).appends.length;
   append(a, 2); assert.equal((await a.q.next('error')).error.code, 'realtime_authority_revoked');
   assert.equal((await f.stats()).appends.length, before); assert.equal(b.q.closed, false);
-  append(b, 3); await b.q.next('rate_limits.updated'); b.ws.close(1000);
+  append(b, 3); await b.q.next('rate_limits.updated'); b.close();
 });
 test('slow authority completion does not renew media freshness', { timeout: 15_000 }, async t => {
   const f = await fixture(t), c = await f.open(false, false);
@@ -430,7 +442,7 @@ test('originating cadence drain retains late parent and child undefined failures
   try {
     const c = await f.open(false, false), snapshot = await f.probeState();
     assert.deepEqual(c.q.errors, []); assert.equal(snapshot.preparation.drainComplete, false);
-    c.ws.close(1000);
+    c.close();
     await until(async () => { const state = (await f.probeState()).preparation; assert.equal(state.drainComplete, false, 'originating drain completed before the held phase'); return state.phase === 'labelled-late-cleanup-held' && f.held(); });
     const held = await f.probeState(); assert.equal(f.held(), true); assert.equal(held.preparation.drainComplete, false);
     f.release(); const done = await f.drain();
