@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Retry transient Worker version-override fallbacks during deploy smoke reads and require stable version proof before POSTs, without replaying paid requests.
+- Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.
+
 - Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
 
 - Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
@@ -86,6 +88,8 @@
 - Bound selected assignment rule/KV/SQL sources, exact revision capture and complete stored/reply representations before materialization or writes. Admit four reconciliations through original-stream retirement and the existing FIFO; preserve legacy no-ops and projected storage without migration or rollback claims. Selected callers now propagate sanitized owner `404 unknown_user` and `400/500 authority_error` instead of the old generic public `500 internal_error` wrapper; unmarked flows are unchanged.
 
 - Bound selected policy collections with shared caller KV admission, private SQL/request/reply profiles, original-stream retirement and prospective candidate checks before normalization or writes. Conservatively reserve structurally valid publication permissions even when expired; actual expiry and permissions remain unchanged, with existing query/ACK public-error mappings preserved.
+
+- Preserve original budget-reservation failures and every ordered ledger/queue cleanup failure privately after all started operations settle. Keep the existing public accounting-unavailable error, acknowledged reservation IDs and queue recovery behavior.
 
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 

@@ -20,6 +20,14 @@ interface LedgerBudgetReservation {
   dispatched?: true;
 }
 
+interface BudgetSettlementFailure {
+  readonly reservationId: string;
+  readonly objectName: string;
+  readonly ledgerReason: unknown;
+  readonly queueReason: unknown;
+}
+const reservationFailureDiagnostics = Symbol("budgetReservationFailure");
+
 export interface BudgetReservationIntent {
   kind: "policy" | "daily" | "weekly" | "provider";
   limitHint?: string | null;
@@ -102,8 +110,16 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) {
     if (reservation.reservations.length) {
-      try { await settleBudget(env, reservation, 0, options.search); }
-      catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
+      const cleanupFailures: BudgetSettlementFailure[] = [];
+      try { await settleBudgetInternal(env, reservation, 0, options.search, cleanupFailures); }
+      catch {
+        const error = new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers.");
+        Object.defineProperty(error, reservationFailureDiagnostics, { value: Object.freeze({
+          reservationReason: failed.reason,
+          cleanupFailures: Object.freeze(cleanupFailures.filter(item => item !== undefined)),
+        }) });
+        throw error;
+      }
     }
     throw failed.reason;
   }
@@ -172,30 +188,45 @@ async function publishUsage(env: Env, event: UsageEvent, search?: MiniMaxSearchO
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
+  return settleBudgetInternal(env, reservation, actualCostMicros, search);
+}
+
+async function settleBudgetInternal(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation, cleanupFailures?: BudgetSettlementFailure[]): Promise<void> {
+  const settle = (item: LedgerBudgetReservation, index: number) => settleReservation(env, item, actualCostMicros, search,
+    cleanupFailures ? failure => { cleanupFailures[index] = failure; } : undefined);
   if (search) {
     let failure: unknown, failed = false;
-    for (const item of reservation.reservations) {
-      try { await settleReservation(env, item, actualCostMicros, search); }
+    for (let index = 0; index < reservation.reservations.length; index++) {
+      try { await settle(reservation.reservations[index], index); }
       catch (error) { if (!failed) failure = error; failed = true; }
     }
     if (failed) throw failure;
     return;
   }
-  const results = await Promise.allSettled(reservation.reservations.map((reservation) => settleReservation(env, reservation, actualCostMicros)));
+  const results = await Promise.allSettled(reservation.reservations.map(settle));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw failed.reason;
 }
 
-async function settleReservation(env: Env, reservation: LedgerBudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
-  const body: BudgetSettleRequest = { reservationId: reservation.reservationId, actualCostMicros };
+async function settleReservation(env: Env, reservation: LedgerBudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation, failed?: (failure: BudgetSettlementFailure) => void): Promise<void> {
+  const reservationId = reservation.reservationId;
+  const body: BudgetSettleRequest = { reservationId, actualCostMicros };
+  const objectName = reservation.objectName;
+  let ledgerReason: unknown;
   try {
-    await settleLedger(env, reservation.objectName, body, undefined, search);
+    await settleLedger(env, objectName, body, undefined, search);
     return;
-  } catch {
+  } catch (error) {
+    ledgerReason = error;
     // The durable queue is the recovery boundary for thrown and non-2xx ledger failures.
   }
-  const message = { kind: "budget_settlement" as const, ledger: { objectName: reservation.objectName }, request: body };
-  if (search) await search.task(() => env.USAGE_QUEUE.send(message), true); else await env.USAGE_QUEUE.send(message);
+  const message = { kind: "budget_settlement" as const, ledger: { objectName }, request: body };
+  try {
+    if (search) await search.task(() => env.USAGE_QUEUE.send(message), true); else await env.USAGE_QUEUE.send(message);
+  } catch (queueReason) {
+    failed?.(Object.freeze({ reservationId, objectName, ledgerReason, queueReason }));
+    throw queueReason;
+  }
 }
 
 export function emptyReservation(): BudgetReservation { return { reservations: [], reservedMicros: 0 }; }
