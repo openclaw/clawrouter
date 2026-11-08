@@ -63,7 +63,7 @@ function environment(bindings,a){
      if(body.selection?.excludedKeys?.length){
       a.alternates++;a.excludedCount=body.selection.excludedKeys.length;a.altEntered=true;
       if(a.held)await gate(a.id,'prepare');
-      
+
      }
     }
     if(a.active&&binding==='GRANT_CREDENTIALS'&&path==='/materialize')a.materializations++;
