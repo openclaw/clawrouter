@@ -1,16 +1,16 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PreparationAdmission, isPreparationLimit, preparationHeader, preparationReplace, resolveTemplate, resolveHeaderTemplate, optionalConfigKeys } from '../provider-templates.ts';
-import { providerConfigurationList, normalizeConnectionMutation } from '../provider-connections.ts';
-import { applyTransportHeaders } from '../provider-auth.ts';
-import { providerById, configuredUpstream, upstreamPath, signSigV4 } from '../providers.ts';
-import { prepareManifestRequest, concreteOpenAiSelection, isSelectionFailure, manifestEnvelope } from '../proxy-selection.ts';
-import { prepareUpstreamRequest } from '../proxy-upstream-request.ts';
-import { qualifyMiniMaxEnvironmentBinding } from '../native-media-credential.ts';
-import { minimaxSpeechBinding } from '../../shared/native-media-binding.ts';
-import { responseRouteDigest, prepareResponseControl } from '../responses-control-dispatch.ts';
-import { sha256Hex } from '../utils.ts';
+const { PreparationAdmission, isPreparationLimit, preparationHeader, preparationReplace, resolveTemplate, resolveHeaderTemplate, optionalConfigKeys } = await import('../provider-templates.ts');
+const { providerConfigurationList, normalizeConnectionMutation } = await import('../provider-connections.ts');
+const { applyTransportHeaders } = await import('../provider-auth.ts');
+const { providerById, configuredUpstream, upstreamPath, signSigV4 } = await import('../providers.ts');
+const { prepareManifestRequest, concreteOpenAiSelection, isSelectionFailure, manifestEnvelope } = await import('../proxy-selection.ts');
+const { prepareUpstreamRequest } = await import('../proxy-upstream-request.ts');
+const { qualifyMiniMaxEnvironmentBinding } = await import('../native-media-credential.ts');
+const { minimaxSpeechBinding } = await import('../../shared/native-media-binding.ts');
+const { responseRouteDigest, prepareResponseControl } = await import('../responses-control-dispatch.ts');
+const { sha256Hex } = await import('../utils.ts');
 
 const limited = error => isPreparationLimit(error) && error.status === 503 && error.code === 'provider_preparation_unavailable';
 const fixture = { ...providerById('openrouter'), id: 'fixture', config_keys: ['FIXTURE_VALUE', 'FIXTURE_OPTIONAL'], optional_config_keys: ['FIXTURE_OPTIONAL'] };

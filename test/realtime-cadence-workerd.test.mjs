@@ -20,28 +20,54 @@ export * from './worker/index.ts';
 let delay = { authority: 15, ledger: 30 }, calls = { authority: 0, ledger: 0, held: 0 };
 let holdPath = '', releases = [], observations = [], observing = false;
 let holdInspection = false, heldInspection = false;
-let preparation = { owners:0, main:0, asr:0, reused:0, wrongOwner:0, observations:0, pending:0, peakPending:0, settled:0, registered:0, background:0, phase:'idle', joined:false, operationSettled:false, operationFailed:false };
-// All actual promises/reasons stay in this originating request's probe.
-function preparationProbe(ctx, allowCapacity = false) {
- const roots=[], owners=new WeakMap();let nextOwner=0,latest,handshake;
+let preparation = { owners:0, main:0, asr:0, reused:0, wrongOwner:0, observations:0, pending:0, peakPending:0, settled:0, registered:0, background:0, phase:'idle', joined:false, operationSettled:false, operationFailed:false, producerClosed:false, enrollmentClosed:false, drainComplete:false, drainFailed:false, drainFailures:0, drainUndefined:0, drainRoots:0 };
+// All original promises and failure reasons stay in this request's drain owner.
+function preparationProbe(ctx, allowCapacity = false, lateFailure = false) {
+ const roots=[], owners=new WeakMap();let nextOwner=0,latest,handshake,opened=false,ended=false,endProducer;
+ const producerClosed=new Promise(resolve=>{endProducer=resolve;});
+ const end=()=>{if(!ended){ended=true;preparation.producerClosed=true;endProducer();}};
  const watch=(pending,kind,owner)=>{const outcome=Promise.resolve(pending).then(()=>({failed:false}),error=>({failed:true,error})).then(result=>{
   if(kind==='observation'){owner.pending=false;preparation.pending--;preparation.settled++;}
   if(kind==='background')preparation.background--;
   return {...result,kind};});roots.push(outcome);return outcome;};
- return {
-  context:{waitUntil(p){preparation.background++;watch(p,'background');ctx.waitUntil(p);},
-   fixtureOwner(owner){if(owners.has(owner)||owner===handshake)preparation.reused++;const mark={id:++nextOwner,main:false,pending:true};owners.set(owner,mark);latest=mark;preparation.owners++;},
-   fixturePreparation(selection,record,p){if(record)handshake=selection.preparation;const mark=owners.get(selection.preparation);
-    if(!record){if(!mark)preparation.wrongOwner++;else if(selection.capability==='audio.realtime'){
-      if(mark.main)preparation.reused++;mark.main=true;preparation.main++;
-     }else {preparation.asr++;if(!mark.main)preparation.wrongOwner++;}}
-    watch(p,'preparation');},
-   fixtureObservation(p){preparation.observations++;preparation.pending++;preparation.peakPending=Math.max(preparation.peakPending,preparation.pending);watch(p,'observation',latest);preparation.registered++;}
+ const context={waitUntil(p){preparation.background++;watch(p,'background');ctx.waitUntil(p);},
+  fixtureProducerOpened(){opened=true;},
+  fixtureProducerClosed(){
+   // The real close method has stopped socket/timer producers and registered
+   // its final task. Held parents may still register children during the join.
+   if(lateFailure){
+    const parent=(async()=>{preparation.phase='labelled-late-cleanup-held';
+     const gate=await fetch('https://cadence-gate.example/observation');await gate.text();
+     const child=Promise.reject(undefined);ctx.waitUntil(watch(child,'fixture-child'));
+     throw undefined;
+    })();ctx.waitUntil(watch(parent,'fixture-parent'));
+   }
+   end();
   },
-  async join(){const failures=[];for(let i=0;i<roots.length;i++){const outcome=await roots[i];
-   if(outcome.failed&&!(allowCapacity&&outcome.kind!=='background'&&isPreparationLimit(outcome.error)))failures.push(outcome.error);}
-   if(failures.length)throw new AggregateError(failures,'cadence independent observation failures');
+  fixtureOwner(owner){if(owners.has(owner)||owner===handshake)preparation.reused++;const mark={id:++nextOwner,main:false,pending:true};owners.set(owner,mark);latest=mark;preparation.owners++;},
+  fixturePreparation(selection,record,p){if(record)handshake=selection.preparation;const mark=owners.get(selection.preparation);
+   if(!record){if(!mark)preparation.wrongOwner++;else if(selection.capability==='audio.realtime'){
+     if(mark.main)preparation.reused++;mark.main=true;preparation.main++;
+    }else {preparation.asr++;if(!mark.main)preparation.wrongOwner++;}}
+   watch(p,'preparation');},
+  fixtureObservation(p){preparation.observations++;preparation.pending++;preparation.peakPending=Math.max(preparation.peakPending,preparation.pending);watch(p,'observation',latest);preparation.registered++;}
+ };
+ // Register before invoking the public handler. This is the actual join, never
+ // a Promise retrieved from another request or inferred from scalar counters.
+ const completion=(async()=>{
+  await producerClosed;const failures=[];let index=0;
+  for(;;){while(index<roots.length){const outcome=await roots[index++];
+    if(outcome.failed&&!(allowCapacity&&outcome.kind!=='background'&&isPreparationLimit(outcome.error)))failures.push(outcome.error);}
+   await Promise.resolve();if(index===roots.length)break;
   }
+  preparation.enrollmentClosed=true;preparation.drainRoots=roots.length;
+  preparation.drainFailures=failures.length;preparation.drainUndefined=failures.filter(error=>error===undefined).length;
+  return failures.length?{failed:true,error:new AggregateError(failures,'cadence originating-request failures')}:{failed:false};
+ })().then(outcome=>{preparation.drainFailed=outcome.failed;preparation.drainComplete=true;return outcome;});
+ ctx.waitUntil(completion); // Tagged outcome retains raw reasons locally; only fixed diagnostics leave.
+ return {context,
+  entry(p){const observed=watch(p,'entry');void observed.then(()=>{if(!opened)end();});return p;},
+  async join(){const outcome=await completion;if(outcome.failed)throw outcome.error;}
  };
 }
 
@@ -81,7 +107,7 @@ export default { async fetch(r, env, ctx) {
      if(closed)throw Error('fixture socket closed before expected event');await pause(5);}throw Error('fixture socket event missing');};
    try{
     const headers=new Headers(r.headers);headers.set('upgrade','websocket');
-    const reply=await handler.fetch(new Request('https://router/v1/realtime?model=gpt-realtime-2.1',{headers,signal:r.signal}),current,probe.context);
+    const reply=await probe.entry(handler.fetch(new Request('https://router/v1/realtime?model=gpt-realtime-2.1',{headers,signal:r.signal}),current,probe.context));
     if(reply.status!==101){await reply.text();throw Error('fixture upgrade failed');}
     ws=reply.webSocket;ws.addEventListener('message',e=>{try{const value=JSON.parse(e.data);events.push(value);if(value.type==='error')errors.push(value.error.code);}catch(error){hasEventFailure=true;eventFailure=error;}});
     ws.addEventListener('close',()=>{closed=true;});ws.accept();
@@ -103,7 +129,8 @@ export default { async fetch(r, env, ctx) {
    }
    return Response.json({fixture:'owned-realtime-inspection',errors,preparation});
   }
-  return handler.fetch(r,current,r.headers.has('x-fixture-preparation-probe')?preparationProbe(ctx).context:ctx);
+  if(r.headers.has('x-fixture-preparation-probe')){const probe=preparationProbe(ctx,false,r.headers.has('x-fixture-late-failure'));return probe.entry(handler.fetch(r,current,probe.context));}
+  return handler.fetch(r,current,ctx);
 }, queue: handler.queue };
 `;
 const upstream = String.raw`
@@ -160,13 +187,22 @@ async function observedRuntime(temporary, upstreamSource, bindings) {
         const entry = 'export async function proxyRealtimeWebSocket(request: Request, env: Env, context: ExecutionContext): Promise<Response> {';
         const owner = '    const preparation = new PreparationAdmission();';
         const observation = '    const observation = inspect(input);';
-        for (const anchor of [entry, owner, observation]) assert.equal(source.split(anchor).length, 2, 'unique observation anchor');
+        const producer = '  const session = new RealtimeSession(pair[1], upstream, {';
+        const options = '    waitUntil: promise => context.waitUntil(promise),';
+        for (const anchor of [entry, owner, observation, producer, options]) assert.equal(source.split(anchor).length, 2, 'unique observation anchor');
         assert.equal(source.split('await prepareSelected(').length, 4, 'three original preparation calls');
         source = source.replaceAll('await prepareSelected(', 'await fixturePrepare(').replace(entry, entry + `
   const fixturePrepare=(...args)=>{const original=prepareSelected(...args);context.fixturePreparation?.(args[2],args[6],original);return original;};`)
           .replace(owner, owner + '\n    context.fixtureOwner?.(preparation);')
-          .replace(observation, observation + '\n    context.fixtureObservation?.(observation);');
+          .replace(observation, observation + '\n    context.fixtureObservation?.(observation);')
+          .replace(producer, '  context.fixtureProducerOpened?.();\n' + producer)
+          .replace(options, options + '\n    fixtureProducerClosed: () => context.fixtureProducerClosed?.(),');
         return { contents: source, loader: 'ts', resolveDir: dirname(path) };
+      });
+      build.onLoad({ filter: /[\\/]worker[\\/]realtime-session\.ts$/ }, async ({ path }) => {
+        const source = await readFile(path, 'utf8'), closed = '    this.options.waitUntil(finish);';
+        assert.equal(source.split(closed).length, 2, 'one actual producer-close notification');
+        return { contents: source.replace(closed, closed + '\n    this.options.fixtureProducerClosed?.();'), loader: 'ts', resolveDir: dirname(path) };
       });
     } }] });
   return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamSource, { preventEviction: true, bindings });
@@ -186,6 +222,7 @@ async function fixture(t, options = {}) {
     failures.push(...serverFailures);
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'cadence fixture cleanup');
   });
+  try {
   server = createServer((request, response) => { request.resume(); if (request.url !== '/observation') { response.writeHead(404); response.end(); }
     else if (released) response.end('released'); else if (gate) { serverFailures.push(Error('unexpected second held observation')); response.writeHead(500); response.end(); } else gate = response; });
   server.on('error', error => serverFailures.push(error));
@@ -196,29 +233,41 @@ async function fixture(t, options = {}) {
   mf = await observedRuntime(temporary, upstreamSource, { OPENAI_API_KEY: expectedKey });
   const kv = await mf.getKVNamespace('POLICY_KV', 'router'), ns = await mf.getDurableObjectNamespace('ACCESS_CONTROL', 'router');
   const authority = ns.get(ns.idFromName('policy-bindings')), svc = await mf.getWorker('upstream');
-  const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret, ...(options.probe ? { 'x-fixture-preparation-probe': 'on' } : {}), ...(options.large ? { 'openai-organization': 'o'.repeat(8192), 'openai-project': 'p'.repeat(8192) } : {}) };
+  const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret, ...(options.probe ? { 'x-fixture-preparation-probe': 'on' } : {}), ...(options.lateFailure ? { 'x-fixture-late-failure': 'on' } : {}), ...(options.large ? { 'openai-organization': 'o'.repeat(8192), 'openai-project': 'p'.repeat(8192) } : {}) };
+  const track = pending => { clients.push(Promise.resolve(pending).then(value => ({ failed: false, value }), error => ({ failed: true, error }))); return pending; };
   const policy = async (extra = {}) => {
-    const r = await authority.fetch('https://authority/policies/put', { method: 'POST', body: JSON.stringify({ policyId: 'fixture', policy: { enabled: true, generation: 'g1', providers: ['openai'], budgetMode: 'soft', monthlyBudgetMicros: 100_000_000, retainRequestContent: false, ...extra } }) }); assert.equal(r.status, 200);
+    const r = await authority.fetch('https://authority/policies/put', { method: 'POST', body: JSON.stringify({ policyId: 'fixture', policy: { enabled: true, generation: 'g1', providers: ['openai'], budgetMode: 'soft', monthlyBudgetMicros: 100_000_000, retainRequestContent: false, ...extra } }) }); await r.text(); assert.equal(r.status, 200);
   };
   const credential = { enabled: true, secretSha256: createHash('sha256').update(secret).digest('hex'), policyId: 'fixture', policyGeneration: 'g1' };
   const setCredential = async extra => { const r = await authority.fetch('https://authority/credentials/mutate', { method: 'POST', body: JSON.stringify({ operation: 'put', credentialId: 'fixture', scope: 'admin', actor: { auth: 'admin_token', role: 'admin', email: 'fixture@example.invalid' }, credential: { ...credential, ...extra } }) }); assert.equal(r.status, 200, await r.text()); };
-  await policy(); await kv.put('credentials/fixture', JSON.stringify(credential));
+  await track(policy()); await kv.put('credentials/fixture', JSON.stringify(credential));
   await kv.put('connections/openai', JSON.stringify({ providerId: 'openai', enabled: true, monthlyBudgetMicros: 100_000_000 }));
-  const call = (url, options) => { const pending = mf.dispatchFetch(url, options).then(async response => ({ status: response.status, text: await response.text() }));
-    clients.push(pending.then(value => ({ failed: false, value }), error => ({ failed: true, error }))); return pending; };
+  const call = (url, options) => track(mf.dispatchFetch(url, options).then(async response => ({ status: response.status, text: await response.text() })));
   const probeState = async () => { const response = await call('https://router/fixture-calls'); assert.equal(response.status, 200); return JSON.parse(response.text); };
-  // Early assertions still close the socket and observe every registered root's
-  // settlement before fixture disposal. No foreign-context I/O promise is shared.
-  if (options.probe) drainProbe = () => until(async () => { const { preparation } = await probeState(); return preparation.pending === 0 && preparation.background === 0; });
-  return { mf, kv, authority, svc, headers, policy, setCredential, release, held: () => !!gate, primary(error) { hasPrimary = true; primary = error; },
-    probeState,
-    owned(mode) { return call('https://router/fixture-owned-inspection', { method: 'POST', headers, body: mode }); }, async control(path, body) { return mf.dispatchFetch('https://router' + path, { method: 'POST', body }); }, async stats() { return (await svc.fetch('https://upstream/fixture-stats')).json(); }, async open(asr, response = true, authHeaders = headers) {
-    const r = await mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } }); assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
-    const ws = r.webSocket, q = observe(ws); sockets.push(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
-    if (response) { ws.send(JSON.stringify({ type: 'response.create' })); await q.next('response.output_item.added'); }
-    return { ws, q };
-  } };
+  // Diagnostics are emitted only AFTER the original request actually joins its
+  // tagged roots. This request never receives or awaits that request's I/O.
+  drainProbe = options.probe ? async () => {
+    const done = await until(async () => { const { preparation } = await probeState(); return preparation.drainComplete ? preparation : false; });
+    assert.equal(done.producerClosed, true); assert.equal(done.enrollmentClosed, true); assert.ok(done.drainRoots > 0);
+    assert.equal(done.drainFailed, !!options.lateFailure);
+    assert.equal(done.drainFailures, options.lateFailure ? 2 : 0); assert.equal(done.drainUndefined, options.lateFailure ? 2 : 0);
+    return done;
+  } : undefined;
+  return { mf, kv, authority, svc, headers, policy, setCredential, release, released: () => released, held: () => !!gate, primary(error) { hasPrimary = true; primary = error; },
+    track, probeState, drain: drainProbe,
+    owned(mode) { return call('https://router/fixture-owned-inspection', { method: 'POST', headers, body: mode }); },
+    control(path, body) { return call('https://router' + path, { method: 'POST', body }); },
+    stats() { return track(svc.fetch('https://upstream/fixture-stats').then(response => response.json())); },
+    open(asr, response = true, authHeaders = headers) { return track((async () => {
+      const r = await mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } }); assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
+      const ws = r.webSocket, q = observe(ws); sockets.push(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
+      if (response) { ws.send(JSON.stringify({ type: 'response.create' })); await q.next('response.output_item.added'); }
+      return { ws, q };
+    })()); }
+  };
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 }
+
 async function cadence(t, asr, frames, rpc) {
   const f = await fixture(t, { probe: true });
   try {
@@ -230,7 +279,7 @@ async function cadence(t, asr, frames, rpc) {
   }
   await sleep(Math.max(0, start + frames * 20 - Date.now()));
   for (let i = 0; i < 100 && c.q.acks.length < frames && !c.q.closed; i++) await sleep(5);
-  const stats = await (await f.svc.fetch('https://upstream/fixture-stats')).json(), calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
+  const stats = await f.stats(), calls = await f.probeState();
   const delay = stats.appends.map(x => x.at - offeredAt[x.index]);
   const result = { asr, durationMs: Date.now() - start, offered: frames, nativeChunkMs: 20, bytesPerChunk: 160, injectedAuthorityRpcMs: rpc?.authority ?? 15, injectedLedgerStatusRpcMs: rpc?.ledger ?? 30,
     egress: stats.appends.length, acknowledgments: c.q.acks.length, upstreamAudioFrames: stats.outputs, receivedAudioFrames: c.q.outputDelay.length, maxUpstreamTickGapMs: stats.maxTickGapMs,
@@ -242,7 +291,8 @@ async function cadence(t, asr, frames, rpc) {
   assert.deepEqual(result.errors, []); assert.equal(result.closed, false); assert.equal(result.egress, frames); assert.equal(result.acknowledgments, frames);
   assert.ok(result.receivedAudioFrames >= frames * 0.9, JSON.stringify(result)); assert.ok(result.maxEgressMs <= 250, JSON.stringify(result)); assert.ok(result.maxDownstreamMs <= 250, JSON.stringify(result));
   assert.ok(result.maxSenderScheduleLagMs <= 100, 'host did not sustain native cadence: ' + JSON.stringify(result));
-  const final = await until(async () => { const state = await f.probeState(); return !state.preparation.pending && !state.preparation.background ? state.preparation : false; });
+  const final = await f.drain();
+  assert.equal(final.pending, 0); assert.equal(final.background, 0);
   assert.equal(final.reused, 0); assert.equal(final.wrongOwner, 0); assert.equal(final.main, final.owners);
   if (frames === 500) assert.ok(final.main > 86, 'healthy media continues beyond the old failure interval');
   if (asr) assert.ok(final.asr > 0, 'main and ASR use the same observed owner');
@@ -349,9 +399,8 @@ for (const mode of ['overflow', 'hold']) test('actual Realtime observation owner
   try {
     const pending = f.owned(mode);
     if (mode === 'hold') {
-      let state, settled = false, released = false;
-      const early = pending.then(() => { settled = true; if (!released) throw Error('diagnostic completed before held observation release'); }, error => { settled = true; throw error; });
-      early.catch(() => {}); // Observed now; raced until release, then joined below.
+      let state, settled = false;
+      const early = f.track(pending.then(() => { settled = true; if (!f.released()) throw Error('diagnostic completed before held observation release'); }, error => { settled = true; throw error; }));
       for (let n = 0; n < 1800; n++) {
         state = await Promise.race([early, f.probeState()]);
         if (state.preparation.operationFailed) { f.release(); await pending; assert.fail('failed originating operation unexpectedly fulfilled'); }
@@ -362,7 +411,7 @@ for (const mode of ['overflow', 'hold']) test('actual Realtime observation owner
       assert.equal(f.held(), true); assert.equal(settled, false); assert.ok(state.preparation.pending >= 1); assert.ok(state.preparation.background >= 1);
       assert.equal(state.preparation.joined, false); assert.ok(state.preparation.peakPending >= 2, 'periodic and held media observations overlap without sharing owners');
       assert.equal((await f.stats()).connections, 1);
-      released = true; f.release(); await early;
+      f.release(); await early;
     }
     const response = await pending; assert.equal(response.status, 200);
     const result = JSON.parse(response.text);
@@ -372,5 +421,20 @@ for (const mode of ['overflow', 'hold']) test('actual Realtime observation owner
     assert.equal(result.preparation.reused, 0); assert.equal(result.preparation.wrongOwner, 0);
     if (mode === 'overflow') assert.ok(result.preparation.asr >= 1, 'actual ASR stage shares the main allowance');
     assert.equal((await f.stats()).connections, 1, 'no replacement upstream connection');
+  } catch (error) { f.primary(error); throw error; }
+});
+
+test('originating cadence drain retains late parent and child undefined failures after the snapshot', { timeout: 15_000 }, async t => {
+  // Labelled fixture cleanup faults; actual preparation and public route stay healthy.
+  const f = await fixture(t, { probe: true, lateFailure: true });
+  try {
+    const c = await f.open(false, false), snapshot = await f.probeState();
+    assert.deepEqual(c.q.errors, []); assert.equal(snapshot.preparation.drainComplete, false);
+    c.ws.close(1000);
+    await until(async () => { const state = (await f.probeState()).preparation; assert.equal(state.drainComplete, false, 'originating drain completed before the held phase'); return state.phase === 'labelled-late-cleanup-held' && f.held(); });
+    const held = await f.probeState(); assert.equal(f.held(), true); assert.equal(held.preparation.drainComplete, false);
+    f.release(); const done = await f.drain();
+    assert.equal(done.drainFailed, true); assert.equal(done.drainFailures, 2); assert.equal(done.drainUndefined, 2);
+    assert.equal(done.pending, 0); assert.equal(done.background, 0); assert.equal((await f.stats()).connections, 1);
   } catch (error) { f.primary(error); throw error; }
 });

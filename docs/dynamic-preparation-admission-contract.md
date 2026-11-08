@@ -151,7 +151,15 @@ A separate local HTTP gate holds a completed authority-reply continuation past
 the unchanged observation timeout. The originating request joins the released
 observation and background work before returning a labelled diagnostic. This is
 logical continuation ownership, not a pending-native-read or timeout-retirement
-claim. Existing credential/configuration revocation tests remain unchanged.
+claim. A fixture-only close notification follows the real session producer shutdown
+and final-task registration. The original request's retained drain then joins all
+tagged outcomes, including children registered by held parents, before closing
+enrollment. Host polls read only the completed join's bounded success/failure
+diagnostic; zero pending counters and runtime disposal are not join evidence.
+Labelled late parent/child failures both carrying undefined exercise this path
+after a healthy snapshot. Original failure reasons stay invocation-local, and
+host client/derived outcomes remain registered for unconditional cleanup.
+Existing credential/configuration revocation tests remain unchanged.
 
 Fixture releases and immediate tagged outcome observers precede clients. Original
 Response bodies and finite background roots are joined; primary failure, including
