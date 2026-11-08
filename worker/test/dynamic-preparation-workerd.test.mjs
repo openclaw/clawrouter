@@ -110,7 +110,7 @@ export default {async fetch(request,bindings,ctx){const u=new URL(request.url),i
  // Small incoming body is consumed before readiness barriers. The diagnostic
  // HTTP client stays connected; only the ORIGINAL routed signal is aborted.
  const body=await request.text(),caller=new AbortController(),env=environment(bindings,a);
- let hasPrimary=false,primary,response;
+ let hasPrimary=false,primary,response,bodyText;
  const outcomes=[];
  const track=p=>{a.background++;const observed=Promise.resolve(p).then(()=>({failed:false}),error=>({failed:true,error})).then(outcome=>{
   a.background--;if(outcome.failed)a.backgroundFailed=true;return outcome;});
@@ -134,18 +134,20 @@ export default {async fetch(request,bindings,ctx){const u=new URL(request.url),i
  try{
   const routed=new Request('https://router.example/v1/responses',{method:'POST',headers:request.headers,body,signal:caller.signal});
   response=await worker.fetch(routed,env,{waitUntil:track});a.outward=true;a.status=response.status;
+  // ORIGINAL body delivery releases accounting work; consume ONCE before joining it.
+  bodyText=await response.text();
+  if(bodyText.length>16384)throw Error('fixture diagnostic body limit');
  }catch(error){hasPrimary=true;primary=error;a.outward=true;}
  finally{
   const failures=[];let index=0;
   while(index<outcomes.length){const outcome=await outcomes[index++];if(outcome.failed)failures.push(outcome.error);}
   globalThis.fetch=raw;HttpOperation.prototype.wait=originalWait;
   if(hasPrimary||failures.length){
-   if(response?.body)try{await response.body.cancel();}catch(error){failures.push(error);}
    if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'dynamic fixture independent failures');
    throw primary;
   }
  }
- return response;
+ return Response.json({fixture:'dynamic-preparation-handler-observation',status:response.status,body:bodyText});
 },queue:worker.queue};`.replace('__CASES__', JSON.stringify(cases));
 
 test('actual public preparation shares capacity across alternates and joins before abort precedence', { timeout: 120_000 }, async t => {
@@ -173,7 +175,7 @@ test('actual public preparation shares capacity across alternates and joins befo
   });
   t.signal.addEventListener('abort', releaseAll, { once: true });
   try {
-    server = createServer((request, response) => {
+    server = createServer({ maxHeaderSize: 65536 }, (request, response) => {
       const parts = new URL(request.url, 'http://fixture').pathname.split('/').filter(Boolean); request.resume();
       if (parts[0] === 'gate') {
         const key = parts.slice(1).join('/');
@@ -222,8 +224,11 @@ test('actual public preparation shares capacity across alternates and joins befo
       }
       const response = await started;
       const status = mode.healthy ? 200 : mode.abortHeld || mode.finalAbort ? 502 : 503;
-      assert.equal(response.status, status, id);
-      const value = JSON.parse(response.text);
+      assert.equal(response.status, 200, id + ' diagnostic transport');
+      const diagnostic = JSON.parse(response.text);
+      assert.equal(diagnostic.fixture, 'dynamic-preparation-handler-observation');
+      assert.equal(diagnostic.status, status, id);
+      const value = JSON.parse(diagnostic.body);
       if (!mode.healthy) assert.equal(value.error.code, status === 502 ? 'provider_unavailable' : 'provider_preparation_unavailable', id);
       assert.doesNotMatch(response.text, /synthetic-access|fixture-secret|s{32}|o{32}|p{32}/);
       await drain(); const state = await json('/state?case=' + id), sql = await json('/sql?case=' + id);

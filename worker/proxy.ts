@@ -459,7 +459,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
       return await proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), preauthenticated ?? undefined, session ?? undefined, control.protocol, params, context, wanAdmission?.wan);
     }
     if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
-    const envelope = manifestEnvelope(wanAdmission ? await wanAdmission.wanCandidate(endpoint) : await readJson<unknown>(request));
+    const envelope = manifestEnvelope(wanAdmission ? await wanAdmission.wanCandidate(endpoint) : await readJson<unknown>(request), preparation);
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
     const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, envelope.pathParams, envelope.query) : envelope.pathParams.response_id;
     return await proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: envelope.pathParams })), preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams, context, wanAdmission?.wan);
@@ -480,7 +480,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
         let value = wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
           ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
         if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
-        envelope = manifestEnvelope(value);
+        envelope = manifestEnvelope(value, preparation);
         value = undefined;
       }
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env, false, preparation);
@@ -666,7 +666,7 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
     let body: unknown = await operation.wait(owner.track(readMiniMaxVideoInput(request, owner, route)));
     let prepared;
     if (route === "manifest") {
-      const envelope = manifestEnvelope(body);
+      const envelope = manifestEnvelope(body, preparation);
       if (envelope.method && envelope.method !== "POST" || Object.keys(envelope.pathParams).length || hasProxyQuery(envelope.query)) miniMaxVideoDenied();
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env, false, preparation); envelope.body = undefined;
     } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env, preparation);
@@ -717,7 +717,7 @@ async function proxyMiniMaxSearch(request: Request, env: Env, context: Execution
     await owner.operation.wait(owner.reserveProvider());
     let prepared;
     if (route === "manifest") {
-      const envelope = manifestEnvelope(body);
+      const envelope = manifestEnvelope(body, preparation);
       if (envelope.method && envelope.method !== "POST" || Object.keys(envelope.pathParams).length || hasProxyQuery(envelope.query)) miniMaxSearchDenied();
       prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env, false, preparation);
       envelope.body = undefined;

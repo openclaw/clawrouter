@@ -107,7 +107,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   const preparation = new PreparationAdmission();
   preparation.paths(input.route.pathParams);
   preparation.text(input.responseId, 4096);
-  preparation.text(input.query, 8192);
+  const admittedQuery = preparation.rawQuery(input.query);
   assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
   const managed = input.protocol !== undefined;
@@ -119,7 +119,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   validateRoute(input.route);
   if (typeof input.query !== "string" || input.query.length > 8192) unavailable();
   if (managed && input.query !== "") unavailable();
-  const query = managed ? new URLSearchParams() : responsesControlQuery(input.action, new URLSearchParams(input.query));
+  const query = managed ? admittedQuery : responsesControlQuery(input.action, admittedQuery);
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
   if (!contract?.retained && Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
   assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed, ...(input.protocol === "minimax.video" ? { model: input.requestedVersion } : {}) }, grant, env, preparation);

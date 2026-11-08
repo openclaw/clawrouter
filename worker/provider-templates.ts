@@ -12,7 +12,6 @@ export class PreparationAdmission {
   #facts: Array<readonly [string, unknown]> = [];
   #factBytes = 0;
   #csvBytes = 0;
-  #retainedCsvBytes = 0;
   #csvEntries = 0;
   #substitutions = 0;
   #parameters = 0;
@@ -37,15 +36,21 @@ export class PreparationAdmission {
   primitive(name: string, value: unknown, csv = false): string | null {
     this.text(name, 256);
     if (value !== null && value !== undefined && !["string", "number", "boolean"].includes(typeof value)) this.fail();
-    const bytes = typeof value === "string" ? this.text(value, csv ? 32768 : 16384) : 0;
+    // CSV is a processing allowance, never a retained oversized primitive.
+    if (csv) {
+      if (typeof value !== "string") return null;
+      this.csv(value);
+      return /\S/u.test(value) ? value : null;
+    }
+    const bytes = typeof value === "string" ? this.text(value, 16384) : 0;
     if (!this.#facts.some(([key, old]) => key === name && Object.is(old, value))) {
       if (this.#facts.length === 128) this.fail();
-      const factBytes = preparationBytes(name) + (csv ? 0 : bytes);
-      if (this.#factBytes + factBytes > 65536 || csv && this.#retainedCsvBytes + bytes > 32768) this.fail();
-      this.#factBytes += factBytes; if (csv) this.#retainedCsvBytes += bytes;
+      const factBytes = preparationBytes(name) + bytes;
+      if (this.#factBytes + factBytes > 65536) this.fail();
+      this.#factBytes += factBytes;
       this.#facts.push([name, value]);
     }
-    return typeof value === "string" && value.trim() ? value : null;
+    return typeof value === "string" && /\S/u.test(value) ? value : null;
   }
   read(env: Env, name: string, csv = false): string | null {
     this.text(name, 256); return this.primitive(name, env[name], csv);
@@ -56,6 +61,17 @@ export class PreparationAdmission {
     for (let index = 0; index < value.length; index++) if (value.charCodeAt(index) === 44) entries++;
     if (this.#csvBytes + bytes > 32768 || this.#csvEntries + entries > 1024) this.fail();
     this.#csvBytes += bytes; this.#csvEntries += entries;
+  }
+  csvToken(name: string, source: string, lo: number, hi: number): string {
+    this.text(name, 256);
+    const bytes = preparationBytes(source, lo, hi);
+    if (hi - lo > 16384 || bytes > 16384) this.fail();
+    for (const [key, value] of this.#facts) if (key === name && typeof value === "string" && value.length === hi - lo && source.startsWith(value, lo)) return value;
+    const factBytes = preparationBytes(name) + bytes;
+    if (this.#facts.length === 128 || this.#factBytes + factBytes > 65536) this.fail();
+    const token = source.slice(lo, hi);
+    this.#factBytes += factBytes; this.#facts.push([name, token]);
+    return token;
   }
   substitute(count: number): void {
     if (this.#substitutions + count > 256) this.fail();
@@ -102,39 +118,52 @@ export class PreparationAdmission {
     if (this.#queryPairs + 1 > 128 || this.#queryBytes + bytes > 8192) this.fail();
     this.#queryPairs++; this.#queryBytes += bytes;
   }
-  queryInput(input: URLSearchParams | Record<string, unknown>): void {
-    if (input instanceof URLSearchParams) { input.forEach((value, name) => this.query(name, value)); return; }
+  queryInput(input: URLSearchParams | Record<string, unknown>): URLSearchParams {
+    if (input instanceof URLSearchParams) { input.forEach((value, name) => this.query(name, value)); return input; }
+    // Keep only admitted pairs. Null entries never reach the bulk record converter.
+    const pairs: Array<[string, string]> = [];
     for (const name in input) if (Object.hasOwn(input, name)) {
-      this.text(name, 256); const value = input[name];
+      const value = input[name];
       if (value == null) continue;
+      this.text(name, 256);
       const admit = (item: unknown) => {
         if (!["string", "number", "boolean"].includes(typeof item)) throw new HttpError(400, "invalid_request_body", "manifest query values must be scalars or arrays of scalars");
         if (typeof item === "string") this.text(item, 4096);
-        this.query(name, String(item));
+        const text = String(item); this.query(name, text); pairs.push([name, text]);
       };
       if (Array.isArray(value)) { if (value.length > 128) this.fail(); for (const item of value) admit(item); }
       else admit(value);
     }
+    return new URLSearchParams(pairs);
   }
-  proxyQuery(url: URL, input: URLSearchParams | Record<string, unknown>): void {
-    this.queryInput(input);
+  rawQuery(input: string): URLSearchParams {
+    this.text(input, 8192);
+    let start = input.startsWith("?") ? 1 : 0, count = 0, bytes = 0, pairs = 0;
+    for (let end = start; end <= input.length; end++) if (end === input.length || input.charCodeAt(end) === 38) {
+      if (++count + this.#queryPairs > 128) this.fail();
+      if (end > start) {
+        let equal = start; while (equal < end && input.charCodeAt(equal) !== 61) equal++;
+        const name = formRange(input, start, equal, 256, this);
+        const value = formRange(input, equal < end ? equal + 1 : end, end, 4096, this);
+        bytes += name + value + 1 + (this.#queryPairs + pairs ? 1 : 0); pairs++;
+        if (this.#queryBytes + bytes > 8192) this.fail();
+      }
+      start = end + 1;
+    }
+    this.#queryPairs += count; this.#queryBytes += bytes;
+    return new URLSearchParams(input);
+  }
+  proxyQuery(url: URL, input: URLSearchParams | Record<string, unknown>): URLSearchParams {
+    const query = this.queryInput(input);
     let bytes = 0, pairs = 0;
     const add = (name: string, value: string) => {
       bytes += preparationEncodedBytes(name, "form") + preparationEncodedBytes(value, "form") + 1 + (pairs++ ? 1 : 0);
     };
-    url.searchParams.forEach((value, name) => {
-      const supplied = input instanceof URLSearchParams ? input.has(name) : Object.hasOwn(input, name) && input[name] != null
-        && (!Array.isArray(input[name]) || (input[name] as unknown[]).length > 0);
-      if (!supplied) add(name, value);
-    });
-    if (input instanceof URLSearchParams) input.forEach((value, name) => add(name, value));
-    else for (const name in input) if (Object.hasOwn(input, name) && input[name] != null) {
-      const value = input[name];
-      if (Array.isArray(value)) for (const item of value) add(name, String(item));
-      else add(name, String(value));
-    }
+    url.searchParams.forEach((value, name) => { if (!query.has(name)) add(name, value); });
+    query.forEach((value, name) => add(name, value));
     const added = bytes + (pairs ? 1 : 0);
     if (url.href.length - url.search.length + added > 16384 || preparationBytes(url.href) - preparationBytes(url.search) + added > 16384) this.fail();
+    return query;
   }
   urlQuery(url: URL, name: string, value: string, append = false, charge = true): void {
     if (charge) this.query(name, value);
@@ -199,33 +228,75 @@ export class PreparationAdmission {
     for (let i = 0; i < writes.length; i++) {
       const [name, value] = writes[i];
       if (writes.some(([key], index) => index > i && key.toLowerCase() === name.toLowerCase())) continue;
-      count++; finalBytes += preparationBytes(name.toLowerCase()) + preparationBytes(value.trim());
+      count++; finalBytes += preparationBytes(name.toLowerCase()) + preparationBytes(value);
     }
     if (count > 64 || finalBytes > 32768 || this.#headerWrites + writes.length > 256 || this.#headerBytes + bytes > 65536) this.fail();
     if (commit) this.#writes(writes.length, bytes);
   }
   header(headers: Headers, name: string, value: string): void {
     this.text(value, 8192);
-    this.#headerLength(headers, name, preparationBytes(value), preparationBytes(value.trim()));
+    this.#headerLength(headers, name, preparationBytes(value));
   }
-  #headerLength(headers: Headers, name: string, valueBytes: number, trimmedBytes = valueBytes): void {
+  #headerLength(headers: Headers, name: string, valueBytes: number): void {
     const bytes = this.text(name, 128) + valueBytes;
-    const lower = name.toLowerCase(); let count = 1, finalBytes = preparationBytes(lower) + trimmedBytes;
+    const lower = name.toLowerCase(); let count = 1, finalBytes = preparationBytes(lower) + valueBytes;
     headers.forEach((old, key) => { if (key !== lower) { count++; finalBytes += preparationBytes(key) + preparationBytes(old); } });
     if (count > 64 || finalBytes > 32768) this.fail();
     this.#writes(1, bytes);
   }
 }
 
-export function preparationBytes(value: string): number {
+export function preparationBytes(value: string, start = 0, end = value.length): number {
   let bytes = 0;
-  for (let index = 0; index < value.length; index++) {
+  for (let index = start; index < end; index++) {
     const code = value.charCodeAt(index);
     if (code < 128) bytes++; else if (code < 2048) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) { bytes += 4; index++; }
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < end && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff) { bytes += 4; index++; }
     else bytes += 3;
   }
   return bytes;
+}
+
+// WHATWG form percent decoding + UTF-8 replacement, measured without a decoded copy.
+function formRange(source: string, start: number, end: number, limit: number, owner: PreparationAdmission): number {
+  let units = 0, bytes = 0, encoded = 0, needed = 0, seen = 0, point = 0, lower = 128, upper = 191;
+  const emit = (code: number) => {
+    units += code > 0xffff ? 2 : 1;
+    const width = code < 128 ? 1 : code < 2048 ? 2 : code < 65536 ? 3 : 4;
+    bytes += width;
+    encoded += code === 32 || code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122 || code === 42 || code === 45 || code === 46 || code === 95 ? 1 : width * 3;
+    if (units > limit || bytes > limit) owner.fail();
+  };
+  const feed = (byte: number) => {
+    if (needed && (byte < lower || byte > upper)) { needed = seen = point = 0; lower = 128; upper = 191; emit(0xfffd); }
+    if (!needed) {
+      if (byte < 128) { emit(byte); return; }
+      if (byte >= 194 && byte <= 223) { needed = 1; point = byte & 31; }
+      else if (byte >= 224 && byte <= 239) { needed = 2; point = byte & 15; if (byte === 224) lower = 160; if (byte === 237) upper = 159; }
+      else if (byte >= 240 && byte <= 244) { needed = 3; point = byte & 7; if (byte === 240) lower = 144; if (byte === 244) upper = 143; }
+      else emit(0xfffd);
+      return;
+    }
+    lower = 128; upper = 191; point = (point << 6) | (byte & 63);
+    if (++seen === needed) { emit(point); needed = seen = point = 0; }
+  };
+  const hex = (code: number) => code >= 48 && code <= 57 ? code - 48 : code >= 65 && code <= 70 ? code - 55 : code >= 97 && code <= 102 ? code - 87 : -1;
+  for (let i = start; i < end; i++) {
+    let code = source.charCodeAt(i);
+    if (code === 37 && i + 2 < end) {
+      const a = hex(source.charCodeAt(i + 1)), b = hex(source.charCodeAt(i + 2));
+      if (a >= 0 && b >= 0) { feed(a * 16 + b); i += 2; continue; }
+    }
+    if (code === 43) code = 32;
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < end && source.charCodeAt(i + 1) >= 0xdc00 && source.charCodeAt(i + 1) <= 0xdfff) { code = 0x10000 + ((code - 0xd800) << 10) + source.charCodeAt(++i) - 0xdc00; }
+    else if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+    if (code < 128) feed(code);
+    else if (code < 2048) { feed(192 | (code >> 6)); feed(128 | (code & 63)); }
+    else if (code < 65536) { feed(224 | (code >> 12)); feed(128 | ((code >> 6) & 63)); feed(128 | (code & 63)); }
+    else { feed(240 | (code >> 18)); feed(128 | ((code >> 12) & 63)); feed(128 | ((code >> 6) & 63)); feed(128 | (code & 63)); }
+  }
+  if (needed) emit(0xfffd);
+  return encoded;
 }
 
 export function preparationEncodedBytes(value: string, mode: "component" | "form" | "aws"): number {
@@ -257,12 +328,14 @@ export function preparationReplace(value: string, pattern: RegExp | string, reso
     owner.substitute(1);
     const at = value.indexOf(pattern); let replacementUnits = 0, replacementBytes = 0;
     for (let i = 0; i < replacement.length;) {
-      let part: string;
+      let source = replacement, lo = i, hi = i + 1;
       if (replacement[i] === "$" && i + 1 < replacement.length && "$&`'".includes(replacement[i + 1])) {
         const code = replacement[i + 1]; i += 2;
-        part = code === "$" ? "$" : code === "&" ? pattern : code === "`" ? value.slice(0, at) : value.slice(at + pattern.length);
-      } else { const code = replacement.codePointAt(i)!; part = String.fromCodePoint(code); i += part.length; }
-      replacementUnits += part.length; replacementBytes += preparationBytes(part);
+        if (code === "&") { source = pattern; lo = 0; hi = pattern.length; }
+        else if (code === "`") { source = value; lo = 0; hi = at; }
+        else if (code === "'") { source = value; lo = at + pattern.length; hi = value.length; }
+      } else { hi = i + (replacement.codePointAt(i)! > 0xffff ? 2 : 1); i = hi; }
+      replacementUnits += hi - lo; replacementBytes += preparationBytes(source, lo, hi);
       if (replacementUnits > limit || replacementBytes > limit) owner.fail();
     }
     units += replacementUnits - pattern.length; bytes += replacementBytes - preparationBytes(pattern);
@@ -281,7 +354,13 @@ export function preparationReplace(value: string, pattern: RegExp | string, reso
 
 export function optionalConfigKeys(provider: CompiledProvider, env: Env, owner?: PreparationAdmission): Set<string> {
   const csv = preparationValue(env, "CLAWROUTER_OPTIONAL_CONFIG_KEYS", owner, true) ?? "";
-  return new Set([...provider.optional_config_keys, ...providerConfigurationList(csv, owner)]);
+  if (!owner) return new Set([...provider.optional_config_keys, ...providerConfigurationList(csv)]);
+  const optional = new Set<string>();
+  for (const key of provider.optional_config_keys) {
+    owner.text(key, 256); owner.primitive("CLAWROUTER_OPTIONAL_CONFIG_KEYS", key); optional.add(key);
+  }
+  for (const key of providerConfigurationList(csv, owner, "CLAWROUTER_OPTIONAL_CONFIG_KEYS", provider.config_keys, true)) optional.add(key);
+  return optional;
 }
 
 export function templateCandidates(provider: CompiledProvider, name: string, owner?: PreparationAdmission): string[] {

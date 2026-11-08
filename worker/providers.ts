@@ -314,21 +314,31 @@ export function transformRequestBody(provider: CompiledProvider, path: string, m
   return transformed;
 }
 
-export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date(), owner?: PreparationAdmission): Promise<string | undefined> {
-  const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
-  if (!scheme || scheme.type !== "sig_v4") return;
-  const credentials = grant?.credentials;
-  const accessKeyId = grant ? credentials?.accessKeyId : preparationValue(env, "AWS_ACCESS_KEY_ID", owner);
-  const secretAccessKey = grant ? credentials?.secretAccessKey : preparationValue(env, "AWS_SECRET_ACCESS_KEY", owner);
-  const sessionToken = grant ? credentials?.sessionToken : preparationValue(env, "AWS_SESSION_TOKEN", owner);
-  const region = preparationValue(env, "AWS_REGION", owner);
-  if (grant) { owner?.primitive("accessKeyId", accessKeyId); owner?.primitive("secretAccessKey", secretAccessKey); owner?.primitive("sessionToken", sessionToken); }
-  if (!accessKeyId || !secretAccessKey || !region) {
-    const message = grant
-      ? "selected AWS grant must contain accessKeyId and secretAccessKey; AWS_REGION is required"
-      : "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are required";
-    throw new HttpError(503, "provider_not_configured", message);
-  }
+export function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date(), owner?: PreparationAdmission): Promise<string | undefined> {
+  try {
+    const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
+    if (!scheme || scheme.type !== "sig_v4") return Promise.resolve(undefined);
+    const credentials = grant?.credentials;
+    const accessKeyId = grant ? credentials?.accessKeyId : preparationValue(env, "AWS_ACCESS_KEY_ID", owner);
+    const secretAccessKey = grant ? credentials?.secretAccessKey : preparationValue(env, "AWS_SECRET_ACCESS_KEY", owner);
+    const sessionToken = grant ? credentials?.sessionToken : preparationValue(env, "AWS_SESSION_TOKEN", owner);
+    const region = preparationValue(env, "AWS_REGION", owner);
+    if (grant) { owner?.primitive("accessKeyId", accessKeyId); owner?.primitive("secretAccessKey", secretAccessKey); owner?.primitive("sessionToken", sessionToken); }
+    if (!accessKeyId || !secretAccessKey || !region) {
+      const message = grant
+        ? "selected AWS grant must contain accessKeyId and secretAccessKey; AWS_REGION is required"
+        : "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are required";
+      throw new HttpError(503, "provider_not_configured", message);
+    }
+    owner?.primitive("service", scheme.service);
+    return signAdmittedSigV4(url, method, body, headers, accessKeyId, secretAccessKey, sessionToken, region, scheme.service, now, owner);
+  } catch (error) { return Promise.reject(error); }
+}
+
+// No Env or grant survives into this asynchronous signer.
+async function signAdmittedSigV4(url: URL, method: string, body: string | undefined, headers: Headers,
+  accessKeyId: string, secretAccessKey: string, sessionToken: string | null | undefined, region: string, service: string,
+  now: Date, owner?: PreparationAdmission): Promise<string> {
   if (owner) {
     owner.text(url.href, 16384); owner.headers(headers);
     // Canonical query/URI expansion is admitted before encoding, arrays or sorting.
@@ -340,7 +350,7 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
     });
     for (const character of url.pathname) if (character === "/") segments++;
     if (segments > 64 || preparationEncodedBytes(url.pathname, "aws") - (segments - 1) * 2 > 8192) owner.fail();
-    owner.text(region, 16384); owner.text(scheme.service, 16384);
+    owner.text(region, 16384); owner.text(service, 16384);
     owner.joined(["AWS4", secretAccessKey], 16388);
   }
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ""), dateStamp = amzDate.slice(0, 8);
@@ -354,8 +364,8 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
   for (const [name] of generated) if (!headerNames.includes(name)) headerNames.push(name);
   const signedHeaderNames = headerNames.filter(name => name === "host" || name === "content-type" || name.startsWith("x-amz-") || name.startsWith("x-amzn-")).sort();
   const signedHeaders = signedHeaderNames.join(";");
-  owner?.joined([dateStamp, region, scheme.service, "aws4_request"], 8192, "/");
-  const scope = `${dateStamp}/${region}/${scheme.service}/aws4_request`;
+  owner?.joined([dateStamp, region, service, "aws4_request"], 8192, "/");
+  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
   owner?.joined(["AWS4-HMAC-SHA256 Credential=", accessKeyId, "/", scope, ", SignedHeaders=", signedHeaders, ", Signature=", "0".repeat(64)], 8192);
   const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=`;
   owner?.headerPlan(headers, [...generated, ["authorization", authorization + "0".repeat(64)]]);
@@ -369,7 +379,7 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
   const canonicalRequest = `${method}\n${uri}\n${query}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
   const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
   const dateKey = await hmac(new TextEncoder().encode(`AWS4${secretAccessKey}`), dateStamp);
-  const regionKey = await hmac(dateKey, region), serviceKey = await hmac(regionKey, scheme.service), signingKey = await hmac(serviceKey, "aws4_request");
+  const regionKey = await hmac(dateKey, region), serviceKey = await hmac(regionKey, service), signingKey = await hmac(serviceKey, "aws4_request");
   const signature = hex(await hmac(signingKey, stringToSign));
   headers.set("authorization", authorization + signature);
   headers.delete("host");
@@ -542,7 +552,7 @@ function compareAscii(left: string, right: string): number { return left < right
 function configuredList(provider: CompiledProvider, name: string, env: Env, owner?: PreparationAdmission): string[] {
   let selected: string | null = null;
   const key = templateCandidates(provider, name, owner).find(candidate => (selected = preparationValue(env, candidate, owner, true)));
-  return key ? providerConfigurationList(selected!, owner) : [];
+  return key ? providerConfigurationList(selected!, owner, key, undefined, !!owner) : [];
 }
 
 function encodePathParam(value: string, style: string): string {

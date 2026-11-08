@@ -1,11 +1,11 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { PreparationAdmission, isPreparationLimit, preparationHeader, preparationReplace, resolveTemplate, resolveHeaderTemplate } from '../provider-templates.ts';
-import { providerConfigurationList } from '../provider-connections.ts';
+import { PreparationAdmission, isPreparationLimit, preparationHeader, preparationReplace, resolveTemplate, resolveHeaderTemplate, optionalConfigKeys } from '../provider-templates.ts';
+import { providerConfigurationList, normalizeConnectionMutation } from '../provider-connections.ts';
 import { applyTransportHeaders } from '../provider-auth.ts';
 import { providerById, configuredUpstream, upstreamPath, signSigV4 } from '../providers.ts';
-import { prepareManifestRequest, concreteOpenAiSelection, isSelectionFailure } from '../proxy-selection.ts';
+import { prepareManifestRequest, concreteOpenAiSelection, isSelectionFailure, manifestEnvelope } from '../proxy-selection.ts';
 import { prepareUpstreamRequest } from '../proxy-upstream-request.ts';
 import { qualifyMiniMaxEnvironmentBinding } from '../native-media-credential.ts';
 import { minimaxSpeechBinding } from '../../shared/native-media-binding.ts';
@@ -41,9 +41,10 @@ test('selected primitive projection admits exact limits, retains overwritten fac
   assert.ok(limited(error)); assert.doesNotMatch(JSON.stringify(error), /synthetic-private-value/);
 });
 
-test('CSV has its own 32 KiB allowance and counts raw empty entries before split', t => {
+test('CSV processing has 32 KiB independently of the ordinary retained token projection', t => {
   let splits = 0; observe(t, String.prototype, 'split', original => function(...args) { splits++; return original.apply(this, args); });
-  assert.equal(providerConfigurationList('x'.repeat(32768), new PreparationAdmission())[0].length, 32768);
+  assert.deepEqual(providerConfigurationList('x' + ' '.repeat(32767), new PreparationAdmission()), ['x']);
+  assert.throws(() => providerConfigurationList('x'.repeat(16385), new PreparationAdmission()), limited, 'source allowance does not enlarge retained values');
   const before = splits;
   assert.throws(() => providerConfigurationList('x'.repeat(32769), new PreparationAdmission()), limited);
   assert.equal(splits, before);
@@ -196,4 +197,125 @@ test('SigV4 generated authorization admission occurs before crypto', async t => 
     'POST', '{}', new Headers(), { AWS_ACCESS_KEY_ID: 'a'.repeat(8192), AWS_SECRET_ACCESS_KEY: 'synthetic-secret', AWS_REGION: 'us-east-1' },
     null, new Date('2026-01-01T00:00:00Z'), new PreparationAdmission()), limited);
   assert.equal(digests, 0);
+});
+
+
+test('manifest and null query entries never reach bulk value/record allocation', t => {
+  const pathParams = Object.fromEntries(Array.from({ length: 33 }, (_, i) => ['p' + i, 'x']));
+  const ignored = Object.fromEntries(Array.from({ length: 500 }, (_, i) => ['ignored' + i, null]));
+  ignored.a = ['1', '3']; ignored.b = true;
+  const rejected = { a: Array(129).fill('x') }; let bulk = 0;
+  observe(t, Object, 'values', original => function(value) { if (value === pathParams) bulk++; return original(value); });
+  observe(t, Object, 'entries', original => function(value) { if (value === ignored || value === rejected) bulk++; return original(value); });
+  assert.throws(() => manifestEnvelope({ pathParams }, new PreparationAdmission()), limited);
+  assert.throws(() => manifestEnvelope({ pathParams: { x: 1 } }, new PreparationAdmission()), e => e.code === 'invalid_request_body');
+  const provider = providerById('openai'), endpoint = provider.endpoints.find(e => e.id === 'responses');
+  const selection = { provider, endpoint, pathParams: {}, body: {}, method: 'POST' };
+  const upstream = configuredUpstream(provider, null, { OPENAI_API_KEY: 'synthetic-key' });
+  const request = new Request('https://router.example/');
+  const result = prepareUpstreamRequest(request, {}, selection, ignored, upstream, 'http', new PreparationAdmission());
+  assert.equal(result.url.search, '?a=1&a=3&b=true');
+  assert.throws(() => prepareUpstreamRequest(request, {}, selection, rejected, upstream, 'http', new PreparationAdmission()), limited);
+  assert.equal(bulk, 0);
+});
+
+test('Headers-preserved NBSP counts before final writes and plans without trim allocation', t => {
+  const names = ['aa', 'bb', 'cc', 'dd'], value = '\u00a0'.repeat(4096);
+  const headers = new Headers(), owner = new PreparationAdmission(); let writes = 0, trims = 0;
+  observe(t, Headers.prototype, 'set', original => function(...args) { if (this === headers) writes++; return original.apply(this, args); });
+  observe(t, String.prototype, 'trim', original => function(...args) { if (String(this) === value) trims++; return original.apply(this, args); });
+  for (const name of names.slice(0, 3)) preparationHeader(headers, name, value, owner);
+  const before = trims;
+  assert.throws(() => preparationHeader(headers, names[3], value, owner), limited);
+  assert.equal(writes, 3); assert.equal(trims, before); assert.equal(headers.has('dd'), false);
+  const exact = '\u00a0'.repeat(4092); // Three * (8192 + 2), plus (8184 + 2) = 32768.
+  preparationHeader(headers, 'dd', exact, owner);
+  assert.equal(headers.get('dd'), exact);
+  const plan = names.map(name => [name, value]);
+  assert.throws(() => new PreparationAdmission().headerPlan(new Headers(), plan), limited);
+  plan[3][1] = exact; new PreparationAdmission().headerPlan(new Headers(), plan);
+  plan[3][1] += 'x'; assert.throws(() => new PreparationAdmission().headerPlan(new Headers(), plan), limited);
+});
+
+test('connection mutation scalar admission precedes trim and preserves null/default semantics', t => {
+  let trims = 0; const over = 'x'.repeat(16385);
+  observe(t, String.prototype, 'trim', original => function(...args) { if (String(this) === over) trims++; return original.apply(this, args); });
+  assert.equal(normalizeConnectionMutation({ label: 'x'.repeat(16384) }, 'p'.repeat(16384)).label.length, 16384);
+  assert.throws(() => normalizeConnectionMutation({ label: over }, 'p'), limited);
+  assert.throws(() => normalizeConnectionMutation({ label: over }, over), limited);
+  assert.throws(() => normalizeConnectionMutation({}, over), limited);
+  assert.equal(trims, 0);
+  assert.deepEqual(normalizeConnectionMutation({}, 'p', true), { providerId: 'p', enabled: true, label: null });
+  assert.deepEqual(normalizeConnectionMutation({}, 'p'), { providerId: 'p' });
+  assert.deepEqual(normalizeConnectionMutation({ enabled: false, label: '  ', monthlyBudgetMicros: null }, 'p'), { providerId: 'p', enabled: false, label: null, monthlyBudgetMicros: null });
+  assert.deepEqual(normalizeConnectionMutation({ label: null, monthlyBudgetMicros: 0 }, 'p'), { providerId: 'p', label: null, monthlyBudgetMicros: 0 });
+  assert.throws(() => normalizeConnectionMutation({ label: {} }, 'p'), e => e.code === 'invalid_provider_connection');
+});
+
+test('CONTROL raw query admission precedes construction and counts decoded and raw occurrences', async t => {
+  const overCount = Array(129).fill('a=1').join('&'), overName = '%61'.repeat(257) + '=x', overValue = 'a=' + 'v'.repeat(4097);
+  const bad = new Set([overCount, overName, overValue]); let constructed = 0, authority = 0;
+  observe(t, globalThis, 'URLSearchParams', Original => new Proxy(Original, { construct(target, args, receiver) { if (bad.has(args[0])) constructed++; return Reflect.construct(target, args, receiver); } }));
+  const input = { owner: { providerId: 'openai', endpointId: 'responses' }, route: { pathParams: {}, organization: null, project: null },
+    responseId: 'resp_fixture', action: 'retrieve', stream: false, authorization: { kind: 'public' } };
+  const env = { ACCESS_CONTROL: { get() { authority++; throw Error('unexpected authority'); } } };
+  for (const query of bad) await assert.rejects(prepareResponseControl(env, { ...input, query }, null), limited);
+  assert.equal(constructed, 0); assert.equal(authority, 0);
+  assert.equal(new PreparationAdmission().rawQuery('%61'.repeat(256) + '=' + 'v'.repeat(4096)).get('a'.repeat(256)).length, 4096);
+  const owner = new PreparationAdmission(); assert.equal(owner.rawQuery(Array(128).fill('a=1').join('&')).size, 128);
+  assert.throws(() => owner.query('a', 'next'), limited, 'parsed query does not reset the operation budget');
+  assert.throws(() => new PreparationAdmission().rawQuery('&'.repeat(128)), limited, 'empty raw occurrences are charged');
+  for (const query of ['?a=1&b=2&a=3', 'a=hello+world&b=%2B', '%EF%BB%BF=x', 'a=%E2%82&b=%ED%A0%80', 'a=%F0%9F%92%A9&b=ü', 'a=%GG%&b=\ud800']) {
+    assert.deepEqual([...new PreparationAdmission().rawQuery(query)], [...new URLSearchParams(query)], query);
+  }
+  assert.throws(() => new PreparationAdmission().rawQuery('a=' + '%FF'.repeat(1366)), limited, 'decoded replacement bytes exceed the value ceiling');
+  const exact = 'a=' + 'x'.repeat(4096) + '&b=' + 'x'.repeat(4091);
+  assert.equal(new PreparationAdmission().rawQuery(exact).get('b').length, 4091);
+  assert.throws(() => new PreparationAdmission().rawQuery(exact + 'x'), limited);
+});
+
+test('CSV ignores unknown tokens without copies and shares retained projection with ordinary facts', t => {
+  const optionalProvider = { ...fixture, optional_config_keys: [] };
+  const ignored = Array.from({ length: 200 }, (_, i) => 'UNKNOWN_' + i).join(','), source = 'v'; let slices = 0, retainedCopies = 0;
+  observe(t, String.prototype, 'slice', original => function(...args) { if (String(this) === ignored) slices++; if (String(this) === source) retainedCopies++; return original.apply(this, args); });
+  const full = new PreparationAdmission(); for (const key of ['a', 'b', 'c', 'd']) full.primitive(key, 'x'.repeat(16383));
+  assert.deepEqual([...optionalConfigKeys(optionalProvider, { CLAWROUTER_OPTIONAL_CONFIG_KEYS: ignored }, full)], []);
+  assert.equal(slices, 0);
+  assert.throws(() => providerConfigurationList(source, full), limited);
+  assert.equal(retainedCopies, 0, 'aggregate ordinary + CSV projection is checked before token copy');
+  const count = new PreparationAdmission(); for (let i = 0; i < 127; i++) count.primitive('k' + i, 'v');
+  const selected = ignored + ',FIXTURE_OPTIONAL';
+  assert.deepEqual([...optionalConfigKeys(optionalProvider, { CLAWROUTER_OPTIONAL_CONFIG_KEYS: selected }, count)], ['FIXTURE_OPTIONAL']);
+  assert.throws(() => count.primitive('last', 'v'), limited);
+  assert.throws(() => optionalConfigKeys(optionalProvider, { CLAWROUTER_OPTIONAL_CONFIG_KEYS: Array(1025).fill('UNKNOWN').join(',') }, new PreparationAdmission()), limited);
+  const raw = new PreparationAdmission();
+  optionalConfigKeys(optionalProvider, { CLAWROUTER_OPTIONAL_CONFIG_KEYS: ' '.repeat(32768) }, raw);
+  assert.throws(() => optionalConfigKeys(optionalProvider, { CLAWROUTER_OPTIONAL_CONFIG_KEYS: ',' }, raw), limited, 'ignored whitespace is still processed source');
+});
+
+test('literal replacement prefix/suffix expansion is metered without slice or replace on overflow', t => {
+  const values = ['x'.repeat(8192) + '@', '@' + 'x'.repeat(8192)]; let slices = 0, replacements = 0;
+  observe(t, String.prototype, 'slice', original => function(...args) { if (values.includes(String(this))) slices++; return original.apply(this, args); });
+  observe(t, String.prototype, 'replace', original => function(...args) { if (values.includes(String(this))) replacements++; return original.apply(this, args); });
+  assert.throws(() => preparationReplace(values[0], '@', () => "$`$`", new PreparationAdmission()), limited);
+  assert.throws(() => preparationReplace(values[1], '@', () => "$'$'", new PreparationAdmission()), limited);
+  assert.equal(slices, 0); assert.equal(replacements, 0);
+  for (const replacement of ["$`", "$'", '$&', '$$', "$`-$&-$$-$'"]) {
+    const value = 'before@after@';
+    assert.equal(preparationReplace(value, '@', () => replacement, new PreparationAdmission()), value.replace('@', replacement));
+  }
+});
+
+test('SigV4 synchronously projects primitives and never reads Env after its first suspension', async () => {
+  const provider = providerById('aws-bedrock'), url = new URL('https://bedrock-runtime.us-east-1.amazonaws.com/model/example/invoke');
+  const values = { AWS_ACCESS_KEY_ID: 'fixture-access', AWS_SECRET_ACCESS_KEY: 'fixture-secret', AWS_REGION: 'us-east-1' }, reads = [];
+  const { proxy, revoke } = Proxy.revocable(values, { get(target, key) { reads.push(key); return target[key]; }, ownKeys() { assert.fail('Env enumeration'); } });
+  const headers = new Headers();
+  const pending = signSigV4(provider, url, 'POST', '{}', headers, proxy, null, new Date('2026-01-01T00:00:00Z'), new PreparationAdmission());
+  const outcome = pending.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+  revoke();
+  const result = await outcome; if (result.failed) throw result.error;
+  assert.equal(result.value, 'us-east-1');
+  assert.deepEqual(reads, ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION']);
+  assert.match(headers.get('authorization'), /^AWS4-HMAC-SHA256/);
 });

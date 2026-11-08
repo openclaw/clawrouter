@@ -26,8 +26,8 @@ export function prepareUpstreamRequest(
   // incidental query of one create call. Credential/config changes still pin.
   owner?.text(url.href, 16384);
   const configuredOwnerUrl = new URL(url);
-  owner?.proxyQuery(url, queryInput);
-  applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
+  const admittedQuery = owner ? owner.proxyQuery(url, queryInput) : queryInput;
+  applyProxyQuery(url.searchParams, admittedQuery, upstream.query.keys());
   if (selection.endpoint.streaming === "sse" && !url.searchParams.has("alt") && selection.endpoint.response_format === "google.stream_generate_content") owner?.urlQuery(url, "alt", "sse");
   applyStreamingQuery(url.searchParams, selection.endpoint);
   owner?.text(url.href, 16384);

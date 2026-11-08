@@ -243,11 +243,16 @@ export function directManifestEnvelope(request: Request, endpoint: CompiledEndpo
   return { method: request.method, pathParams, query: isModelDiscovery(endpoint) ? discoveryQuery(query) : query, body: {} };
 }
 
-export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
+export function manifestEnvelope(value: unknown, preparation?: PreparationAdmission): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
   const envelope = requestObject(value, "manifest request");
   if (envelope.method !== undefined && typeof envelope.method !== "string") throw new HttpError(400, "invalid_request_body", "manifest method must be a string");
   const pathParams = optionalObject(envelope.pathParams, "manifest pathParams");
-  if (Object.values(pathParams).some((item) => typeof item !== "string")) throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  let parameters = 0;
+  for (const name in pathParams) if (Object.hasOwn(pathParams, name)) {
+    if (++parameters > 32) preparation?.fail();
+    if (typeof pathParams[name] !== "string") throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  }
+  preparation?.paths(pathParams as Record<string, string>);
   return {
     method: envelope.method as string | undefined,
     pathParams: pathParams as Record<string, string>,
