@@ -48,11 +48,16 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.ok(!paths.includes("/grant-pools/select"));
     return view;
   }
-  await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  const apiCatalog = await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  assert.deepEqual(apiCatalog.products.map(product => product.id), ["platform-api"]);
+  assert.ok(apiCatalog.offers.some(offer => offer.productOffers?.some(reference => reference.productId === "platform-api")));
   const key = "oauth/fixture/subscription";
   grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
   delete env.OPENAI_API_KEY;
   const subscribed = await compare(["llm.responses"], false);
+  assert.deepEqual(subscribed.products.map(product => product.id), ["chatgpt-subscription"]);
+  assert.ok(subscribed.offers.some(offer => offer.productOffers?.length));
+  assert.ok(subscribed.offers.flatMap(offer => offer.productOffers ?? []).every(reference => reference.productId === "chatgpt-subscription"));
   assert.equal(subscribed.readiness.configPresent, true);
   assert.deepEqual(subscribed.readiness.missingConfig, []);
   assert.equal(subscribed.readiness.upstreamGrantCount, 1);
@@ -64,7 +69,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId?.includes("gpt-image-2.5") && eligible), false);
   env.OPENAI_API_KEY = "fixture-environment-key";
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
-  await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  const mixed = await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  assert.deepEqual(mixed.products.map(product => product.id), ["chatgpt-subscription", "platform-api"]);
   policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
   await compare(["llm.responses"], false);
   policy.grantRouting.eligibleGrants.openai = [];
@@ -72,6 +78,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   policy.grantRouting.eligibleGrants.openai = ["subscription"];
   states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60000).toISOString(), windows: [] };
   const cooling = await compare(["llm.responses"], false);
+  assert.equal(cooling.products, undefined);
+  assert.ok(cooling.offers.every(offer => offer.productOffers === undefined));
   assert.ok(cooling.offers.every(offer => !offer.eligible));
   assert.equal(cooling.models.some(({ id }) => id === "openai/tts-1"), false);
   assert.equal(cooling.models.some(({ capabilities }) => capabilities.includes("llm.chat")), false);

@@ -326,7 +326,7 @@ Reproduce timing, profiles and the optional serialization audit separately:
 
 ```sh
 # Choose an artifact directory on the external volume, outside this checkout.
-proof=/Volumes/Clawstudio-Storage/CodexWorktrees/clawrouter-http-cpu-proof
+proof="$(mktemp -d)"
 HTTP_CPU_OUT="$proof/timing" node test/diagnostics/http-responses-cpu.test.mjs
 HTTP_CPU_PROFILE=1 HTTP_CPU_SIZES=5 HTTP_CPU_RUNS=20 HTTP_CPU_OUT="$proof/profile" \
   node test/diagnostics/http-responses-cpu.test.mjs
@@ -383,7 +383,7 @@ per-token loop (~50%) and the identity scanner (~20%). First-request compile
 cost is not addressable from application code.
 
 ```sh
-proof=/Volumes/Clawstudio-Storage/CodexWorktrees/clawrouter-cold-proof
+proof="$(mktemp -d)"
 HTTP_CPU_SIZES=0.003 HTTP_CPU_OUT="$proof" node --no-opt --no-maglev --no-sparkplug \
   test/diagnostics/http-responses-cpu.test.mjs
 HTTP_CPU_DELTAS=10 HTTP_CPU_WARMUPS=0 HTTP_CPU_SIZES=0.003 HTTP_CPU_RUNS=12 HTTP_CPU_OUT="$proof" \

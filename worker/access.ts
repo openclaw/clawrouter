@@ -1,3 +1,4 @@
+import { PolicyCollection, admitEffectivePolicies, admitPolicyIds, policyCollectionFailure } from "./policy-collection.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
@@ -110,13 +111,19 @@ export function sessionPolicyIdentity(session: AccessSession, entry: AccessPolic
 }
 
 export async function sessionPolicies(session: AccessSession, env: Env): Promise<AccessPolicyEntry[]> {
+  const collection = new PolicyCollection(session.email, session.groups);
   const bindings = (await resolveBindings(env, [
     { principalType: "user", principalId: session.email },
     ...session.groups.map((group) => ({ principalType: "group" as const, principalId: group })),
-  ])).filter((binding) => binding.enabled).sort((a, b) => a.priority - b.priority);
-  const entries = await resolvePolicies(env, [...new Set(bindings.map((binding) => binding.policyId))]);
+  ], collection)).filter((binding) => binding.enabled).sort((a, b) => a.priority - b.priority);
+  // Bound distinct referenced IDs before allocating the lookup maps/sets.
+  const ids: string[] = [];
+  for (const binding of bindings) if (!ids.includes(binding.policyId)) { if (ids.length === 2048) throw policyCollectionFailure("limit"); ids.push(binding.policyId); }
+  admitPolicyIds(ids);
+  const entries = await resolvePolicies(env, ids, collection);
+  admitEffectivePolicies(entries, ids, session.budgetOverrides);
   const byId = new Map(entries.map((entry) => [entry.policyId, entry]));
-  return [...new Set(bindings.map((binding) => binding.policyId))].flatMap((id) => {
+  return ids.flatMap((id) => {
     const entry = byId.get(id);
     return entry?.policy.enabled ? [{ ...entry, policy: effectiveBudgetPolicy(id, entry.policy, session.budgetOverrides) }] : [];
   });

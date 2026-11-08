@@ -163,6 +163,27 @@ test('all stages share the call ceiling even if an executor asks for more', asyn
   await assert.rejects(runContractAgent(task, 'image', 'case:contract', { ...config, maxTurns: 3 }, f.invoke, f.dependencies), /four_calls/);
 });
 
+test('a larger cheap allowance reserves one fallback call within the shared ceiling', async () => {
+  const f = fixture([failed, failed, passed]);
+  const allowances = [];
+  f.dependencies.agent = async (_task, _image, _strategy, id, settings, invoke, _engine, options) => {
+    allowances.push(settings.maxTurns);
+    for (let i = 0; i < settings.maxTurns; i++) await invoke(id, models.strong, actionBody, options.signal);
+    return result();
+  };
+  const output = await runContractAgent(task, 'image', 'case:allowance', config, f.invoke,
+    { ...f.dependencies, providedProbe: 'provided probe', cheapMaxCalls: 20 });
+  assert.deepEqual(allowances, [7, 1]);
+  assert.equal(output.turns, config.maxTurns);
+  assert.equal(output.escalated, true);
+  assert.equal(output.contractPassed, true);
+  assert.ok(f.boxes.every(box => box.closed));
+  for (const cheapMaxCalls of [0, 60, 1.5, '20', NaN]) {
+    await assert.rejects(runContractAgent(task, 'image', 'case:allowance', config, f.invoke,
+      { ...f.dependencies, cheapMaxCalls }), /invalid_cheap_call_allowance/);
+  }
+});
+
 test('fresh verification rejects test edits and always retires its own sandbox', async () => {
   const f = fixture([failed]);
   f.dependencies.agent = async () => ({ ...result(), files: [{ path: task.visibleTests[0], content: 'weakened' }] });
