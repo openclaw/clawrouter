@@ -93,6 +93,34 @@ test('path occurrence, segment, raw and encoded limits precede copying and encod
     upstreamPath(provider, endpoint2, { model: arn }, { AWS_REGION: 'us-east-1' }, auth));
 });
 
+test('manifest envelope and preparation share declared relative-path admission at encoded exact/+1', () => {
+  // Synthetic declared endpoint exercises the normal manifest copy and path validation.
+  const endpoint = { ...providerById('openai').endpoints.find(e => e.id === 'responses'),
+    path: '/fixture/${path}', upstreamPath: undefined, path_params: ['path'], path_param_styles: { path: 'relative_path' } };
+  const relative = 'ü'.repeat(1364) + '/abcdefg', preparation = new PreparationAdmission();
+  assert.equal(new TextEncoder().encode(relative).byteLength, 2736);
+  const envelope = manifestEnvelope({ pathParams: { path: relative }, body: { input: 'fixture' } }, preparation, endpoint.path_param_styles);
+  const prepared = prepareManifestRequest(fixture, endpoint, envelope.body, envelope.pathParams, {}, false, preparation);
+  assert.equal(prepared.preparation, preparation);
+  assert.notEqual(prepared.pathParams, envelope.pathParams);
+  assert.equal(prepared.pathParams.path, relative);
+  const auth = { baseUrl: 'https://provider.example', transportPaths: {} };
+  const encoded = encodeURIComponent('ü'.repeat(1364)) + '/abcdefg';
+  assert.equal(encoded.length, 8192);
+  assert.equal(upstreamPath(fixture, endpoint, prepared.pathParams, {}, auth, preparation), '/fixture/' + encoded);
+  for (const path of [relative + 'h', 'x'.repeat(4097), Array(65).fill('x').join('/')]) {
+    const owner = new PreparationAdmission();
+    assert.throws(() => {
+      const rejected = manifestEnvelope({ pathParams: { path } }, owner, endpoint.path_param_styles);
+      prepareManifestRequest(fixture, endpoint, rejected.body, rejected.pathParams, {}, false, owner);
+    }, limited);
+  }
+  const owner = new PreparationAdmission();
+  const unsafe = manifestEnvelope({ pathParams: { path: 'a/../b' } }, owner, endpoint.path_param_styles);
+  const checked = prepareManifestRequest(fixture, endpoint, unsafe.body, unsafe.pathParams, {}, false, owner);
+  assert.throws(() => upstreamPath(fixture, endpoint, checked.pathParams, {}, auth, owner), error => error.code === 'invalid_path_param');
+});
+
 test('query conversion counts repeated writes and preserves protected/interleaved values', () => {
   const pairs = new PreparationAdmission(); for (let i = 0; i < 128; i++) pairs.query('a', '');
   assert.throws(() => pairs.query('a', ''), limited);
