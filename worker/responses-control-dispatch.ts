@@ -12,7 +12,7 @@ import type { ContinuationOwner } from "./continuation-store.ts";
 import { applyManagedHeaders, assertManagedDispatch, managedHeaderIdentity, managedProbeId } from "./managed-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { applyTransportHeaders, assertOperationConfiguration, providerCredentialScheme } from "./provider-auth.ts";
-import { resolveTemplate } from "./provider-templates.ts";
+import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
 import { configuredUpstream, copyRequestHeaders, providerById, upstreamPath, type UpstreamAuth } from "./providers.ts";
 import { responseIdentity } from "./response-identities.ts";
 import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
@@ -39,7 +39,15 @@ export interface ResponseControlDispatch {
   authorization: ResponseControlAuthorization;
 }
 
-export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null, lifecycle?: CompiledEndpoint["lifecycle"], env?: Env, pathParams: Record<string, string> = {}, requestedVersion?: string): Promise<string> {
+export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null, lifecycle?: CompiledEndpoint["lifecycle"], env?: Env, pathParams: Record<string, string> = {}, requestedVersion?: string, preparation?: PreparationAdmission): Promise<string> {
+  // Ownerless shared-helper callers retain their legacy contract. Selected
+  // proxy and CONTROL callers supply their original token; never mint one here.
+  preparation?.paths(pathParams); preparation?.text(url.href, 16384);
+  preparation?.headers(upstream.headers); preparation?.headers(headers);
+  upstream.query.forEach((value, name) => preparation?.query(name, value));
+  if (requestedVersion !== undefined) preparation?.text(requestedVersion, 16384);
+  if (upstream.grant?.credentialLineage) preparation?.text(upstream.grant.credentialLineage, 16384);
+  for (const name of provider.adapter.passthroughHeaders) { preparation?.text(name, 128); const value = headers.get(name); if (value !== null) preparation?.text(value, 8192); }
   const routeUrl = new URL(url), scheme = providerCredentialScheme(provider, upstream.grant);
   if (grantKey && scheme.type === "query_api_key") routeUrl.searchParams.delete(scheme.param);
   const identity = upstream.grant?.credentialLineage ?? await sha256Hex(JSON.stringify([[...upstream.headers], [...upstream.query]]));
@@ -74,9 +82,12 @@ export async function responseRouteDigest(provider: CompiledProvider, upstream: 
       const control = adapter.control(action, endpoint, managedProbeId(adapter), pathParams);
       // Transport overrides must not silently move a declared managed control.
       if (upstream.transport?.endpointPaths[endpoint.id]) unavailable();
+      preparation?.text(control.path, 16384);
+      control.query.forEach((value, name) => preparation?.query(name, value));
+      if (control.headers) preparation?.headers(control.headers);
       const headers = managedHeaderIdentity(provider, control);
       return [[endpoint.method, control.path,
-        Object.entries(endpoint.headers).map(([name, value]) => [name, resolveTemplate(provider, value, env)]), [...control.query], ...(headers.length ? [headers] : [])]];
+        Object.entries(endpoint.headers).map(([name, value]) => [name, resolveTemplate(provider, value, env, preparation, 8192)]), [...control.query], ...(headers.length ? [headers] : [])]];
     }));
   }
   if (lifecycle?.protocol === "minimax.video") {
@@ -93,6 +104,10 @@ export function retainedResponseRoute(pathParams: Record<string, string>, header
 // The credential owner invokes fetch immediately after this preparation while
 // still holding its mutation tail. No credential leaves that owner for a poll.
 export async function prepareResponseControl(env: Env, input: ResponseControlDispatch, grant: UpstreamGrant | null, wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<Request> {
+  const preparation = new PreparationAdmission();
+  preparation.paths(input.route.pathParams);
+  preparation.text(input.responseId, 4096);
+  const admittedQuery = preparation.rawQuery(input.query);
   assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
   const managed = input.protocol !== undefined;
@@ -104,29 +119,24 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   validateRoute(input.route);
   if (typeof input.query !== "string" || input.query.length > 8192) unavailable();
   if (managed && input.query !== "") unavailable();
-  const query = managed ? new URLSearchParams() : responsesControlQuery(input.action, new URLSearchParams(input.query));
+  const query = managed ? admittedQuery : responsesControlQuery(input.action, admittedQuery);
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
   if (!contract?.retained && Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
-  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed, ...(input.protocol === "minimax.video" ? { model: input.requestedVersion } : {}) }, grant, env);
+  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: !managed, managedLifecycle: managed, ...(input.protocol === "minimax.video" ? { model: input.requestedVersion } : {}) }, grant, env, preparation);
   const videoRequirement = input.protocol === "minimax.video" ? { provider, endpoint: create, model: input.requestedVersion, mode: "http" as const, managedLifecycle: true } : undefined;
   if (videoRequirement && (!miniMaxVideoRequirement(videoRequirement) || !grant || !miniMaxVideoProjection(grant))) miniMaxVideoDenied();
   const connection = await resolveConnection(env, provider.id, wan, undefined, video);
   if (connection?.enabled === false) throw new HttpError(503, "provider_disabled", "response provider is disabled");
-  const upstream = configuredUpstream(provider, grant, env, videoRequirement), incoming = new Headers();
-  if (input.route.organization !== null) incoming.set("openai-organization", input.route.organization);
-  if (input.route.project !== null) incoming.set("openai-project", input.route.project);
+  const upstream = configuredUpstream(provider, grant, env, videoRequirement, preparation), incoming = new Headers();
+  if (input.route.organization !== null) preparationHeader(incoming, "openai-organization", input.route.organization, preparation);
+  if (input.route.project !== null) preparationHeader(incoming, "openai-project", input.route.project, preparation);
+  preparation.headers(upstream.headers, true);
   const headers = new Headers(upstream.headers);
-  copyRequestHeaders(incoming, provider, create, headers, env);
-  applyTransportHeaders(headers, upstream.transport, grant);
-  const urlFor = (endpoint: typeof create, params: Record<string, string>) => {
-    const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${upstreamPath(provider, endpoint, params, env, upstream)}`);
-    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-    for (const [name, value] of Object.entries(endpoint.query)) url.searchParams.set(name, resolveTemplate(provider, value, env));
-    return url;
-  };
+  copyRequestHeaders(incoming, provider, create, headers, env, preparation);
+  applyTransportHeaders(headers, upstream.transport, grant, preparation);
   // Compare the original create route, not the necessarily different control
   // URL. Environment credential/configuration changes also invalidate the pin.
-  if (await responseRouteDigest(provider, upstream, urlFor(create, input.route.pathParams), headers, input.owner.grantKey, managed ? create.lifecycle : undefined, env, input.route.pathParams, input.requestedVersion) !== input.owner.routeSha256) unavailable();
+  if (await responseRouteDigest(provider, upstream, urlFor(controlUrlConfiguration(provider, create, input.route.pathParams, upstream, env, preparation), preparation), headers, input.owner.grantKey, managed ? create.lifecycle : undefined, env, input.route.pathParams, input.requestedVersion, preparation) !== input.owner.routeSha256) unavailable();
   const fileContract = input.file && provider && create ? (await import("./managed-files.ts")).managedFileRoute(provider, create) : null;
   if (input.file && (!managed || !fileContract || input.action !== "retrieve" || input.authorization.kind !== "public"
     || !["metadata", "download"].includes(input.file.action))) unavailable();
@@ -139,26 +149,50 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   const endpoint = input.file ? fileContract?.endpoints[input.file.action] : managed ? contract?.controls[input.action]
     : provider.endpoints.find(endpoint => endpoint.id === create.responsesLifecycle![input.action as "retrieve" | "cancel"]);
   if (!endpoint) unavailable();
-  if (input.file) assertOperationConfiguration({ provider, endpoint, mode: "http" }, grant, env);
+  if (input.file) assertOperationConfiguration({ provider, endpoint, mode: "http" }, grant, env, preparation);
   const control = input.file ? fileContract!.adapter.control(input.file.action, endpoint, input.file.descriptor, upstream.baseUrl, input.file.state)
     : managed ? contract!.adapter.control(input.action, endpoint, id.value!, input.route.pathParams) : null;
   if (input.file && control && (!control.path.startsWith("/") || /[\\%?#\s]/.test(control.path) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(control.path)
     || control.headers && [...control.headers].length || control.transientHeaders?.length)) unavailable();
-  const url = control ? new URL(`${upstream.baseUrl.replace(/\/$/, "")}${control.path}`) : urlFor(endpoint, { response_id: id.value! });
+  if (control) preparation.url(upstream.baseUrl, control.path);
+  const url = control ? new URL(`${upstream.baseUrl.replace(/\/$/, "")}${control.path}`) : urlFor(controlUrlConfiguration(provider, endpoint, { response_id: id.value! }, upstream, env, preparation), preparation);
   if (input.file) {
     const base = new URL(upstream.baseUrl);
     if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/")) unavailable();
   }
   if (control) {
-    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-    control.query.forEach((value, name) => { if (url.searchParams.has(name)) unavailable(); url.searchParams.set(name, value); });
+    upstream.query.forEach((value, name) => { preparation.urlQuery(url, name, value); url.searchParams.set(name, value); });
+    control.query.forEach((value, name) => { if (url.searchParams.has(name)) unavailable(); preparation.urlQuery(url, name, value); url.searchParams.set(name, value); });
   }
-  for (const [name, value] of query) url.searchParams.append(name, value);
-  if (input.clientRequestId) incoming.set("x-client-request-id", input.clientRequestId);
-  copyRequestHeaders(incoming, provider, endpoint, headers, env);
-  applyTransportHeaders(headers, upstream.transport, grant);
-  if (control) applyManagedHeaders(provider, headers, control);
+  for (const [name, value] of query) { preparation.urlQuery(url, name, value, true); url.searchParams.append(name, value); }
+  if (input.clientRequestId) preparationHeader(incoming, "x-client-request-id", input.clientRequestId, preparation);
+  copyRequestHeaders(incoming, provider, endpoint, headers, env, preparation);
+  applyTransportHeaders(headers, upstream.transport, grant, preparation);
+  if (control) {
+    control.headers?.forEach((value, name) => preparation.header(headers, name, value));
+    applyManagedHeaders(provider, headers, control);
+  }
+  preparation.headers(headers, true); preparation.text(url.href, 16384);
   return new Request(url, { method: endpoint.method, headers, redirect: "manual" });
+}
+
+// This configuration contains admitted strings only, never an Env closure.
+function controlUrlConfiguration(provider: CompiledProvider, endpoint: CompiledEndpoint, params: Record<string, string>,
+  upstream: UpstreamAuth, env: Env, preparation: PreparationAdmission) {
+  const path = upstreamPath(provider, endpoint, params, env, upstream, preparation);
+  preparation.url(upstream.baseUrl, path);
+  const query: Array<[string, string]> = [];
+  upstream.query.forEach((value, name) => { preparation.query(name, value); query.push([name, value]); });
+  for (const name in endpoint.query) {
+    const value = resolveTemplate(provider, endpoint.query[name], env, preparation, 4096);
+    preparation.query(name, value); query.push([name, value]);
+  }
+  return { base: upstream.baseUrl, path, query };
+}
+function urlFor(config: ReturnType<typeof controlUrlConfiguration>, preparation: PreparationAdmission): URL {
+  const url = new URL(`${config.base.replace(/\/$/, "")}${config.path}`);
+  for (const [name, value] of config.query) { preparation.urlQuery(url, name, value, false, false); url.searchParams.set(name, value); }
+  preparation.text(url.href, 16384); return url;
 }
 
 export function responseControlRetentionProtocol(input: ResponseControlDispatch): string | undefined {

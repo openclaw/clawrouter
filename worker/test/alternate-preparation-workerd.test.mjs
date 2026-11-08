@@ -154,13 +154,13 @@ export default {async fetch(request,bindings,ctx){const u=new URL(request.url),i
 async function withoutOutsideFence(directory, upstream) {
   const { build } = createRequire(import.meta.resolve('wrangler/package.json'))('esbuild');
   const target = resolve('worker/proxy.ts');
-  const anchor = '      signal.throwIfAborted();\n      if (retry) {';
+  const anchor = '      signal.throwIfAborted();\n      if (capacityFailure) throw capacityFailure;\n      if (retry) {';
   const bundle = await build({ stdin: { contents: router, resolveDir: process.cwd(), sourcefile: 'alternate-fixture.ts', loader: 'ts' },
     write: false, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent', plugins: [{ name: 'omit-only-final-fence', setup(build) {
       build.onLoad({ filter: /[\\/]worker[\\/]proxy\.ts$/ }, async ({ path }) => {
         assert.equal(resolve(path), target); const source = await readFile(path, 'utf8');
         assert.equal(source.split(anchor).length, 2, 'unique outside final-join fence');
-        return { contents: source.replace(anchor, '      if (retry) {'), loader: 'ts', resolveDir: dirname(path) };
+        return { contents: source.replace(anchor, '      if (capacityFailure) throw capacityFailure;\n      if (retry) {'), loader: 'ts', resolveDir: dirname(path) };
       });
     } }] });
   return startBundledWorkerdFixture(directory, bundle.outputFiles[0].text, upstream, { preventEviction: true });

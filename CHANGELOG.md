@@ -90,6 +90,8 @@
 
 - Preserve original budget-reservation failures and every ordered ledger/queue cleanup failure privately after all started operations settle. Keep the existing public accounting-unavailable error, acknowledged reservation IDs and queue recovery behavior.
 
+- Bound selected dynamic provider preparation with one explicit allowance across configuration, templates, paths, queries, headers, signing and alternate preparation. Realtime uses a separate allowance per fresh authority observation, shared by its main and ASR stages; the handshake allowance remains separate. Preserve credential and transport semantics while making capacity denial terminal, keeping original abort precedence and accounting IDs; independent response controls own their own allowance.
+
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 
 - Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
