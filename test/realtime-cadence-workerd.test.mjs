@@ -1,19 +1,50 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { startWorkerdFixture } from './helpers/workerd.mjs';
+import { startBundledWorkerdFixture } from './helpers/workerd.mjs';
+const require = createRequire(import.meta.resolve('wrangler/package.json'));
+const { build } = require('esbuild');
 
 // Fixed 15ms authority RPC / 30ms status RPC delays wrap real production
 // authority and SQLite ledgers. Neither authorization nor accounting is mocked.
 const router = String.raw`
 import handler, { BudgetLedgerObject as RealBudgetLedger } from './worker/index.ts';
 import { putGrantCredentials } from './worker/grant-credentials.ts';
+import { isPreparationLimit } from './worker/provider-templates.ts';
 export * from './worker/index.ts';
 let delay = { authority: 15, ledger: 30 }, calls = { authority: 0, ledger: 0, held: 0 };
 let holdPath = '', releases = [], observations = [], observing = false;
+let holdInspection = false, heldInspection = false;
+let preparation = { owners:0, main:0, asr:0, reused:0, wrongOwner:0, observations:0, pending:0, peakPending:0, settled:0, registered:0, background:0, phase:'idle', joined:false, operationSettled:false, operationFailed:false };
+// All actual promises/reasons stay in this originating request's probe.
+function preparationProbe(ctx, allowCapacity = false) {
+ const roots=[], owners=new WeakMap();let nextOwner=0,latest,handshake;
+ const watch=(pending,kind,owner)=>{const outcome=Promise.resolve(pending).then(()=>({failed:false}),error=>({failed:true,error})).then(result=>{
+  if(kind==='observation'){owner.pending=false;preparation.pending--;preparation.settled++;}
+  if(kind==='background')preparation.background--;
+  return {...result,kind};});roots.push(outcome);return outcome;};
+ return {
+  context:{waitUntil(p){preparation.background++;watch(p,'background');ctx.waitUntil(p);},
+   fixtureOwner(owner){if(owners.has(owner)||owner===handshake)preparation.reused++;const mark={id:++nextOwner,main:false,pending:true};owners.set(owner,mark);latest=mark;preparation.owners++;},
+   fixturePreparation(selection,record,p){if(record)handshake=selection.preparation;const mark=owners.get(selection.preparation);
+    if(!record){if(!mark)preparation.wrongOwner++;else if(selection.capability==='audio.realtime'){
+      if(mark.main)preparation.reused++;mark.main=true;preparation.main++;
+     }else {preparation.asr++;if(!mark.main)preparation.wrongOwner++;}}
+    watch(p,'preparation');},
+   fixtureObservation(p){preparation.observations++;preparation.pending++;preparation.peakPending=Math.max(preparation.peakPending,preparation.pending);watch(p,'observation',latest);preparation.registered++;}
+  },
+  async join(){const failures=[];for(let i=0;i<roots.length;i++){const outcome=await roots[i];
+   if(outcome.failed&&!(allowCapacity&&outcome.kind!=='background'&&isPreparationLimit(outcome.error)))failures.push(outcome.error);}
+   if(failures.length)throw new AggregateError(failures,'cadence independent observation failures');
+  }
+ };
+}
+
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(r) { if (new URL(r.url).pathname === '/fixture-rows') return Response.json([...this.fixtureSql.exec('SELECT settled, dispatch_started, reserved_micros FROM budget_reservations')]); return super.fetch(r); }
@@ -28,6 +59,9 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
     const started = Date.now();
     if (observed) { calls[key]++; await pause(delay[key]); }
     const dispatched = Date.now(), response = await stub.fetch(...input);
+    if(key==='authority'&&holdInspection&&!heldInspection){heldInspection=true;preparation.phase='held-completed-authority-reply';
+      try{const gate=await fetch('https://cadence-gate.example/observation');await gate.text();}
+      catch(primary){try{await response.body?.cancel();}catch(cleanup){throw new AggregateError([primary,cleanup],'cadence held-reply cleanup');}throw primary;}}
     if (observing && observed && observations.length < 64) observations.push({ key, started, dispatched, completed: Date.now(), status: response.status });
     return response;
   } }; };
@@ -37,16 +71,48 @@ export default { async fetch(r, env, ctx) {
   if (path === '/fixture-grant') { await putGrantCredentials(env, 'oauth/fixture/openai', { enabled: true, provider: 'openai', kind: 'api_key', credential: 'fixture-upstream-key' }); return new Response('ok'); }
   if (path === '/fixture-delay') { delay = await r.json(); return new Response('ok'); }
   if (path === '/fixture-observe') { observing = true; return new Response('ok'); }
-  if (path === '/fixture-calls') return Response.json({ ...calls, observations });
+  if (path === '/fixture-calls') return Response.json({ ...calls, observations, preparation });
   if (path === '/fixture-hold') { const mode = await r.text(); holdPath = mode === 'on' ? '/status' : mode === 'dispatch' ? '/dispatch' : ''; if (!holdPath) { for (const release of releases) release(); releases = []; } return new Response('ok'); }
-  return handler.fetch(r, { ...env, ACCESS_CONTROL: delayed(env.ACCESS_CONTROL, 'authority'), BUDGET_LEDGER: delayed(env.BUDGET_LEDGER, 'ledger') }, ctx);
+  const current={...env,ACCESS_CONTROL:delayed(env.ACCESS_CONTROL,'authority'),BUDGET_LEDGER:delayed(env.BUDGET_LEDGER,'ledger')};
+  if(path==='/fixture-owned-inspection'){
+   const mode=await r.text(),probe=preparationProbe(ctx,mode==='overflow');let ws,hasPrimary=false,primary,errors=[];
+   const events=[];let closed=false,hasEventFailure=false,eventFailure;
+   const next=async type=>{for(let i=0;i<1500;i++){if(hasEventFailure)throw eventFailure;const at=events.findIndex(e=>e.type===type);if(at>=0)return events.splice(at,1)[0];
+     if(closed)throw Error('fixture socket closed before expected event');await pause(5);}throw Error('fixture socket event missing');};
+   try{
+    const headers=new Headers(r.headers);headers.set('upgrade','websocket');
+    const reply=await handler.fetch(new Request('https://router/v1/realtime?model=gpt-realtime-2.1',{headers,signal:r.signal}),current,probe.context);
+    if(reply.status!==101){await reply.text();throw Error('fixture upgrade failed');}
+    ws=reply.webSocket;ws.addEventListener('message',e=>{try{const value=JSON.parse(e.data);events.push(value);if(value.type==='error')errors.push(value.error.code);}catch(error){hasEventFailure=true;eventFailure=error;}});
+    ws.addEventListener('close',()=>{closed=true;});ws.accept();
+    if(mode==='overflow')ws.send(JSON.stringify({type:'session.update',session:__ASR_SESSION__}));
+    else {ws.send(JSON.stringify({type:'session.update',session:__INITIAL_SESSION__}));await next('session.updated');
+      holdInspection=true;ws.send(JSON.stringify({type:'input_audio_buffer.append',event_id:'cad_0',audio:btoa(String.fromCharCode(...new Uint8Array(160)))}));}
+    const error=await next('error');
+    if(error.error.code!==(mode==='overflow'?'provider_preparation_unavailable':'realtime_authority_timeout'))throw Error('unexpected fixture public error');
+    if(mode==='hold'&&(!heldInspection||preparation.pending<1||preparation.registered<1||preparation.background<1))throw Error('timeout lost actual observation');
+    preparation.phase=mode==='hold'?'timed-out-owner-still-pending':'capacity-denied';
+   }catch(error){hasPrimary=true;primary=error;}
+   finally{
+    preparation.operationSettled=true;preparation.operationFailed=hasPrimary;
+    const failures=hasEventFailure?[eventFailure]:[];try{ws?.close(1000);}catch(error){failures.push(error);}
+    try{await probe.join();}catch(error){failures.push(error);}
+    preparation.joined=true;
+    if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'cadence primary and cleanup failures');
+    if(hasPrimary)throw primary;
+   }
+   return Response.json({fixture:'owned-realtime-inspection',errors,preparation});
+  }
+  return handler.fetch(r,current,r.headers.has('x-fixture-preparation-probe')?preparationProbe(ctx).context:ctx);
 }, queue: handler.queue };
 `;
 const upstream = String.raw`
-let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null;
+let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null, connections = 0;
 export default { async fetch(r) {
-  if (new URL(r.url).pathname === '/fixture-stats') return Response.json({ appends, outputs, creates, closedAt, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])) });
-  if (r.headers.get('authorization') !== 'Bearer fixture-upstream-key') throw Error('wrong route');
+  if(new URL(r.url).origin==='https://cadence-gate.example')return fetch(__GATE_ORIGIN__+new URL(r.url).pathname,r);
+  if (new URL(r.url).pathname === '/fixture-stats') return Response.json({ appends, outputs, creates, closedAt, connections, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])) });
+  if (r.headers.get('authorization') !== __EXPECTED_AUTH__) throw Error('wrong route');
+  connections++;
   const pair = new WebSocketPair(), ws = pair[1]; ws.accept(); let timer, active;
   const send = e => ws.send(JSON.stringify(e));
   ws.addEventListener('close', () => { closedAt = Date.now(); clearInterval(timer); });
@@ -85,15 +151,52 @@ function observe(ws) {
     throw Error('missing ' + type + ': ' + errors);
   } };
 }
-async function fixture(t) {
+async function observedRuntime(temporary, upstreamSource, bindings) {
+  const bundle = await build({ stdin: { contents: router.replace('__INITIAL_SESSION__', JSON.stringify(session(false))).replace('__ASR_SESSION__', JSON.stringify(session(true))),
+    resolveDir: process.cwd(), sourcefile: 'cadence-fixture.ts', loader: 'ts' }, write: false, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
+    plugins: [{ name: 'observe-original-realtime-preparation', setup(build) {
+      build.onLoad({ filter: /[\\/]worker[\\/]realtime-websocket\.ts$/ }, async ({ path }) => {
+        let source = await readFile(path, 'utf8');
+        const entry = 'export async function proxyRealtimeWebSocket(request: Request, env: Env, context: ExecutionContext): Promise<Response> {';
+        const owner = '    const preparation = new PreparationAdmission();';
+        const observation = '    const observation = inspect(input);';
+        for (const anchor of [entry, owner, observation]) assert.equal(source.split(anchor).length, 2, 'unique observation anchor');
+        assert.equal(source.split('await prepareSelected(').length, 4, 'three original preparation calls');
+        source = source.replaceAll('await prepareSelected(', 'await fixturePrepare(').replace(entry, entry + `
+  const fixturePrepare=(...args)=>{const original=prepareSelected(...args);context.fixturePreparation?.(args[2],args[6],original);return original;};`)
+          .replace(owner, owner + '\n    context.fixtureOwner?.(preparation);')
+          .replace(observation, observation + '\n    context.fixtureObservation?.(observation);');
+        return { contents: source, loader: 'ts', resolveDir: dirname(path) };
+      });
+    } }] });
+  return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamSource, { preventEviction: true, bindings });
+}
+async function fixture(t, options = {}) {
   const temporary = await mkdtemp(join(tmpdir(), 'clawrouter-cadence-'));
-  let mf;
-  t.after(async () => { try { await mf?.dispose(); } finally { await rm(temporary, { recursive: true, force: true }); } });
+  let mf, server, gate, drainProbe, released = false, hasPrimary = false, primary; const clients = [], sockets = [], serverFailures = [];
+  const release = () => { released = true; gate?.end('released'); gate = undefined; };
+  t.after(async () => {
+    release(); const failures = [];
+    for (const ws of sockets) try { ws.close(1000); } catch (error) { failures.push(error); }
+    try { await drainProbe?.(); } catch (error) { failures.push(error); }
+    for (const observed of clients) { const outcome = await observed; if (outcome.failed) failures.push(outcome.error); }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    if (server) try { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    failures.push(...serverFailures);
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'cadence fixture cleanup');
+  });
+  server = createServer((request, response) => { request.resume(); if (request.url !== '/observation') { response.writeHead(404); response.end(); }
+    else if (released) response.end('released'); else if (gate) { serverFailures.push(Error('unexpected second held observation')); response.writeHead(500); response.end(); } else gate = response; });
+  server.on('error', error => serverFailures.push(error));
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); }); });
+  const expectedKey = options.large ? 's'.repeat(8185) : 'fixture-upstream-key';
+  const upstreamSource = upstream.replace('__GATE_ORIGIN__', JSON.stringify('http://127.0.0.1:' + server.address().port)).replace('__EXPECTED_AUTH__', JSON.stringify('Bearer ' + expectedKey));
   // Idle Durable Object eviction is a local co-scheduling stall, not router latency.
-  mf = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true });
+  mf = await observedRuntime(temporary, upstreamSource, { OPENAI_API_KEY: expectedKey });
   const kv = await mf.getKVNamespace('POLICY_KV', 'router'), ns = await mf.getDurableObjectNamespace('ACCESS_CONTROL', 'router');
   const authority = ns.get(ns.idFromName('policy-bindings')), svc = await mf.getWorker('upstream');
-  const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret };
+  const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret, ...(options.probe ? { 'x-fixture-preparation-probe': 'on' } : {}), ...(options.large ? { 'openai-organization': 'o'.repeat(8192), 'openai-project': 'p'.repeat(8192) } : {}) };
   const policy = async (extra = {}) => {
     const r = await authority.fetch('https://authority/policies/put', { method: 'POST', body: JSON.stringify({ policyId: 'fixture', policy: { enabled: true, generation: 'g1', providers: ['openai'], budgetMode: 'soft', monthlyBudgetMicros: 100_000_000, retainRequestContent: false, ...extra } }) }); assert.equal(r.status, 200);
   };
@@ -101,15 +204,24 @@ async function fixture(t) {
   const setCredential = async extra => { const r = await authority.fetch('https://authority/credentials/mutate', { method: 'POST', body: JSON.stringify({ operation: 'put', credentialId: 'fixture', scope: 'admin', actor: { auth: 'admin_token', role: 'admin', email: 'fixture@example.invalid' }, credential: { ...credential, ...extra } }) }); assert.equal(r.status, 200, await r.text()); };
   await policy(); await kv.put('credentials/fixture', JSON.stringify(credential));
   await kv.put('connections/openai', JSON.stringify({ providerId: 'openai', enabled: true, monthlyBudgetMicros: 100_000_000 }));
-  return { mf, kv, authority, svc, headers, policy, setCredential, async control(path, body) { return mf.dispatchFetch('https://router' + path, { method: 'POST', body }); }, async stats() { return (await svc.fetch('https://upstream/fixture-stats')).json(); }, async open(asr, response = true, authHeaders = headers) {
+  const call = (url, options) => { const pending = mf.dispatchFetch(url, options).then(async response => ({ status: response.status, text: await response.text() }));
+    clients.push(pending.then(value => ({ failed: false, value }), error => ({ failed: true, error }))); return pending; };
+  const probeState = async () => { const response = await call('https://router/fixture-calls'); assert.equal(response.status, 200); return JSON.parse(response.text); };
+  // Early assertions still close the socket and observe every registered root's
+  // settlement before fixture disposal. No foreign-context I/O promise is shared.
+  if (options.probe) drainProbe = () => until(async () => { const { preparation } = await probeState(); return preparation.pending === 0 && preparation.background === 0; });
+  return { mf, kv, authority, svc, headers, policy, setCredential, release, held: () => !!gate, primary(error) { hasPrimary = true; primary = error; },
+    probeState,
+    owned(mode) { return call('https://router/fixture-owned-inspection', { method: 'POST', headers, body: mode }); }, async control(path, body) { return mf.dispatchFetch('https://router' + path, { method: 'POST', body }); }, async stats() { return (await svc.fetch('https://upstream/fixture-stats')).json(); }, async open(asr, response = true, authHeaders = headers) {
     const r = await mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } }); assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
-    const ws = r.webSocket, q = observe(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
+    const ws = r.webSocket, q = observe(ws); sockets.push(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
     if (response) { ws.send(JSON.stringify({ type: 'response.create' })); await q.next('response.output_item.added'); }
     return { ws, q };
   } };
 }
 async function cadence(t, asr, frames, rpc) {
-  const f = await fixture(t);
+  const f = await fixture(t, { probe: true });
+  try {
   if (rpc) assert.equal((await f.control('/fixture-delay', JSON.stringify(rpc))).status, 200);
   const c = await f.open(asr), offeredAt = [], scheduleLag = [], start = Date.now();
   for (let i = 0; i < frames; i++) {
@@ -130,6 +242,11 @@ async function cadence(t, asr, frames, rpc) {
   assert.deepEqual(result.errors, []); assert.equal(result.closed, false); assert.equal(result.egress, frames); assert.equal(result.acknowledgments, frames);
   assert.ok(result.receivedAudioFrames >= frames * 0.9, JSON.stringify(result)); assert.ok(result.maxEgressMs <= 250, JSON.stringify(result)); assert.ok(result.maxDownstreamMs <= 250, JSON.stringify(result));
   assert.ok(result.maxSenderScheduleLagMs <= 100, 'host did not sustain native cadence: ' + JSON.stringify(result));
+  const final = await until(async () => { const state = await f.probeState(); return !state.preparation.pending && !state.preparation.background ? state.preparation : false; });
+  assert.equal(final.reused, 0); assert.equal(final.wrongOwner, 0); assert.equal(final.main, final.owners);
+  if (frames === 500) assert.ok(final.main > 86, 'healthy media continues beyond the old failure interval');
+  if (asr) assert.ok(final.asr > 0, 'main and ASR use the same observed owner');
+  } catch (error) { f.primary(error); throw error; }
 }
 for (const asr of [false, true]) test('native 20ms duplex cadence for 10s, ASR=' + asr, { timeout: 30_000 }, t => cadence(t, asr, 500));
 // First ASR byte is serial authority -> funded soft admission -> authority. Its
@@ -224,4 +341,36 @@ test('slow authority completion does not renew media freshness', { timeout: 15_0
   await f.setCredential({ enabled: false });
   append(c, 1); assert.equal((await c.q.next('error')).error.code, 'realtime_authority_revoked');
   assert.equal((await f.stats()).appends.length, 1);
+});
+
+
+for (const mode of ['overflow', 'hold']) test('actual Realtime observation owner: ' + mode, { timeout: 25_000 }, async t => {
+  const f = await fixture(t, { large: mode === 'overflow' });
+  try {
+    const pending = f.owned(mode);
+    if (mode === 'hold') {
+      let state, settled = false, released = false;
+      const early = pending.then(() => { settled = true; if (!released) throw Error('diagnostic completed before held observation release'); }, error => { settled = true; throw error; });
+      early.catch(() => {}); // Observed now; raced until release, then joined below.
+      for (let n = 0; n < 1800; n++) {
+        state = await Promise.race([early, f.probeState()]);
+        if (state.preparation.operationFailed) { f.release(); await pending; assert.fail('failed originating operation unexpectedly fulfilled'); }
+        if (state.preparation.phase === 'timed-out-owner-still-pending') break;
+        await Promise.race([early, sleep(5)]);
+      }
+      assert.equal(state.preparation.phase, 'timed-out-owner-still-pending');
+      assert.equal(f.held(), true); assert.equal(settled, false); assert.ok(state.preparation.pending >= 1); assert.ok(state.preparation.background >= 1);
+      assert.equal(state.preparation.joined, false); assert.ok(state.preparation.peakPending >= 2, 'periodic and held media observations overlap without sharing owners');
+      assert.equal((await f.stats()).connections, 1);
+      released = true; f.release(); await early;
+    }
+    const response = await pending; assert.equal(response.status, 200);
+    const result = JSON.parse(response.text);
+    assert.equal(result.fixture, 'owned-realtime-inspection');
+    assert.deepEqual(result.errors, [mode === 'overflow' ? 'provider_preparation_unavailable' : 'realtime_authority_timeout']);
+    assert.equal(result.preparation.joined, true); assert.equal(result.preparation.pending, 0); assert.equal(result.preparation.background, 0);
+    assert.equal(result.preparation.reused, 0); assert.equal(result.preparation.wrongOwner, 0);
+    if (mode === 'overflow') assert.ok(result.preparation.asr >= 1, 'actual ASR stage shares the main allowance');
+    assert.equal((await f.stats()).connections, 1, 'no replacement upstream connection');
+  } catch (error) { f.primary(error); throw error; }
 });

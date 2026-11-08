@@ -19,8 +19,15 @@ supplied one. The returned selection/preparation carries it to `prepareSelected`
 Direct `prepareSelected` callers with manually constructed selections establish
 one token on that selection, retained across subsequent calls. This covers the
 preparation portion of existing HTTP, native and WebSocket callers; it is not a
-new public WebSocket upgrade or transcription codec qualification. Realtime's
-separate ASR model selection remains a separate logical preparation owner.
+new public WebSocket upgrade or transcription codec qualification. Realtime keeps
+its initial handshake/credential-retry owner. Each fresh authority inspection
+establishes one separate owner at entry; that observation's sequential main and
+ASR preparations share it through observation-local selection copies. Session
+selection tokens are never overwritten. Concurrent observations have distinct
+owners. The existing waitUntil registration precedes the timeout race; timeout
+does not settle the actual observation, release its owner, or grant capacity credit.
+Cadence, fresh authorization, pinned identity/configuration checks and deadlines
+remain unchanged.
 
 `prepareResponseControl` establishes one independent CONTROL token before dynamic
 construction. Its admitted URL configuration contains strings and ordered query
@@ -133,6 +140,18 @@ this does not claim the original aborted response body is delivered over HTTP.
 The local fault producer admits headers up to its explicit 64 KiB server bound.
 The existing alternate fixture's
 in-memory omission control still removes only its abort fence.
+
+The existing public Realtime cadence fixture observes original preparation
+promises through an in-memory, same-promise wrapper. Its unchanged ASR-off/on
+cadence must exceed 86 authority inspections; identity observations require new
+owners between inspections and one shared owner within main/ASR preparation.
+An initially admissible handshake followed by an ASR observation exceeds the
+cumulative header allowance and must close without another upstream connection.
+A separate local HTTP gate holds a completed authority-reply continuation past
+the unchanged observation timeout. The originating request joins the released
+observation and background work before returning a labelled diagnostic. This is
+logical continuation ownership, not a pending-native-read or timeout-retirement
+claim. Existing credential/configuration revocation tests remain unchanged.
 
 Fixture releases and immediate tagged outcome observers precede clients. Original
 Response bodies and finite background roots are joined; primary failure, including
