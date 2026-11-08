@@ -1,3 +1,4 @@
+import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { authorityAck, readAuthorityAck } from "./authority-ack-response.ts";
@@ -17,7 +18,7 @@ import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
   UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
 } from "./types";
-import { captureAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
+import { captureAssignmentRules, captureAdmittedAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, withAdmittedLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
@@ -25,7 +26,9 @@ import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { chooseGrantKey, normalizedChoiceCandidates } from "./grant-selection-strategies.ts";
 import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
+import { admitUserJson, admitUserRecordBytes, parseUserRecord, readUserKvRecord, readUserMaterializationRequest, userJsonText, userMaterializationFailure, userMaterializationHeader, userMaterializationVersion, userRecordBudget, type UserRecordBudget } from "./authority-user-materialization.ts";
 import { readAuthorityUserResponse } from "./authority-user-response.ts";
+import { admitAssignmentBytes, assignmentJsonText, assignmentSourceBudget, assignmentSourceFailure, assignmentSourceHeader, assignmentSourceVersion, isAssignmentSourceFailure, parseAssignmentSource, readAssignmentRequest, readAssignmentResponse } from "./assignment-source.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
@@ -52,6 +55,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   private env: Env;
   // Reconciliation entry order only; unrelated owner routes remain concurrent.
   private assignmentTail: Promise<void> = Promise.resolve();
+  private assignmentAdmissions = 0;
 
   constructor(state: DurableObjectState, env: Env) {
     this.env = env;
@@ -62,8 +66,53 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
-    if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
+    if (request.method !== "POST" && !request.headers.has(userMaterializationHeader) && !request.headers.has(assignmentSourceHeader) && !request.headers.has(policyCollectionHeader)) return errorResponse("route_not_found", "route not found", 404);
     try {
+      if (request.headers.has(policyCollectionHeader)) {
+        // A private protocol selector, not authority or a public caller header.
+        const input = await readPolicyRequest(request, path);
+        try {
+          if (path === "/resolve") return new Response(policyJsonText({ initialized: this.hasMeta("bindings_global_initialized"),
+            ...this.resolveCollectedBindings((input as { principals: Principal[] }).principals) }), { headers: { "content-type": "application/json" } });
+          if (path === "/policies/resolve") return new Response(policyJsonText(this.resolveCollectedPolicies((input as { policyIds: string[] }).policyIds)), { headers: { "content-type": "application/json" } });
+          if (path === "/initialize") this.initializeCollectedBindings(input as Seed[]);
+          else this.initializeCollectedPolicies(input as AccessPolicyEntry[] | { entries: AccessPolicyEntry[]; retainRequestContentDefault: boolean });
+          return new Response("initialized");
+        } catch (error) {
+          if (isPolicyCollectionFailure(error)) throw error;
+          // Query business errors keep the caller's sanitized generic-500 mapping;
+          // initialization errors still cross the existing initialized ACK owner.
+          throw policyCollectionFailure("protocol");
+        }
+      }
+      if (request.headers.has(assignmentSourceHeader)) {
+        // Reserve before acquiring the body. Fifth/invalid requests still own
+        // their ORIGINAL body but cannot read or enter the semantic FIFO.
+        const admitted = this.assignmentAdmissions < 4;
+        if (admitted) this.assignmentAdmissions++;
+        try {
+          const input = await readAssignmentRequest(request, path, admitted) as AssignmentReconcileRequest;
+          const text = await this.reconcileUserAssignments(input, true) as string;
+          return new Response(text, { headers: { "content-type": "application/json; charset=utf-8" } });
+        } catch (error) {
+          const failure = isAssignmentSourceFailure(error) || error instanceof HttpError ? error : assignmentSourceFailure("protocol");
+          return errorResponse(failure.code, failure.message, failure.status);
+        } finally { if (admitted) this.assignmentAdmissions--; }
+      }
+      if (request.headers.has(userMaterializationHeader)) {
+        const input = await readUserMaterializationRequest(request, path);
+        try {
+          if (path === "/users/resolve") {
+            const result = { initialized: this.hasMeta("users_global_initialized"), ...this.resolveMaterializedUsers((input as { emails: string[] }).emails) };
+            return new Response(userJsonText(result, "complete"), { headers: { "content-type": "application/json; charset=utf-8" } });
+          }
+          this.initializeMaterializedUsers(input as AccessControlUser[]);
+          return new Response("initialized");
+        } catch (error) {
+          if (error instanceof HttpError && error.code === "user_materialization_unavailable") throw error;
+          throw userMaterializationFailure("protocol");
+        }
+      }
       const cover = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion;
       if (cover && !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
       const coverInput = cover ? await readCoverControlRequest(request) : undefined;
@@ -197,6 +246,117 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS oauth_authorization_states (state TEXT PRIMARY KEY, state_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
   }
 
+  private collectedPolicy(id: string, budget: PolicySourceBudget): AccessPolicyEntry | null {
+    policyId(id);
+    const meta = rows<{ bytes: number }>(this.sql.exec("SELECT length(CAST(policy_json AS BLOB)) AS bytes FROM access_policies WHERE policy_id = ?", id))[0];
+    if (!meta) return null;
+    admitPolicyBytes(budget, meta.bytes); // Metadata before full value materialization.
+    const row = rows<{ policy_json: string }>(this.sql.exec("SELECT policy_json FROM access_policies WHERE policy_id = ?", id))[0];
+    if (!row) throw policyCollectionFailure("protocol");
+    return { policyId: id, policy: parsePolicyRecord(row.policy_json, budget) as AccessPolicy };
+  }
+
+  private resolveCollectedPolicies(ids: string[]): { initialized: boolean; policies: AccessPolicyEntry[]; missingPolicyIds: string[] } {
+    admitPolicyIds(ids);
+    const budget = policySourceBudget(), policies: AccessPolicyEntry[] = [], missingPolicyIds: string[] = [];
+    const policyPlan = policySequencePlan(), missingPlan = policySequencePlan();
+    for (const id of new Set(ids)) {
+      const entry = this.collectedPolicy(id, budget);
+      if (entry) { policyPlan(entry); policies.push(entry); } else { missingPlan(id); missingPolicyIds.push(id); }
+    }
+    const result = { initialized: this.hasMeta("policies_global_initialized"), policies, missingPolicyIds };
+    admitPolicyJson(result); return result;
+  }
+
+  private initializeCollectedPolicies(input: AccessPolicyEntry[] | { entries: AccessPolicyEntry[]; retainRequestContentDefault: boolean }): void {
+    if (this.hasMeta("policies_global_initialized")) return;
+    const raw = !Array.isArray(input), entries = Array.isArray(input) ? input : input.entries;
+    const budget = policySourceBudget(), staged = new Set<string>(), plan = policyCandidatePlan();
+    const candidates: AccessPolicyEntry[] = [];
+    const prepared: Array<{ policyId: string; text: string }> = [];
+    for (const entry of entries) {
+      policyId(entry.policyId);
+      // Canonical current records win before normalization of an ignored seed.
+      // A malformed existing JSON row still fails the complete preflight.
+      const current = this.collectedPolicy(entry.policyId, budget);
+      if (current || staged.has(entry.policyId)) continue;
+      if (!entry.policyId) invalidAuthorityRequest("policyId is required");
+      admitPolicyJson(entry.policy);
+      plan(entry.policyId, entry.policy, raw ? (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault : undefined);
+      candidates.push(entry); staged.add(entry.policyId);
+    }
+    // The COMPLETE prospective batch is admitted before even the first
+    // providers.filter/models Set/routing copy in the unchanged normalizer.
+    const actualPlan = policySequencePlan();
+    for (const entry of candidates) {
+      const policy = raw ? normalizePolicyRecord(entry.policy as unknown as Record<string, unknown>, (input as { retainRequestContentDefault: boolean }).retainRequestContentDefault) : entry.policy;
+      if (raw) {
+        // Only fresh normalizer dictionaries: __proto__ consumed its quota but
+        // created no own JSON field. Preserve those bytes without touching seeds.
+        const routing = policy.grantRouting;
+        if (Array.isArray(Object.getPrototypeOf(routing.eligibleGrants))) Object.setPrototypeOf(routing.eligibleGrants, Object.prototype);
+        if (Object.hasOwn(routing, "sharedGrants") && Array.isArray(Object.getPrototypeOf(routing.sharedGrants!))) Object.setPrototypeOf(routing.sharedGrants!, Object.prototype);
+      }
+      actualPlan({ policyId: entry.policyId, policy });
+      prepared.push({ policyId: entry.policyId, text: policyJsonText(policy) });
+    }
+    // All candidate validation, complete-batch accounting and serialization finish
+    // before the first write. SQL failure retains the existing partial-commit risk.
+    for (const entry of prepared) this.sql.exec("INSERT OR REPLACE INTO access_policies (policy_id, policy_json) VALUES (?, ?)", entry.policyId, entry.text);
+  }
+
+  private resolveCollectedBindings(principals: Principal[]): { bindings: PolicyBinding[]; missingPrincipals: Principal[] } {
+    admitPolicyPrincipals(principals);
+    const budget = policySourceBudget(), bindings: PolicyBinding[] = [], missingPrincipals: Principal[] = [];
+    const plan = policySequencePlan(), missingPlan = policySequencePlan();
+    let count = 0;
+    for (const raw of principals) {
+      const principal = normalizePrincipal(raw); policyId(principal.principalId);
+      const key = principalKey(principal);
+      if (!this.hasPrincipal(key)) { missingPlan(principal); missingPrincipals.push(principal); continue; }
+      const meta = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(binding_json AS BLOB))), 0) AS bytes FROM policy_binding_entries WHERE principal_key = ?", key))[0];
+      if (!meta || !Number.isSafeInteger(meta.count) || meta.count < 0 || meta.count > 4096 - count) throw policyCollectionFailure("limit");
+      count += meta.count; admitPolicyBytes(budget, meta.bytes);
+      for (const row of this.sql.exec<{ binding_json: string }>("SELECT binding_json FROM policy_binding_entries WHERE principal_key = ?", key)) {
+        const value = parsePolicyRecord(row.binding_json, budget, true) as PolicyBinding;
+        // Full stored unknown graph is counted before the old binding projection.
+        policyId(value?.principalId); policyId(value?.policyId);
+        const binding = normalizeBinding(value); plan(binding); bindings.push(binding);
+      }
+    }
+    // Normalized once, with exactly the original stable comparator/tie behavior.
+    bindings.sort((a, b) => a.priority - b.priority || a.principalType.localeCompare(b.principalType) || a.principalId.localeCompare(b.principalId) || a.policyId.localeCompare(b.policyId));
+    const result = { bindings, missingPrincipals }; admitPolicyJson(result); return result;
+  }
+
+  private initializeCollectedBindings(seeds: Seed[]): void {
+    if (this.hasMeta("bindings_global_initialized")) return;
+    const staged = new Set<string>(), plan = policySequencePlan();
+    const prepared: Array<{ key: string; writes: Array<{ key: string; text: string }> }> = [];
+    for (const seed of seeds) {
+      const principal = normalizePrincipal(seed.principal); policyId(principal.principalId);
+      const key = principalKey(principal);
+      if (this.hasPrincipal(key) || staged.has(key)) continue;
+      const normalized: PolicyBinding[] = [], rowPlan = policySequencePlan();
+      for (const raw of seed.bindings) {
+        // Preserve RAW principal-match filtering before normalization. Duplicate
+        // binding keys are written in their original order, including last wins.
+        if (raw.principalType !== principal.principalType || raw.principalId !== principal.principalId) continue;
+        const binding = normalizeBinding(raw); rowPlan(binding); normalized.push(binding);
+      }
+      plan({ principal, bindings: normalized });
+      const writes = normalized.map(binding => ({ key: bindingKey(binding), text: policyJsonText(binding) }));
+      prepared.push({ key, writes }); staged.add(key);
+    }
+    for (const seed of prepared) {
+      for (const binding of seed.writes) {
+        this.sql.exec("INSERT OR REPLACE INTO policy_binding_entries (principal_key, binding_key, binding_json) VALUES (?, ?, ?)", seed.key, binding.key, binding.text);
+        this.sql.exec("INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)", seed.key);
+      }
+      this.sql.exec("INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)", seed.key);
+    }
+  }
+
   private initializeBindings(seeds: Seed[]): void {
     if (this.hasMeta("bindings_global_initialized")) return;
     for (const seed of seeds) {
@@ -293,6 +453,47 @@ export class PolicyBindingIndexObject implements DurableObject {
     return row ? { email: normalized, record: JSON.parse(row.user_json) } : null;
   }
 
+  // Only marked selected-user requests use these source budgets. Unmarked
+  // getUser/list/bulk initialization semantics and other namespaces are unchanged.
+  private materializedUser(email: string, budget: UserRecordBudget): AccessControlUser | null {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return null;
+    const size = rows<{ bytes: number }>(this.sql.exec("SELECT length(CAST(user_json AS BLOB)) AS bytes FROM access_users WHERE email = ?", normalized))[0];
+    if (!size) return null;
+    admitUserRecordBytes(budget, size.bytes);
+    const row = rows<{ user_json: string }>(this.sql.exec("SELECT user_json FROM access_users WHERE email = ?", normalized))[0];
+    if (!row) throw userMaterializationFailure("protocol");
+    // Preserve getUser's row-wrapper truthiness, including parsed null/false/0.
+    return { email: normalized, record: parseUserRecord(row.user_json, budget) as AccessUserRecord };
+  }
+
+  private resolveMaterializedUsers(emails: string[]): { users: AccessControlUser[]; missingEmails: string[] } {
+    const budget = userRecordBudget(), users: AccessControlUser[] = [], missingEmails: string[] = [];
+    for (const email of new Set(emails.map(normalizeEmail).filter(Boolean) as string[])) {
+      const user = this.materializedUser(email, budget);
+      if (user) users.push(user); else missingEmails.push(email);
+    }
+    return { users, missingEmails };
+  }
+
+  private initializeMaterializedUsers(users: AccessControlUser[]): void {
+    if (this.hasMeta("users_global_initialized")) return;
+    const budget = userRecordBudget(), candidates: AccessControlUser[] = [], inserted = new Set<string>();
+    for (const raw of users) {
+      const email = normalizeEmail(raw.email);
+      // Simulate earlier first-wins candidates, without inserting early. Every
+      // actual canonical read is charged and parsed, even when it wins the race.
+      if (email && inserted.has(email) || this.materializedUser(raw.email, budget)) continue;
+      const user = normalizeUser(raw);
+      candidates.push(user); inserted.add(user.email);
+    }
+    admitUserJson(candidates, "complete");
+    const prepared = candidates.map(user => ({ email: user.email, text: JSON.stringify(user.record) }));
+    // All resource/validation/serialization work precedes the FIRST write. SQL
+    // failures retain existing partial-commit uncertainty; no new transaction.
+    for (const row of prepared) this.sql.exec("INSERT OR REPLACE INTO access_users (email, user_json) VALUES (?, ?)", row.email, row.text);
+  }
+
   private resolveUsers(emails: string[]): { users: AccessControlUser[]; missingEmails: string[] } {
     const users: AccessControlUser[] = [], missingEmails: string[] = [];
     for (const email of [...new Set(emails.map((item) => normalizeEmail(item)).filter(Boolean) as string[])]) {
@@ -306,24 +507,48 @@ export class PolicyBindingIndexObject implements DurableObject {
     return rows<{ email: string; user_json: string }>(this.sql.exec("SELECT email, user_json FROM access_users ORDER BY email")).map((row) => ({ email: row.email, record: JSON.parse(row.user_json) }));
   }
 
-  private reconcileUserAssignments(request: AssignmentReconcileRequest) {
+  private assignmentUser(email: string): AccessControlUser | null {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return null;
+    const size = rows<{ bytes: number }>(this.sql.exec("SELECT length(CAST(user_json AS BLOB)) AS bytes FROM access_users WHERE email = ?", normalized))[0];
+    if (!size) return null;
+    const budget = assignmentSourceBudget(); admitAssignmentBytes(budget, size.bytes);
+    const row = rows<{ user_json: string }>(this.sql.exec("SELECT user_json FROM access_users WHERE email = ?", normalized))[0];
+    if (!row) throw assignmentSourceFailure("protocol");
+    return { email: normalized, record: parseAssignmentSource(row.user_json, budget) as AccessUserRecord };
+  }
+
+  private reconcileUserAssignments(request: AssignmentReconcileRequest, bounded = false) {
     const predecessor = this.assignmentTail;
     let release!: () => void;
     this.assignmentTail = new Promise<void>(resolve => { release = resolve; });
     const actual = (async () => {
       let snapshot, captured, failed = false, reason: unknown;
       try {
-        snapshot = captureAssignmentRules(request.rules);
+        snapshot = bounded ? captureAdmittedAssignmentRules(request.rules) : captureAssignmentRules(request.rules);
         captured = { email: request.email, legacy: request.legacy, evidence: request.evidence, force: request.force };
       } catch (error) { failed = true; reason = error; }
       // Even a synchronous snapshot failure must not let a successor overtake.
       await predecessor;
       if (failed) throw reason;
       const prepared = await prepareAssignmentRules(snapshot!);
-      const user = this.getUser(captured!.email);
+      const user = bounded ? this.assignmentUser(captured!.email) : this.getUser(captured!.email);
       if (!user) throw new HttpError(404, "unknown_user", "access user not found");
-      const candidate = withLegacyAssignmentState(user, captured!.legacy);
+      const candidate = bounded ? withAdmittedLegacyAssignmentState(user, captured!.legacy) : withLegacyAssignmentState(user, captured!.legacy);
       const result = evaluatePreparedUserAssignments(candidate, prepared, captured!.evidence, captured!.force);
+      if (bounded) {
+        // Normalize ONCE, only for an already-required write. Preserve the
+        // existing projection, raw-group dedup/defaults, and full reply fields.
+        const normalized = result.changed ? normalizeUser(result.user) : undefined;
+        const stored = normalized ? assignmentJsonText(normalized.record, true) : undefined;
+        const reply = assignmentJsonText(result);
+        // Both serialized outputs precede the first mutation. No new rollback.
+        if (normalized && stored !== undefined) {
+          try { this.sql.exec("INSERT OR REPLACE INTO access_users (email, user_json) VALUES (?, ?)", normalized.email, stored); }
+          catch { throw assignmentSourceFailure("transport"); }
+        }
+        return reply;
+      }
       if (result.changed) this.putUser(result.user);
       return result;
     })();
@@ -977,14 +1202,29 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
   if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
+  if (objectName === "policy-bindings" && path === "/users/reconcile-assignments") {
+    const text = assignmentJsonText(body);
+    return await readAssignmentResponse(() => stub.fetch("https://clawrouter.internal/users/reconcile-assignments", {
+      method: "POST", body: text, signal, headers: { [assignmentSourceHeader]: assignmentSourceVersion },
+    }), signal) as T;
+  }
+  const collection = objectName === "policy-bindings" && isPolicyCollectionPath(path);
+  if (collection) admitPolicyCall(path, body);
   const ack = objectName === "policy-bindings" ? authorityAck(path) : undefined;
   if (ack) {
-    const text = JSON.stringify(body);
-    return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal }), ack, signal) as T;
+    const text = collection ? policyJsonText(body) : JSON.stringify(body);
+    return await readAuthorityAck(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal,
+      ...(collection ? { headers: { [policyCollectionHeader]: policyCollectionVersion } } : {}) }), ack, signal) as T;
+  }
+  if (collection) {
+    const text = policyJsonText(body);
+    return await readPolicyResponse(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal,
+      headers: { [policyCollectionHeader]: policyCollectionVersion } }), signal, path) as T;
   }
   if (objectName === "policy-bindings" && path === "/users/resolve") {
-    const text = JSON.stringify(body);
-    return await readAuthorityUserResponse(() => stub.fetch("https://clawrouter.internal/users/resolve", { method: "POST", body: text, signal }), signal) as T;
+    const text = userJsonText(body, "query");
+    return await readAuthorityUserResponse(() => stub.fetch("https://clawrouter.internal/users/resolve", { method: "POST", body: text, signal,
+      headers: { [userMaterializationHeader]: userMaterializationVersion } }), signal) as T;
   }
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
@@ -1028,15 +1268,17 @@ export async function listBindings(env: Env): Promise<PolicyBinding[]> {
   await authorityCall(env, "/initialize-all", bindings);
   return (await authorityCall<{ bindings: PolicyBinding[] }>(env, "/list", {})).bindings;
 }
-export async function resolvePolicies(env: Env, ids: string[]): Promise<AccessPolicyEntry[]> {
+export async function resolvePolicies(env: Env, ids: string[], collection = new PolicyCollection()): Promise<AccessPolicyEntry[]> {
+  admitPolicyIds(ids);
   const result = await authorityCall<{ initialized: boolean; policies: AccessPolicyEntry[]; missingPolicyIds: string[] }>(env, "/policies/resolve", { policyIds: ids });
+  admitPolicyJson(result); admitPolicyIds(result.missingPolicyIds);
   if (result.initialized || !result.missingPolicyIds.length) return result.policies;
-  const seeded: AccessPolicyEntry[] = [];
+  const seeded: AccessPolicyEntry[] = [], plan = policySequencePlan();
   for (const policyId of result.missingPolicyIds) {
-    const value = await env.POLICY_KV.get<Record<string, unknown>>(`policies/${policyId}`, "json") ?? await genuineLegacyKey(env, policyId);
-    if (value) seeded.push({ policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
+    const value = await collection.read(env, `policies/${policyId}`) ?? await genuineLegacyKey(env, policyId, key => collection.read(env, key));
+    if (value) { const entry = { policyId, policy: value as unknown as AccessPolicy }; plan(entry); seeded.push(entry); }
   }
-  if (seeded.length) await authorityCall(env, "/policies/initialize", seeded);
+  if (seeded.length) await authorityCall(env, "/policies/initialize", { entries: seeded, retainRequestContentDefault: contentRetentionDefault(env) });
   return (await authorityCall<typeof result>(env, "/policies/resolve", { policyIds: ids })).policies;
 }
 export async function resolveCredentials(env: Env, ids: string[]): Promise<ProxyCredentialEntry[]> {
@@ -1053,24 +1295,35 @@ export async function resolveCredentials(env: Env, ids: string[]): Promise<Proxy
 export async function resolveUsers(env: Env, emails: string[]): Promise<AccessControlUser[]> {
   const result = await authorityCall<{ initialized: boolean; users: AccessControlUser[]; missingEmails: string[] }>(env, "/users/resolve", { emails });
   if (result.initialized || !result.missingEmails.length) return result.users;
-  const seeded: AccessControlUser[] = [];
+  const seeded: AccessControlUser[] = [], budget = userRecordBudget();
   for (const email of result.missingEmails) {
-    const record = await env.POLICY_KV.get<AccessUserRecord>(`access/users/${email}`, "json");
+    const record = await readUserKvRecord(() => env.POLICY_KV.get(`access/users/${email}`, "stream"), budget) as AccessUserRecord;
     if (record) seeded.push({ email, record });
   }
-  if (seeded.length) await authorityCall(env, "/users/initialize", seeded);
+  if (seeded.length) {
+    // This private cold path alone marks initialization. Raw ignored seeds are
+    // admitted here; only the owner can determine which candidates to normalize.
+    const text = userJsonText(seeded, "init");
+    const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
+    await readAuthorityAck(() => stub.fetch("https://clawrouter.internal/users/initialize", { method: "POST", body: text,
+      headers: { [userMaterializationHeader]: userMaterializationVersion } }), "initialized");
+  }
   return (await authorityCall<typeof result>(env, "/users/resolve", { emails })).users;
 }
-export async function resolveBindings(env: Env, principals: Principal[]): Promise<PolicyBinding[]> {
+export async function resolveBindings(env: Env, principals: Principal[], collection = new PolicyCollection()): Promise<PolicyBinding[]> {
+  admitPolicyPrincipals(principals);
   const result = await authorityCall<{ initialized: boolean; bindings: PolicyBinding[]; missingPrincipals: Principal[] }>(env, "/resolve", { principals });
+  admitPolicyBindings(result.bindings); admitPolicyPrincipals(result.missingPrincipals);
   if (result.initialized || !result.missingPrincipals.length) return result.bindings;
-  const seeds: Seed[] = [];
+  const seeds: Seed[] = [], plan = policySequencePlan();
   for (const principal of result.missingPrincipals) {
     const prefix = `access/bindings/${principal.principalType}/${encodeURIComponent(principal.principalId)}/`;
-    seeds.push({ principal, bindings: (await listKvJson<PolicyBinding>(env, prefix)).map(([, binding]) => binding) });
+    const seed = { principal, bindings: await collection.listBindings(env, prefix) };
+    plan(seed); seeds.push(seed);
   }
   await authorityCall(env, "/initialize", seeds);
-  return (await authorityCall<typeof result>(env, "/resolve", { principals })).bindings;
+  const final = (await authorityCall<typeof result>(env, "/resolve", { principals })).bindings;
+  admitPolicyBindings(final); return final;
 }
 export async function resolveConnections(env: Env, providerIds: string[]): Promise<ProviderConnection[]> {
   const ids = [...new Set(providerIds)];

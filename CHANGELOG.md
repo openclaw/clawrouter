@@ -3,7 +3,14 @@
 ## Unreleased
 
 - Retry transient Worker version-override fallbacks during deploy smoke reads and require stable version proof before POSTs, without replaying paid requests.
+- Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
+
+- Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
+
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+
+- Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
+
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
@@ -73,6 +80,12 @@
 - Write compact, versioned assignment-rule revisions only when reconciliation already changes canonical state. Preserve unchanged legacy records and serialize owner-local reconciliation through immutable rule snapshots, hashing before the final current-user read without locking unrelated owner operations.
 
 - Bound selected user-resolution replies to a complete 1 MiB JSON profile and join original fetch, read, FIRST cancellation and unlock before publication. Preserve bounded legacy records, unknown fields and cold-import behavior; oversized or uncertain replies deny without authentication fallback. Producer allocations remain separate.
+
+- Bound selected user-record SQL/KV materialization and private cold initialization with cumulative source admission, original-stream retirement and complete batch checks before writes. Preserve canonical winners, full legacy records and unmarked bulk flows; resource failures deny without truncation, migration or rollback claims.
+
+- Bound selected assignment rule/KV/SQL sources, exact revision capture and complete stored/reply representations before materialization or writes. Admit four reconciliations through original-stream retirement and the existing FIFO; preserve legacy no-ops and projected storage without migration or rollback claims. Selected callers now propagate sanitized owner `404 unknown_user` and `400/500 authority_error` instead of the old generic public `500 internal_error` wrapper; unmarked flows are unchanged.
+
+- Bound selected policy collections with shared caller KV admission, private SQL/request/reply profiles, original-stream retirement and prospective candidate checks before normalization or writes. Conservatively reserve structurally valid publication permissions even when expired; actual expiry and permissions remain unchanged, with existing query/ACK public-error mappings preserved.
 
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 

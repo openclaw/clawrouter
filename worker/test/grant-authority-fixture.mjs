@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import { after } from "node:test";
 import { PolicyBindingIndexObject } from "../authority.ts";
@@ -9,7 +10,12 @@ export function createGrantAuthority(initialize, env) {
   const object = new PolicyBindingIndexObject({ storage }, env);
   return {
     sql, storage, object,
-    fetch: (url, init) => object.fetch(new Request(url, init)),
+    async fetch(url, init) {
+      const selected = new Headers(init?.headers).has("x-clawrouter-policy-collection");
+      if (!selected) return object.fetch(new Request(url, init));
+      const response = await object.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+      return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
+    },
     async call(path, body) {
       const response = await object.fetch(new Request(`https://clawrouter.internal/grant-pools/${path}`, { method: "POST", body: JSON.stringify(body) }));
       const result = await response.json();
