@@ -1,5 +1,267 @@
 import type { Token } from "stream-json/core/parser.js";
 import { createJsonTokenizer } from "./json-tokens.ts";
+import { HttpError } from "./utils.ts";
+
+const accountingAdmissionErrors = new WeakSet<object>();
+export function accountingAdmissionFailure(): never {
+  const error = new HttpError(503, "accounting_preflight_unavailable", "accounting preflight is unavailable");
+  accountingAdmissionErrors.add(error);
+  throw error;
+}
+export function isAccountingAdmissionFailure(error: unknown): error is HttpError {
+  return typeof error === "object" && error !== null && accountingAdmissionErrors.has(error);
+}
+export function accountingIdentity(value: unknown, maximum = 1024): void {
+  if (value != null && (typeof value !== "string" || value.length > maximum)) accountingAdmissionFailure();
+}
+
+// Closed accounting profiles, including the existing tighter control sink.
+type AccountingJsonProfile = "intent" | "capsule" | "archive" | "search";
+const accountingProfiles = {
+  // Existing Search/cover control sink, including its root-depth and omitted-
+  // member accounting. This adds no new limit to legacy sink finalization.
+  search: { wire: 16384, depth: 16, values: 128, containers: Infinity, members: 128, entries: 128, combined: Infinity, strings: 8192, key: 4096, scalar: 4096 },
+  intent: { wire: 16384, depth: 8, values: 256, containers: 64, members: 128, entries: 64, combined: Infinity, strings: 8192, key: 128, scalar: 2048 },
+  capsule: { wire: 65536, depth: 8, values: 1024, containers: 128, members: 512, entries: 256, combined: Infinity, strings: 32768, key: 128, scalar: 2048 },
+  archive: { wire: 8 * 1024 * 1024 + 65536, depth: 32, values: 65536, containers: 16384, members: Infinity, entries: Infinity, combined: 32768, strings: 8 * 1024 * 1024, key: 1024, scalar: Infinity },
+} as const;
+
+// Private prospective scalar witnesses. They never enter a copied graph or wire
+// value. Event producers must enforce the corresponding bound on actual values.
+const accountingRanges = new WeakMap<object, { units: number; bytes: number; text: number }>();
+const accountingObjects = new WeakMap<object, { source: object; overrides: Record<string, unknown>; renames: readonly { from: string; to: string }[] }>();
+const accountingArrays = new WeakMap<object, { source: readonly unknown[]; extra: readonly unknown[] }>();
+const accountingSequences = new WeakMap<object, () => Iterable<unknown>>();
+// Fixed prospective views used by Fusion before copying a request or building
+// unknown adviser text. They are never serializable/retainable certificates.
+export function accountingObjectProjection(source: object, overrides: Record<string, unknown>, renames: readonly { from: string; to: string }[] = []): object {
+  const view = Object.freeze({}); accountingObjects.set(view, { source, overrides, renames }); return view;
+}
+export function accountingArrayProjection(source: readonly unknown[], extra: readonly unknown[]): object {
+  const view = Object.freeze({}); accountingArrays.set(view, { source, extra }); return view;
+}
+export function accountingSequenceProjection(values: () => Iterable<unknown>): object {
+  const view = Object.freeze({}); accountingSequences.set(view, values); return view;
+}
+export function accountingJoinedText(parts: Iterable<string>, separator: string, prefix = ""): { value: object; units: number } {
+  const initial = admitAccountingJson(prefix, "archive"), between = admitAccountingJson(separator, "archive");
+  let bytes = initial.bytes, text = initial.text, units = prefix.length, first = true;
+  for (const part of parts) {
+    const measured = admitAccountingJson(part, "archive");
+    if (!first) { bytes += between.bytes - 2; text += between.text - 2; units += separator.length; }
+    first = false; bytes += measured.bytes - 2; text += measured.text - 2; units += part.length;
+    if (bytes > accountingProfiles.archive.wire || text > accountingProfiles.archive.wire || units > accountingProfiles.archive.strings) accountingAdmissionFailure();
+  }
+  const value = Object.freeze({}); accountingRanges.set(value, { units, bytes, text }); return { value, units };
+}
+export function accountingTextCapacity(known: string, unknownUnits: number): object {
+  const measured = admitAccountingJson(known, "archive"), view = Object.freeze({});
+  accountingRanges.set(view, { units: known.length + unknownUnits, bytes: measured.bytes + 6 * unknownUnits, text: measured.text + 6 * unknownUnits });
+  return view;
+}
+export function accountingStringCapacity(units: number): object {
+  const value = Object.freeze({});
+  accountingRanges.set(value, { units, bytes: 2 + 6 * units, text: 2 + 6 * units });
+  return value;
+}
+export function accountingNumberCapacity(): object {
+  const value = Object.freeze({});
+  accountingRanges.set(value, { units: 0, bytes: 24, text: 24 });
+  return value;
+}
+
+// No encoding, substring, entries vector or normalized copy precedes this walk.
+// A gateway entry loses only the two fields already excluded by retention.
+export function admitAccountingJson(value: unknown, profile: AccountingJsonProfile,
+  gateway?: readonly unknown[]): { bytes: number; text: number } {
+  const limits = accountingProfiles[profile];
+  let bytes = 0, text = 0, values = 0, containers = 0, members = 0, entries = 0, strings = 0;
+  const active = new Set<object>();
+  const add = (wire: number, units = wire) => {
+    bytes += wire; text += units;
+    if (bytes > limits.wire || text > limits.wire) accountingAdmissionFailure();
+  };
+  const string = (input: string, key: boolean) => {
+    if (input.length > (key ? limits.key : limits.scalar) || (strings += input.length) > limits.strings) accountingAdmissionFailure();
+    add(2);
+    for (let i = 0; i < input.length; i++) {
+      const code = input.charCodeAt(i);
+      if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) add(2);
+      else if (code < 32) add(6);
+      else if (code < 128) add(1);
+      else if (code < 2048) add(2, 1);
+      else if (code >= 0xd800 && code <= 0xdbff && input.charCodeAt(i + 1) >= 0xdc00 && input.charCodeAt(i + 1) <= 0xdfff) { add(4, 2); i++; }
+      else if (code >= 0xd800 && code <= 0xdfff) add(6);
+      else add(3, 1);
+    }
+  };
+  const visit = (input: unknown, depth: number, gatewayEntry = false): void => {
+    if (++values > limits.values || depth > limits.depth) accountingAdmissionFailure();
+    if (typeof input === "string") { string(input, false); return; }
+    if (input === null || input === undefined) { add(4); return; }
+    if (typeof input === "number") {
+      if (profile === "search" && !Number.isFinite(input)) accountingAdmissionFailure();
+      const token = Number.isFinite(input) ? String(input) : "null";
+      if (token.length > 64) accountingAdmissionFailure();
+      add(token.length); return;
+    }
+    if (typeof input === "boolean") { add(input ? 4 : 5); return; }
+    if (typeof input !== "object") accountingAdmissionFailure();
+    const range = accountingRanges.get(input);
+    if (range) {
+      if (range.units > limits.scalar || (strings += range.units) > limits.strings) accountingAdmissionFailure();
+      add(range.bytes, range.text); return;
+    }
+    if (++containers > limits.containers || active.has(input)) accountingAdmissionFailure();
+    const objectView = accountingObjects.get(input), arrayView = accountingArrays.get(input), sequence = accountingSequences.get(input);
+    const array = Array.isArray(input) || !!arrayView || !!sequence, prototype = Object.getPrototypeOf(input);
+    if (Array.isArray(input) && prototype !== Array.prototype) accountingAdmissionFailure();
+    if (!array && prototype !== Object.prototype && prototype !== null) accountingAdmissionFailure();
+    active.add(input); add(2);
+    if (sequence) {
+      let first = true;
+      for (const item of sequence()) {
+        if (++entries > limits.entries || entries + members > limits.combined) accountingAdmissionFailure();
+        if (!first) add(1); first = false; visit(item, depth + 1);
+      }
+    } else if (array) {
+      const source: readonly unknown[] = arrayView?.source ?? input as unknown[];
+      const length = source.length + (arrayView?.extra.length ?? 0);
+      if ((entries += length) > limits.entries || entries + members > limits.combined) accountingAdmissionFailure();
+      for (let i = 0; i < length; i++) {
+        const descriptor = Object.getOwnPropertyDescriptor(i < source.length ? source : arrayView!.extra, String(i < source.length ? i : i - source.length));
+        if (descriptor && !("value" in descriptor)) accountingAdmissionFailure();
+        if (i) add(1);
+        visit(descriptor?.value, depth + 1, source === gateway);
+      }
+    } else {
+      let first = true;
+      const source = objectView?.source ?? input;
+      const overrides = objectView?.overrides;
+      // Rename metadata is bounded independently before this visitor. Resolve
+      // chains without allocating an entries/key vector or copying body fields.
+      const renamed = (key: string) => {
+        for (const rename of objectView?.renames ?? []) if (key === rename.from) key = rename.to;
+        return key;
+      };
+      const member = (key: string, owner: object) => {
+        if (gatewayEntry && (key === "headers" || key === "authorization")) return;
+        const descriptor = Object.getOwnPropertyDescriptor(owner, key)!;
+        if (!("value" in descriptor)) accountingAdmissionFailure();
+        if (descriptor.value === undefined) { if (profile === "search" && ++members > limits.members) accountingAdmissionFailure(); return; }
+        if (++members > limits.members || entries + members > limits.combined) accountingAdmissionFailure();
+        if (!first) add(1); first = false;
+        string(renamed(key), true); add(1); visit(descriptor.value, depth + 1);
+      };
+      for (const key in source) if (Object.hasOwn(source, key)) member(key, overrides && Object.hasOwn(overrides, key) ? overrides : source);
+      if (overrides) for (const key in overrides) if (Object.hasOwn(overrides, key) && !Object.hasOwn(source, key)) member(key, overrides);
+    }
+    active.delete(input);
+  };
+  visit(value, profile === "search" ? 1 : 0);
+  return { bytes, text };
+}
+
+function copyAdmittedAccountingJson(value: unknown, gateway?: readonly unknown[], gatewayEntry = false): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (accountingRanges.has(value) || accountingObjects.has(value) || accountingArrays.has(value) || accountingSequences.has(value)) accountingAdmissionFailure();
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    for (let i = 0; i < value.length; i++) copy.push(copyAdmittedAccountingJson(value[i] ?? null, gateway, value === gateway));
+    return copy;
+  }
+  const copy: Record<string, unknown> = {};
+  for (const key in value) {
+    if (!Object.hasOwn(value, key) || gatewayEntry && (key === "headers" || key === "authorization")) continue;
+    const item = (value as Record<string, unknown>)[key];
+    if (item !== undefined) Object.defineProperty(copy, key, { value: copyAdmittedAccountingJson(item, gateway), enumerable: true, writable: true, configurable: true });
+  }
+  return copy;
+}
+
+export function copyAccountingJson<T>(value: T, profile: AccountingJsonProfile): T {
+  admitAccountingJson(value, profile);
+  return copyAdmittedAccountingJson(value) as T;
+}
+
+function* accountingChunks(value: unknown): Generator<string> {
+  if (typeof value === "string") { yield* quoted(value); return; }
+  if (Array.isArray(value)) {
+    yield "[";
+    for (let i = 0; i < value.length; i++) { if (i) yield ","; yield* accountingChunks(value[i] ?? null); }
+    yield "]"; return;
+  }
+  if (value !== null && typeof value === "object") {
+    yield "{"; let first = true;
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue;
+      const item = (value as Record<string, unknown>)[key];
+      if (item === undefined) continue;
+      if (!first) yield ","; first = false;
+      yield* quoted(key); yield ":"; yield* accountingChunks(item);
+    }
+    yield "}"; return;
+  }
+  yield JSON.stringify(value);
+}
+
+/** Privately copied TEXT archive; one synchronous pull and at most one queued chunk. */
+export function accountingArchive(value: unknown, gateway?: readonly unknown[]) {
+  const measurement = admitAccountingJson(value, "archive", gateway);
+  let owned: unknown = copyAdmittedAccountingJson(value, gateway);
+  let used = false, done = false;
+  let chunks: Generator<string> | undefined;
+  let pending: string | undefined;
+  const release = () => { if (done) return; done = true; owned = undefined; pending = undefined; chunks?.return(undefined); };
+  return {
+    bytes: measurement.bytes,
+    text(): string {
+      if (used || measurement.bytes > 32768) throw new Error("accounting archive requires streaming");
+      used = true;
+      const text = JSON.stringify(owned);
+      release(); return text;
+    },
+    stream(): ReadableStream<Uint8Array> {
+      if (used) throw new Error("accounting archive already consumed");
+      used = true; chunks = accountingChunks(owned);
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          try {
+            const backing = new Uint8Array(32768);
+            let written = 0, eof = false;
+            while (true) {
+              if (pending === undefined) {
+                const next = chunks!.next();
+                if (next.done) { eof = true; break; }
+                pending = next.value;
+              }
+              // quoted() has <=4096 source units: escaped ASCII <=24576 bytes,
+              // unescaped UTF-8 <=12288. Measure before encodeInto, not after.
+              if (pending.length > 24576) accountingAdmissionFailure();
+              let bytes = 0;
+              for (let i = 0; i < pending.length; i++) {
+                const code = pending.charCodeAt(i);
+                if (code < 128) bytes++;
+                else if (code < 2048) bytes += 2;
+                else if (code >= 0xd800 && code <= 0xdbff && pending.charCodeAt(i + 1) >= 0xdc00 && pending.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i++; }
+                else bytes += 3;
+              }
+              if (bytes > backing.byteLength - written) break;
+              const encoded = encoder.encodeInto(pending, backing.subarray(written));
+              if (encoded.read !== pending.length) accountingAdmissionFailure();
+              written += encoded.written; pending = undefined;
+            }
+            if (written) controller.enqueue(backing.subarray(0, written));
+            if (eof) { release(); controller.close(); }
+          } catch (error) { release(); controller.error(error); }
+        },
+        cancel() { release(); },
+      }, { highWaterMark: 0 });
+    },
+    discard: release,
+    get retired() { return done; },
+  };
+}
 
 // Large JSON media must not create an additional whole-document string and
 // UTF-8 buffer for every pricing/dispatch/retention owner. Inputs are the plain

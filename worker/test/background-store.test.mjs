@@ -149,10 +149,36 @@ test("an owner offline across the seven-day cutoff schedules retirement, not ano
 test("byte bounds apply before admission and every later terminal write", t => {
   const f = fixture(t), input = f.admission();
   const large = structuredClone(input); large.facts.event.model = "x".repeat(65536);
-  assert.throws(() => f.store.admit(large), error => error.code === "background_metadata_too_large");
+  assert.throws(() => f.store.admit(large), error => error.code === "accounting_preflight_unavailable");
   assert.equal(f.db.prepare("SELECT count(*) AS count FROM responses_background").get().count, 0);
   f.store.admit(input); dispatch(f, input.id);
   assert.throws(() => f.store.freeze(input.id, { ...outcome(), contentRef: "x".repeat(65536) }), error => error.code === "background_metadata_too_large");
   assert.equal(f.store.get(input.id).event, null);
   assert.equal(f.store.get(input.id).phase, "observing");
+});
+
+test("NEW admission reserves terminal growth; legacy already-committed facts still finalize", t => {
+  const f = fixture(t), input = f.admission();
+  const raw = structuredClone(input);
+  // The source graph fits; the complete future receipt/row exceeds admission.
+  raw.facts.event.policy_id = "\0".repeat(1024);
+  raw.facts.event.credential_id = "\0".repeat(1024);
+  raw.facts.event.principal_id = "\0".repeat(1024);
+  raw.facts.event.key_id = "\0".repeat(1024);
+  raw.facts.event.tenant_id = "\0".repeat(1024);
+  raw.facts.event.model = "\0".repeat(1024);
+  raw.facts.event.request_format = "\0".repeat(1024);
+  raw.facts.event.auth_type = "\0".repeat(1024);
+  raw.facts.event.provider = "\0".repeat(1024);
+  raw.facts.event.capability = "\0".repeat(1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(raw)) < 65536);
+  assert.throws(() => f.store.admit(raw), error => error.code === "accounting_preflight_unavailable");
+  assert.equal(f.db.prepare("SELECT count(*) AS count FROM responses_background").get().count, 0);
+  f.store.admit(input); dispatch(f, input.id);
+  // Labelled legacy SQL seed: new scalar admission is not applied to recovery.
+  f.db.prepare("UPDATE responses_background SET job_json=json_set(job_json,'$.facts.event.model',?) WHERE job_id=?").run("m".repeat(3000), input.id);
+  const frozen = f.store.freeze(input.id, outcome());
+  assert.equal(frozen.event.model, "m".repeat(3000));
+  assert.equal(frozen.phase, "outbox");
+  assert.deepEqual(frozen.legs.map(leg => leg.intent.request.reservationId), input.plan.legs.map(leg => leg.request.reservationId));
 });

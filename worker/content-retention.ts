@@ -1,6 +1,6 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
-import { jsonBodyBytes, jsonBodyStream, jsonBodyTransport, mediaJsonBody } from "./json-body.ts";
+import { accountingArchive, accountingIdentity, admitAccountingJson, jsonBodyTransport } from "./json-body.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -34,6 +34,20 @@ export interface PreparedContentRetention {
   /** Above the parser bound the archive streams the body; keep that write sequential. */
   readonly large: boolean;
   write(): Promise<void>;
+}
+
+// Fusion supplies a private prospective body view before allocating placeholders.
+// The fixed-length ref has exactly the representation produced by randomId().
+export function admitProspectiveContentRetention(auth: AuthorizedIdentity, selection: Omit<RetainedSelection, "body">,
+  requestId: string, body: unknown): void {
+  if (!retentionRequired(auth, selection.capability)) return;
+  for (const value of [requestId, auth.policy.tenantId, auth.policyId, auth.credentialId, auth.principalId,
+    selection.provider.id, selection.capability, selection.model?.id]) accountingIdentity(value);
+  admitAccountingJson({ version: "clawrouter.retained-request.v1", contentRef: "content_00000000000000000000000000000000",
+    requestId, occurredAtMs: Number.MAX_SAFE_INTEGER, expiresAtMs: Number.MAX_SAFE_INTEGER,
+    tenantId: auth.policy.tenantId ?? "default", policyId: auth.policyId, credentialId: auth.credentialId,
+    principalId: auth.principalId, provider: selection.provider.id, capability: selection.capability,
+    model: selection.model?.id ?? null, body }, "archive");
 }
 
 // The borrowed music controller invokes this only for its qualified inline
@@ -86,45 +100,56 @@ export function prepareInlineMusicRetention(env: Env, auth: AuthorizedIdentity, 
 // the R2 write itself can run after the request is dispatched.
 export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string): PreparedContentRetention | null {
   if (!retentionRequired(auth, selection.capability)) return null;
-  const contentRef = randomId("content");
-  const occurredAtMs = Date.now();
+  for (const value of [requestId, auth.policy.tenantId, auth.policyId, auth.credentialId, auth.principalId,
+    selection.provider.id, selection.capability, selection.model?.id]) accountingIdentity(value);
+  const contentRef = randomId("content"), occurredAtMs = Date.now();
+  const tenant = auth.policy.tenantId ?? "default";
+  const expiresAt = String(occurredAtMs + retentionPeriodMs);
   const record: ContentRecord = {
-    version: "clawrouter.retained-request.v1",
-    contentRef,
-    requestId,
-    occurredAtMs,
-    expiresAtMs: occurredAtMs + retentionPeriodMs,
-    tenantId: auth.policy.tenantId ?? "default",
-    policyId: auth.policyId,
-    credentialId: auth.credentialId,
-    principalId: auth.principalId,
-    provider: selection.provider.id,
-    capability: selection.capability,
-    model: selection.model?.id ?? null,
-    // Universal gateway entries carry transport credentials inside the JSON
-    // body. Archive query content, never their authorization or header fields.
-    body: selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body)
-      ? selection.body.map(({ headers: _headers, authorization: _authorization, ...entry }) => entry)
-      : selection.body,
+    version: "clawrouter.retained-request.v1", contentRef, requestId, occurredAtMs,
+    expiresAtMs: occurredAtMs + retentionPeriodMs, tenantId: tenant, policyId: auth.policyId,
+    credentialId: auth.credentialId, principalId: auth.principalId, provider: selection.provider.id,
+    capability: selection.capability, model: selection.model?.id ?? null, body: selection.body,
   };
-  // Media splices in as raw chunks, as at dispatch; other large Claude records
-  // use the chunked serializer rather than a whole-document copy.
-  const media = mediaJsonBody(record);
-  const bytes = media ? media.bytes : selection.provider.id === "anthropic" && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(record) : 0;
-  return {
-    contentRef,
-    large: bytes > maxJsonBodyBytes,
-    async write() {
-      // R2 requires a known-length stream. Counting uses the same serializer as
-      // delivery, including Unicode/escaping and the retention envelope.
-      const body = media ? media.stream().pipeThrough(new FixedLengthStream(bytes))
-        : bytes > maxJsonBodyBytes ? jsonBodyStream(record).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(record);
-      await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), body, {
-        httpMetadata: { contentType: "application/json" },
-        customMetadata: { expiresAt: String(record.expiresAtMs) },
-      });
-    },
-  };
+  const gateway = selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body) ? selection.body : undefined;
+  // Admission traverses the privacy-filtered view BEFORE the first map/copy.
+  const archive = accountingArchive(record, gateway);
+  return ownedContentRetention(env.CONTENT_ARCHIVE, contentKey(tenant, contentRef), expiresAt, contentRef, archive);
+}
+
+function ownedContentRetention(bucket: Env["CONTENT_ARCHIVE"], key: string, expiresAt: string,
+  contentRef: string, archive: ReturnType<typeof accountingArchive>): PreparedContentRetention {
+  let writing: Promise<void> | undefined;
+  return { contentRef, large: archive.bytes > maxJsonBodyBytes, write() {
+    return writing ??= (async () => {
+      if (archive.bytes <= 32768) {
+        // The COMPLETE admitted serialization fits the same whole-backing
+        // ceiling. R2 completion remains a distinct, awaited owner.
+        const text = archive.text();
+        await bucket.put(key, text, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
+        return;
+      }
+      const fixed = new FixedLengthStream(archive.bytes), abort = new AbortController();
+      const pipe = archive.stream().pipeTo(fixed.writable, { signal: abort.signal });
+      const pipeOutcome = pipe.then(() => ({ failed: false as const }), error => ({ failed: true as const, error }));
+      let hasPrimary = false, primary: unknown;
+      const cleanup: unknown[] = [];
+      try {
+        await bucket.put(key, fixed.readable, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
+      } catch (error) { hasPrimary = true; primary = error; }
+      if (hasPrimary) {
+        abort.abort();
+        if (!fixed.readable.locked) {
+          try { await fixed.readable.cancel(); } catch (error) { cleanup.push(error); }
+        }
+      }
+      const outcome = await pipeOutcome;
+      if (outcome.failed) cleanup.push(outcome.error);
+      archive.discard();
+      if (cleanup.length) throw new AggregateError(hasPrimary ? [primary, ...cleanup] : cleanup, "content retention cleanup failed");
+      if (hasPrimary) throw primary;
+    })();
+  } };
 }
 
 export async function readRetainedContent(env: Env, tenant: string, ref: string): Promise<Record<string, unknown> | null> {

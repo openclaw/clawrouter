@@ -1,4 +1,5 @@
 import type { AccessPolicy, AuthorizedIdentity } from "./types.ts";
+import { accountingIdentity, accountingAdmissionFailure, admitAccountingJson } from "./json-body.ts";
 
 type BudgetIdentity = Pick<AuthorizedIdentity, "credentialId" | "principalId"> & { policy: Pick<AccessPolicy, "budgetScope"> };
 
@@ -12,11 +13,17 @@ export function budgetPrincipal(auth: BudgetIdentity): string | null {
 export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy, "tenantId" | "budgetScope">, principal?: string | null, at = Date.now()) {
   const tenant = policy.tenantId ?? "default";
   const scopedPrincipal = policy.budgetScope === "principal" ? principal ?? null : null;
+  accountingIdentity(tenant); accountingIdentity(policyId); accountingIdentity(scopedPrincipal);
+  const scope = scopedPrincipal ? ["principal", tenant, policyId, scopedPrincipal] : ["policy", tenant, policyId];
+  const measured = admitAccountingJson(scope, "intent");
+  if (measured.bytes > 8192 || measured.text > 8192) accountingAdmissionFailure();
+  // The longest address adds the weekly suffix to these admitted constituents.
+  if (tenant.length + policyId.length + (scopedPrincipal?.length ?? 0) + 32 > 8192) accountingAdmissionFailure();
   const suffix = scopedPrincipal ? `:${scopedPrincipal}` : "";
   const path = scopedPrincipal ? `/${scopedPrincipal}` : "";
   return {
     tenant,
-    scopeKey: JSON.stringify(scopedPrincipal ? ["principal", tenant, policyId, scopedPrincipal] : ["policy", tenant, policyId]),
+    scopeKey: JSON.stringify(scope),
     // Keep the physical shard and window stable for existing balances and receipts.
     objectName: `${tenant}:${policyId}${suffix}`,
     policyId: `${tenant}/${policyId}${path}`,
@@ -25,6 +32,7 @@ export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy,
 }
 
 export function providerBudgetLedgerAddress(providerId: string, at = Date.now()) {
+  accountingIdentity(providerId);
   const month = new Date(at).toISOString().slice(0, 7);
   return {
     tenant: "default",

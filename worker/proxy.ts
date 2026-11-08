@@ -1,4 +1,6 @@
-import { PreparationAdmission, isPreparationLimit, preparationHeader } from "./provider-templates.ts";
+import { providerConfigurationList } from "./provider-connections.ts";
+import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
+import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
 import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
@@ -50,7 +52,7 @@ import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDisco
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
-import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
+import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
@@ -62,7 +64,7 @@ import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
-import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
+import { admitAccountingFacts, createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
@@ -72,11 +74,11 @@ import {
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
-import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
+import { planBudgetReservation, markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { admitProspectiveContentRetention, prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
 import { correlationMetadata, logCorrelationError } from "./correlation.ts";
 import {
-  FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
+  FUSION_MODEL_ID, prepareFusionAccounting, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
   fusionMessagesValid, prepareAdviserBody,
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
@@ -277,6 +279,9 @@ interface ReservedProxyBudget {
   modelId: string | null;
   capability: string;
   connection: ProviderConnection;
+  fusion?: ReturnType<typeof prepareFusionAccounting>;
+  claim(): void;
+  finishUnclaimed(): Promise<void>;
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -333,6 +338,7 @@ async function proxyConcreteOpenAi(
     if (compound && result.auditSelection) await auditSelectionFailure(request, env, context, mode, result.auditSelection, preauthenticated, result.response.status, compound, auditAuth);
     return result.response;
   }
+  reservedBudget?.fusion?.assertRoute(body, result.body as Record<string, unknown>, result.provider.id, result.endpoint.id, result.pathParams.model);
   if (admission?.expanded && !mediaEnvelope(result.endpoint)) return expandedTooLarge();
   return proxySelected(request, env, context, mode, result, new URL(request.url).searchParams, preauthenticated, reservedBudget, compound, auditAuth, admission);
 }
@@ -357,7 +363,17 @@ async function proxyFusion(
   // The original body was already parsed. Concrete routes serialize their transformed body separately.
   const fusionRequest = new Request(request.url, { method: request.method, headers: fusionHeaders, signal: request.signal });
   const aggregatorPreparation = new PreparationAdmission();
-  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), env, undefined, aggregatorPreparation);
+  admitAccountingJson(body, "archive");
+  // Resolve the route with a constant-size envelope before constructing the
+  // worst-case reservation body. The SAME preparation token covers both reads.
+  const probe = concreteOpenAiSelection("/v1/chat/completions", { model: config.aggregatorModel, messages: [] }, env, undefined, aggregatorPreparation);
+  if (isSelectionFailure(probe)) return probe.response;
+  const fusionAuth = await selectedAuth(fusionRequest, env, mode, probe, preauthenticated);
+  if (fusionAuth instanceof Response) return fusionAuth;
+  const renames = fusionAccountingRenames(probe, body, env, aggregatorPreparation);
+  const certificate = prepareFusionAccounting(body, config, { provider: probe.provider.id, endpoint: probe.endpoint.id,
+    upstream: probe.pathParams.model, renames }, view => admitProspectiveContentRetention(fusionAuth, probe, requestId, view));
+  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(certificate.input, certificate.config, buildFusionReservationProposals(certificate.config)), env, undefined, aggregatorPreparation);
   if (isSelectionFailure(aggregatorSelection)) {
     if (aggregatorSelection.auditSelection) await auditSelectionFailure(fusionRequest, env, context, mode, aggregatorSelection.auditSelection, preauthenticated, aggregatorSelection.response.status, {
       id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
@@ -371,39 +387,77 @@ async function proxyFusion(
     });
     return errorResponse("model_parameter_unsupported", parameters.conflicts.map(({ message }) => message).join(" "), 400);
   }
-  const aggregatorBudget = await reserveSelected(fusionRequest, env, context, mode, aggregatorSelection, preauthenticated, {
+  const aggregatorBudget = await reserveSelected(fusionRequest, env, context, mode, aggregatorSelection, fusionAuth, {
     id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
   });
   if (aggregatorBudget instanceof Response) return aggregatorBudget;
-  const result = await collectFusionProposals(config, body, async (_model, adviserBody, timeoutMs, index, signal) => {
-    const headers = new Headers(fusionRequest.headers);
-    headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
-    const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
-    const compound: CompoundRequestContext = {
-      id: compoundRequestId, stage: "fusion_adviser", index: index + 1, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
-    };
-    const preparation = new PreparationAdmission();
-    const selection = concreteOpenAiSelection("/v1/chat/completions", adviserBody, env, timeoutMs, preparation);
-    if (isSelectionFailure(selection)) {
-      if (selection.auditSelection) await auditSelectionFailure(adviserRequest, env, context, mode, selection.auditSelection, preauthenticated, selection.response.status, compound, aggregatorBudget.auth);
-      return selection.response;
+  aggregatorBudget.fusion = certificate;
+  let primary: unknown, hasPrimary = false;
+  try {
+    const result = await collectFusionProposals(certificate.config, certificate.input, async (_model, adviserBody, timeoutMs, index, signal) => {
+      const headers = new Headers(fusionRequest.headers);
+      headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
+      const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
+      const compound: CompoundRequestContext = {
+        id: compoundRequestId, stage: "fusion_adviser", index: index + 1, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
+      };
+      const preparation = new PreparationAdmission();
+      const selection = concreteOpenAiSelection("/v1/chat/completions", adviserBody, env, timeoutMs, preparation);
+      if (isSelectionFailure(selection)) {
+        if (selection.auditSelection) await auditSelectionFailure(adviserRequest, env, context, mode, selection.auditSelection, preauthenticated, selection.response.status, compound, aggregatorBudget.auth);
+        return selection.response;
+      }
+      selection.body = prepareAdviserBody(selection.body as Record<string, unknown>, selection.model, selection.endpoint, config.temperature);
+      return proxySelected(adviserRequest, env, context, mode, selection, new URL(adviserRequest.url).searchParams, preauthenticated, undefined, compound, aggregatorBudget.auth);
+    }, work => context.waitUntil(work));
+    const aggregatorBody = certificate.assemble(result.proposals);
+    const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {
+      id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
+    }, undefined, undefined, aggregatorPreparation);
+    const headers = new Headers(response.headers);
+    headers.set("x-clawrouter-fusion-strategy", fusionStrategy(config));
+    headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
+    headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
+    headers.set("x-clawrouter-fusion-adviser-count", String(result.proposals.length));
+    headers.set("x-clawrouter-fusion-failed-count", String(result.failedModels.length));
+    headers.set("x-clawrouter-fusion-latency-ms", String(result.durationMs));
+    if (result.proposals.length) headers.set("x-clawrouter-fusion-advisers", result.proposals.map((proposal) => proposal.model).join(","));
+    return inheritLocalError(response, new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    try { await aggregatorBudget.finishUnclaimed(); }
+    catch (cleanup) {
+      const failure = new HttpError(503, "accounting_unavailable", "Fusion reservation cleanup could not finish");
+      Object.defineProperty(failure, "accountingCleanup", { value: { hasPrimary, primary, cleanup } });
+      throw failure;
     }
-    selection.body = prepareAdviserBody(selection.body as Record<string, unknown>, selection.model, selection.endpoint, config.temperature);
-    return proxySelected(adviserRequest, env, context, mode, selection, new URL(adviserRequest.url).searchParams, preauthenticated, undefined, compound, aggregatorBudget.auth);
-  });
-  const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
-  const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {
-    id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
-  }, undefined, undefined, aggregatorPreparation);
-  const headers = new Headers(response.headers);
-  headers.set("x-clawrouter-fusion-strategy", fusionStrategy(config));
-  headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
-  headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
-  headers.set("x-clawrouter-fusion-adviser-count", String(result.proposals.length));
-  headers.set("x-clawrouter-fusion-failed-count", String(result.failedModels.length));
-  headers.set("x-clawrouter-fusion-latency-ms", String(result.durationMs));
-  if (result.proposals.length) headers.set("x-clawrouter-fusion-advisers", result.proposals.map((proposal) => proposal.model).join(","));
-  return inheritLocalError(response, new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
+  }
+}
+
+// Mirror only the declared rename selection; no prompt-field vectors/copies.
+// The certificate records the actual active sequence and upstream primitive.
+function fusionAccountingRenames(selection: ProxySelection, original: Record<string, unknown>, env: Env, owner: PreparationAdmission) {
+  const declared = selection.provider.adapter.requestTransforms.renameFields;
+  admitAccountingJson(declared, "capsule");
+  const active: Array<{ from: string; to: string }> = [];
+  const translated = (key: string) => { for (const rename of active) if (key === rename.from) key = rename.to; return key; };
+  const present = (name: string) => {
+    if (name in Object.prototype) return true;
+    if (translated("model") === name) return true;
+    for (const key in original) if (Object.hasOwn(original, key) && translated(key) === name) return true;
+    return false;
+  };
+  for (const rename of declared) {
+    if (rename.paths.length && !rename.paths.includes("/v1/chat/completions")) continue;
+    let allowed = !rename.upstreams.length || rename.upstreams.includes(selection.pathParams.model);
+    if (!allowed && rename.upstreamConfig) {
+      let value: string | null = null;
+      const key = templateCandidates(selection.provider, rename.upstreamConfig, owner).find(candidate => (value = preparationValue(env, candidate, owner, true)));
+      allowed = !!key && providerConfigurationList(value!, owner, key, undefined, true).includes(selection.pathParams.model);
+    }
+    if (allowed && present(rename.from) && !present(rename.to)) active.push({ from: rename.from, to: rename.to });
+  }
+  return active;
 }
 
 export async function proxyManifest(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -761,6 +815,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
   const accountingContext = { context, env, auth, selection, request, compound, search: searchOwner, startedAtMs: Date.now() };
+  const failureAccounting = createProxyAccounting(accountingContext);
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
@@ -790,6 +845,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
+      reservedBudget.claim();
       accounting.fail(500, "provider_error", reservedBudget.reservation);
       return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
     }
@@ -797,15 +853,20 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
   }
   catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
     let failure = selectedFailure(search?.preflightError(error) ?? continuation?.preflightError(error) ?? googleContinuation?.preflightError(error) ?? error);
     if (isModelDiscovery(selection.endpoint) && failure.status === 400 && failure.code === "grant_transport_unavailable")
       failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
+    reservedBudget?.claim();
+    (accounting ?? failureAccounting).fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const { cost, requestId } = accounting;
   const useSoft = !isModelDiscovery(selection.endpoint) && softBudgetPolicy(auth.policy) && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
+  const softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, accounting.facts.event.id, !!searchOwner) : undefined;
+  const reservePlan = !useSoft && !reservedBudget ? planBudgetReservation(auth, selection.capability, cost, prepared.connection) : undefined;
+  admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation);
   let soft: ReturnType<typeof softBudget> | undefined;
   let budgetMs = 0;
   let upstreamMs = 0;
@@ -823,11 +884,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     });
     else retention = prepareContentRetention(env, auth, selection, requestId);
   }
-  catch {
+  catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
+    reservedBudget?.claim();
     accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   const content = retention?.contentRef ?? null;
+  reservedBudget?.claim();
   if (prepared.backgroundRecovery) {
     try {
       if (!prepared.continuation || !continuation || reservedBudget) throw new HttpError(400, "background_unsupported", "this route cannot own background recovery");
@@ -845,7 +909,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection, undefined, {
       // Fail-closed retention and stateful revalidation must finish before the
       // separate dispatch transition. Durable owners keep their own protocol.
-      dispatched: !retention?.large && !prepared.revalidateAccount && !prepared.revalidateMedia, search: searchOwner,
+      dispatched: !retention?.large && !prepared.revalidateAccount && !prepared.revalidateMedia, search: searchOwner, preparedPlan: reservePlan,
     }); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
@@ -986,7 +1050,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (prepared.featherlessCatalog) catalogWork = pending;
     else if (catalogInputs) registerCatalogFetch(pending);
     if (useSoft) {
-      soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error), searchOwner);
+      soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
       reservation = soft.reservation;
       context.waitUntil(soft.check);
     }
@@ -1006,7 +1070,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       try {
         retry = await operation.wait(preparation);
       } catch (error) {
-        if (isPreparationLimit(error)) capacityFailure = error;
+        if (isPreparationLimit(error) || isAccountingAdmissionFailure(error)) capacityFailure = error;
         // Ordinary selection failure leaves the original rejection available to the caller.
       } finally {
         // Join logical preparation even when the operation stopped waiting for it.
@@ -1130,7 +1194,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
-    if (isPreparationLimit(error) && !signal.aborted) {
+    if ((isPreparationLimit(error) || isAccountingAdmissionFailure(error)) && !signal.aborted) {
       operation.stop("upstream", error);
       if (response) void discard(response);
       // Alternate preparation never dispatched. The original received rejection
@@ -1211,20 +1275,30 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
+  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   let prepared: PreparedUpstream;
   try {
     prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    createProxyAccounting({ context, env, auth, selection, request, compound }).fail(failure.status, status);
+    accounting.fail(failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
-  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   const { cost } = accounting;
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
-    return { auth, reservation, cost, failedGrantKey: prepared.failedGrantKey, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection };
+    let claimed = false, cleanup: Promise<void> | undefined;
+    return { auth, reservation, cost, failedGrantKey: prepared.failedGrantKey, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
+      claim() { claimed = true; },
+      finishUnclaimed() {
+        if (claimed) return Promise.resolve();
+        return cleanup ??= accounting.settle(500, "provider_error", false, null, reservation, null).then(ok => {
+          if (!ok) throw new HttpError(503, "accounting_unavailable", "Fusion reservation cleanup could not finish");
+        });
+      },
+    };
   } catch (error) {
     const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
     accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
@@ -1257,7 +1331,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
       return { ...retry, failedGrantKey: error.grantKey };
-    } catch (alternateError) { if (isPreparationLimit(alternateError)) throw alternateError; throw error; } // No usable alternate: preserve the original credential failure.
+    } catch (alternateError) { if (isPreparationLimit(alternateError) || isAccountingAdmissionFailure(alternateError)) throw alternateError; throw error; } // No usable alternate: preserve the original credential failure.
   }
 }
 

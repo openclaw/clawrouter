@@ -494,30 +494,38 @@ export class BudgetSettlementError extends Error {
   constructor(disposition: BudgetSettlementError["disposition"]) { super("budget ledger did not acknowledge settlement"); this.disposition = disposition; }
 }
 
-export async function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+export function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  return chargeLedgerNamespace(env.BUDGET_LEDGER, objectName, request, search, cover);
+}
+
+export async function chargeLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
   if (cover) {
-    const receipt = await musicCoverLedgerControl<{ charged?: boolean; chargeId?: string }>(env, objectName, "/charge", request, cover, true);
+    const receipt = await musicCoverLedgerControl<{ charged?: boolean; chargeId?: string }>(namespace, objectName, "/charge", request, cover, true);
     if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
     return;
   }
   if (search) {
     const receipt = await search.controlJson<{ charged?: boolean; chargeId?: string }>(request,
-      (body, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body, signal }), true);
+      (body, signal) => namespace.get(namespace.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body, signal }), true);
     if (receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
     return;
   }
-  const response = await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body: JSON.stringify(request) });
+  const response = await namespace.get(namespace.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body: JSON.stringify(request) });
   const receipt = response.ok ? await response.json<{ charged?: boolean; chargeId?: string }>().catch(() => null) : null;
   if (receipt?.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
 }
 
-export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+export function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
+  return settleLedgerNamespace(env.BUDGET_LEDGER, objectName, request, signal, search, cover);
+}
+
+export async function settleLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<void> {
   if (cover) {
-    const receipt = await musicCoverLedgerControl<{ settled?: boolean }>(env, objectName, "/settle", request, cover, true);
+    const receipt = await musicCoverLedgerControl<{ settled?: boolean }>(namespace, objectName, "/settle", request, cover, true);
     if (receipt.settled !== true) throw new BudgetSettlementError("unavailable");
     return;
   }
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
+  const stub = namespace.get(namespace.idFromName(objectName));
   if (search) {
     const receipt = await search.controlJson<{ settled?: boolean }>(request,
       (body, active) => stub.fetch("https://clawrouter.internal/settle", { method: "POST", body, signal: active }), true);
@@ -529,13 +537,17 @@ export async function settleLedger(env: Env, objectName: string, request: Budget
   if ((await response.json<{ settled: boolean }>().catch(() => null))?.settled !== true) throw new BudgetSettlementError("unavailable");
 }
 
-export async function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<UsageIngestReceipt> {
+export function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<UsageIngestReceipt> {
+  return ingestUsageNamespace(env.USAGE_LEDGER, event, signal, search, cover);
+}
+
+export async function ingestUsageNamespace(namespace: Env["USAGE_LEDGER"], event: UsageEvent, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl): Promise<UsageIngestReceipt> {
   const receipt: unknown = cover
-    ? await cover.controlJson(event, (body, active) => usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), true)
+    ? await cover.controlJson(event, (body, active) => namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), true)
     : search
-    ? await search.controlJson<unknown>(event, (body, active) => usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active }), true)
+    ? await search.controlJson<unknown>(event, (body, active) => namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active }), true)
     : await (async () => {
-      const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
+      const response = await namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
       if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
       return response.json<unknown>().catch(() => null);
     })();
@@ -648,9 +660,9 @@ function camelProvider(row: ProviderRow) { return { provider: row.provider, requ
 function camelDaily(row: DailyRow) { return { dayStartMs: row.day_start_ms, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros, unpricedRequestCount: row.unpriced_request_count }; }
 
 // Inactive cover caller only. Slot acquisition precedes serialization and fetch.
-export function musicCoverLedgerControl<T>(env: Env, objectName: string, path: "/reserve" | "/dispatch" | "/settle" | "/charge", body: unknown,
+export function musicCoverLedgerControl<T>(namespace: Env["BUDGET_LEDGER"], objectName: string, path: "/reserve" | "/dispatch" | "/settle" | "/charge", body: unknown,
   owner: MiniMaxMusicCoverControl, mandatory = false): Promise<T> {
-  return owner.controlJson<T>(body, (text, signal) => env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName))
+  return owner.controlJson<T>(body, (text, signal) => namespace.get(namespace.idFromName(objectName))
     .fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal, redirect: "manual",
       headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), mandatory);
 }

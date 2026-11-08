@@ -52,6 +52,53 @@ test("Fusion settles the final body estimate while retaining both original reser
   }
 });
 
+test("Fusion injected post-reserve route containment failure releases the original unclaimed IDs once", async t => {
+  const { modelRoute } = await import("../providers.ts");
+  const { DEFAULT_FUSION_CONFIG } = await import("../fusion.ts");
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 };
+  const env = usageEnv([], { limit: 1_000_000, fixedCost: 7, retainContent: false });
+  env.OPENAI_API_KEY = "fixture-openai-key";
+  env.POLICY_KV.get = async key => key === "config/fusion" ? config : Array.isArray(key) ? new Map() : null;
+  const ledger = sqlBudgetNamespace(t), calls = [], events = [], roots = [];
+  let hasPrimary = false, primary, posts = 0;
+  const route = modelRoute(config.aggregatorModel, "llm.chat"), transforms = route.provider.adapter.requestTransforms;
+  const descriptor = Object.getOwnPropertyDescriptor(transforms, "renameFields");
+  const track = root => { roots.push(root.then(value => ({ failed: false, value }), error => ({ failed: true, error }))); return root; };
+  t.after(async () => {
+    Object.defineProperty(transforms, "renameFields", descriptor);
+    const failures = []; let index = 0;
+    while (index < roots.length) { const batch = roots.slice(index); index = roots.length; for (const result of await Promise.all(batch)) if (result.failed) failures.push(result.error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "Fusion fixture roots");
+  });
+  env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch(url, init) {
+    calls.push({ name, path: new URL(url).pathname, body: JSON.parse(init.body) }); return ledger.get(name).fetch(url, init);
+  } }) };
+  env.USAGE_QUEUE = { async send(event) { events.push(event); } };
+  t.mock.method(globalThis, "fetch", async () => {
+    posts++;
+    // Labelled containment fault, not a normal post-paid capacity decision.
+    Object.defineProperty(transforms, "renameFields", { ...descriptor, value: [...descriptor.value,
+      { from: "fixture_field", to: "fixture_changed", paths: [], upstreams: [route.model.upstream] }] });
+    return Response.json({ choices: [{ message: { content: "fixture adviser" } }] });
+  });
+  try {
+    const response = await track(handler.fetch(new Request("https://router.example/v1/chat/completions", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }], fixture_field: "value" }),
+    }), env, { waitUntil: track }).then(async response => { await response.text(); return response; }));
+    assert.equal(response.status, 500); assert.equal(posts, 1);
+    let index = 0; while (index < roots.length) { const batch = roots.slice(index); index = roots.length; await Promise.all(batch); }
+    const original = calls.filter(call => call.path === "/reserve").slice(0, 2);
+    assert.equal(original.length, 2);
+    for (const item of original) {
+      const related = calls.filter(call => call.name === item.name && call.body.reservationId === item.body.reservationId);
+      assert.deepEqual(related.map(call => call.path), ["/reserve", "/settle"]);
+      assert.equal(related[1].body.actualCostMicros, 0);
+    }
+    assert.equal(events.filter(event => event.compound_request_stage === "fusion_synthesizer").length, 1);
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+});
+
 test("reservation reuse reassesses a final pricing gap before admission and unmetered settlement", async (t) => {
   const { reserveBudget, validateBudgetReservation } = await import("../accounting.ts");
   const { createProxyAccounting, estimateCost } = await import("../proxy-accounting.ts");

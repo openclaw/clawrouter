@@ -10,14 +10,15 @@ import { reportingEstimate } from "./reporting-estimate.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
-import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { emptyReservation, accountingSinks, bindAccountingPlan, finalizeOwnedAccounting, type AccountingSinks, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
-import { actualCharacterCost, actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, outcomeRequestPricingGap, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint, type RequestCostReceipt } from "./pricing";
+import { actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, outcomeRequestPricingGap, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint, type RequestCostReceipt } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
-import type { AuthorizedIdentity, CompiledModel, Env, ProxyRequestBody, UsageEvent } from "./types";
+import type { AuthorizedIdentity, CompiledModel, Env, ImageTokenPricing, ModelPricing, TokenRates, ProxyRequestBody, UsageEvent } from "./types";
+import { accountingIdentity, admitAccountingJson, accountingStringCapacity, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import { randomId } from "./utils";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
@@ -32,6 +33,7 @@ export interface CompoundRequestContext {
 
 interface AccountingContext {
   search?: MiniMaxSearchOperation;
+  realtime?: true;
   env: Env;
   context: ExecutionContext;
   auth: AuthorizedIdentity;
@@ -48,9 +50,11 @@ interface AccountingContext {
 // These facts contain attribution and prices, never the generation body. A
 // durable owner freezes them before dispatch and freezes the resulting event
 // before delivery to any accounting sink.
+type AccountingPrice = Exclude<ModelPricing, ImageTokenPricing> | Pick<ImageTokenPricing,
+  "unit" | "effectiveAt" | "source" | "textInputMicrosPerMillion" | "imageInputMicrosPerMillion" | "imageOutputMicrosPerMillion">;
 export interface AccountingFacts {
   event: UsageEvent;
-  model: (Pick<CompiledModel, "pricing"> & Partial<Pick<CompiledModel, "upstream">>) | null;
+  model: { pricing: AccountingPrice | null; upstream?: string } | null;
   anthropicRequest?: AnthropicModifiers;
   fixed: number | null;
   cost: EstimatedCost;
@@ -116,7 +120,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
   const soft = reservation.charges !== undefined;
   const audioUnbounded = cost.pricingGap === "audio_upload_bound";
-  const anthropicUnpriced = outcome.pricingUnavailable || tokens?.billable !== false && fixed == null && requestFormat === "anthropic.messages" && event.capability !== "llm.count_tokens" && !anthropicPricing(model?.pricing, model?.upstream, facts.anthropicRequest ?? {}, tokens?.anthropic ?? {});
+  const anthropicUnpriced = outcome.pricingUnavailable || tokens?.billable !== false && fixed == null && requestFormat === "anthropic.messages" && event.capability !== "llm.count_tokens" && !anthropicPricing(model?.pricing?.unit == null ? model?.pricing : null, model?.upstream, facts.anthropicRequest ?? {}, tokens?.anthropic ?? {});
   const claudeWeb = requestFormat === "anthropic.messages" ? facts.anthropicWebPrice : undefined;
   const measured = anthropicUnpriced ? null : cost.pricingGap && !soft && !audioUnbounded && !claudeWeb ? null : tokens ? ((soft || claudeWeb) && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat, facts.anthropicRequest))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
@@ -143,7 +147,7 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // Reporting can recover a disclosed estimate from a frozen card without changing the debit.
   // Hosted fees/partial usage keep their existing unknown remainder, never a token-only total.
   const reporting = billable && fixed == null && measured == null && actual === 0 && !cost.pricingGap
-    ? reportingEstimate(model?.pricing, tokens, requestFormat) : null;
+    ? reportingEstimate(model?.pricing?.unit == null ? model?.pricing : null, tokens, requestFormat) : null;
   // Reporting evidence is separate from the debit: measured token/tool costs
   // can establish a component, but fixed tariffs, character estimates, flat
   // fallbacks and retained reservation bounds cannot. In particular, a hard
@@ -166,17 +170,115 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     duration_ms: outcome.occurredAtMs - facts.startedAtMs, content_retained: !!contentRef, content_ref: contentRef };
 }
 
+const controlSinkFacts = new WeakSet<AccountingFacts>();
+interface AccountingFlags {
+  billingBinding: Parameters<typeof upstreamGenerationMayBeCharged>[0]; google: boolean; requestedGoogleTier: string | null;
+  vertex: boolean; nativeResponse: boolean; characterEstimate: number | null; realtime: boolean;
+}
+const accountingFlags = new WeakMap<AccountingFacts, AccountingFlags>();
+
+// Covers the union of actual receipt branches BEFORE funding. Scalar producers
+// are bound separately: service tiers <=64 (token-usage), content IDs 40
+// (randomId), alternate grant IDs <=1024, Realtime IDs <=128 (session identity).
+export function prospectiveAccountingEvent(facts: AccountingFacts,
+  profile: "standard" | "search" | "realtime" = controlSinkFacts.has(facts) ? "search" : accountingFlags.get(facts)?.realtime ? "realtime" : "standard"): Record<string, unknown> {
+  for (const key in facts.event) if (Object.hasOwn(facts.event, key)) {
+    const value = facts.event[key as keyof UsageEvent];
+    if (typeof value === "string") accountingIdentity(value);
+  }
+  accountingIdentity(facts.hostedSearchPrice?.version); accountingIdentity(facts.anthropicWebPrice?.version);
+  const number = accountingNumberCapacity();
+  const event: Record<string, unknown> = {};
+  for (const key in facts.event) {
+    if (!Object.hasOwn(facts.event, key)) continue;
+    const value = facts.event[key as keyof UsageEvent];
+    Object.defineProperty(event, key, { value: typeof value === "number" ? number : value, enumerable: true, writable: true, configurable: true });
+  }
+  Object.assign(event, {
+    occurred_at_ms: number, input_tokens: number, output_tokens: number, total_tokens: number,
+    cached_input_tokens: number, cache_write_input_tokens: number, reserved_input_tokens: number,
+    reserved_output_tokens: number, reserved_cost_micros: number, actual_cost_micros: number,
+    duration_ms: number, status_code: number, status: "provider_error", cost_basis: accountingStringCapacity(Math.max(64, facts.cost.basis.length)),
+    reporting_known_cost_micros: number,
+  });
+  if (profile === "standard") Object.assign(event, {
+    grant_key: accountingStringCapacity(1024), grant_lane: "subscription",
+    reporting_estimated_cost_micros: number, reporting_estimate_reason: accountingStringCapacity(96),
+    hosted_tool_calls: { web_search: number }, hosted_tool_calls_complete: false,
+    hosted_tool_cost_micros: number, hosted_tool_pricing_ref: facts.anthropicWebPrice?.version ?? facts.hostedSearchPrice?.version ?? null,
+    reasoning_output_tokens: number, image_usage: { text_input_tokens: number, image_input_tokens: number, image_output_tokens: number },
+    served_service_tier: accountingStringCapacity(64), content_retained: false, content_ref: accountingStringCapacity(40),
+  });
+  if (profile === "search") event.reasoning_output_tokens = number;
+  if (profile === "realtime") Object.assign(event, {
+    realtime_usage: { unit_id: accountingStringCapacity(128), response_id: accountingStringCapacity(128),
+      item_id: accountingStringCapacity(128), output_cap: number, text_input_tokens: number, audio_input_tokens: number,
+      cached_text_input_tokens: number, cached_audio_input_tokens: number, text_output_tokens: number, audio_output_tokens: number },
+  });
+  return event;
+}
+export function admitAccountingFacts(facts: AccountingFacts, plan?: unknown, control = controlSinkFacts.has(facts)): void {
+  const event = prospectiveAccountingEvent(facts, control ? "search" : accountingFlags.get(facts)?.realtime ? "realtime" : "standard");
+  admitAccountingJson(event, "capsule");
+  if (control) { admitAccountingJson(facts.event, "search"); admitAccountingJson(event, "search"); }
+  admitAccountingJson({ ...facts, event, plan, flags: accountingFlags.get(facts) }, "capsule");
+}
+
+function immutableFacts(facts: AccountingFacts, control = false, flags?: AccountingFlags): AccountingFacts {
+  if (flags) accountingFlags.set(facts, flags);
+  admitAccountingFacts(facts, undefined, control);
+  const copy = copyAccountingJson(facts, "capsule");
+  const freeze = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    for (const key in value) if (Object.hasOwn(value, key)) freeze((value as Record<string, unknown>)[key]);
+    Object.freeze(value);
+  };
+  freeze(copy);
+  if (control) controlSinkFacts.add(copy);
+  if (flags) accountingFlags.set(copy, flags);
+  return copy;
+}
+
+// Select tariff fields only after the source card has been admitted. In
+// particular, image request-generation tables never enter the receipt owner.
+function receiptPricing(pricing: ModelPricing | null | undefined): AccountingPrice | null {
+  if (!pricing) return null;
+  const { unit, effectiveAt, source } = pricing;
+  if (unit === "image_token") return { unit, effectiveAt, source, textInputMicrosPerMillion: pricing.textInputMicrosPerMillion,
+    imageInputMicrosPerMillion: pricing.imageInputMicrosPerMillion, imageOutputMicrosPerMillion: pricing.imageOutputMicrosPerMillion };
+  if (unit === "character") return { unit, effectiveAt, source, inputMicrosPerMillionCharacters: pricing.inputMicrosPerMillionCharacters, maxInputCharacters: pricing.maxInputCharacters };
+  const rates = (value: TokenRates): TokenRates => ({ inputMicrosPerMillion: value.inputMicrosPerMillion, outputMicrosPerMillion: value.outputMicrosPerMillion,
+    cachedInputMicrosPerMillion: value.cachedInputMicrosPerMillion, cacheWriteInputMicrosPerMillion: value.cacheWriteInputMicrosPerMillion,
+    cacheWrite5mInputMicrosPerMillion: value.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInputMicrosPerMillion: value.cacheWrite1hInputMicrosPerMillion });
+  const long = (value: typeof pricing.longContext) => value ? { ...rates(value), thresholdInputTokens: value.thresholdInputTokens } : null;
+  return { effectiveAt, source, ...rates(pricing), maxInputTokens: pricing.maxInputTokens, maxRequestInputTokens: pricing.maxRequestInputTokens,
+    defaultMaxOutputTokens: pricing.defaultMaxOutputTokens, inputTokenOverhead: pricing.inputTokenOverhead, longContext: long(pricing.longContext),
+    ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map(tier => ({ ...rates(tier), id: tier.id, aliases: tier.aliases,
+      maxInputTokens: tier.maxInputTokens, longContext: long(tier.longContext) })) } : {}),
+    ...(pricing.anthropicModifiers ? { anthropicModifiers: pricing.anthropicModifiers } : {}),
+    ...(pricing.settlementBasis ? { settlementBasis: pricing.settlementBasis } : {}),
+    // Runtime cards may retain this existing automatic-tier qualifier.
+    ...("autoServiceTier" in pricing ? { autoServiceTier: pricing.autoServiceTier } : {}),
+  };
+}
+
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
+  for (const value of [auth.policyId, auth.policy.tenantId, auth.credentialId, auth.principalId, auth.authType,
+    selection.provider.id, selection.capability, selection.model?.id, selection.model?.upstream,
+    selection.model?.pricing_ref, selection.endpoint.request_format, selection.method, options.grantKey, options.grantLane,
+    compound?.id, compound?.stage, auth.policy.limitHint]) accountingIdentity(value);
+  if (selection.model?.pricing) admitAccountingJson(selection.model.pricing, "capsule");
+  if (options.cost) admitAccountingJson(options.cost, "capsule");
   const cost = options.cost ?? estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, undefined, selection.nativeResponse?.tariff, selection.provider.id);
+  admitAccountingJson(cost, "capsule");
+  for (const value of [cost.basis, cost.requestTariff?.version, cost.requestTariff?.effectiveAt, selection.model?.pricing?.effectiveAt]) accountingIdentity(value);
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const billingBinding = { providerId, capability, requestFormat: selection.endpoint.request_format, method: selection.method, selectedModel: model?.upstream ?? null };
-  let chargedUpstreamResponse = false;
   const google = selection.endpoint.request_format === "google.generate_content";
   const count = selection.endpoint.request_format === "openai.responses_input_tokens";
   const requestedTier = google ? googleServiceTier(googleField(selection.body, "serviceTier", "service_tier"))
     : extractServiceTier(Array.isArray(selection.body) ? null : selection.body) ?? null;
-  let responseTier: string | null | undefined;
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = options.startedAtMs ?? Date.now();
@@ -211,6 +313,32 @@ export function createProxyAccounting(options: AccountingContext) {
       duration_ms: null, content_retained: false, content_ref: null, status: "success",
     },
   };
+  let characterEstimate: number | null = null;
+  if (selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary"
+    && !Array.isArray(selection.body) && typeof selection.body.input === "string" && model?.pricing?.unit === "character") {
+    let characters = 0;
+    for (const _character of selection.body.input) characters++;
+    characterEstimate = Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(characters * model.pricing.inputMicrosPerMillionCharacters / 1_000_000));
+  }
+  const flags: AccountingFlags = {
+    billingBinding, google, requestedGoogleTier: google ? googleRequestServiceTier(selection.body) : null,
+    vertex: vertexAnthropicRoute(selection.provider, selection.endpoint), nativeResponse: !!selection.nativeResponse,
+    characterEstimate, realtime: options.realtime === true,
+  };
+  admitAccountingJson(flags, "capsule");
+  Object.freeze(flags.billingBinding); Object.freeze(flags);
+  accountingFlags.set(facts, flags);
+  admitAccountingFacts(facts, undefined, !!options.search);
+  if (facts.model && model) facts.model = { pricing: receiptPricing(model.pricing), upstream: model.upstream };
+  return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env), context.waitUntil?.bind(context), options.search, flags);
+}
+
+function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, waitUntil: ((work: Promise<unknown>) => void) | undefined,
+  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags) {
+  let facts = initial, chargedUpstreamResponse = false;
+  bindAccountingPlan(facts.cost, plan => admitAccountingFacts(facts, plan));
+  let responseTier: string | null | undefined;
+  const { google } = flags;
   function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null, hostedSearch?: HostedSearchUsage, requestTariffOutcome?: RequestTariffOutcome, requestCostReceipt?: RequestCostReceipt) {
     const outcome: AccountingOutcome = { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt };
     // Error payloads are not a qualified usage receipt. Keep the dispatched
@@ -218,39 +346,51 @@ export function createProxyAccounting(options: AccountingContext) {
     if (chargedUpstreamResponse) Object.assign(outcome, { billable: true, tokens: null, characterEstimate: null,
       pricingUnavailable: facts.fixed == null, hostedSearch: undefined, requestTariffOutcome: "unknown", requestCostReceipt: undefined });
     const event = accountingReceipt(facts, outcome);
-    return finalizeAccounting(env, reservation, event.actual_cost_micros, event, options.search);
+    return finalizeOwnedAccounting(sinks, reservation, event.actual_cost_micros, event, search);
   }
   return {
     settle,
     pricingFailure(tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
       const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode: 502, status: "provider_error", billable: true, tokens, reservation, contentRef, pricingUnavailable: true });
-      return finalizeAccounting(env, reservation, event.actual_cost_micros, event, options.search);
+      return finalizeOwnedAccounting(sinks, reservation, event.actual_cost_micros, event, search);
     },
-    cost,
-    requestId,
-    facts,
-    setGrant(key: string | null, lane: import("./types").GrantLane) { facts.event.grant_key = key; facts.event.grant_lane = lane; },
+    cost: facts.cost,
+    requestId: facts.event.request_id,
+    get facts() { return facts; },
+    fork() {
+      // Same admitted shape and fixed-length event ID. No post-media admission.
+      const child = Object.freeze({ ...facts, event: Object.freeze({ ...facts.event, id: randomId("usage") }) });
+      if (search) controlSinkFacts.add(child);
+      accountingFlags.set(child, flags);
+      return ownedProxyAccounting(child, sinks, waitUntil, search, flags);
+    },
+    setGrant(key: string | null, lane: import("./types").GrantLane) {
+      accountingIdentity(key); accountingIdentity(lane);
+      facts = Object.freeze({ ...facts, event: Object.freeze({ ...facts.event, grant_key: key, grant_lane: lane }) });
+      if (search) controlSinkFacts.add(facts);
+      accountingFlags.set(facts, flags);
+    },
     observeUpstreamResponse(response: Response, url: URL) {
-      chargedUpstreamResponse ||= upstreamGenerationMayBeCharged(billingBinding, url, response.status)
-        || vertexAnthropicRoute(selection.provider, selection.endpoint) && !response.ok;
+      chargedUpstreamResponse ||= upstreamGenerationMayBeCharged(flags.billingBinding, url, response.status)
+        || flags.vertex && !response.ok;
     },
     get upstreamChargePossible() { return chargedUpstreamResponse; },
     fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
       // Missing response headers cannot prove that dispatched upstream work was free.
-      context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"));
+      if (!waitUntil) throw new TypeError("accounting background sink unavailable");
+      waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"));
     },
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
-      if (google) responseTier = googleResponseServiceTier(googleRequestServiceTier(selection.body), observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
+      if (google) responseTier = googleResponseServiceTier(flags.requestedGoogleTier, observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
       const tokens = google && observed.tokens ? { ...observed.tokens, serviceTier: responseTier } : observed.tokens;
-      if (vertexAnthropicRoute(selection.provider, selection.endpoint) && (observed.nonbillable || termination || observed.outcome === "provider_error")) chargedUpstreamResponse = true;
+      if (flags.vertex && (observed.nonbillable || termination || observed.outcome === "provider_error")) chargedUpstreamResponse = true;
       const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
       // Errors after generation starts do not undo dispatched billable work.
       // A received pre-output rejection is known-free even with HTTP-200 SSE.
       // Keep actual wire status and authoritative terminal usage separately.
       const characterEstimate = observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination
-        && selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary" && !Array.isArray(selection.body)
-        ? actualCharacterCost(model?.pricing, selection.body.input) : null;
-      return settle(response.status, status, (response.ok || !!selection.nativeResponse) && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch, observed.requestTariffOutcome, observed.requestCostReceipt);
+        ? flags.characterEstimate : null;
+      return settle(response.status, status, (response.ok || flags.nativeResponse) && !observed.nonbillable, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch, observed.requestTariffOutcome, observed.requestCostReceipt);
     },
   };
 }
@@ -315,9 +455,14 @@ function actualCost(model: AccountingFacts["model"], tokens: UsageTokens, fixed:
   const pricing = model?.pricing;
   if (requestFormat === "anthropic.messages") {
     if (tokens.billable === false) return 0;
-    const qualified = anthropicPricing(pricing, model?.upstream, requested ?? {}, tokens.anthropic ?? {});
+    const qualified = anthropicPricing(pricing?.unit == null ? pricing : null, model?.upstream, requested ?? {}, tokens.anthropic ?? {});
     return qualified ? actualModelCost(qualified, tokens, requestFormat) : null;
   }
   if (!pricing) return 1;
+  if (pricing.unit === "image_token") {
+    const image = tokens.image;
+    return requestFormat === "openai.images_generations" && image ? Math.ceil((image.textInput * pricing.textInputMicrosPerMillion
+      + image.imageInput * pricing.imageInputMicrosPerMillion + image.imageOutput * pricing.imageOutputMicrosPerMillion) / 1_000_000) : null;
+  }
   return actualModelCost(pricing, tokens, requestFormat);
 }
