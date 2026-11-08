@@ -52,6 +52,43 @@ auth:
             messages:
               - role: user
                 content: "."
+products:
+  - id: platform-api
+    displayName: Anthropic API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [models_list, models_retrieve, messages, count_tokens]
+    offers:
+      - { endpoint: models_list, capability: models.list, models: null }
+      - { endpoint: models_retrieve, capability: models.retrieve, models: null }
+      - &anthropicMessagesProductOffer
+        endpoint: messages
+        capability: llm.messages
+        models: &anthropicProductModels
+          - anthropic/claude-sonnet-5-5
+          - anthropic/claude-haiku-5-5
+          - anthropic/claude-opus-5-5
+          - anthropic/claude-opus-5
+          - anthropic/claude-sonnet-5
+          - anthropic/claude-fable-5-1
+          - anthropic/claude-fable-5
+          - anthropic/claude-opus-4-8
+          - anthropic/claude-sonnet-4-6
+          - anthropic/claude-haiku-4-5
+      - &anthropicCountTokensProductOffer
+        endpoint: count_tokens
+        capability: llm.count_tokens
+        models: *anthropicProductModels
+  - id: claude-subscription
+    displayName: Claude subscription
+    commercialModel: subscription
+    authenticationMethod: oauth2
+    binding: { type: grant-transport, grantKind: subscription }
+    endpoints: [messages, count_tokens]
+    offers:
+      - *anthropicMessagesProductOffer
+      - *anthropicCountTokensProductOffer
 baseUrls:
   default: https://api.anthropic.com
 routing:

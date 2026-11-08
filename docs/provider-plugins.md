@@ -244,6 +244,20 @@ prices, quota ownership, or [subscription onboarding](openai-subscriptions.md).
 When changing a model's capabilities, update the corresponding explicit offer
 selection in the same change; the OpenAI declaration tests check coverage.
 
+### Bundled Anthropic pilot
+
+`anthropic.provider.yaml` separates `platform-api` (metered, API key) from
+`claude-subscription` (subscription, OAuth 2). Both products declare exact model
+selections for Messages and token counting. Only the API product declares the
+model-list and model-retrieval operations, with `models: null`.
+
+The subscription product references the existing `subscription` grant transport.
+The runtime still rejects subscription model discovery. Neither product adds
+WebSocket or lifecycle support, changes credential refresh or quota probes, or
+certifies live account entitlement. These declarations preserve existing prices
+and execution rules. Update explicit offer selections alongside model capability
+changes; the declaration and runtime tests check this boundary.
+
 ## Descriptor v1
 
 | Field | Requirement |

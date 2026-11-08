@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.
+
 - Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
 
 - Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
