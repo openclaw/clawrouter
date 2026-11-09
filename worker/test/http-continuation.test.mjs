@@ -16,7 +16,7 @@ const { ProxyCompletion } = await import("../proxy-completion.ts");
 console.error("http-continuation-phase", JSON.stringify({ phase: "imports-complete" }));
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
-  const diagnostic = state => console.error("http-continuation-phase", JSON.stringify({ case: "first", ...state }));
+  const diagnostic = state => { try { if (typeof t.log === "function") t.log("http-continuation-phase " + JSON.stringify({ case: "first", ...state })); } catch {} };
   diagnostic({ phase: "first-test-entry" });
   const f = await fixture(t, true, { diagnostic });
   f.response = (_request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed" }, { headers: { "x-codex-turn-state": index === 1 ? "turn_original" : `turn_next_${index}` } });
@@ -170,7 +170,7 @@ for (const fixedCost of [null, 7]) {
       }
       return child;
     });
-    const diagnostic = phase => console.error("http-continuation-phase", JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released }));
+    const diagnostic = phase => { try { if (typeof t.log === "function") t.log("http-continuation-phase " + JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released })); } catch {} };
     f.response = (_request, index) => {
       if (index === 1) return new Response(new ReadableStream({ cancel() { canceled = true; return cancellation.promise; } }, { highWaterMark: 0 }), { status: 429 });
       assert.equal(canceled, true, "discard the first body before dispatch without waiting for its cleanup");
