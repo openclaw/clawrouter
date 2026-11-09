@@ -39,6 +39,9 @@ export function analyzePairRun(run) {
       || ![run.config.cheap, run.config.strong].includes(call.model)) throw new Error('unsettled_or_invalid_pair_call');
     const [taskId, strategy, extra] = call.trialId.split(':');
     if (extra !== undefined || !cases.has(taskId) || !run.strategies.includes(strategy)) throw new Error('unexpected_pair_call');
+    if (['cheap', 'strong'].includes(strategy) && call.model !== run.config[strategy]) {
+      throw new Error('mismatched_pair_control_model');
+    }
     const entry = attempts.get(call.trialId) ?? [];
     entry.push(call.costMicros); attempts.set(call.trialId, entry);
   }

@@ -81,6 +81,14 @@ test('known-cost failed trials remain scored failures and never become successes
   assert.throws(() => analyzePairRun(run), /invalid_or_duplicate/);
 });
 
+test('fixed-control calls cannot use the other registered model', () => {
+  for (const [strategy, model] of [['cheap', 'strong-model'], ['strong', 'cheap-model']]) {
+    const run = fixture();
+    run.calls.find(call => call.trialId.endsWith(`:${strategy}`)).model = model;
+    assert.throws(() => analyzePairRun(run), /mismatched_pair_control_model/);
+  }
+});
+
 test('mixture does not extrapolate outside control costs or divide by equal prices', () => {
   for (const costs of [[10, 100, 5], [10, 100, 110], [10, 10, 10]]) {
     assert.equal(analyzePairRun(fixture(undefined, costs)).matchedCostRandomMixture, null);
