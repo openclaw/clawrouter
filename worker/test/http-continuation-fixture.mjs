@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 const { default: handler } = await import("../index.ts");
 import { putGrantCredentials } from "../grant-credentials.ts";
 import { sha256Hex } from "../utils.ts";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -16,7 +17,11 @@ export async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } 
     ACCESS_CONTROL: null,
     BUDGET_LEDGER: sqlBudgetNamespace(t),
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)])) : structuredClone(values.get(key) ?? null); },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)]));
+        const value = values.get(key) ?? null;
+        return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : structuredClone(value);
+      },
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
     OPENAI_API_KEY: "synthetic-environment-key",

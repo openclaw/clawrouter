@@ -401,13 +401,6 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
   const { fixture } = await import('./http-continuation-fixture.mjs');
   const { default: handler } = await import('../index.ts');
   const f = await fixture(t, true, { limit: 1000000, fixedCost: 7 });
-  // The shared Node authority fixture owns its byte Request/Response producers.
-  // This selected regression alone adapts its object-backed KV; Workerd stays original.
-  const kvGet = f.env.POLICY_KV.get.bind(f.env.POLICY_KV);
-  f.env.POLICY_KV.get = async (key, type) => {
-    const value = await kvGet(key, type);
-    return type === 'stream' && value !== null ? accessBytesResponse(JSON.stringify(value), '').body : value;
-  };
   const get = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
   f.env.ACCESS_CONTROL.get = name => {
     const stub = get(name);
