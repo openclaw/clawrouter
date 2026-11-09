@@ -466,6 +466,15 @@ and took 2.09 times the strong control's elapsed time. It failed both the
 20% saving and two-times latency gates. Cheap-only was 83.38% cheaper than
 strong on these exposed cases; independent validation is still needed.
 
+The first prospective fixed-model block did not complete. Cheap repaired the
+credential-alias case and passed all 68 acceptance tests. The strong control's
+first request then returned HTTP 400 with a token-limit classification and no
+usage. The run stopped, retaining its full reservation. This partial result is
+not a comparison or evidence of general superiority; the second block was not
+started. Separate synthetic requests with the same output limit and a similar
+request size succeeded, so the original rejection remains unexplained.
+
+
 ### Operational holdout candidates
 
 `benchmarks/fusion/operational-holdout-workloads.json` defines three historical
