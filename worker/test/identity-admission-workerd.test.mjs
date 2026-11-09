@@ -49,19 +49,31 @@ async function probe(body){
 }
 export class PolicyBindingIndexObject extends Base{
  constructor(state,env){
-  const trace={sizes:0,values:0,writes:0,selectedRequests:[]},sql=state.storage.sql;
+  const trace={sizes:0,values:0,writes:0,selectedRequests:[],kv:[]},sql=state.storage.sql;
+  const nativeKv=env.POLICY_KV,getKv=nativeKv.get.bind(nativeKv);
+  const observedKv=new Proxy(nativeKv,{get(target,key){
+   if(key==='get')return async(...args)=>{
+    const body=await getKv(...args);
+    if(args[1]==='stream'&&body instanceof ReadableStream){
+     const kind=typeof args[0]==='string'&&args[0].startsWith('credentials/')?'credential':typeof args[0]==='string'&&args[0].startsWith('policies/')?'policy':'other';
+     const row={kind,...observation()};trace.kv.push(row);observe(body,row);
+    }return body;
+   };
+   const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  const observedEnv=new Proxy(env,{get(target,key,receiver){return key==='POLICY_KV'?observedKv:Reflect.get(target,key,receiver);}});
   const wrapped=new Proxy(state.storage,{get(target,key){if(key==='sql')return {exec(query,...args){
    if(query.startsWith('SELECT length')||query.startsWith('SELECT count'))trace.sizes++;
    if(/^SELECT (?:credential_json|policy_json|user_json|connection_json|projection_json|json_object)/.test(query))trace.values++;
    if(/^(INSERT|UPDATE|DELETE)/.test(query))trace.writes++;
    return sql.exec(query,...args);
   }};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
-  super({storage:wrapped},env);this.fixtureSql=sql;this.fixtureTrace=trace;
+  super({storage:wrapped},observedEnv);this.fixtureSql=sql;this.fixtureTrace=trace;
  }
  async fetch(request){
   const path=new URL(request.url).pathname;
   if(path==='/fixture/sql'){const input=await request.json();return Response.json([...this.fixtureSql.exec(input.query,...input.args)]);}
-  if(path==='/fixture/trace'){const value={...this.fixtureTrace,selectedRequests:this.fixtureTrace.selectedRequests};if(new URL(request.url).searchParams.has('reset')){this.fixtureTrace.sizes=0;this.fixtureTrace.values=0;this.fixtureTrace.writes=0;this.fixtureTrace.selectedRequests=[];}return Response.json(value);}
+  if(path==='/fixture/trace'){const value={...this.fixtureTrace,selectedRequests:this.fixtureTrace.selectedRequests};if(new URL(request.url).searchParams.has('reset')){this.fixtureTrace.sizes=0;this.fixtureTrace.values=0;this.fixtureTrace.writes=0;this.fixtureTrace.selectedRequests=[];this.fixtureTrace.kv=[];}return Response.json(value);}
   if(path==='/fixture/request-capability')return Response.json(await probe(request.body));
   if(request.headers.has('x-clawrouter-identity-admission')){const row=observation();this.fixtureTrace.selectedRequests.push(row);observe(request.body,row);}
   return super.fetch(request);
@@ -280,7 +292,15 @@ test('identity profile: ORIGINAL KV/DO/Cache bodies then real public SQLite/KV/c
         assert.equal(result.traces.providerPosts, 0);
         for (const row of result.traces.reply) { assert.equal(row.byob, true); assert.equal(row.unlocked, true); assert.ok(row.maxBacking <= 16384); }
       }
-      if (mode === 'cold' || mode === 'cold-routing') assert.ok(result.traces.kv.some(row => row.byob && row.eof && row.unlocked));
+      if (mode === 'cold' || mode === 'cold-routing') {
+        // Outer traces.kv records caller reads; cold imports belong to the DO.
+        const rows = result.sql.kv.filter(row => row.kind === (mode === 'cold' ? 'credential' : 'policy'));
+        assert.ok(rows.length > 0, 'actual owner cold KV stream');
+        for (const row of rows) {
+          assert.equal(row.byob, true); assert.ok(row.reads > 0); assert.equal(row.eof, true);
+          assert.equal(row.unlocked, true); assert.equal(row.locked, false); assert.ok(row.maxBacking > 0 && row.maxBacking <= 16384);
+        }
+      }
       if (mode === 'colo') assert.equal(result.adopted, true);
       if (mode === 'refresh') assert.equal(result.refreshUnchanged, true);
       if (mode === 'pool-commit') assert.deepEqual(result.poolCommits, [
