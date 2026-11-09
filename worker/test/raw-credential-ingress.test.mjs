@@ -45,6 +45,67 @@ function observedHeaders(t, values) {
   return { headers, examined };
 }
 
+// One finite public operation owns its original request, one body consumption,
+// and every accepted background promise. Promise identity is origin identity.
+async function withPublicResponse(t, dispatch, verify) {
+  const roots = [], byOriginal = new Map();
+  let requestRoot, bodyRoot, cleanup, closed = false, reported = false;
+  let hasPrimary = false, primary, primaryOrigin;
+  const observe = original => {
+    const existing = byOriginal.get(original);
+    if (existing) return existing;
+    assert.equal(closed, false, 'background enrollment after all owned producers settled');
+    const root = { result: undefined, outcome: undefined };
+    byOriginal.set(original, root); roots.push(root);
+    root.outcome = Promise.resolve(original).then(
+      value => (root.result = { failed: false, value }),
+      error => (root.result = { failed: true, error }));
+    return root;
+  };
+  const start = invoke => {
+    let original;
+    try { original = invoke(); } catch (error) { original = Promise.reject(error); }
+    return observe(original);
+  };
+  const consume = response => bodyRoot ??= start(() => response.json());
+  const read = async root => {
+    const result = await root.outcome;
+    if (result.failed) {
+      hasPrimary = true; primary = result.error; primaryOrigin = root;
+      throw result.error;
+    }
+    return result.value;
+  };
+  const finish = () => cleanup ??= (async () => {
+    for (let index = 0; index < roots.length; index++) {
+      const root = roots[index], result = await root.outcome;
+      // Teardown still consumes a fulfilled request if the driver never did.
+      if (root === requestRoot && !result.failed) consume(result.value);
+    }
+    closed = true;
+  })();
+  const report = () => {
+    if (reported) return;
+    reported = true;
+    const failures = roots.filter(root => root !== primaryOrigin && root.result.failed).map(root => root.result.error);
+    if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], 'public fixture roots failed');
+    if (hasPrimary) throw primary;
+  };
+  // Register before invoking any request. The normal path joins before returning,
+  // keeping test mocks installed; teardown joins the same cleanup, never replays it.
+  t.after(async () => { await finish(); report(); });
+  try {
+    requestRoot = start(() => dispatch({ waitUntil(original) { observe(original); } }));
+    const response = await read(requestRoot), body = await read(consume(response));
+    await finish();
+    const failed = roots.find(root => root.result.failed);
+    if (failed) await read(failed);
+    await verify(response, body);
+  } catch (error) { if (!hasPrimary) { hasPrimary = true; primary = error; } }
+  finally { await finish(); }
+  report();
+}
+
 for (const prefix of ['clawrouter-live-', 'clawrouter-test-', 'ocpk_live_', 'ocpk_test_']) {
   test(`exact raw 4096 admits unchanged ${prefix} grammar`, async t => {
     const f = fixture(t), delimiter = prefix.startsWith('ocpk') ? '_' : '-';
@@ -122,27 +183,28 @@ test('inspect uses one sequential selection and the selected legacy mode', async
 
 for (const [path, model, anthropic] of [['/v1/messages', 'anthropic/claude-haiku-4-5', true], ['/v1/chat/completions', 'openai/gpt-6-astra', false]]) {
   for (const oversized of [false, true]) test(`actual public ${path} preserves native ${oversized ? 503 : 401} classification`, async t => {
-    const f = fixture(t), pending = [], header = oversized ? 'x'.repeat(4097) : 'fixture-malformed-input';
-    const response = await worker.fetch(new Request(`https://router.example${path}`, { method: 'POST',
+    const f = fixture(t), header = oversized ? 'x'.repeat(4097) : 'fixture-malformed-input';
+    await withPublicResponse(t, context => worker.fetch(new Request(`https://router.example${path}`, { method: 'POST',
       headers: { authorization: header, 'content-type': 'application/json' },
       body: JSON.stringify({ model, messages: [{ role: 'user', content: 'fixture' }], max_tokens: 8 }),
-    }), f.env, { waitUntil(promise) { pending.push(promise); } });
-    const body = await response.json();
-    while (pending.length) await Promise.all(pending.splice(0));
-    assert.equal(response.status, oversized ? 503 : 401);
-    const code = oversized ? 'identity_admission_unavailable' : 'invalid_proxy_key';
-    assert.equal(response.headers.get('x-clawrouter-error-code'), code);
-    if (anthropic) { assert.equal(body.type, 'error'); assert.equal(body.error.type, oversized ? 'api_error' : 'authentication_error'); assert.ok(!Object.hasOwn(body.error, 'code')); }
-    else assert.equal(body.error.code, code);
-    assert.ok(body.error.message.length > 0); assert.ok(!JSON.stringify(body).includes(header));
-    assert.deepEqual(f.counters, { hashes: [], lookups: [], provider: 0 });
+    }), f.env, context), async (response, body) => {
+      assert.equal(response.status, oversized ? 503 : 401);
+      const code = oversized ? 'identity_admission_unavailable' : 'invalid_proxy_key';
+      assert.equal(response.headers.get('x-clawrouter-error-code'), code);
+      if (anthropic) { assert.equal(body.type, 'error'); assert.equal(body.error.type, oversized ? 'api_error' : 'authentication_error'); assert.ok(!Object.hasOwn(body.error, 'code')); }
+      else assert.equal(body.error.code, code);
+      assert.ok(body.error.message.length > 0); assert.ok(!JSON.stringify(body).includes(header));
+      assert.deepEqual(f.counters, { hashes: [], lookups: [], provider: 0 });
+    });
   });
 }
 
 for (const size of [4096, 4097]) test(`raw Latin-1 ${size} is measured in UTF-16 units, not encoded bytes`, async t => {
   const f = fixture(t), headers = new Headers({ 'x-api-key': 'é'.repeat(size) });
   if (size === 4097) await assert.rejects(authenticateProxyKey(headers, f.env), isIdentityFailure);
-  else assert.equal((await authenticateProxyKey(headers, f.env)).status, 401);
+  else await withPublicResponse(t, () => authenticateProxyKey(headers, f.env), async response => {
+    assert.equal(response.status, 401);
+  });
   assert.deepEqual(f.counters, { hashes: [], lookups: [], provider: 0 });
 });
 
@@ -151,7 +213,7 @@ for (const path of ['/v1/catalog', '/v1/models', '/v1/pool']) {
     test(`${path} bounded intent preserves ${scenario} Access precedence`, async t => {
       const env = await credentialFixture(t, [], { held: false });
       env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS = '0';
-      const cookie = await env.cookie(), pending = [];
+      const cookie = await env.cookie();
       const counts = { access: 0, admission: 0, hashes: 0, provider: 0 };
       const kvGet = env.POLICY_KV.get;
       t.mock.method(env.POLICY_KV, 'get', function (key, ...args) {
@@ -174,25 +236,81 @@ for (const path of ['/v1/catalog', '/v1/models', '/v1/pool']) {
       if (scenario === 'malformed-marker') headers.set('authorization', 'clawrouter-malformed');
       if (scenario === 'oversized') { headers.set('authorization', 'x'.repeat(4097)); headers.set('x-api-key', key); }
       if (scenario === 'selected') { headers.set('authorization', `Bearer ${key}`); headers.set('x-api-key', 'x'.repeat(4097)); }
-      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), env,
-        { waitUntil(promise) { pending.push(promise); } });
-      const body = await response.json();
-      while (pending.length) await Promise.all(pending.splice(0));
-      assert.equal(counts.provider, 0);
-      if (scenario === 'missing' || scenario === 'ordinary') {
-        assert.equal(counts.access, 1); assert.equal(counts.admission, 0);
-        assert.equal(response.status, path === '/v1/pool' ? 403 : 200);
-        if (path === '/v1/pool') assert.equal(body.error.code, 'access_policy_required');
-        else if (path === '/v1/catalog') assert.equal(body.scope.authType, 'access');
-        else assert.deepEqual(body.data, []);
-      } else {
-        assert.equal(counts.access, 0);
-        assert.equal(response.status, scenario === 'oversized' ? 503 : 401);
-        assert.equal(body.error.code, scenario === 'oversized' ? 'identity_admission_unavailable'
-          : scenario === 'selected' ? 'unknown_proxy_key' : 'invalid_proxy_key');
-        assert.equal(counts.admission, scenario === 'selected' ? 1 : 0);
-        assert.equal(counts.hashes, scenario === 'selected' ? 1 : 0);
-      }
+      await withPublicResponse(t, context => worker.fetch(new Request(`https://router.example${path}`, { headers }), env, context), async (response, body) => {
+        assert.equal(counts.provider, 0);
+        if (scenario === 'missing' || scenario === 'ordinary') {
+          assert.equal(counts.access, 1); assert.equal(counts.admission, 0);
+          assert.equal(response.status, path === '/v1/pool' ? 403 : 200);
+          if (path === '/v1/pool') assert.equal(body.error.code, 'access_policy_required');
+          else if (path === '/v1/catalog') assert.equal(body.scope.authType, 'access');
+          else assert.deepEqual(body.data, []);
+        } else {
+          assert.equal(counts.access, 0);
+          assert.equal(response.status, scenario === 'oversized' ? 503 : 401);
+          assert.equal(body.error.code, scenario === 'oversized' ? 'identity_admission_unavailable'
+            : scenario === 'selected' ? 'unknown_proxy_key' : 'invalid_proxy_key');
+          assert.equal(counts.admission, scenario === 'selected' ? 1 : 0);
+          assert.equal(counts.hashes, scenario === 'selected' ? 1 : 0);
+        }
+      });
     });
   }
 }
+
+for (const failure of ['throw', 'reject']) test(`finite public cleanup preserves ${failure} undefined and every independent late root`, async t => {
+  const shared = new Error('synthetic independent root failure');
+  let lateJoined = false, verified = false;
+  await assert.rejects(withPublicResponse(t, context => {
+    const first = Promise.reject(shared);
+    context.waitUntil(first); context.waitUntil(first); // One origin, accepted twice.
+    context.waitUntil(Promise.reject(shared)); // Same reason, independent origin.
+    context.waitUntil(Promise.resolve().then(async () => {
+      await Promise.resolve();
+      context.waitUntil(Promise.resolve().then(() => { lateJoined = true; throw undefined; }));
+    }));
+    if (failure === 'throw') throw undefined;
+    return Promise.reject(undefined);
+  }, () => { verified = true; }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [undefined, shared, shared, undefined]);
+    assert.equal(error.errors[1], shared); assert.equal(error.errors[2], shared);
+    return true;
+  });
+  assert.equal(lateJoined, true); assert.equal(verified, false);
+});
+
+test('memoized original body rejection is counted once when also accepted by waitUntil', async t => {
+  let consumed = 0;
+  await assert.rejects(withPublicResponse(t, context => {
+    context.waitUntil(Promise.reject(undefined));
+    const response = new Response(null);
+    t.mock.method(response, 'json', () => {
+      consumed++;
+      const original = Promise.reject(undefined);
+      context.waitUntil(original); return original;
+    });
+    return Promise.resolve(response);
+  }, () => assert.fail('rejected body cannot reach assertions')), error => {
+    assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [undefined, undefined]);
+    return true;
+  });
+  assert.equal(consumed, 1);
+});
+
+test('assertion failure including undefined follows complete request/body/child joins with mocks active', async t => {
+  let consumed = 0, childJoined = false, caught = false;
+  const response = Response.json({ fixture: true }), json = response.json;
+  t.mock.method(response, 'json', function (...args) { consumed++; return Reflect.apply(json, this, args); });
+  try {
+    await withPublicResponse(t, context => {
+      context.waitUntil(Promise.resolve().then(() => {
+        context.waitUntil(Promise.resolve().then(() => { childJoined = true; }));
+      }));
+      return Promise.resolve(response);
+    }, (_response, body) => {
+      assert.deepEqual(body, { fixture: true }); assert.equal(childJoined, true); assert.equal(consumed, 1);
+      throw undefined;
+    });
+  } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); assert.equal(consumed, 1); assert.equal(response.bodyUsed, true);
+});
