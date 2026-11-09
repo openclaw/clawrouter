@@ -91,7 +91,10 @@ Search, text Music and private cover remain ZERO_R2.
 Fusion preserves early synthesizer reserve, then adviser fanout, then synthesizer
 POST. Before NUL placeholders, body copies or that reserve, a private immutable
 certificate covers original body/configuration, route/active renames, archive
-metadata and every successful subset of zero to four advisers. The unknown
+metadata and every successful subset of zero to four advisers. OpenAI
+transport is covered by both unchanged/subscription and API default-tier
+variants after declared renames, including the complete archive envelope. This
+does not insert a tier into the actual subscription request. The unknown
 proposal component contributes at most 80000 UTF-16 units / 480000 escaped JSON
 bytes; known instructions, labels, delimiters and body fields are measured too.
 Conservative near-limit early denial is intentional. Local message projections

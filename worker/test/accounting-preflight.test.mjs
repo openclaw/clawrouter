@@ -162,6 +162,31 @@ test("Fusion reserves every subset before placeholders and uses containment afte
   assert.throws(() => prepareFusionAccounting(tooLarge, certificate.config, certificate.route, () => {}), denied);
 });
 
+test("Fusion prospective API tier variants follow renames without changing subscription bodies", async () => {
+  const { assertServiceTier } = await import("../service-tiers.ts");
+  const config = normalizeFusionConfig({ enabled: true, strategy: "single", aggregatorModel: "openai/gpt-6-astra" });
+  for (const tier of [undefined, "auto"]) for (const renameTier of [false, true]) {
+    const original = { model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }],
+      ...(tier === undefined ? {} : { service_tier: tier }) };
+    const renames = renameTier ? [{ from: "service_tier", to: "client_tier" }] : [];
+    const measured = [], route = { provider: "openai", endpoint: "chat", upstream: "gpt-6-astra", renames };
+    const certificate = prepareFusionAccounting(original, config, route, view => measured.push(admitAccountingJson(view, "archive")));
+    const raw = { ...original, model: route.upstream };
+    if (renameTier && Object.hasOwn(raw, "service_tier")) { raw.client_tier = raw.service_tier; delete raw.service_tier; }
+    const apiBody = { ...raw, service_tier: "default" };
+    assert.deepEqual(measured, [admitAccountingJson(raw, "archive"), admitAccountingJson(apiBody, "archive")]);
+    assert.equal(measured[1].bytes - measured[0].bytes, tier === "auto" && !renameTier ? 3 : 25);
+    const selected = body => ({ provider: { id: "openai" }, model: null, endpoint: { request_format: "openai.chat_completions" }, body });
+    const api = selected(raw), subscription = selected(raw);
+    assertServiceTier(auth(), api, null);
+    assertServiceTier(auth(), subscription, { id: "fixture-subscription" });
+    assert.deepEqual(api.body, apiBody); assert.strictEqual(subscription.body, raw);
+    const assembled = certificate.assemble([]);
+    assert.equal(Object.hasOwn(assembled, "service_tier"), tier !== undefined);
+    assert.equal(assembled.service_tier, tier); assert.equal(original.service_tier, tier);
+  }
+});
+
 test("Fusion prepares a mutable admitted MiB dispatch body while its certificate stays immutable", async t => {
   const { usageEnv, proxyKey } = await import("./usage-budget-fixture.mjs");
   const { authenticateProxyKey } = await import("../proxy-auth.ts");

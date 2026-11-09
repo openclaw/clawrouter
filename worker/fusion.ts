@@ -60,8 +60,15 @@ export function prepareFusionAccounting(original: Record<string, unknown>, confi
     const messages = instruction && fusionMessagesValid(original.messages)
       ? accountingArrayProjection(original.messages, [{ role: "system", content: accountingTextCapacity(instruction.content as string, labels.length * config.maxProposalChars) }])
       : original.messages;
-    const view = accountingObjectProjection(original, { model: route.upstream, ...(messages === undefined ? {} : { messages }) }, route.renames);
+    const overrides = { model: route.upstream, ...(messages === undefined ? {} : { messages }) };
+    const view = accountingObjectProjection(original, overrides, route.renames);
     admitAccountingJson(view, "archive"); archive(view);
+    if (route.provider === "openai") {
+      // API preparation can add/replace the tier after route transforms.
+      // Admit both possibilities now; actual subscription bytes stay unchanged.
+      const api = accountingObjectProjection(original, overrides, route.renames, true);
+      admitAccountingJson(api, "archive"); archive(api);
+    }
   }
   const input = copyAccountingJson(original, "archive"), settings = copyAccountingJson(config, "capsule"), pinnedRoute = copyAccountingJson(route, "capsule");
   const freeze = (value: unknown): void => {

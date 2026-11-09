@@ -29,13 +29,13 @@ const accountingProfiles = {
 // Private prospective scalar witnesses. They never enter a copied graph or wire
 // value. Event producers must enforce the corresponding bound on actual values.
 const accountingRanges = new WeakMap<object, { units: number; bytes: number; text: number }>();
-const accountingObjects = new WeakMap<object, { source: object; overrides: Record<string, unknown>; renames: readonly { from: string; to: string }[] }>();
+const accountingObjects = new WeakMap<object, { source: object; overrides: Record<string, unknown>; renames: readonly { from: string; to: string }[]; defaultServiceTier: boolean }>();
 const accountingArrays = new WeakMap<object, { source: readonly unknown[]; extra: readonly unknown[] }>();
 const accountingSequences = new WeakMap<object, () => Iterable<unknown>>();
 // Fixed prospective views used by Fusion before copying a request or building
 // unknown adviser text. They are never serializable/retainable certificates.
-export function accountingObjectProjection(source: object, overrides: Record<string, unknown>, renames: readonly { from: string; to: string }[] = []): object {
-  const view = Object.freeze({}); accountingObjects.set(view, { source, overrides, renames }); return view;
+export function accountingObjectProjection(source: object, overrides: Record<string, unknown>, renames: readonly { from: string; to: string }[] = [], defaultServiceTier = false): object {
+  const view = Object.freeze({}); accountingObjects.set(view, { source, overrides, renames, defaultServiceTier }); return view;
 }
 export function accountingArrayProjection(source: readonly unknown[], extra: readonly unknown[]): object {
   const view = Object.freeze({}); accountingArrays.set(view, { source, extra }); return view;
@@ -135,7 +135,7 @@ export function admitAccountingJson(value: unknown, profile: AccountingJsonProfi
         visit(descriptor?.value, depth + 1, source === gateway);
       }
     } else {
-      let first = true;
+      let first = true, hasServiceTier = false;
       const source = objectView?.source ?? input;
       const overrides = objectView?.overrides;
       // Rename metadata is bounded independently before this visitor. Resolve
@@ -144,17 +144,27 @@ export function admitAccountingJson(value: unknown, profile: AccountingJsonProfi
         for (const rename of objectView?.renames ?? []) if (key === rename.from) key = rename.to;
         return key;
       };
+      const emit = (name: string, value: unknown) => {
+        // Closed Fusion API variant, applied AFTER declared field renames.
+        // Subscription/raw variants use the unchanged projection separately.
+        if (objectView?.defaultServiceTier && name === "service_tier") {
+          hasServiceTier = true;
+          if (value == null || typeof value === "string" && value.length === 4 && value.toLowerCase() === "auto") value = "default";
+        }
+        if (value === undefined) { if (profile === "search" && ++members > limits.members) accountingAdmissionFailure(); return; }
+        if (++members > limits.members || entries + members > limits.combined) accountingAdmissionFailure();
+        if (!first) add(1); first = false;
+        string(name, true); add(1); visit(value, depth + 1);
+      };
       const member = (key: string, owner: object) => {
         if (gatewayEntry && (key === "headers" || key === "authorization")) return;
         const descriptor = Object.getOwnPropertyDescriptor(owner, key)!;
         if (!("value" in descriptor)) accountingAdmissionFailure();
-        if (descriptor.value === undefined) { if (profile === "search" && ++members > limits.members) accountingAdmissionFailure(); return; }
-        if (++members > limits.members || entries + members > limits.combined) accountingAdmissionFailure();
-        if (!first) add(1); first = false;
-        string(renamed(key), true); add(1); visit(descriptor.value, depth + 1);
+        emit(renamed(key), descriptor.value);
       };
       for (const key in source) if (Object.hasOwn(source, key)) member(key, overrides && Object.hasOwn(overrides, key) ? overrides : source);
       if (overrides) for (const key in overrides) if (Object.hasOwn(overrides, key) && !Object.hasOwn(source, key)) member(key, overrides);
+      if (objectView?.defaultServiceTier && !hasServiceTier) emit("service_tier", "default");
     }
     active.delete(input);
   };
