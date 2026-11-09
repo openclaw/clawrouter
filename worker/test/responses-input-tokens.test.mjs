@@ -197,20 +197,35 @@ for (const cause of ["fetch", "abort", "timeout", "cancel", "malformed"]) test("
   const originalOutcome = original && observe(original.promise, true);
   if (held) {
     diagnostic("observer-install-start");
-    const push = f.pending.push;
-    t.mock.method(f.pending, "push", function (...promises) { for (const promise of promises) observe(promise); return push.apply(this, promises); });
+    const pushDescriptor = Object.getOwnPropertyDescriptor(f.pending, "push"), push = f.pending.push;
     t.after(async () => {
       diagnostic("cleanup-start");
-      release(); diagnostic("cleanup-release"); await requestOutcome; await bodyOutcome;
-      observe(f.drain());
       const failures = [];
-      for (let index = 0; index < roots.length; index++) {
-        const row = roots[index], outcome = await row.outcome;
-        if (outcome.failed && !row.expected) failures.push(outcome.error);
+      try {
+        try { release(); } catch (error) { failures.push(error); }
+        diagnostic("cleanup-release");
+        try { await requestOutcome; } catch (error) { failures.push(error); }
+        try { await bodyOutcome; } catch (error) { failures.push(error); }
+        try { observe(f.drain()); } catch (error) { failures.push(error); }
+        for (let index = 0; index < roots.length; index++) {
+          try {
+            const row = roots[index], outcome = await row.outcome;
+            if (outcome.failed && !row.expected) failures.push(outcome.error);
+          } catch (error) { failures.push(error); }
+        }
+      } finally {
+        try {
+          if (pushDescriptor === undefined) delete f.pending.push;
+          else Object.defineProperty(f.pending, "push", pushDescriptor);
+        } catch (error) { failures.push(error); }
       }
       diagnostic("cleanup-joined", null, failures.length);
       if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "count fixture cleanup failed");
     });
+    try {
+      Object.defineProperty(f.pending, "push", { configurable: true, writable: true, enumerable: false,
+        value: function (...promises) { for (const promise of promises) observe(promise); return Reflect.apply(push, this, promises); } });
+    } catch (error) { hasPrimary = true; primary = error; throw error; }
     diagnostic("observer-install-end");
   }
   if (cause === "timeout") t.mock.timers.enable({ apis: ["setTimeout"] });
