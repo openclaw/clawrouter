@@ -615,10 +615,10 @@ test("pre-header first cause survives later aborts and late fetch rejection for 
   }
 });
 
-async function withHeldHttpRoots(t, f, release, run) {
+async function withHeldHttpRoots(t, f, release, abortOnFailure, run) {
   const { default: worker } = await import("../index.ts");
   const roots = [];
-  let hasPrimary = false, primary;
+  let hasPrimary = false, primary, driverCompleted = false, cleanupTask, observer;
   // Expected failures belong to a named producer, never to a reason value.
   const start = (thunk, expected = false) => {
     const row = { expected }; roots.push(row);
@@ -627,13 +627,6 @@ async function withHeldHttpRoots(t, f, release, run) {
     row.outcome = row.actual.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
     return row;
   };
-  const fetch = worker.fetch;
-  const observer = t.mock.method(worker, "fetch", function (request, env, context) {
-    if (env !== f.env) return fetch.call(this, request, env, context);
-    return fetch.call(this, request, env, { ...context, waitUntil(promise) {
-      start(() => promise); return context.waitUntil(promise);
-    } });
-  });
   const driver = {
     start,
     request(thunk) {
@@ -650,25 +643,48 @@ async function withHeldHttpRoots(t, f, release, run) {
     },
     drain: () => start(() => f.drain()).actual,
   };
-  try { await run(driver); }
-  catch (error) { hasPrimary = true; primary = error; }
-  finally {
+  const cleanup = () => cleanupTask ??= Promise.resolve().then(async () => {
     const failures = [];
-    try { release(); } catch (error) { failures.push(error); }
-    for (let index = 0; index < roots.length; index++) await roots[index].outcome;
-    start(() => f.drain());
-    for (let index = 0; index < roots.length; index++) {
-      const row = roots[index], outcome = await row.outcome;
-      if (outcome.failed && !row.expected) failures.push(outcome.error);
+    if (hasPrimary || !driverCompleted) {
+      try { abortOnFailure(hasPrimary ? primary : new Error("fixture teardown before driver completion")); }
+      catch (error) { failures.push(error); }
     }
-    try { observer.mock.restore(); } catch (error) { failures.push(error); }
+    try { release(); } catch (error) { failures.push(error); }
+    let joined = 0;
+    const join = async () => {
+      while (joined < roots.length) {
+        const row = roots[joined++];
+        try {
+          const outcome = await row.outcome;
+          if (outcome.failed && !row.expected) failures.push(outcome.error);
+        } catch (error) { failures.push(error); }
+      }
+    };
+    await join(); start(() => f.drain()); await join();
+    try { observer?.mock.restore(); } catch (error) { failures.push(error); }
+    return failures;
+  });
+  const finish = async () => {
+    const failures = await cleanup();
     if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "held HTTP fixture cleanup failed");
-  }
+  };
+  t.after(finish);
+  try {
+    const fetch = worker.fetch;
+    observer = t.mock.method(worker, "fetch", function (request, env, context) {
+      if (env !== f.env) return fetch.call(this, request, env, context);
+      return fetch.call(this, request, env, { ...context, waitUntil(promise) {
+        start(() => promise); return context.waitUntil(promise);
+      } });
+    });
+    await run(driver); driverCompleted = true;
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally { await finish(); }
   if (hasPrimary) throw primary;
 }
 
 test("a response arriving after the deadline is retired without publication or a second receipt", async t => {
-  const deadline = await endpointDeadline(t), f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  const deadline = await endpointDeadline(t), f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
   const entered = Promise.withResolvers(), gate = Promise.withResolvers();
   let cancels = 0, released = false, started = false, driver;
   const release = () => {
@@ -677,10 +693,10 @@ test("a response arriving after the deadline is retired without publication or a
       cancels++; return driver.start(() => Promise.reject(new Error("fixture cleanup")), true).actual;
     } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "never_published" } }) : undefined);
   };
-  await withHeldHttpRoots(t, f, release, async d => {
+  await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
     driver = d; const original = d.start(() => gate.promise);
     f.response = () => { started = true; entered.resolve(); return original.actual; };
-    const pending = d.request(() => f.request());
+    const pending = d.request(() => f.request({}, {}, "/v1/responses", caller.signal));
     await d.arrival(entered.promise, pending.request); deadline();
     const response = await pending.request.actual;
     assert.equal(response.status, 502); await pending.body.actual;
@@ -704,7 +720,7 @@ test("header registration keeps the first cause and never publishes a late ACK o
       if (late === "resolve") gate.resolve(); else gate.reject(new Error("late publication failure"));
       cancellation.resolve();
     };
-    await withHeldHttpRoots(t, f, release, async d => {
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
       d.start(() => gate.promise, true); d.start(() => cancellation.promise);
       f.env.ACCESS_CONTROL.beforeFetch = (name, request) => {
         const row = d.start(async () => {
@@ -741,7 +757,7 @@ test("first-event sniffing keeps its deadline while delivered JSON, SSE and body
     const entered = Promise.withResolvers(), gate = Promise.withResolvers(), cancellation = Promise.withResolvers();
     let pulls = 0, cancels = 0;
     const release = () => { gate.resolve(); cancellation.resolve(); };
-    await withHeldHttpRoots(t, f, release, async d => {
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
       d.start(() => gate.promise); d.start(() => cancellation.promise);
       if (phase === "registration") f.env.ACCESS_CONTROL.beforeFetch = (name, request) => d.start(async () => {
         if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
@@ -822,7 +838,7 @@ for (const late of ["response", "rejection"]) test(`Fusion invocation watchdog o
     if (delay === 1_000) timers.push(timer);
     return schedule(() => timer.fire(), delay);
   });
-  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
   f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini", adviserTimeoutMs: 1_000 });
   const entered = Promise.withResolvers(), upstream = Promise.withResolvers();
   let canceled = 0, released = false, started = false;
@@ -831,13 +847,13 @@ for (const late of ["response", "rejection"]) test(`Fusion invocation watchdog o
     if (late === "response") upstream.resolve(started ? new Response(new ReadableStream({ cancel() { canceled++; } }, { highWaterMark: 0 })) : undefined);
     else upstream.reject(new Error("fixture late upstream failure"));
   };
-  await withHeldHttpRoots(t, f, release, async d => {
+  await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
     const original = d.start(() => upstream.promise, late === "rejection");
     f.response = (_request, index) => {
       if (index === 1) { started = true; entered.resolve(); return original.actual; }
       return Response.json({ choices: [{ message: { content: "fixture complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
     };
-    const pending = d.request(() => f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions"));
+    const pending = d.request(() => f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions", caller.signal));
     await d.arrival(entered.promise, pending.request);
     assert.equal(f.sent.length, 1);
     for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().filter(row => row.dispatch_started === 1).length, 1);
@@ -895,7 +911,7 @@ for (const format of ["json", "sse"]) for (const origin of ["caller", "deadline"
     const entered = Promise.withResolvers(), disposal = Promise.withResolvers();
     let cancels = 0, upstream, released = false;
     const release = () => { if (!released) { released = true; disposal.resolve(); } };
-    await withHeldHttpRoots(t, f, release, async d => {
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
       d.start(() => disposal.promise);
       f.response = () => upstream = new Response(new ReadableStream({
         pull() { entered.resolve(); },
