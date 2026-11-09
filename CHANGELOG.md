@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep ordinary selected JSON HTTP input custody through actual delivery cleanup, archive writes and terminal accounting without delaying response publication; preserve specialized owners and existing accounting outcomes.
+
 - Include declared product summaries in provider package indexes, sharing metadata types with the plugin contract while keeping execution and auth configuration private.
 
 - Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.
