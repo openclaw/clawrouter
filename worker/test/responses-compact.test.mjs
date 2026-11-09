@@ -217,7 +217,14 @@ for (const cause of ["fetch_rejection", "caller_abort", "deadline", "consumer_ca
       });
       roots.push({ expected: false, outcome: bodyOutcome });
     }
-    await entered;
+    if (held) {
+      const arrival = await Promise.race([entered.then(() => ({ entered: true })),
+        requestOutcome.then(outcome => ({ entered: false, outcome }))]);
+      if (!arrival.entered) {
+        if (arrival.outcome.failed) throw arrival.outcome.error;
+        assert.fail("compact request completed before synthetic fetch arrival");
+      }
+    } else await entered;
     if (cause === "caller_abort") caller.abort(new Error("fixture caller cancellation"));
     if (cause === "deadline") t.mock.timers.tick(600_000);
     const response = await pendingResponse;

@@ -508,7 +508,14 @@ test("caller abort during registration cancels the single owned reader and does 
   try {
     const response = await f.request({}, {}, "/v1/responses", controller.signal);
     const consumed = assert.rejects(response.text(), /fixture caller abort/);
-    await entered.promise; controller.abort(new Error("fixture caller abort"));
+    const consumedOutcome = consumed.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+    const arrival = await Promise.race([entered.promise.then(() => ({ entered: true })),
+      consumedOutcome.then(outcome => ({ entered: false, outcome }))]);
+    if (!arrival.entered) {
+      if (arrival.outcome.failed) throw arrival.outcome.error;
+      assert.fail("consumption settled before registration arrival");
+    }
+    controller.abort(new Error("fixture caller abort"));
     await consumed; gate.resolve(); await f.drain();
     assert.equal(upstream.state.canceled, true); assert.equal(f.events.length, 1);
     assert.equal(f.events[0].actual_cost_micros, 7); assert.equal(f.events[0].status, "client_error");

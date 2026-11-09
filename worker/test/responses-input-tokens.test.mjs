@@ -220,7 +220,14 @@ for (const cause of ["fetch", "abort", "timeout", "cancel", "malformed"]) test("
       });
       roots.push({ expected: false, outcome: bodyOutcome });
     }
-    await entered;
+    if (held) {
+      const arrival = await Promise.race([entered.then(() => ({ entered: true })),
+        requestOutcome.then(outcome => ({ entered: false, outcome }))]);
+      if (!arrival.entered) {
+        if (arrival.outcome.failed) throw arrival.outcome.error;
+        assert.fail("count request completed before synthetic fetch arrival");
+      }
+    } else await entered;
     if (cause === "abort") caller.abort(); if (cause === "timeout") t.mock.timers.tick(120000);
     const response = await pending;
     if (held) {
