@@ -17,7 +17,7 @@ export function credential(principalId = session.email) {
 }
 
 export async function fixture(t, entries = [], { held = true, legacy = false } = {}) {
-  const { db, sql } = sqliteFixture(t);
+  const { db, sql, transactionSync } = sqliteFixture(t);
   const store = new Map();
   const call = async (path, body) => {
     const response = await owner.fetch(new Request(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) }));
@@ -61,7 +61,7 @@ export async function fixture(t, entries = [], { held = true, legacy = false } =
       return worker.fetch(new Request(`https://clawrouter.example${path}`, { method, headers: { ...authHeaders, origin: "https://clawrouter.example", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), state, { waitUntil() {} });
     },
   };
-  const owner = new PolicyBindingIndexObject({ storage: { sql } }, state);
+  const owner = new PolicyBindingIndexObject({ storage: { sql, transactionSync } }, state);
   if (legacy) {
     for (const [id, value] of entries) store.set(`credentials/${id}`, value);
     store.set("policies/maintainer_access", policy);

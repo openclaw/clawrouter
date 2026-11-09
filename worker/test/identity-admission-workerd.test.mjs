@@ -144,18 +144,18 @@ export default {async fetch(request,bindings,context){
   const canonicalUser=JSON.stringify({enabled:true,groups:[],assignmentRevision:legacy,unknown:JSON.parse('{"__proto__":{"kept":true},"policyId":"'+ 'x'.repeat(1025)+'"}')});
   await sql('UPDATE access_users SET user_json = ? WHERE email = ?',canonicalUser,'owner@example.invalid');
   if(mode==='cold'){
-   await sql('DELETE FROM proxy_credentials');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','credentials_global_initialized');await putKv('credentials/'+id,credential);
+   await sql('DELETE FROM proxy_credentials');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','credentials_global_initialized');await kv.put('credentials/'+id,JSON.stringify(credential));
   }
   let coldRoutingBytes;
   if(mode==='cold-routing'){
    record.grantRouting=JSON.parse('{"eligibleGrants":{"__proto__":["token"]},"sharedGrants":{"__proto__":'+JSON.stringify(Array.from({length:32},(_,i)=>'oauth/shared/key'+i))+',"anthropic":["oauth/shared/later"]}}');
    const raw=JSON.stringify(record);coldRoutingBytes=JSON.stringify(normalizePolicyRecord(record,false));
    check(JSON.stringify(record)===raw,'normalizer leaves RAW policy unchanged');
-   await sql('DELETE FROM access_policies');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','policies_global_initialized');await putKv('policies/'+id,raw);
+   await sql('DELETE FROM access_policies');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','policies_global_initialized');await kv.put('policies/'+id,raw);
   }
   if(mode==='sql-limit')await sql('UPDATE proxy_credentials SET credential_json = ? WHERE credential_id = ?',' '.repeat(1048576)+'{}',id);
   if(mode==='kv-limit'){
-   await sql('DELETE FROM proxy_credentials');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','credentials_global_initialized');await putKv('credentials/'+id,' '.repeat(1048576)+'{}');
+   await sql('DELETE FROM proxy_credentials');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','credentials_global_initialized');await kv.put('credentials/'+id,' '.repeat(1048576)+'{}');
   }
   await call('/fixture/trace?reset',{});
   const send=async()=>{const response=await worker.fetch(new Request('https://router.example/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'anthropic/claude-sonnet-5',max_tokens:16,messages:[]})}),env,{waitUntil:track});
