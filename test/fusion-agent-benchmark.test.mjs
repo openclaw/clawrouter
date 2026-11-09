@@ -49,6 +49,61 @@ test('every arm fits the predeclared campaign ceiling including previous uncerta
   assert.throws(() => validateExperiment({ ...defaultExperiment, strategies: ['strong', 'strong'] }, 4));
 });
 
+test('a charged truncated action is discarded before one bounded recovery in a real sandbox', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  const ledger = new SpendLedger({ trialBudgetMicros: 30, campaignBudgetMicros: 30, priorCostMicros: 0 }, async () => {});
+  let calls = 0;
+  const result = await runAgent(task, receipt.image, 'strong', 'truncated-fixture',
+    { maxTurns: 2, deadlineMs: 120000, outputTokens: 256 }, async (id, role, body) => {
+      const attempt = await ledger.reserve(id, role, 10);
+      await ledger.settle(attempt, 7, 200);
+      if (calls++ === 0) return { choices: [{ finish_reason: 'length', message: {
+        content: JSON.stringify({ action: 'edit', paths: [], query: '', memory: 'partial-output-sentinel',
+          edits: [{ path: task.editPaths[0], search: original, replace: 'partial-output-sentinel' }] }),
+      } }] };
+      assert.match(body.messages.at(-1).content, /discarded without applying edits/);
+      assert.ok(!JSON.stringify(body.messages).includes('partial-output-sentinel'));
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: 'finish', paths: [], query: '', memory: '', edits: [],
+      }) } }] };
+    });
+  assert.equal(calls, 2);
+  assert.equal(ledger.total(), 14);
+  assert.equal(result.truncationRetries, 1);
+  assert.equal(result.files.find(file => file.path === task.editPaths[0]).content, original);
+  assert.equal(result.publicPassed, true);
+  assert.deepEqual(result.actions.map(action => action.action), ['truncated_output', 'finish']);
+});
+
+test('truncation recovery never exceeds its allowance or retries uncertain charges and refusals', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  for (const [maxTurns, error, expectedCalls] of [[1, 'provider_truncated', 1],
+    [3, 'provider_truncated', 2], [3, 'unknown_cost', 1], [3, 'provider_refused', 1]]) {
+    let calls = 0;
+    await assert.rejects(runAgent(task, receipt.image, 'strong', 'bounded-truncation',
+      { maxTurns, deadlineMs: 120000, outputTokens: 256 }, async () => {
+        calls++; throw new Error(error);
+      }), new RegExp(error));
+    assert.equal(calls, expectedCalls);
+  }
+});
+
 test('concurrent reservations cannot overspend; settled savings remain available to the same baseline', async () => {
   let persisted = 0;
   const ledger = new SpendLedger({ trialBudgetMicros: 100, campaignBudgetMicros: 130, priorCostMicros: 10 }, async () => { persisted++; });

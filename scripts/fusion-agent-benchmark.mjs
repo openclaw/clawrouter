@@ -157,7 +157,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
-  let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0;
+  let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
@@ -212,12 +212,19 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           request = engine.buildAggregatorBody(request, fusion, proposals.proposals);
         }
         response = await invoke(trialId, model, request, deadline);
+        requireCompleteResponse(response);
       } catch (error) {
+        if (error.message === 'provider_truncated' && truncationRetries === 0
+          && turns + 1 < config.maxTurns && !deadline.aborted) {
+          truncationRetries++;
+          actions.push({ turn: turns + 1, action: 'truncated_output', status: 'rejected' });
+          messages.push({ role: 'user', content: 'Your previous response exceeded the output limit and was discarded without applying edits. Return one concise JSON action. Use a smaller edit or a focused read. Do not repeat partial output.' });
+          continue;
+        }
         if (error.message === 'unknown_cost' || error.message.startsWith('provider_')) throw error;
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         throw error;
       }
-      requireCompleteResponse(response);
       const content = response.choices?.[0]?.message?.content;
       let action;
       try { action = JSON.parse(content); } catch { actions.push({ turn: turns + 1, action: 'invalid_json', status: 'rejected' }); invalidActions++; messages.push({ role: 'user', content: 'Invalid JSON action. Return a valid action object.' }); continue; }
@@ -285,7 +292,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     }
     const files = await readSource(box, task.editPaths);
     return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
-      publicPassed, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
+      publicPassed, truncationRetries, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }
 
@@ -341,7 +348,7 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
       await ledger.settle(attempt, result.costMicros, response.status);
     } catch { ledger.blocked = true; await snapshot(); throw new Error('unknown_cost'); }
     try { requireCompleteResponse(result.result); }
-    catch (error) { stoppedTrials.set(trialId, error.message); throw error; }
+    catch (error) { if (error.message !== 'provider_truncated') stoppedTrials.set(trialId, error.message); throw error; }
     return result.result;
   };
   await snapshot();

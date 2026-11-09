@@ -424,6 +424,15 @@ These reports use `kind: native-controls-repository`, list only `cheap` and
 analyzer rejects them. Budget preflight counts the actual selected arms in all
 modes; execution still meters every call and reserves unknown charges.
 
+The interactive agent may retry one truncated response when a call and time
+remain. It discards the partial action and requests a shorter complete action;
+the original call remains charged. Reports count `truncationRetries` and include
+a rejected `truncated_output` event. A second truncation ends the trial. The
+agent does not retry unknown charges, refusals, or other provider errors. No
+spending, output-token, time, or total-call limit is increased.
+Paired-run call ledgers retain normalized finish reasons and response outcomes
+without storing partial response text.
+
 
 Matched one-shot results on the same three exposed development repairs:
 
