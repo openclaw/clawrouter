@@ -8,8 +8,32 @@ import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
 export const grantKeys = ["oauth/fixture/account-a", "oauth/fixture/account-b"];
-export async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } = {}) {
+export async function fixture(t, pooled = true, { limit = null, fixedCost = 7, diagnostic } = {}) {
   const pending = [], events = [], values = new Map(), sent = [];
+  const observations = diagnostic ? new Set() : undefined;
+  let requests = 0, started = 0, settled = 0, rejected = 0, diagnosticFailures = 0;
+  const emit = (phase, request = requests, root) => {
+    if (!diagnostic) return;
+    const pendingIds = [];
+    for (const row of observations) { if (pendingIds.length === 16) break; pendingIds.push({ id: row.id, settled: row.settled }); }
+    try { diagnostic({ phase, request, rootId: root?.id ?? null, rootSettled: root?.settled ?? null, started, settled, rejected, pendingQueue: pending.length,
+      pendingCount: observations.size, pendingIds, overflow: Math.max(0, observations.size - pendingIds.length), diagnosticFailures }); }
+    catch { diagnosticFailures++; }
+  };
+  const waitUntil = promise => {
+    const length = pending.push(promise);
+    if (observations) {
+      const row = { id: ++started, settled: false }, request = requests; observations.add(row);
+      const observe = failed => {
+        row.settled = true; settled++; if (failed) rejected++; observations.delete(row);
+        emit("wait-until-settled", request, row);
+      };
+      void promise.then(() => observe(false), () => observe(true));
+      emit("wait-until-enrolled", request, row);
+    }
+    return length;
+  };
+  emit("fixture-start");
   const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
   const credential = { enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture" };
   const env = attachGrantCredentialNamespace({
@@ -42,15 +66,29 @@ export async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } 
     env, values, sent, events, policy, credential, authority, mutateCredential,
     response: (request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } }),
     async request(body = {}, headers = {}, path = "/v1/responses", signal) {
-      return handler.fetch(new Request(`https://router.example${path}`, { method: "POST", signal, headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", ...body }) }), env, { waitUntil: promise => pending.push(promise) });
+      const ordinal = ++requests; emit("request-start", ordinal);
+      try {
+        const original = handler.fetch(new Request(`https://router.example${path}`, { method: "POST", signal, headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", ...body }) }), env, { waitUntil });
+        if (diagnostic) void original.then(() => emit("request-fulfilled", ordinal), () => emit("request-rejected", ordinal));
+        return original;
+      } catch (error) { emit("request-threw", ordinal); throw error; }
     },
-    async consume(response) { const text = await response.text(); await f.drain(); return text; },
-    async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
+    async consume(response) {
+      emit("body-text-start"); let text;
+      try { text = await response.text(); } catch (error) { emit("body-text-rejected"); throw error; }
+      emit("body-text-end"); await f.drain(); return text;
+    },
+    async drain() {
+      emit("drain-start");
+      try { while (pending.length) await Promise.all(pending.splice(0)); }
+      catch (error) { emit("drain-rejected"); throw error; }
+      emit("drain-end");
+    },
     bindings() { return [...env.ACCESS_CONTROL.objects].filter(([name]) => name.startsWith("http-continuations:")); },
   };
   t.mock.method(globalThis, "fetch", async (url, init) => {
     const request = { url: String(url), body: JSON.parse(init.body), headers: new Headers(init.headers), signal: init.signal, redirect: init.redirect };
     sent.push(request); return f.response(request, sent.length);
   });
-  return f;
+  emit("fixture-end"); return f;
 }

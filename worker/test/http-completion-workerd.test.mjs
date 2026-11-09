@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -7,6 +7,31 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBundledWorkerdFixture } from '../../test/helpers/workerd.mjs';
+
+const lifetime = { fixtureEntered: false, serverListening: false, runtimeStarted: false,
+  teardownStarted: false, clientsJoined: false, runtimeDisposeStarted: false, runtimeDisposed: false,
+  serverCloseStarted: false, serverClosed: false, teardownEnd: false, teardownFailed: false, fileAfter: false,
+  clientsStarted: 0, clientsSettled: 0, pendingClients: 0, pendingGates: 0 };
+function resourceCounts() {
+  const types = Object.create(null); let retainedTypes = 0, overflow = 0, total = 0;
+  for (const type of process.getActiveResourcesInfo()) {
+    total++;
+    if (Object.hasOwn(types, type)) types[type]++;
+    else if (retainedTypes < 16) { types[type] = 1; retainedTypes++; }
+    else overflow++;
+  }
+  return { types, overflow, total };
+}
+const resourceBaseline = resourceCounts(); let lifetimeDiagnosticFailures = 0;
+const lifetimeDiagnostic = phase => {
+  try { console.error('http-completion-lifetime', JSON.stringify({ phase, ...lifetime,
+    baseline: resourceBaseline, resources: resourceCounts(), diagnosticFailures: lifetimeDiagnosticFailures })); }
+  catch { lifetimeDiagnosticFailures++; }
+};
+process.once('beforeExit', () => lifetimeDiagnostic('before-exit'));
+process.once('exit', () => lifetimeDiagnostic('exit'));
+after(() => { lifetime.fileAfter = true; lifetimeDiagnostic('file-after'); });
+lifetimeDiagnostic('module-start');
 
 // Used unchanged by the originating Workerd request and synthetic outcome tests.
 function heldSecondRead(original, hold, track, state) {
@@ -248,39 +273,55 @@ async function fixture(directory, upstream) {
 }
 
 test('ordinary public HTTP joins original delivery, archive and accounting after publication', { timeout: 120_000 }, async t => {
+  lifetime.fixtureEntered = true; lifetimeDiagnostic('fixture-start');
   const directory = await mkdtemp(join(tmpdir(), 'http-completion-'));
   const gates = new Map(), released = new Set(), clients = [], diagnosticFailures = [], controlFailures = []; let releaseFuture = false, runtime, server, hasPrimary = false, primary, wireStarted = false, drainWire;
   let activeCase = 'setup', hostPhase = 'setup', lastState = null;
   const phases = ['abort','archive','accounting','read-return','cancel','provider-eof'];
   const diagnostic = () => { try { console.error('http-completion-host', JSON.stringify({ case: activeCase, phase: hostPhase, lastState, clients: { started: clients.length, settled: clients.filter(row => row.done).length, failed: clients.filter(row => row.outcome?.failed).length }, gates: Object.fromEntries(phases.map(phase => [phase, { arrived: gates.has(activeCase+'/'+phase), released: released.has(activeCase+'/'+phase) }])) })); } catch (error) { diagnosticFailures.push(error); } };
-  const release = key => { released.add(key); gates.get(key)?.end('released'); gates.delete(key); };
+  const release = key => { released.add(key); gates.get(key)?.end('released'); gates.delete(key); lifetime.pendingGates = gates.size; };
   const releaseKeys = keys => { const failures = []; for (const key of keys) try { release(key); } catch (error) { failures.push(error); } if (failures.length) throw new AggregateError(failures, 'independent host releases'); };
   const releaseAll = () => { releaseFuture = true; releaseKeys([...gates.keys()]); };
-  const track = work => { const row = { done: false, outcome: undefined }; row.observed = work.then(value => { row.done = true; return row.outcome = { failed: false, value }; }, error => { row.done = true; return row.outcome = { failed: true, error }; }); clients.push(row); return row; };
+  const track = work => {
+    const row = { done: false, outcome: undefined }; lifetime.clientsStarted++; lifetime.pendingClients++;
+    row.observed = work.then(value => { row.done = true; lifetime.clientsSettled++; lifetime.pendingClients--; return row.outcome = { failed: false, value }; },
+      error => { row.done = true; lifetime.clientsSettled++; lifetime.pendingClients--; return row.outcome = { failed: true, error }; });
+    clients.push(row); return row;
+  };
   const interrupted = () => { try { releaseAll(); } catch (error) { controlFailures.push(error); } }; t.signal.addEventListener('abort', interrupted, { once: true });
   t.after(async () => {
+    lifetime.teardownStarted = true; lifetimeDiagnostic('teardown-start');
     hostPhase = 'host-cleanup'; diagnostic(); const diagnosticCount = diagnosticFailures.length, controlCount = controlFailures.length, failures = [...diagnosticFailures, ...controlFailures];
     try { releaseAll(); } catch (error) { failures.push(error); }
     for (const row of clients) { const result = await row.observed; if (result.failed) failures.push(result.error); }
+    lifetime.clientsJoined = true; lifetimeDiagnostic('clients-joined');
     if (wireStarted && drainWire) try { await drainWire(); } catch (error) { failures.push(error); }
-    if (runtime) try { await runtime.dispose(); } catch (error) { failures.push(error); }
-    if (server) try { server.closeAllConnections(); await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } catch (error) { failures.push(error); }
+    if (runtime) try {
+      lifetime.runtimeDisposeStarted = true; lifetimeDiagnostic('runtime-dispose-start');
+      await runtime.dispose(); lifetime.runtimeDisposed = true; lifetimeDiagnostic('runtime-dispose-end');
+    } catch (error) { failures.push(error); }
+    if (server) try {
+      lifetime.serverCloseStarted = true; lifetimeDiagnostic('server-close-start');
+      server.closeAllConnections(); await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      lifetime.serverClosed = true; lifetimeDiagnostic('server-close-end');
+    } catch (error) { failures.push(error); }
     try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }
     t.signal.removeEventListener('abort', interrupted);
     failures.push(...diagnosticFailures.slice(diagnosticCount), ...controlFailures.slice(controlCount));
+    lifetime.teardownEnd = true; lifetime.teardownFailed = hasPrimary || failures.length > 0; lifetimeDiagnostic('teardown-end');
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'host roots');
   });
   try {
     server = createServer((request, response) => {
       request.resume(); const parts = new URL(request.url, 'http://fixture').pathname.split('/').filter(Boolean);
-      if (parts[0] === 'gate') { const key = parts.slice(1).join('/'); if (releaseFuture || released.has(key)) response.end('released'); else gates.set(key, response); }
+      if (parts[0] === 'gate') { const key = parts.slice(1).join('/'); if (releaseFuture || released.has(key)) response.end('released'); else { gates.set(key, response); lifetime.pendingGates = gates.size; } }
       else if (parts[0] === 'provider') {
         const id = parts[1], normalization = id.includes('-normalization'), sse = id.startsWith('sse-');
         response.writeHead(normalization ? 429 : 200, { 'content-type': sse ? 'text/event-stream' : 'application/json' });
         response.write(sse ? 'data: '+JSON.stringify(normalization ? { error: { message: 'fixture rejection', type: 'rate_limit_error' } }
           : { id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'fixture' }, finish_reason: null }] })+'\n\n'
           : normalization ? '{"error":{"message":"'+'x'.repeat(70*1024)+'"}}' : '{"id":"fixture",');
-        const key = parts[1] + '/provider-eof'; if (releaseFuture || released.has(key)) response.end(); else gates.set(key, response);
+        const key = parts[1] + '/provider-eof'; if (releaseFuture || released.has(key)) response.end(); else { gates.set(key, response); lifetime.pendingGates = gates.size; }
       } else if (parts[0] === 'release-all') {
         try { releaseKeys(phases.map(phase => parts[1]+'/'+phase)); response.end('released'); }
         catch (error) { controlFailures.push(error); response.writeHead(500); response.end('fixture release failed'); }
@@ -288,9 +329,11 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
       else { response.writeHead(404); response.end(); }
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    lifetime.serverListening = true; lifetimeDiagnostic('server-listening');
     const origin = 'http://127.0.0.1:' + server.address().port;
     const upstream = `export default {fetch(request){const u=new URL(request.url);if(u.origin==='https://completion-gate.example')return fetch(${JSON.stringify(origin)}+u.pathname,request);if(u.origin==='https://api.openai.com')return Response.json({id:'fixture',object:'chat.completion',choices:[{index:0,message:{role:'assistant',content:'fixture'},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}});throw Error('unexpected egress');}};`;
-    runtime = await fixture(directory, upstream);
+    lifetimeDiagnostic('runtime-start'); runtime = await fixture(directory, upstream);
+    lifetime.runtimeStarted = true; lifetimeDiagnostic('runtime-ready');
     const call = (path, options) => track(runtime.dispatchFetch('https://router.example'+path, options).then(async response => ({ status: response.status, text: await response.text() })));
     const value = async row => { const result = await row.observed; if (result.failed) throw result.error; assert.equal(result.value.status, 200); return JSON.parse(result.value.text); };
     await value(call('/setup'));

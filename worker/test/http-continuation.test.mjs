@@ -1,4 +1,6 @@
 import { perRequestAuthority } from "./typescript-setup.mjs";
+// The static import graph precedes this execution marker.
+console.error("http-continuation-phase", JSON.stringify({ phase: "module-execution-start" }));
 perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -11,9 +13,12 @@ import { HttpContinuation } from "../http-continuation.ts";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const { ProxyCompletion } = await import("../proxy-completion.ts");
+console.error("http-continuation-phase", JSON.stringify({ phase: "imports-complete" }));
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
-  const f = await fixture(t);
+  const diagnostic = state => console.error("http-continuation-phase", JSON.stringify({ case: "first", ...state }));
+  diagnostic({ phase: "first-test-entry" });
+  const f = await fixture(t, true, { diagnostic });
   f.response = (_request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed" }, { headers: { "x-codex-turn-state": index === 1 ? "turn_original" : `turn_next_${index}` } });
   const first = await f.request();
   assert.equal(first.status, 200); assert.equal(first.headers.get("x-codex-turn-state"), "turn_original");
@@ -165,7 +170,7 @@ for (const fixedCost of [null, 7]) {
       }
       return child;
     });
-    const diagnostic = phase => t.diagnostic(JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released }));
+    const diagnostic = phase => console.error("http-continuation-phase", JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released }));
     f.response = (_request, index) => {
       if (index === 1) return new Response(new ReadableStream({ cancel() { canceled = true; return cancellation.promise; } }, { highWaterMark: 0 }), { status: 429 });
       assert.equal(canceled, true, "discard the first body before dispatch without waiting for its cleanup");
