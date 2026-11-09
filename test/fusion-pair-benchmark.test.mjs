@@ -231,7 +231,7 @@ test('contract policy meters the test author and worker inside the same trial', 
 
 
 test('provided probes are equally visible to fixed controls and skip the test-author role', async () => {
-  for (const policy of ['contract-provided', 'contract-draft']) {
+  for (const policy of ['contract-provided', 'contract-draft', 'contract-refine']) {
   const { root, options } = await fixture();
   try {
     await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy }), /missing_reproducer/);
@@ -251,7 +251,7 @@ test('provided probes are equally visible to fixed controls and skip the test-au
       },
       contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
         assert.equal(agentOptions.providedProbe, task.reproducer);
-        assert.equal(typeof agentOptions.cheapAgent, policy === 'contract-draft' ? 'function' : 'undefined');
+        assert.equal(typeof agentOptions.cheapAgent, ['contract-draft', 'contract-refine'].includes(policy) ? 'function' : 'undefined');
         await invoke(id, roles.cheap, body, signal); return repaired();
       } });
     assert.equal(instructions.length, 2);

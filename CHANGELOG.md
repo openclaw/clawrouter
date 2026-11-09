@@ -12,6 +12,8 @@
 
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 
+- Add a bounded Fusion draft-repair experiment that revises cheap patches from isolated executable feedback before strong fallback.
+
 - Add an opt-in Fusion single-draft benchmark policy with executable verification and original-source strong fallback.
 
 - Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
