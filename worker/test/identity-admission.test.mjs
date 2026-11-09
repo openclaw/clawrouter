@@ -479,3 +479,26 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
     for (const row of rows) { assert.equal(row.settled, 1); assert.equal(row.dispatch_started, 1); assert.equal(row.reserved_micros, 0); }
   } catch (error) { hasPrimary = true; primary = error; throw error; }
 });
+
+
+for (const dimension of ['count', 'bytes']) for (const overflow of [false, true]) test(`bodyless admission colo headers ${dimension} exact/+1: overflow=${overflow}`, async t => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'caches');
+  t.after(() => { if (prior) Object.defineProperty(globalThis, 'caches', prior); else delete globalThis.caches; });
+  const headers = dimension === 'count' ? new Headers(Array.from({ length: overflow ? 33 : 32 }, (_, i) => ['x-' + i, 'v']))
+    : new Headers({ x: 'v'.repeat(overflow ? 4096 : 4095) });
+  if (dimension === 'count') assert.equal([...headers].length, overflow ? 33 : 32);
+  else assert.equal([...headers].reduce((n, [key, value]) => n + Buffer.byteLength(key) + Buffer.byteLength(value), 0), overflow ? 4097 : 4096);
+  let lookups = 0;
+  Object.defineProperty(globalThis, 'caches', { configurable: true, value: { default: { async match() { lookups++; return new Response(null, { headers }); } } } });
+  const f = await admissionFixture(); f.env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS = '60';
+  const { clearHotCaches } = await import('../hot-cache.ts'); clearHotCaches();
+  const work = authenticateProxyKey(new Headers(admissionHeaders), f.env, [admissionProvider]);
+  if (overflow) {
+    await assert.rejects(work, error => { denied(error); assert.match(error.message, /\(limit\)/); return true; });
+    assert.equal(f.calls.length, 0, 'no authority rescue after genuine header capacity denial');
+  } else {
+    const identity = await work; assert.equal(identity.policyId, 'fixture');
+    assert.ok(f.calls.includes('/admission/resolve'), 'within-limit bodyless cache remains an ordinary miss');
+  }
+  assert.equal(lookups, 1);
+});

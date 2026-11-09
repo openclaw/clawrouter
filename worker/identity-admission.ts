@@ -299,7 +299,7 @@ class IdentitySource {
     finally { await this.retire(eof ? "eof" : "cancel"); }
   }
 }
-function admitHeaders(headers: Headers): void {
+export function admitIdentityHeaders(headers: Headers): void {
   let count = 0, bytes = 0;
   for (const [key, value] of headers) {
     if (++count > 32 || identityUtf8(key) > 4096 - bytes) fail("limit"); bytes += identityUtf8(key);
@@ -318,7 +318,7 @@ export async function readIdentityRequest(request: Request, validPath: boolean):
   const owner = new IdentitySource(request.body);
   try {
     if (!validPath || request.method !== "POST" || request.headers.get(identityHeader) !== identityVersion) fail("protocol");
-    admitHeaders(request.headers);
+    admitIdentityHeaders(request.headers);
     const budget = identitySourceBudget();
     const wire = new IdentityWire();
     return parseIdentity(await owner.text(budget, request.signal, "complete", wire), budget, "complete", new URL(request.url).pathname === "/materialize" ? "grant" : "generic", wire.span);
@@ -333,7 +333,7 @@ export async function readIdentityResponse<T>(start: () => Promise<Response>, bu
   const actual = identityActual(start).then(value => { response = value; owner = new IdentitySource(value.body); });
   void actual.catch(() => undefined);
   try {
-    await wait(actual, signal); admitHeaders(response!.headers);
+    await wait(actual, signal); admitIdentityHeaders(response!.headers);
     const wire = new IdentityWire();
     result = parseIdentity(await owner!.text(budget, signal, "complete", wire), budget, "complete", envelope, wire.span);
     if (!response!.ok) {
