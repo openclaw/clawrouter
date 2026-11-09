@@ -8,6 +8,54 @@ import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBundledWorkerdFixture } from '../../test/helpers/workerd.mjs';
 
+// Used unchanged by the originating Workerd request and synthetic outcome tests.
+function heldSecondRead(original, hold, track, state) {
+  const originalTag = {}, propagatedTag = {};
+  let originalOutcome, propagatedOutcome, forwardedOriginal = false, cancelInvoked = false;
+  state.nativeReadPending = true;
+  const observed = original.then(value => {
+    state.nativeReadPending = false; state.nativeReadSettled = true;
+    return originalOutcome = { failed: false, value };
+  }, error => {
+    state.nativeReadPending = false; state.nativeReadSettled = true; state.nativeReadFailed = true;
+    return originalOutcome = { failed: true, error };
+  });
+  track(original, 'read', originalTag);
+  const work = observed.then(async outcome => {
+    try { await hold(); state.readOutcomeReleased = true; }
+    catch (error) {
+      if (outcome.failed) throw new AggregateError([outcome.error, error], 'original read and independent continuation');
+      throw error;
+    }
+    forwardedOriginal = true;
+    if (outcome.failed) throw outcome.error;
+    state.readReturned = true; return outcome.value;
+  });
+  const propagated = work.then(value => {
+    state.propagatedReadSettled = true; return propagatedOutcome = { failed: false, value };
+  }, error => {
+    state.propagatedReadSettled = true; state.propagatedReadFailed = true;
+    return propagatedOutcome = { failed: true, error };
+  });
+  track(work, 'read', propagatedTag);
+  return {
+    work, observed, propagated,
+    firstCancel(intentional) {
+      if (cancelInvoked) throw Error('second-read FIRST cancel invoked twice');
+      cancelInvoked = true;
+      state.readPendingAtFirstCancel = state.nativeReadPending;
+      state.readCancelIntentional = intentional;
+    },
+    cancelSucceeded() { state.readCancelSucceeded = true; },
+    expected(result) {
+      return originalOutcome?.failed === true && state.readPendingAtFirstCancel === true
+        && state.readCancelIntentional === true && state.readCancelSucceeded === true
+        && (result.provenance === originalTag || result.provenance === propagatedTag && forwardedOriginal);
+    },
+    outcomes() { return { original: originalOutcome, propagated: propagatedOutcome }; },
+  };
+}
+
 const cases = ['account-last', 'archive-last', 'delivery-last', 'cancel-reject',
   'sse-replay', 'sse-replay-cancel-reject', 'sse-normalization', 'sse-normalization-cancel-reject',
   'json-normalization', 'json-normalization-cancel-reject'];
@@ -28,6 +76,7 @@ export class UsageLedgerObject extends Usage {
 }
 const states=new Map(),nativeFetch=globalThis.fetch.bind(globalThis);
 const check=(value,label)=>{if(!value)throw Error(label);};
+__SECOND_READ_OBSERVER__
 export default {async fetch(request,bindings,ctx){
  const url=new URL(request.url),id=url.searchParams.get('case');
  if(url.pathname==='/setup'){
@@ -60,13 +109,14 @@ export default {async fetch(request,bindings,ctx){
  const normalization=id.includes('-normalization'),streaming=id.startsWith('sse-')||normalization,cancelReject=id.endsWith('cancel-reject');
  const s={response:false,first:false,bodyDone:false,bodyRejected:false,status:null,streaming,normalization,nativeReadPending:false,nativeReadSettled:false,nativeReadFailed:false,readReturned:false,
   nativeCancelPending:false,nativeCancelSettled:false,nativeCancelFailed:false,cancelReturned:false,cancels:0,unlocked:false,r2Native:false,r2Returned:false,accountEntered:false,accountDone:false,
-  completionSeen:0,completionDone:false,completionFailed:null,events:0,posts:0,reserves:0,closed:false,operationDone:false,operationFailed:false,phase:'dispatch',
+   readOutcomeReleased:false,readPendingAtFirstCancel:false,readCancelIntentional:false,readCancelSucceeded:false,propagatedReadSettled:false,propagatedReadFailed:false,intentionalAbort:false,expectedReadFailures:0,independentRootFailures:0,
+   completionSeen:0,completionDone:false,completionFailed:null,events:0,posts:0,reserves:0,closed:false,operationDone:false,operationFailed:false,phase:'dispatch',
   roots:Object.fromEntries(['fetch','read','first-cancel','archive','accounting','production-completion','input-finish','gate','background'].map(kind=>[kind,{started:0,settled:0,failed:0}])),
   gates:Object.fromEntries(['abort','archive','accounting','read-return','cancel'].map(phase=>[phase,{entered:false,released:false}]))};states.set(id,s);
  const roots=[],names=new Map(),reservationIds=[],usageNames=new Set(),caller=new AbortController();
- let hasPrimary=false,primary,closed=false,archiveKey,expectedBody,completion;
- const track=(work,kind='background')=>{check(!closed,'fixture enrollment closed');const count=s.roots[kind];count.started++;
-  const tagged=work.then(()=>{count.settled++;return {failed:false};},error=>{count.settled++;count.failed++;return {failed:true,error};});roots.push(tagged);return work;};
+  let hasPrimary=false,primary,closed=false,archiveKey,expectedBody,completion,secondRead;
+  const track=(work,kind='background',provenance)=>{check(!closed,'fixture enrollment closed');const count=s.roots[kind];count.started++;
+   const tagged=work.then(()=>{count.settled++;return {failed:false,provenance};},error=>{count.settled++;count.failed++;return {failed:true,error,provenance};});roots.push(tagged);return work;};
  const diagnostic=()=>{try{console.error('http-completion-origin',JSON.stringify({case:id,...s,charged:bodyBudgetCharged()}));}catch(error){roots.push(Promise.resolve({failed:true,error}));}};
  const gate=phase=>track((async()=>{s.gates[phase].entered=true;const response=await nativeFetch('https://completion-gate.example/gate/'+id+'/'+phase);check(response.ok,'fixture gate');await response.text();s.gates[phase].released=true;})(),'gate');
  const releaseAll=async()=>{const response=await nativeFetch('https://completion-gate.example/release-all/'+id);check(response.ok,'fixture release all');await response.text();};
@@ -93,16 +143,15 @@ export default {async fetch(request,bindings,ctx){
    body.getReader=(...args)=>{
     const reader=acquire(...args),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),unlock=reader.releaseLock.bind(reader);let reads=0,firstCancel;
     reader.read=(...args)=>{
-     const index=++reads,original=track(read(...args),'read');
-     if(index!==2||normalization)return original;
-     s.nativeReadPending=true;
-     return track(original.then(async value=>{s.nativeReadPending=false;s.nativeReadSettled=true;await gate('read-return');s.readReturned=true;return value;},error=>{
-      s.nativeReadPending=false;s.nativeReadSettled=true;s.nativeReadFailed=true;throw error;
-     }),'read');
+      const index=++reads,original=read(...args);
+      if(index!==2||normalization)return track(original,'read');
+      check(!secondRead,'one ORIGINAL second read');
+      secondRead=heldSecondRead(original,()=>gate('read-return'),track,s);return secondRead.work;
     };
     reader.cancel=(...args)=>firstCancel??=(async()=>{
      s.cancels++;s.nativeCancelPending=true;
-     try{await track(cancel(...args),'first-cancel');}catch(error){s.nativeCancelFailed=true;throw error;}
+      secondRead?.firstCancel(s.intentionalAbort);
+      try{await track(cancel(...args),'first-cancel');secondRead?.cancelSucceeded();}catch(error){s.nativeCancelFailed=true;throw error;}
      finally{s.nativeCancelPending=false;s.nativeCancelSettled=true;}
      await gate('cancel');s.cancelReturned=true;
      if(cancelReject)throw undefined;
@@ -123,7 +172,7 @@ export default {async fetch(request,bindings,ctx){
   }),'fetch');
  };
  // Controls are registered before dispatch, and never wait on the completion owner.
- if(!normalization)track(gate('abort').then(()=>caller.abort(Error('fixture routed abort'))));
+  if(!normalization)track(gate('abort').then(()=>{s.intentionalAbort=true;caller.abort(Error('fixture routed abort'));}));
  let reader,readOutcome;
  try{
   expectedBody={model:'openai/gpt-6-astra',messages:[{role:'user',content:'x'.repeat(1024*1024+16)}]};
@@ -154,11 +203,17 @@ export default {async fetch(request,bindings,ctx){
  }
  s.phase='root-join';diagnostic();
  const failures=[];let index=0;
- while(index<roots.length){const batch=roots.slice(index);index=roots.length;for(const result of await Promise.all(batch))if(result.failed)failures.push(result.error);}
+ while(index<roots.length){const batch=roots.slice(index);index=roots.length;for(const result of await Promise.all(batch))if(result.failed){failures.push(result.error);if(secondRead?.expected(result))s.expectedReadFailures++;else s.independentRootFailures++;}}
  closed=true;s.closed=true;s.phase='receipt-assertions';globalThis.fetch=nativeFetch;
- if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'independent fixture roots');if(hasPrimary)throw primary;
+ if(s.independentRootFailures)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'original read and independent fixture roots');if(hasPrimary)throw primary;
  check(s.completionDone&&s.completionFailed===false&&bodyBudgetCharged()===0,'actual completion and caller charge release');
- check(s.cancels===1&&s.unlocked&&(normalization||s.readReturned)&&s.cancelReturned,'actual read FIRST cancel and unlock');
+  if(!normalization){
+   const outcomes=secondRead.outcomes();
+   check(s.readPendingAtFirstCancel&&s.readCancelIntentional&&s.readCancelSucceeded&&s.readOutcomeReleased,'controlled pending-read FIRST cancel and released outcome');
+   check(outcomes.original.failed&&outcomes.propagated.failed&&s.propagatedReadSettled&&s.propagatedReadFailed&&!s.readReturned,'actual rejected read is not fabricated success');
+   check(Object.is(outcomes.original.error,outcomes.propagated.error),'IDENTICAL original read rejection forwarded');
+  }
+  check(s.cancels===1&&s.unlocked&&(normalization||s.readOutcomeReleased)&&s.cancelReturned,'actual read FIRST cancel and unlock');
  check(s.posts===1&&s.events===1&&s.reserves===4,'single provider and accounting with four original reservations');
  const rows=[];for(const [key] of names){const response=await bindings.BUDGET_LEDGER.get(bindings.BUDGET_LEDGER.idFromString(key)).fetch('https://clawrouter.internal/fixture-sql');rows.push(...(await response.json()).filter(row=>reservationIds.includes(row.reservation_id)));}
  check(rows.length===4&&rows.every(row=>reservationIds.includes(row.reservation_id)&&row.settled===1&&row.dispatch_started===1&&row.reserved_micros===(normalization?0:7)),'same original reservation IDs and terminal SQL');
@@ -171,7 +226,7 @@ export default {async fetch(request,bindings,ctx){
  check(text===JSON.stringify(expectedArchive)&&stored.size===new TextEncoder().encode(text).byteLength,'actual R2 COMPLETE byte oracle');
  check(record.requestId==='completion-'+id&&stored.httpMetadata.contentType==='application/json'&&stored.customMetadata.expiresAt===String(record.expiresAtMs),'actual R2 metadata');
  return Response.json({fixture:'originating-request completion join; post-native read/cancel/R2 holds',...s,charged:bodyBudgetCharged(),originalIds:rows.length,usage:usage.length,archiveBytes:stored.size});
-},queue:worker.queue};`.replaceAll('__CASES__', JSON.stringify(cases));
+},queue:worker.queue};`.replaceAll('__CASES__', JSON.stringify(cases)).replace('__SECOND_READ_OBSERVER__', () => heldSecondRead.toString());
 
 async function fixture(directory, upstream) {
   const { build } = createRequire(import.meta.resolve('wrangler/package.json'))('esbuild');
@@ -275,6 +330,9 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
         hostPhase = 'abort-arrival'; release(id+'/abort');
         s = await wait(s => s.bodyDone && s.accountEntered && s.nativeReadSettled && s.nativeCancelSettled);
         assert.equal(s.status, 200);
+       assert.equal(s.nativeReadFailed, true); assert.equal(s.readPendingAtFirstCancel, true);
+       assert.equal(s.readCancelIntentional, true); assert.equal(s.readCancelSucceeded, true);
+       assert.equal(s.readOutcomeReleased, false); assert.equal(s.readReturned, false);
       }
       assert.equal(s.completionDone, false); assert.equal(s.unlocked, false); assert.equal(s.cancels, 1); assert.ok(s.charged > 0);
       const order = id === 'account-last' ? ['delivery','archive','accounting'] : id === 'archive-last' ? ['accounting','delivery','archive'] : ['archive','accounting','delivery'];
@@ -283,7 +341,7 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
         if (phase === 'delivery') {
           release(id+'/read-return');
           if (id.startsWith('sse-') || normalization) {
-            s = await wait(s => s.r2Returned && s.accountDone && (normalization || s.readReturned));
+             s = await wait(s => s.r2Returned && s.accountDone && (normalization || s.readOutcomeReleased));
             assert.equal(s.completionDone, false); assert.ok(s.charged > 0);
             assert.equal(s.unlocked, false); assert.equal(s.cancelReturned, false); assert.equal(s.cancels, 1);
           }
@@ -299,7 +357,99 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
       hostPhase = 'originating-client-join'; diagnostic();
       const result = await value(client);
       assert.equal(result.closed, true); assert.equal(result.completionDone, true); assert.equal(result.completionFailed, false);
+      assert.equal(result.expectedReadFailures, normalization ? 0 : 2); assert.equal(result.independentRootFailures, 0);
+      for (const root of Object.values(result.roots)) assert.equal(root.settled, root.started, 'ALL original and child roots joined');
       assert.equal(result.charged, 0); assert.equal(result.originalIds, 4); assert.equal(result.usage, 1); assert.equal(result.posts, 1); assert.ok(result.archiveBytes > 1024*1024);
     }
   } catch (error) { hasPrimary = true; primary = error; diagnostic(); throw error; }
+});
+
+// Synthetic promise schedules exercise the SAME observer injected into Workerd.
+// All finite promises settle and join before assertions; no native-I/O claim.
+test('second-read fixture preserves independent failure before FIRST cancellation, including undefined', async () => {
+  const shared = Error('synthetic shared read reason');
+  for (const reason of [undefined, shared]) {
+    const roots = [], state = {};
+    const track = (work, kind, provenance) => { roots.push(work.then(() => ({ failed: false, kind, provenance }), error => ({ failed: true, error, kind, provenance }))); return work; };
+    const read = heldSecondRead(Promise.reject(reason), () => Promise.resolve(), track, state);
+    await read.observed; // The failure is observed BEFORE the controlled cancel.
+    read.firstCancel(true); read.cancelSucceeded();
+    await read.propagated; const outcomes = await Promise.all(roots);
+    assert.equal(state.readPendingAtFirstCancel, false);
+    assert.equal(outcomes.length, 2);
+    for (const outcome of outcomes) {
+      assert.equal(outcome.failed, true); assert.equal(read.expected(outcome), false);
+      assert.ok(Object.hasOwn(outcome, 'error')); assert.ok(Object.is(outcome.error, reason));
+    }
+    assert.ok(Object.is(read.outcomes().original.error, reason));
+    assert.ok(Object.is(read.outcomes().propagated.error, reason));
+  }
+});
+
+test('second-read fixture gates BOTH actual outcomes and forwards the original value or reason', async () => {
+  const value = { done: true, value: new Uint8Array([1]) }, shared = Error('synthetic shared read reason');
+  for (const source of [{ failed: false, value }, { failed: true, error: undefined }, { failed: true, error: shared }]) {
+    const roots = [], state = { readOutcomeReleased: false, readReturned: false, propagatedReadSettled: false };
+    const track = (work, kind, provenance) => { roots.push(work.then(() => ({ failed: false, kind, provenance }), error => ({ failed: true, error, kind, provenance }))); return work; };
+    let resolve, reject, release;
+    const original = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const gate = new Promise(yes => { release = yes; });
+    const read = heldSecondRead(original, () => track(gate, 'gate'), track, state);
+    read.firstCancel(true); read.cancelSucceeded();
+    if (source.failed) reject(source.error); else resolve(source.value);
+    await read.observed; const held = { ...state };
+    release(); await read.propagated; const outcomes = await Promise.all(roots);
+    assert.equal(held.readPendingAtFirstCancel, true); assert.equal(held.nativeReadSettled, true);
+    assert.equal(held.readOutcomeReleased, false); assert.equal(held.propagatedReadSettled, false);
+    assert.equal(state.readOutcomeReleased, true); assert.equal(state.readReturned, !source.failed);
+    const actual = read.outcomes();
+    assert.equal(actual.original.failed, source.failed); assert.equal(actual.propagated.failed, source.failed);
+    if (source.failed) {
+      assert.ok(Object.is(actual.original.error, source.error)); assert.ok(Object.is(actual.propagated.error, source.error));
+      assert.equal(outcomes.filter(outcome => outcome.failed && read.expected(outcome)).length, 2);
+    } else {
+      assert.strictEqual(actual.original.value, value); assert.strictEqual(actual.propagated.value, value);
+      assert.equal(outcomes.some(outcome => outcome.failed), false);
+    }
+  }
+});
+
+test('second-read fixture retains continuation, other-read and cleanup occurrences alongside expected rejection', async () => {
+  const shared = Error('synthetic shared read and cleanup reason');
+  for (const reason of [undefined, shared]) {
+    const roots = [], state = {};
+    const track = (work, kind, provenance) => { roots.push(work.then(() => ({ failed: false, kind, provenance }), error => ({ failed: true, error, kind, provenance }))); return work; };
+    let reject; const original = new Promise((_, no) => { reject = no; });
+    const read = heldSecondRead(original, () => track(Promise.reject(reason), 'gate'), track, state);
+    read.firstCancel(true); read.cancelSucceeded();
+    track(Promise.reject(reason), 'other-read'); track(Promise.reject(reason), 'unlock');
+    reject(reason); await read.propagated; const outcomes = await Promise.all(roots);
+    assert.equal(outcomes.length, 5); assert.equal(outcomes.every(outcome => outcome.failed), true);
+    assert.equal(outcomes.filter(outcome => read.expected(outcome)).length, 1, 'only the ORIGINAL expected read, not the failed continuation');
+    assert.ok(Object.is(read.outcomes().original.error, reason));
+    const propagated = read.outcomes().propagated;
+    assert.equal(propagated.failed, true); assert.ok(propagated.error instanceof AggregateError);
+    assert.equal(propagated.error.errors.length, 2);
+    for (const error of propagated.error.errors) assert.ok(Object.is(error, reason));
+    assert.strictEqual(outcomes[1].error, propagated.error);
+    for (const index of [0, 2, 3, 4]) assert.ok(Object.is(outcomes[index].error, reason));
+    for (const outcome of outcomes.slice(2)) assert.equal(read.expected(outcome), false);
+  }
+});
+
+test('second-read fixture keeps FIRST-cancel failure independent from the read outcomes', async () => {
+  for (const reason of [undefined, Error('synthetic shared cancel reason')]) {
+    const roots = [], state = {};
+    const track = (work, kind, provenance) => { roots.push(work.then(() => ({ failed: false, kind, provenance }), error => ({ failed: true, error, kind, provenance }))); return work; };
+    let reject; const original = new Promise((_, no) => { reject = no; });
+    const read = heldSecondRead(original, () => Promise.resolve(), track, state);
+    read.firstCancel(true); // The actual cancel rejects: never mark it successful.
+    track(Promise.reject(reason), 'first-cancel'); reject(reason);
+    await read.propagated; const outcomes = await Promise.all(roots);
+    assert.equal(outcomes.length, 3);
+    for (const outcome of outcomes) {
+      assert.equal(outcome.failed, true); assert.equal(read.expected(outcome), false);
+      assert.ok(Object.is(outcome.error, reason));
+    }
+  }
 });

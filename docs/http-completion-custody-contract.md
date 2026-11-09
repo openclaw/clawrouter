@@ -118,7 +118,14 @@ The fixture's provider transport stays connected independently of routed abort s
 FIRST reader cancellation can be observed. In delivery cases, the second native
 read is genuinely pending before abort. Rejection cases instead finish their
 bounded error read before the cancellation hold. Read-return/cancel gates and the R2 gate hold application
-continuations **after** native settlement; they do not prove native latency. The
+continuations **after** native settlement; they do not prove native latency. Both
+second-read outcomes wait on the read gate and forward the original value/reason.
+The fixture retains both original and propagated outcome records; only their
+private provenance tags, observed pending-at-FIRST-cancel schedule and successful
+native cancellation identify the expected read rejection. Other reads, gates,
+cancellation and unlock failures remain independent, including identical or
+`undefined` reasons. Any independent failure reports all failed root occurrences.
+A released rejected outcome is not a successful read or retirement proof. The
 cancel-rejection case injects a labelled post-native `undefined` rejection. Original
 promises, actual unlock and every finite fixture root are joined in the originating
 request, including dynamically registered children. Outer diagnostic EOF/disposal

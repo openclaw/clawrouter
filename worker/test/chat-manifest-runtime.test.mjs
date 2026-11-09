@@ -297,8 +297,10 @@ test("ordinary identity denial keeps auth precedence and held zero-cost accounti
   const send = f.env.USAGE_QUEUE.send; let entered = false;
   f.env.USAGE_QUEUE.send = async event => { await send(event); entered = true; await held; };
   try {
-    const model = provider.models.find(row => row.capabilities.includes("llm.chat"));
-    const endpoint = provider.endpoints.find(row => row.request_format === "anthropic.messages");
+    const model = provider.models.find(row => row.capabilities.includes("llm.messages"));
+    const endpoint = provider.endpoints.find(row => row.id === "messages");
+    assert.ok(model, "Anthropic messages model exists");
+    assert.ok(endpoint, "Anthropic messages endpoint exists");
     const path = `/v1/proxy/${provider.id}/${endpoint.id}`;
     const headers = { "anthropic-workspace-id": "synthetic-workspace", "x-request-id": "identity-denial-before-validation" };
     const payload = { body: { model: model.id, max_tokens: "invalid", messages: [{ role: "user", content: "x".repeat(1024 * 1024 + 16) }] } };
