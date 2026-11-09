@@ -166,3 +166,13 @@ test('exactly twenty percent saving meets the cost threshold without rounding dr
   assert.equal(report.pilotScreen.enoughCostSaving, true);
   assert.equal(report.pilotScreen.passed, true);
 });
+
+test('false accepts include a passing verdict with mismatched qualified test counts', () => {
+  const runs = repeats();
+  const rejected = runs[1].records.find(row => row.strategy === 'scope');
+  rejected.score = 0;
+  rejected.verdict.tests = 1;
+  const report = analyzePairRepeats(runs);
+  assert.equal(report.totals.find(row => row.strategy === 'scope').falseAccepts, 1);
+  assert.equal(report.pilotScreen.passed, false);
+});

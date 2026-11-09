@@ -129,7 +129,7 @@ export function analyzePairRepeats(runs) {
     const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
       costMicros: sum(rows.map(row => row.costMicros)), elapsedMs: sum(rows.map(row => row.elapsedMs)),
-      falseAccepts: rows.filter(row => row.publicPassed === true && row.verdict?.passed === false).length };
+      falseAccepts: rows.filter(row => row.publicPassed === true && row.score === 0).length };
   });
   const comparisons = ['cheap', 'strong'].map(reference => {
     const blocks = reports.map(report => report.comparisons.find(row => row.reference === reference));
