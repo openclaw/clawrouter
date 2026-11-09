@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse, stringify } from "yaml";
 import { buildProviderPackageIndex } from "../scripts/provider-package-index.mjs";
 
 const source = fileURLToPath(new URL("../examples/provider-plugin/", import.meta.url));
@@ -24,7 +25,8 @@ test("package index contains validated identity and resource references, not fil
   assert.equal(entry.id, "example");
   assert.equal(entry.displayName, "Example");
   assert.equal(entry.version, "1.0.0");
-  assert.deepEqual(Object.keys(entry).sort(), ["digest", "displayName", "documentation", "fixtures", "id", "license", "logo", "manifest", "version"]);
+  assert.deepEqual(Object.keys(entry).sort(), ["digest", "displayName", "documentation", "fixtures", "id", "license", "logo", "manifest", "products", "version"]);
+  assert.deepEqual(entry.products, [{ id: "api", displayName: "API", commercialModel: "metered", authenticationMethod: "api-key" }]);
   assert.deepEqual(entry.logo.light.path, "assets/logo.svg");
   assert.equal(entry.documentation.bytes, Buffer.byteLength("PRIVATE_DOCUMENT_SENTINEL"));
   assert.match(entry.documentation.sha256, /^[0-9a-f]{64}$/);
@@ -34,6 +36,46 @@ test("package index contains validated identity and resource references, not fil
   assert.deepEqual(buildProviderPackageIndex([descriptor]), index);
   writeFileSync(join(root, "README.md"), "updated docs");
   assert.notEqual(buildProviderPackageIndex([descriptor]).packages[0].digest, entry.digest);
+});
+
+test("package products expose sorted metadata without execution or auth configuration", t => {
+  const { root, descriptor } = fixture(t);
+  const path = join(root, "example.provider.yaml");
+  const manifest = parse(readFileSync(path, "utf8"));
+  const api = manifest.products[0];
+  manifest.auth.grantTransports = { subscription: {
+    auth: { type: "bearer", header: "Authorization", format: "Bearer ${secret}" },
+    allowedEndpoints: ["invoke"], headers: { "X-Private-Metadata": "PRIVATE_TRANSPORT_SENTINEL" },
+  } };
+  manifest.products = [{ ...api, id: "z-api" }, { ...api, id: "a-subscription", displayName: "Subscription",
+    commercialModel: "subscription", authenticationMethod: "oauth2", binding: { type: "grant-transport", grantKind: "subscription" } }];
+  writeFileSync(path, stringify(manifest));
+  const [entry] = buildProviderPackageIndex([descriptor]).packages;
+  assert.deepEqual(entry.products, [
+    { id: "a-subscription", displayName: "Subscription", commercialModel: "subscription", authenticationMethod: "oauth2" },
+    { id: "z-api", displayName: "API", commercialModel: "metered", authenticationMethod: "api-key" },
+  ]);
+  for (const product of entry.products) {
+    assert.deepEqual(Object.keys(product).sort(), ["authenticationMethod", "commercialModel", "displayName", "id"]);
+  }
+  const encoded = JSON.stringify(entry);
+  for (const excluded of ["PRIVATE_TRANSPORT_SENTINEL", "grant-transport", "allowedEndpoints", "tool.invoke", "EXAMPLE_API_KEY", "api.example.invalid"]) {
+    assert.ok(!encoded.includes(excluded), excluded);
+  }
+  assert.deepEqual(buildProviderPackageIndex([descriptor]).packages[0], entry);
+  manifest.products[1].endpoints = ["unknown"];
+  writeFileSync(path, stringify(manifest));
+  assert.throws(() => buildProviderPackageIndex([descriptor]), /unknown endpoint/);
+});
+
+test("legacy package indexes omit product metadata instead of inventing a default", t => {
+  const { root, descriptor } = fixture(t);
+  const path = join(root, "example.provider.yaml");
+  const manifest = parse(readFileSync(path, "utf8"));
+  delete manifest.products;
+  writeFileSync(path, stringify(manifest));
+  const [entry] = buildProviderPackageIndex([descriptor]).packages;
+  assert.equal(Object.hasOwn(entry, "products"), false);
 });
 
 test("optional assets and fixtures remain absent instead of acquiring defaults", t => {

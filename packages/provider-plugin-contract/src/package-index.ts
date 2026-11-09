@@ -1,3 +1,5 @@
+import type { ProviderProductSummary } from "./product-metadata.ts";
+
 /** A build artifact for packaging tools. No resource is authorized for HTML rendering. */
 export interface ProviderPackageResource {
   path: string;
@@ -11,6 +13,7 @@ export interface ProviderPackageIndex {
     id: string;
     version: string;
     displayName: string;
+    products?: ProviderProductSummary[];
     digest: string;
     manifest: ProviderPackageResource;
     documentation: ProviderPackageResource;

@@ -15,6 +15,7 @@ export function buildProviderPackageIndex(pluginPaths) {
     schema: "clawrouter.provider-package-index.v1",
     packages: plugins.map(plugin => {
       const { descriptor } = plugin;
+      const provider = providers.get(descriptor.id);
       const resource = path => {
         const file = plugin.files.find(file => file.path === path);
         if (!file) throw new Error(`provider plugin ${descriptor.id} resource was not captured: ${path}`);
@@ -23,7 +24,9 @@ export function buildProviderPackageIndex(pluginPaths) {
       return {
         id: descriptor.id,
         version: descriptor.version,
-        displayName: providers.get(descriptor.id).display_name,
+        displayName: provider.display_name,
+        ...(provider.products ? { products: provider.products.map(({ id, displayName, commercialModel, authenticationMethod }) =>
+          ({ id, displayName, commercialModel, authenticationMethod })) } : {}),
         digest: plugin.digest,
         manifest: resource(descriptor.manifest),
         documentation: resource(descriptor.documentation),
