@@ -549,11 +549,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     }
     const method = (envelope.method ?? endpoint.method).toUpperCase();
     if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
+    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+    const selection: ProxySelection = { preparation, provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, selection);
     if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
     if (preauthenticated instanceof Response) return preauthenticated;
-    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-    const selection = { preparation, provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     prepared.body = {};
     await admission.prepareMusic(selection);
     return await proxySelected(request, env, context, mode, selection, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
@@ -827,20 +827,48 @@ function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): R
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
-  const ordinary = admission?.ordinaryCompletion() && !compound && !reservedBudget && !selection.nativeResponse
-    && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
-    && !["minimax", "anthropic-vertex", "gmi"].includes(selection.provider.id)
-    && ["openai.chat_completions", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "anthropic.messages"].includes(selection.endpoint.request_format);
-  const completion = ordinary ? new ProxyCompletion() : undefined;
-  if (completion) admission!.completion = completion.completion;
-  try {
-    if (completion) context.waitUntil(completion.completion);
-    return await (completion ? completion.start(scope => proxySelectedOwned(request, env, context, mode, selection, queryInput, preauthenticated, reservedBudget, compound, auditAuth, admission, scope))
-      : proxySelectedOwned(request, env, context, mode, selection, queryInput, preauthenticated, reservedBudget, compound, auditAuth, admission));
-  } finally { completion?.seal(); }
+  // Invoke only at the authenticated, validated boundary (or the earlier
+  // identity-denial receipt). Never reconstruct the selection or reauthenticate.
+  const complete = async (start: (scope?: ProxyCompletion) => Promise<Response>): Promise<Response> => {
+    const ordinary = admission?.ordinaryCompletion() && !compound && !reservedBudget && !selection.nativeResponse
+      && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
+      && !["minimax", "anthropic-vertex", "gmi"].includes(selection.provider.id)
+      && ["openai.chat_completions", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "anthropic.messages"].includes(selection.endpoint.request_format);
+    const completion = ordinary ? new ProxyCompletion() : undefined;
+    if (completion) admission!.completion = completion.completion;
+    try {
+      if (completion) context.waitUntil(completion.completion);
+      return await (completion ? completion.start(start) : start());
+    } finally { completion?.seal(); }
+  };
+  const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
+  if (auth instanceof Response) {
+    if (compound && auditAuth) {
+      createProxyAccounting({ context, env, auth: auditAuth, selection, request, compound })
+        .fail(auth.status, auth.status === 403 ? "denied" : auth.status < 500 ? "client_error" : "provider_error");
+    }
+    return auth;
+  }
+  const identityDenial = identitySelectionDenied(request, selection.provider.id);
+  if (identityDenial) {
+    return complete(async completion => {
+      const accounting = createProxyAccounting({ context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } });
+      try { accounting.fail(identityDenial.status, "denied"); return identityDenial; }
+      finally { accounting.close(); }
+    });
+  }
+  if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
+  if (selection.endpoint.request_format === "openrouter.audio_transcription"
+    && (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(request.headers.get("content-type")?.trim() ?? "")
+      || ![null, "identity"].includes(request.headers.get("content-encoding"))))
+    throw new HttpError(400, "invalid_native_transcription_content_type", "native transcription requires uncompressed UTF-8 JSON");
+  if (selection.endpoint.inputProfile !== undefined)
+    throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
+  validateSelectedInput(selection);
+  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion));
 }
 
-async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission, completion?: ProxyCompletion): Promise<Response> {
+async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion): Promise<Response> {
   let failureAccounting: ReturnType<typeof createProxyAccounting> | undefined;
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let retention: PreparedContentRetention | null | undefined;
@@ -851,27 +879,6 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   const published = publishedMusicInput(selection);
   const music = inlineMusicInput(selection) ?? published;
   const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
-  const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
-  if (auth instanceof Response) {
-    if (compound && auditAuth) {
-      createProxyAccounting({ context, env, auth: auditAuth, selection, request, compound, completion })
-        .fail(auth.status, auth.status === 403 ? "denied" : auth.status < 500 ? "client_error" : "provider_error");
-    }
-    return auth;
-  }
-  const identityDenial = identitySelectionDenied(request, selection.provider.id);
-  if (identityDenial) {
-    createProxyAccounting({ context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } }).fail(identityDenial.status, "denied");
-    return identityDenial;
-  }
-  if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
-  if (selection.endpoint.request_format === "openrouter.audio_transcription"
-    && (!/^application\/json(?:\s*;\s*charset\s*=\s*(?:utf-8|"utf-8"))?$/i.test(request.headers.get("content-type")?.trim() ?? "")
-      || ![null, "identity"].includes(request.headers.get("content-encoding"))))
-    throw new HttpError(400, "invalid_native_transcription_content_type", "native transcription requires uncompressed UTF-8 JSON");
-  if (selection.endpoint.inputProfile !== undefined)
-    throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
-  validateSelectedInput(selection);
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);

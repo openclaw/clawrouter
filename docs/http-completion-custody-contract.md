@@ -34,7 +34,10 @@ Completion requires closure and settlement of every descendant. Repeated closure
 is idempotent. Starting work in a closed scope fails before invocation. This is a
 logical ownership rule, not an operation-count or memory limit.
 
-The selected runner enrolls before execution. Its completion is registered with
+The selected runner authenticates and performs its existing input validation before
+classifying the same selection, including Access-session manifest requests. An earlier
+identity denial owns its zero-cost accounting separately. The selected continuation
+enrolls before preparation and transport. Its completion is registered with
 the original request context even when no input bytes are charged. Its top scope
 is sealed before the response returns. It does not await encompassing completion. `JsonAdmission.finish`
 waits on that receipt separately, then follows its existing input-finish/release

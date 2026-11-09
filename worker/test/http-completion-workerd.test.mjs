@@ -41,8 +41,8 @@ export default {async fetch(request,bindings,ctx){
  }
  // Direct public wire control; no diagnostic Response replaces this result.
  if(url.pathname==='/v1/chat/completions'){
-  const wire={done:false,failed:false},roots=[];states.set('wire',wire);
-  const track=work=>{roots.push(work.then(()=>({failed:false}),error=>({failed:true,error})));return work;};
+  const wire={done:false,failed:false,started:0,settled:0,failedRoots:0},roots=[];states.set('wire',wire);
+  const track=work=>{wire.started++;roots.push(work.then(()=>{wire.settled++;return {failed:false};},error=>{wire.settled++;wire.failedRoots++;return {failed:true,error};}));return work;};
   let hasPrimary=false,primary,response;
   try{response=await track(worker.fetch(request,bindings,{waitUntil:track}));}catch(error){hasPrimary=true;primary=error;}
   // Outside the caller join: this original-context fixture drain is never enrolled
@@ -58,23 +58,28 @@ export default {async fetch(request,bindings,ctx){
  if(url.pathname!=='/fixture'||!__CASES__.includes(id))return new Response(null,{status:404});
  await request.text(); // Explicit outer request lifetime support; no upload/readiness coupling.
  const normalization=id.includes('-normalization'),streaming=id.startsWith('sse-')||normalization,cancelReject=id.endsWith('cancel-reject');
- const s={response:false,first:false,bodyDone:false,bodyRejected:false,status:null,streaming,normalization,nativeReadPending:false,nativeReadSettled:false,readReturned:false,
-  nativeCancelSettled:false,cancelReturned:false,cancels:0,unlocked:false,r2Native:false,r2Returned:false,accountEntered:false,accountDone:false,
-  completionSeen:0,completionDone:false,completionFailed:null,events:0,posts:0,reserves:0,closed:false,operationDone:false,operationFailed:false};states.set(id,s);
+ const s={response:false,first:false,bodyDone:false,bodyRejected:false,status:null,streaming,normalization,nativeReadPending:false,nativeReadSettled:false,nativeReadFailed:false,readReturned:false,
+  nativeCancelPending:false,nativeCancelSettled:false,nativeCancelFailed:false,cancelReturned:false,cancels:0,unlocked:false,r2Native:false,r2Returned:false,accountEntered:false,accountDone:false,
+  completionSeen:0,completionDone:false,completionFailed:null,events:0,posts:0,reserves:0,closed:false,operationDone:false,operationFailed:false,phase:'dispatch',
+  roots:Object.fromEntries(['fetch','read','first-cancel','archive','accounting','production-completion','input-finish','gate','background'].map(kind=>[kind,{started:0,settled:0,failed:0}])),
+  gates:Object.fromEntries(['abort','archive','accounting','read-return','cancel'].map(phase=>[phase,{entered:false,released:false}]))};states.set(id,s);
  const roots=[],names=new Map(),reservationIds=[],usageNames=new Set(),caller=new AbortController();
  let hasPrimary=false,primary,closed=false,archiveKey,expectedBody,completion;
- const track=work=>{check(!closed,'fixture enrollment closed');const tagged=work.then(()=>({failed:false}),error=>({failed:true,error}));roots.push(tagged);return work;};
- const gate=phase=>track((async()=>{const response=await nativeFetch('https://completion-gate.example/gate/'+id+'/'+phase);check(response.ok,'fixture gate');await response.text();})());
+ const track=(work,kind='background')=>{check(!closed,'fixture enrollment closed');const count=s.roots[kind];count.started++;
+  const tagged=work.then(()=>{count.settled++;return {failed:false};},error=>{count.settled++;count.failed++;return {failed:true,error};});roots.push(tagged);return work;};
+ const diagnostic=()=>{try{console.error('http-completion-origin',JSON.stringify({case:id,...s,charged:bodyBudgetCharged()}));}catch(error){roots.push(Promise.resolve({failed:true,error}));}};
+ const gate=phase=>track((async()=>{s.gates[phase].entered=true;const response=await nativeFetch('https://completion-gate.example/gate/'+id+'/'+phase);check(response.ok,'fixture gate');await response.text();s.gates[phase].released=true;})(),'gate');
  const releaseAll=async()=>{const response=await nativeFetch('https://completion-gate.example/release-all/'+id);check(response.ok,'fixture release all');await response.text();};
  const env={...bindings,
-  __fixtureCompletion(original){s.completionSeen++;completion=original;track(original.then(receipt=>{s.completionDone=true;s.completionFailed=receipt.failed;}));},
+  __fixtureCompletion(original){s.completionSeen++;completion=original;track(original.then(receipt=>{s.completionDone=true;s.completionFailed=receipt.failed;}),'production-completion');},
+  __fixtureInputFinish(original){track(original,'input-finish');},
   BUDGET_LEDGER:{idFromName(name){const key=bindings.BUDGET_LEDGER.idFromName(name);names.set(String(key),name);return key;},get(key){const stub=bindings.BUDGET_LEDGER.get(key);return {fetch(input,init){
    if(new URL(String(input)).pathname==='/reserve'){s.reserves++;reservationIds.push(JSON.parse(init.body).reservationId);}return stub.fetch(input,init);}};}},
-  CONTENT_ARCHIVE:{put(key,body,options){archiveKey=key;const original=track(bindings.CONTENT_ARCHIVE.put(key,body,options));
-   return track(original.then(async result=>{s.r2Native=true;await gate('archive');s.r2Returned=true;return result;}));}},
+  CONTENT_ARCHIVE:{put(key,body,options){archiveKey=key;const original=track(bindings.CONTENT_ARCHIVE.put(key,body,options),'archive');
+   return track(original.then(async result=>{s.r2Native=true;await gate('archive');s.r2Returned=true;return result;}),'archive');}},
   USAGE_LEDGER:{idFromName(name){usageNames.add(name);return bindings.USAGE_LEDGER.idFromName(name);},get:key=>bindings.USAGE_LEDGER.get(key)},
   USAGE_QUEUE:{send(event){s.events++;s.accountEntered=true;
-   return track((async()=>{await gate('accounting');const receipt=await ingestUsage(env,event);check(receipt.eventId===event.id,'original usage receipt');s.accountDone=true;})());}}
+   return track((async()=>{await gate('accounting');const receipt=await ingestUsage(env,event);check(receipt.eventId===event.id,'original usage receipt');s.accountDone=true;})(),'accounting');}}
  };
  // The fixture transport stays connected so routed abort reaches the ORIGINAL
  // reader FIRST cancel independently of fetch-signal cancellation. No body replacement.
@@ -88,13 +93,18 @@ export default {async fetch(request,bindings,ctx){
    body.getReader=(...args)=>{
     const reader=acquire(...args),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),unlock=reader.releaseLock.bind(reader);let reads=0,firstCancel;
     reader.read=(...args)=>{
-     const index=++reads,original=track(read(...args));
+     const index=++reads,original=track(read(...args),'read');
      if(index!==2||normalization)return original;
      s.nativeReadPending=true;
-     return track(original.then(async value=>{s.nativeReadPending=false;s.nativeReadSettled=true;await gate('read-return');s.readReturned=true;return value;}));
+     return track(original.then(async value=>{s.nativeReadPending=false;s.nativeReadSettled=true;await gate('read-return');s.readReturned=true;return value;},error=>{
+      s.nativeReadPending=false;s.nativeReadSettled=true;s.nativeReadFailed=true;throw error;
+     }),'read');
     };
     reader.cancel=(...args)=>firstCancel??=(async()=>{
-     s.cancels++;await track(cancel(...args));s.nativeCancelSettled=true;await gate('cancel');s.cancelReturned=true;
+     s.cancels++;s.nativeCancelPending=true;
+     try{await track(cancel(...args),'first-cancel');}catch(error){s.nativeCancelFailed=true;throw error;}
+     finally{s.nativeCancelPending=false;s.nativeCancelSettled=true;}
+     await gate('cancel');s.cancelReturned=true;
      if(cancelReject)throw undefined;
     })();
     const first=reader.cancel;
@@ -103,14 +113,14 @@ export default {async fetch(request,bindings,ctx){
      // Deliberate post-native rejection is asserted, never an arbitrary ignore.
      if(!reader.fixtureObserved){reader.fixtureObserved=true;track(original.then(()=>{check(!cancelReject,'expected labelled cancel rejection');},error=>{
       if(!cancelReject||!s.nativeCancelSettled||!s.cancelReturned||error!==undefined)throw error;
-     }));}
+     }),'first-cancel');}
      return original;
     };
     reader.releaseLock=()=>{unlock();s.unlocked=!body.locked;};
     return reader;
    };
    return response; // Healthy ORIGINAL response identity is preserved.
-  }));
+  }),'fetch');
  };
  // Controls are registered before dispatch, and never wait on the completion owner.
  if(!normalization)track(gate('abort').then(()=>caller.abort(Error('fixture routed abort'))));
@@ -118,13 +128,13 @@ export default {async fetch(request,bindings,ctx){
  try{
   expectedBody={model:'openai/gpt-6-astra',messages:[{role:'user',content:'x'.repeat(1024*1024+16)}]};
   if(streaming)expectedBody.stream=true;
-  const response=await track(worker.fetch(new Request('https://router.example/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer clawrouter-live-'+id.replaceAll('-','_')+'-fixture-secret','content-type':'application/json','x-request-id':'completion-'+id},body:JSON.stringify(expectedBody),signal:caller.signal}),env,{waitUntil:track}));
-  s.response=true;s.status=response.status;reader=response.body?.getReader();check(reader,'actual public body');
+  const response=await track(worker.fetch(new Request('https://router.example/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer clawrouter-live-'+id.replaceAll('-','_')+'-fixture-secret','content-type':'application/json','x-request-id':'completion-'+id},body:JSON.stringify(expectedBody),signal:caller.signal}),env,{waitUntil:track}),'fetch');
+  s.response=true;s.status=response.status;s.phase='public-body';reader=response.body?.getReader();check(reader,'actual public body');
   check(response.status===(normalization?429:200),'actual public response status');check(s.completionSeen===1,'one caller completion');
-  const first=await track(reader.read());check(!first.done&&first.value.byteLength>0,'actual first public body read');s.first=true;
+  const first=await track(reader.read(),'read');check(!first.done&&first.value.byteLength>0,'actual first public body read');s.first=true;
   if(normalization){
    const decoder=new TextDecoder();let text=decoder.decode(first.value,{stream:true});
-   for(;;){const next=await track(reader.read());if(next.done)break;text+=decoder.decode(next.value,{stream:true});}
+   for(;;){const next=await track(reader.read(),'read');if(next.done)break;text+=decoder.decode(next.value,{stream:true});}
    text+=decoder.decode();check(!!JSON.parse(text).error,'actual normalized error body');s.bodyDone=true;
   }else{
    if(streaming)check(response.headers.get('content-type')?.includes('text/event-stream')&&new TextDecoder().decode(first.value).startsWith('data: '),'valid first SSE replay delivered');
@@ -136,15 +146,16 @@ export default {async fetch(request,bindings,ctx){
   reader.releaseLock();reader=undefined;
   // Result/accounting may be early; the original receipt is a distinct join.
   check(completion&&!s.completionDone,'public response/body do not retire caller');
- }catch(error){hasPrimary=true;primary=error;s.operationFailed=true;}
+ }catch(error){hasPrimary=true;primary=error;s.operationFailed=true;diagnostic();}
  finally{
   s.operationDone=true;
   if(hasPrimary){try{await releaseAll();}catch(error){roots.push(Promise.resolve({failed:true,error}));}}
   if(reader){try{await reader.cancel();}catch(error){roots.push(Promise.resolve({failed:true,error}));}try{reader.releaseLock();}catch(error){roots.push(Promise.resolve({failed:true,error}));}}
  }
+ s.phase='root-join';diagnostic();
  const failures=[];let index=0;
  while(index<roots.length){const batch=roots.slice(index);index=roots.length;for(const result of await Promise.all(batch))if(result.failed)failures.push(result.error);}
- closed=true;s.closed=true;globalThis.fetch=nativeFetch;
+ closed=true;s.closed=true;s.phase='receipt-assertions';globalThis.fetch=nativeFetch;
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'independent fixture roots');if(hasPrimary)throw primary;
  check(s.completionDone&&s.completionFailed===false&&bodyBudgetCharged()===0,'actual completion and caller charge release');
  check(s.cancels===1&&s.unlocked&&(normalization||s.readReturned)&&s.cancelReturned,'actual read FIRST cancel and unlock');
@@ -169,7 +180,13 @@ async function fixture(directory, upstream) {
     bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent', plugins: [{ name: 'observe-original-completion', setup(build) {
       build.onLoad({ filter: /[\\/]worker[\\/]proxy\.ts$/ }, async ({ path }) => {
         const source = await readFile(path, 'utf8'); assert.equal(source.split(anchor).length, 2);
-        return { contents: source.replace(anchor, 'if (completion) { admission!.completion = completion.completion; env.__fixtureCompletion?.(completion.completion); }'), loader: 'ts', resolveDir: dirname(path) };
+        const finish = 'context.waitUntil((async () => {\n      try { await this.completion; }';
+        assert.equal(source.split(finish).length, 2);
+        const finishEnd = 'this.intakeOperation?.stop("complete"); this.intakeOperation = undefined;\n      }\n    })());';
+        assert.equal(source.split(finishEnd).length, 2);
+        const observed = source.replace(finish, 'const originalFinish = (async () => {\n      try { await this.completion; }')
+          .replace(finishEnd, 'this.intakeOperation?.stop("complete"); this.intakeOperation = undefined;\n      }\n    })();\n    this.env.__fixtureInputFinish?.(originalFinish);\n    context.waitUntil(originalFinish);');
+        return { contents: observed.replace(anchor, 'if (completion) { admission!.completion = completion.completion; env.__fixtureCompletion?.(completion.completion); }'), loader: 'ts', resolveDir: dirname(path) };
       });
     } }] });
   return startBundledWorkerdFixture(directory, bundled.outputFiles[0].text, upstream, { preventEviction: true, r2Buckets: ['CONTENT_ARCHIVE'] });
@@ -177,19 +194,25 @@ async function fixture(directory, upstream) {
 
 test('ordinary public HTTP joins original delivery, archive and accounting after publication', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'http-completion-'));
-  const gates = new Map(), released = new Set(), clients = []; let releaseFuture = false, runtime, server, hasPrimary = false, primary, wireStarted = false, drainWire;
+  const gates = new Map(), released = new Set(), clients = [], diagnosticFailures = [], controlFailures = []; let releaseFuture = false, runtime, server, hasPrimary = false, primary, wireStarted = false, drainWire;
+  let activeCase = 'setup', hostPhase = 'setup', lastState = null;
+  const phases = ['abort','archive','accounting','read-return','cancel','provider-eof'];
+  const diagnostic = () => { try { console.error('http-completion-host', JSON.stringify({ case: activeCase, phase: hostPhase, lastState, clients: { started: clients.length, settled: clients.filter(row => row.done).length, failed: clients.filter(row => row.outcome?.failed).length }, gates: Object.fromEntries(phases.map(phase => [phase, { arrived: gates.has(activeCase+'/'+phase), released: released.has(activeCase+'/'+phase) }])) })); } catch (error) { diagnosticFailures.push(error); } };
   const release = key => { released.add(key); gates.get(key)?.end('released'); gates.delete(key); };
-  const releaseAll = () => { releaseFuture = true; for (const key of gates.keys()) release(key); };
+  const releaseKeys = keys => { const failures = []; for (const key of keys) try { release(key); } catch (error) { failures.push(error); } if (failures.length) throw new AggregateError(failures, 'independent host releases'); };
+  const releaseAll = () => { releaseFuture = true; releaseKeys([...gates.keys()]); };
   const track = work => { const row = { done: false, outcome: undefined }; row.observed = work.then(value => { row.done = true; return row.outcome = { failed: false, value }; }, error => { row.done = true; return row.outcome = { failed: true, error }; }); clients.push(row); return row; };
-  const interrupted = () => releaseAll(); t.signal.addEventListener('abort', interrupted, { once: true });
+  const interrupted = () => { try { releaseAll(); } catch (error) { controlFailures.push(error); } }; t.signal.addEventListener('abort', interrupted, { once: true });
   t.after(async () => {
-    releaseAll(); const failures = [];
+    hostPhase = 'host-cleanup'; diagnostic(); const diagnosticCount = diagnosticFailures.length, controlCount = controlFailures.length, failures = [...diagnosticFailures, ...controlFailures];
+    try { releaseAll(); } catch (error) { failures.push(error); }
     for (const row of clients) { const result = await row.observed; if (result.failed) failures.push(result.error); }
     if (wireStarted && drainWire) try { await drainWire(); } catch (error) { failures.push(error); }
     if (runtime) try { await runtime.dispose(); } catch (error) { failures.push(error); }
     if (server) try { server.closeAllConnections(); await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } catch (error) { failures.push(error); }
     try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }
     t.signal.removeEventListener('abort', interrupted);
+    failures.push(...diagnosticFailures.slice(diagnosticCount), ...controlFailures.slice(controlCount));
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'host roots');
   });
   try {
@@ -203,7 +226,10 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
           : { id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'fixture' }, finish_reason: null }] })+'\n\n'
           : normalization ? '{"error":{"message":"'+'x'.repeat(70*1024)+'"}}' : '{"id":"fixture",');
         const key = parts[1] + '/provider-eof'; if (releaseFuture || released.has(key)) response.end(); else gates.set(key, response);
-      } else if (parts[0] === 'release-all') { for (const phase of ['abort','archive','accounting','read-return','cancel','provider-eof']) release(parts[1]+'/'+phase); response.end('released'); }
+      } else if (parts[0] === 'release-all') {
+        try { releaseKeys(phases.map(phase => parts[1]+'/'+phase)); response.end('released'); }
+        catch (error) { controlFailures.push(error); response.writeHead(500); response.end('fixture release failed'); }
+      }
       else { response.writeHead(404); response.end(); }
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -214,19 +240,25 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
     const value = async row => { const result = await row.observed; if (result.failed) throw result.error; assert.equal(result.value.status, 200); return JSON.parse(result.value.text); };
     await value(call('/setup'));
     drainWire = async () => {
-      for (let n = 0; n < 500; n++) { const state = await value(call('/state?case=wire')); if (state?.done) { assert.equal(state.failed, false, 'original wire drain failed'); return; } await delay(10); }
+      for (let n = 0; n < 500; n++) { const state = lastState = await value(call('/state?case=wire')); if (state?.done) { assert.equal(state.failed, false, 'original wire drain failed'); return; } await delay(10); }
       throw Error('healthy original-context drain did not finish');
     };
-    wireStarted = true;
+    wireStarted = true; activeCase = 'wire'; hostPhase = 'healthy-public-body';
     const healthy = await value(call('/v1/chat/completions', { method: 'POST', headers: { authorization: 'Bearer clawrouter-live-wire-fixture-secret', 'content-type': 'application/json' }, body: JSON.stringify({ model: 'openai/gpt-6-astra', messages: [{ role: 'user', content: 'fixture' }] }) }));
-    assert.equal(healthy.object, 'chat.completion'); await drainWire(); wireStarted = false;
+    assert.equal(healthy.object, 'chat.completion'); hostPhase = 'healthy-root-join'; await drainWire(); wireStarted = false;
     for (const id of cases) {
+      activeCase = id; hostPhase = 'initial-arrival'; lastState = null;
       const client = call('/fixture?case='+id, { method: 'POST', body: 'fixture' });
-      const state = () => value(call('/state?case='+id));
+      const state = async () => lastState = await value(call('/state?case='+id));
       const wait = async predicate => {
         for (let n = 0; n < 500; n++) {
           if (client.done) { const result = await client.observed; if (result.failed) throw result.error; throw Error('originating diagnostic completed prematurely'); }
-          const s = await state(); if (s?.operationFailed) { const result = await client.observed; if (result.failed) throw result.error; throw Error('originating operation failed'); }
+          const s = await state(); if (s?.operationFailed) {
+            diagnostic(); const failures = []; try { releaseKeys(phases.map(phase => id+'/'+phase)); } catch (error) { failures.push(error); }
+            const result = await client.observed;
+            if (failures.length) throw new AggregateError(result.failed ? [result.error, ...failures] : failures, 'original client and independent release failures');
+            if (result.failed) throw result.error; throw Error('originating operation failed');
+          }
           if (s && predicate(s)) return s;
           await delay(10);
         }
@@ -240,13 +272,14 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
       }else{
         s = await wait(s => s.response && s.first && s.nativeReadPending && s.r2Native);
         assert.equal(s.completionDone, false); assert.ok(s.charged > 0); assert.equal(s.accountEntered, false);
-        release(id+'/abort');
+        hostPhase = 'abort-arrival'; release(id+'/abort');
         s = await wait(s => s.bodyDone && s.accountEntered && s.nativeReadSettled && s.nativeCancelSettled);
         assert.equal(s.status, 200);
       }
       assert.equal(s.completionDone, false); assert.equal(s.unlocked, false); assert.equal(s.cancels, 1); assert.ok(s.charged > 0);
       const order = id === 'account-last' ? ['delivery','archive','accounting'] : id === 'archive-last' ? ['accounting','delivery','archive'] : ['archive','accounting','delivery'];
       for (const [index, phase] of order.entries()) {
+        hostPhase = phase;
         if (phase === 'delivery') {
           release(id+'/read-return');
           if (id.startsWith('sse-') || normalization) {
@@ -263,9 +296,10 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
         }
       }
       release(id+'/provider-eof');
+      hostPhase = 'originating-client-join'; diagnostic();
       const result = await value(client);
       assert.equal(result.closed, true); assert.equal(result.completionDone, true); assert.equal(result.completionFailed, false);
       assert.equal(result.charged, 0); assert.equal(result.originalIds, 4); assert.equal(result.usage, 1); assert.equal(result.posts, 1); assert.ok(result.archiveBytes > 1024*1024);
     }
-  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  } catch (error) { hasPrimary = true; primary = error; diagnostic(); throw error; }
 });
