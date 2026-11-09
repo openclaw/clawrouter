@@ -6,6 +6,7 @@ import { once } from "node:events";
 import test from "node:test";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { continuationAuthority } from "./continuation-authority.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const { default: worker } = await import("../index.ts");
 const { sha256Hex } = await import("../utils.ts");
@@ -22,7 +23,9 @@ async function fixture(t) {
   const credentials = await Promise.all(Object.entries(secrets).map(async ([credentialId, secret]) => ({ credentialId, credential: { enabled: true, secretSha256: await sha256Hex(secret), policyId: credentialId, policyGeneration: "v1", ...(credentialId === "limited" ? { serviceTiers: ["default", "ultrafast"] } : {}) } })));
   const records = new Map(), calls = [], pending = [], events = [];
   const env = { OPENAI_API_KEY: "synthetic-upstream-only", POLICY_KV: {
-    async get(key, type) { const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
+    async get(key, type) { const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null;
+      if (!Array.isArray(key) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
+      return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
     async put(key, value) { records.set(key, JSON.parse(value)); },
     async list() { return { keys: [], list_complete: true }; },
   }, USAGE_QUEUE: { send: async event => events.push(event) }, BUDGET_LEDGER: { get() { throw new Error("unmetered catalog must not reserve or observe budgets"); } } };

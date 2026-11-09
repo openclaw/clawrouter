@@ -9,6 +9,7 @@ import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredential
 import { HttpError, sha256Hex } from "../utils.ts";
 import { HttpContinuation } from "../http-continuation.ts";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
   const f = await fixture(t);
@@ -178,9 +179,12 @@ test("failed alternate selection preserves the original rejection body and zero 
     const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
     let selections = 0, canceled = false;
     if (scenario === "unavailable") await revokeGrantCredentials(f.env, grantKeys[1]);
-    f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
-      if (new URL(request.url).pathname === "/admission/resolve" && ++selections === 2 && scenario === "selection_error") throw new Error("fixture selection outage");
-    };
+    const getAuthority = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+    f.env.ACCESS_CONTROL.get = name => { const stub = getAuthority(name); return { ...stub, fetch(url, init) {
+      if (new URL(url).pathname === "/admission/resolve" && ++selections === 2 && scenario === "selection_error")
+        return accessBytesResponse(JSON.stringify({ error: { code: "authority_error", message: "fixture selection outage" } }), "", { status: 500 });
+      return stub.fetch(url, init);
+    } }; };
     const body = '{"error":{"code":"fixture_rejection"}}';
     f.response = () => new Response(new ReadableStream({
       pull(controller) { controller.enqueue(new TextEncoder().encode(body)); controller.close(); },

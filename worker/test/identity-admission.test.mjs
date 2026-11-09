@@ -420,9 +420,13 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
     return { ...stub, async fetch(url, init) {
       const path = new URL(url).pathname, body = JSON.parse(init.body);
       if (path === '/reserve') originalIds.push(body.reservationId);
-      if (path === '/dispatch') dispatchedIds.push(body.reservationId);
       if (path === '/settle') settledIds.push(body.reservationId);
-      return stub.fetch(url, init);
+      const response = await stub.fetch(url, init);
+      if (response.ok && (path === '/reserve' || path === '/dispatch')) {
+        const acknowledgment = await response.clone().json();
+        if (acknowledgment.dispatched === true && !dispatchedIds.includes(body.reservationId)) dispatchedIds.push(body.reservationId);
+      }
+      return response;
     } };
   };
   const sql = f.env.ACCESS_CONTROL.objects.get('policy-bindings').db;
