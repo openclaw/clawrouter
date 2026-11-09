@@ -77,6 +77,13 @@ repair comparison. It checks that each qualified task has every arm and that
 row costs and call counts reconcile with settled attempts. Incomplete runs,
 unknown charges and duplicate or missing outcomes are rejected.
 
+New test receipts include up to 128 SHA-256 fingerprints of failing TAP label
+paths, with a truncation flag. Compare them with qualification receipts to help
+distinguish an existing failure from a new regression. The fingerprints retain
+no test titles, source or error text. They identify reported label paths, not
+authenticated tests, and do not alter acceptance or replace test-count checks.
+Older receipts without fingerprints remain readable.
+
 The summary reports per-task wins and losses against each fixed control, total
 cost, and the number of extra repairs available from choosing correctly between
 the controls. It also compares the candidate with a task-independent random
