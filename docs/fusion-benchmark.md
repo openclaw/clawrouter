@@ -398,3 +398,59 @@ The first bounded-repair development run solved 2/3 for $0.258246, versus
 3/3 for cheap-only ($0.065905) and 3/3 for strong ($0.383451). The Voyage
 repair passed its supplied probe but failed hidden acceptance. This rejects
 promotion even though aggregate cascade cost was lower than strong.
+
+### Matched one-shot execution
+
+`FUSION_PAIR_EXECUTOR=single-draft` applies the same one-patch executor to
+both fixed controls and the strong fallback, rather than comparing a cheap
+draft against an interactive strong agent. It requires a supplied-check policy
+and is recorded as `executor` in the report. The default remains `interactive`.
+A fixed control makes one draft; the cascade can use a cheap draft followed by
+one original-source strong draft when verification fails. All attempts count.
+
+`contract-provided-strong` and `contract-provided-cheap` keep that same supplied
+check and fallback scaffold but map both roles to one model. Use these ablations
+to distinguish a model-combination gain from the value of a second attempt.
+Policy-only ablations remain explicitly separate from paired-control reports.
+
+
+Matched one-shot results on the same three exposed development repairs:
+
+| Strategy | Solved | Total API cost | Summed elapsed |
+| --- | --- | --- | --- |
+| One cheap draft | 1/3 | $0.003417 | 61.234s |
+| One strong draft | 1/3 | $0.073903 | 41.791s |
+| Cheap draft, then strong on failed check | 2/3 | $0.072998 | 118.156s |
+| Strong draft, then strong on failed check | 2/3 | $0.071008 | 97.148s |
+| Cheap draft, then cheap on failed check | 1/3 | $0.009432 | 136.664s |
+
+The single-model retry controls ran after the paired comparison; they were not
+interleaved arms. All used the same one-shot executor, supplied check, medium
+cheap reasoning and four-call shared ceiling. The strong retry matched the
+mixed route's quality at lower cost and latency. These observations do not
+establish a benefit from mixing models. No candidate advances from this study.
+Costs use reported usage and published tariffs, not provider invoices.
+
+A subsequent interactive-agent calibration used medium cheap reasoning and
+20 cheap calls within 40 shared calls. All three arms repaired its first GMI
+case. The next strong-control API call failed at the transport boundary without
+a response or usage, so the run stopped with its full reservation retained.
+There are no complete three-case totals or promotion result for this run. Its
+partial outcomes must not be combined with successful trials from other runs.
+
+The repository repair agent and its executable checks run in the benchmark's
+isolated local environment. The deployed Worker Fusion route supports single
+model execution and adviser/synthesizer requests; it does not execute client
+repository tools or the benchmark's regression checks. A successful repair
+benchmark would still require a caller-side agent integration and separate
+end-to-end validation before describing it as deployed verified repair.
+
+A complete interactive calibration repeated the same three exposed cases with
+medium cheap reasoning and 20 cheap calls within 40 total. Cheap solved 3/3
+for $0.061654, strong 2/3 for $0.371022, and the cascade 3/3 for $0.339482.
+The strong Voyage attempt exhausted its 8192-token output cap; its known cost
+is retained and the attempt counts as an error. Summed elapsed times were
+201.027s, 123.990s and 259.363s respectively. The cascade saved only 8.50%
+and took 2.09 times the strong control's elapsed time. It failed both the
+20% saving and two-times latency gates. Cheap-only was 83.38% cheaper than
+strong on these exposed cases; independent validation is still needed.
