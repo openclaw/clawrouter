@@ -78,7 +78,7 @@ import { planBudgetReservation, markBudgetDispatched, reserveBudget, validateBud
 import { admitProspectiveContentRetention, prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
 import { correlationMetadata, logCorrelationError } from "./correlation.ts";
 import {
-  FUSION_MODEL_ID, prepareFusionAccounting, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
+  FUSION_MODEL_ID, prepareFusionAccounting, buildFusionReservationProposals, collectFusionProposals,
   fusionMessagesValid, prepareAdviserBody,
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
@@ -373,7 +373,7 @@ async function proxyFusion(
   const renames = fusionAccountingRenames(probe, body, env, aggregatorPreparation);
   const certificate = prepareFusionAccounting(body, config, { provider: probe.provider.id, endpoint: probe.endpoint.id,
     upstream: probe.pathParams.model, renames }, view => admitProspectiveContentRetention(fusionAuth, probe, requestId, view));
-  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(certificate.input, certificate.config, buildFusionReservationProposals(certificate.config)), env, undefined, aggregatorPreparation);
+  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", certificate.assemble(buildFusionReservationProposals(certificate.config)), env, undefined, aggregatorPreparation);
   if (isSelectionFailure(aggregatorSelection)) {
     if (aggregatorSelection.auditSelection) await auditSelectionFailure(fusionRequest, env, context, mode, aggregatorSelection.auditSelection, preauthenticated, aggregatorSelection.response.status, {
       id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
@@ -1275,7 +1275,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
-  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
+  const failureAccounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   let prepared: PreparedUpstream;
   try {
     prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
@@ -1283,9 +1283,12 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
     if (isAccountingAdmissionFailure(error)) throw error;
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    accounting.fail(failure.status, status);
+    failureAccounting.fail(failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
+  // Preparation can pin the API service tier. Admit that successful capsule
+  // before reserve; the early owner is used only when preparation fails.
+  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   const { cost } = accounting;
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);

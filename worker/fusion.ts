@@ -93,7 +93,9 @@ export function prepareFusionAccounting(original: Record<string, unknown>, confi
         if (index < 0 || typeof proposal.content !== "string" || proposal.content.length > settings.maxProposalChars) throw new Error("fusion certificate mismatch");
         previous = index;
       }
-      return buildAggregatorBody(input, settings, proposals);
+      // The certificate stays immutable. Dispatch serialization temporarily
+      // replaces media slots, so it receives a mutable copy of admitted input.
+      return buildAggregatorBody(structuredClone(input), settings, proposals);
     },
   });
 }

@@ -20,6 +20,21 @@ const selection = () => ({ provider: { id: "fixture" }, model: null, capability:
   endpoint: { request_format: "openai.chat_completions", response_format: "openai.chat_completions" }, body: { messages: [{ role: "user", content: "fixture" }] } });
 const request = () => new Request("https://router.example/v1/chat/completions", { headers: { "x-request-id": "fixture-request" } });
 
+async function consumeArchiveReader(reader) {
+  const parts = [], cleanup = [];
+  let maximumBacking = 0, hasPrimary = false, primary;
+  try {
+    for (;;) { const next = await reader.read(); if (next.done) break; maximumBacking = Math.max(maximumBacking, next.value.buffer.byteLength); parts.push(next.value); }
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    try { await reader.cancel(); } catch (error) { cleanup.push(error); }
+    try { reader.releaseLock(); } catch (error) { cleanup.push(error); }
+  }
+  if (cleanup.length) throw new AggregateError(hasPrimary ? [primary, ...cleanup] : cleanup, "archive reader cleanup failed");
+  if (hasPrimary) throw primary;
+  return { parts, maximumBacking };
+}
+
 for (const [name, profile, accepted, rejected] of [
   ["intent scalar", "intent", "a".repeat(2048), "a".repeat(2049)],
   ["intent key", "intent", { ["k".repeat(128)]: 0 }, { ["k".repeat(129)]: 0 }],
@@ -93,13 +108,28 @@ test("TEXT archive bytes preserve JSON semantics, own proto and borrowed mutatio
   const expected = JSON.stringify(source), archive = accountingArchive(source);
   source.first = 9; source.__proto__.value = "changed";
   const stream = archive.stream(), reader = stream.getReader();
-  const parts = []; let maximumBacking = 0;
-  try {
-    for (;;) { const next = await reader.read(); if (next.done) break; maximumBacking = Math.max(maximumBacking, next.value.buffer.byteLength); parts.push(next.value); }
-  } finally { await reader.cancel(); reader.releaseLock(); }
+  const { parts, maximumBacking } = await consumeArchiveReader(reader);
   assert.equal(await new Blob(parts).text(), expected);
   assert.ok(maximumBacking <= 32768); assert.equal(stream.locked, false); assert.equal(archive.retired, true);
   assert.equal(Object.isFrozen(source), false);
+});
+
+for (const reason of [undefined, new Error("synthetic shared reader failure")]) test(`archive reader unlock survives rejected cancellation and preserves ${reason === undefined ? "undefined" : "shared Error"} occurrences`, async t => {
+  const stream = new ReadableStream({ pull(controller) { controller.error(reason); } }, { highWaterMark: 0 });
+  const reader = stream.getReader(), cancel = reader.cancel.bind(reader), unlock = reader.releaseLock.bind(reader);
+  let cancelCalls = 0, unlockCalls = 0;
+  t.after(() => { if (stream.locked) unlock(); });
+  t.mock.method(reader, "cancel", () => { cancelCalls++; return cancel(); });
+  // Real unlock happens first; the injected post-unlock failure shares the
+  // original reason to prove that reason equality never deduplicates roots.
+  t.mock.method(reader, "releaseLock", () => { unlockCalls++; unlock(); throw reason; });
+  await assert.rejects(consumeArchiveReader(reader), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 3);
+    for (const failure of error.errors) assert.strictEqual(failure, reason);
+    return true;
+  });
+  assert.equal(cancelCalls, 1); assert.equal(unlockCalls, 1); assert.equal(stream.locked, false);
 });
 
 test("privacy-filtered archive is copied before a held injected R2 write", async t => {
@@ -130,6 +160,42 @@ test("Fusion reserves every subset before placeholders and uses containment afte
   assert.throws(() => certificate.assemble([{ model: "fixture/a", content: "x".repeat(20001) }]), /certificate mismatch/);
   const tooLarge = { messages: [{ role: "user", content: "x".repeat(8 * 1024 * 1024 - 100000) }] };
   assert.throws(() => prepareFusionAccounting(tooLarge, certificate.config, certificate.route, () => {}), denied);
+});
+
+test("Fusion prepares a mutable admitted MiB dispatch body while its certificate stays immutable", async t => {
+  const { usageEnv, proxyKey } = await import("./usage-budget-fixture.mjs");
+  const { authenticateProxyKey } = await import("../proxy-auth.ts");
+  const { concreteOpenAiSelection, isSelectionFailure } = await import("../proxy-selection.ts");
+  const { prepareSelected } = await import("../proxy.ts");
+  const env = usageEnv([], { fixedCost: null, retainContent: false });
+  env.OPENAI_API_KEY = "synthetic-openai-key";
+  const req = new Request("https://router.example/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${proxyKey()}` } });
+  const identity = await authenticateProxyKey(req.headers, env, [{ id: "openai", tokenRef: "openai" }]);
+  assert.ok(!(identity instanceof Response));
+  const config = normalizeFusionConfig({ enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 });
+  const original = { model: "clawrouter/fusion", messages: [{ role: "user", content: "x".repeat(1024 * 1024) }], max_tokens: 32 };
+  const probe = concreteOpenAiSelection("/v1/chat/completions", { model: config.aggregatorModel, messages: [] }, env);
+  assert.equal(isSelectionFailure(probe), false);
+  const certificate = prepareFusionAccounting(original, config, { provider: probe.provider.id, endpoint: probe.endpoint.id, upstream: probe.pathParams.model, renames: [] }, () => {});
+  let posts = 0;
+  t.mock.method(globalThis, "fetch", () => { posts++; throw Error("preparation must not invoke a vendor"); });
+  for (const proposals of [buildFusionReservationProposals(certificate.config), [{ model: config.adviserModels[0], content: "fixture answer" }]]) {
+    const dispatch = certificate.assemble(proposals);
+    const selected = concreteOpenAiSelection("/v1/chat/completions", dispatch, env, undefined, probe.preparation);
+    assert.equal(isSelectionFailure(selected), false);
+    const prepared = await prepareSelected(req, env, selected, {}, identity, new Set(), false);
+    // Own and consume the actual prepared stream before any later assertion.
+    const body = typeof prepared.requestBody === "string" ? prepared.requestBody
+      : await new Blob((await consumeArchiveReader(prepared.requestBody.getReader())).parts).text();
+    assert.ok(prepared.requestBody instanceof ReadableStream, "the existing MiB media serializer was reached");
+    const sent = JSON.parse(body), message = sent.messages.find(value => value.role === "user");
+    assert.equal(message.content, original.messages[0].content); assert.equal(sent.service_tier, "default");
+    assert.notStrictEqual(dispatch.messages, certificate.input.messages);
+    assert.equal(Object.isFrozen(dispatch.messages[0]), false);
+    assert.equal(certificate.input.messages[0].content, original.messages[0].content);
+    assert.equal(Object.isFrozen(certificate.input.messages[0]), true);
+  }
+  assert.equal(posts, 0); assert.equal(Object.isFrozen(original.messages[0]), false);
 });
 
 test("Search seed fits its old sink but prospective growth denies before any owned effect", () => {
