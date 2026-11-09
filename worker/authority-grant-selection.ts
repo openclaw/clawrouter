@@ -107,6 +107,14 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
         if (row?.bytes != null) admitIdentityBytes(store.identity, row.bytes);
       }
     }
+    // Register the whole current pool before a legacy candidate can return early.
+    // Publication still waits for successful admission and final serialization.
+    for (const key of pool.keys) {
+      const pending = staged.get(key);
+      if (!pending || rows(sql.exec("SELECT 1 FROM upstream_grant_projections WHERE grant_key = ?", key)).length
+        || store.grantAttachment(key).revision !== pending.revision) continue;
+      store.afterAdmission!(() => sql.exec("INSERT OR IGNORE INTO upstream_grant_projections (grant_key, projection_json, legacy) VALUES (?, ?, ?)", key, pending.text, pending.legacy));
+    }
     const candidates: AdmissionPoolCandidate[] = [];
     for (const key of pool.keys) {
       let row = rows<{ projection_json: string | null; legacy: number }>(sql.exec("SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
@@ -114,7 +122,6 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
       if (!row && pending && store.grantAttachment(key).revision === pending.revision) {
         // The already-admitted private projection is not another original SQL read.
         usedStaged = true; row = { projection_json: pending.text, legacy: pending.legacy };
-        store.afterAdmission!(() => sql.exec("INSERT OR IGNORE INTO upstream_grant_projections (grant_key, projection_json, legacy) VALUES (?, ?, ?)", key, pending.text, pending.legacy));
       }
       if (!row || row.legacy) return fresh;
       if (search && row.projection_json) {

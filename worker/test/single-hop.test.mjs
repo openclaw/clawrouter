@@ -144,11 +144,17 @@ for (const [endpointId, mode] of [['responses', 'http'], ['chat_completions', 'h
 test('legacy projections use the old path until owner publication, without storing secrets', async t => {
   const f = await fixture();
   f.records.set(keyA, grant());
+  const streamReads = []; const get = f.env.POLICY_KV.get;
+  t.mock.method(f.env.POLICY_KV, 'get', async (...args) => { if (args[1] === "stream") streamReads.push(args[0]); return get(...args); });
   const first = await f.admit(); assert.equal(first.selection, undefined);
+  assert.deepEqual(streamReads, [keyA, 'oauth/tenants/fixture/anthropic']);
   assert.deepEqual(f.authority.sql.exec('SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?', keyA).map(row => ({ ...row })), [{ projection_json: null, legacy: 1 }]);
-  let streamReads = 0; const get = f.env.POLICY_KV.get;
-  t.mock.method(f.env.POLICY_KV, 'get', async (...args) => { if (args[1] === "stream") streamReads++; return get(...args); });
-  await f.admit(); assert.equal(streamReads, 0, 'import marker prevents repeating the legacy import');
+  assert.deepEqual(f.authority.sql.exec('SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?', 'oauth/tenants/fixture/anthropic').map(row => ({ ...row })), [{ projection_json: null, legacy: 0 }]);
+  streamReads.length = 0;
+  for (let n = 0; n < 2; n++) {
+    assert.equal((await f.admit()).selection, undefined);
+    assert.deepEqual(streamReads, [], 'legacy and later null markers prevent repeated source reads');
+  }
   t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }));
   f.calls.length = 0;
   const response = await f.request(); assert.equal(response.status, 200); await response.text(); await Promise.all(f.pending);
