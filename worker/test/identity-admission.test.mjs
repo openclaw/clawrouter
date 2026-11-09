@@ -424,7 +424,8 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
       const response = await stub.fetch(url, init);
       if (response.ok && (path === '/reserve' || path === '/dispatch')) {
         const acknowledgment = await response.clone().json();
-        if (acknowledgment.dispatched === true && !dispatchedIds.includes(body.reservationId)) dispatchedIds.push(body.reservationId);
+        const acknowledged = path === '/reserve' ? acknowledgment.allowed === true && acknowledgment.dispatched === true : acknowledgment.dispatched === true;
+        if (acknowledged) dispatchedIds.push(body.reservationId);
       }
       return response;
     } };
