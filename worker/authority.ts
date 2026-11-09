@@ -1,4 +1,4 @@
-import { admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
@@ -150,6 +150,7 @@ export class PolicyBindingIndexObject implements DurableObject {
           if (!bound?.identity) return this.initializePolicies([{ policyId: id, policy: normalizePolicyRecord(value, contentRetentionDefault(this.env)) }]);
           if (this.getPolicy(id, bound) || this.hasMeta("policies_global_initialized")) return;
           const policy = normalizePolicyRecord(value, contentRetentionDefault(this.env));
+          canonicalFreshIdentityRouting(policy.grantRouting);
           if (bound?.identity) this.stageIdentityRecord(bound, "access_policies", "policy_id", "policy_json", id, policy, "policies_global_initialized");
           else this.initializePolicies([{ policyId: id, policy }]);
         },
@@ -1339,7 +1340,7 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
   if (objectName === "policy-bindings" && ["/admission/resolve", "/grant-pools/resolve", "/grant-pools/select"].includes(path)) {
     const text = identityJson(body);
     return readIdentityResponse<T>(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal,
-      headers: { [identityHeader]: identityVersion } }), identityBudget ?? identitySourceBudget(), signal);
+      headers: { [identityHeader]: identityVersion } }), identityBudget ?? identitySourceBudget(), signal, undefined, path === "/admission/resolve" ? "identity" : "generic");
   }
   const collection = objectName === "policy-bindings" && isPolicyCollectionPath(path);
   if (collection) admitPolicyCall(path, body);

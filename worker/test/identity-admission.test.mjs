@@ -4,7 +4,7 @@ import test from 'node:test';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 import { sqliteFixture } from './sqlite-storage.mjs';
 const { admitIdentity, admitAdmission, identityJson, identityPlan, copyIdentity, identitySourceBudget, admitIdentityBytes,
-  parseIdentity, readIdentityKv, readIdentityResponse, identitySqlRows, identityFailure, isIdentityFailure, admittedEffectivePolicy } = await import('../identity-admission.ts');
+  parseIdentity, readIdentityKv, readIdentityRequest, readIdentityResponse, identitySqlRows, identityFailure, isIdentityFailure, admittedEffectivePolicy } = await import('../identity-admission.ts');
 const { parseAccessJson } = await import('../access-json.ts');
 const { authenticateProxyKey, admittedGrantSelection, proxyAdmission } = await import('../proxy-auth.ts');
 const { admissionFixture, admissionHeaders, admissionProvider } = await import('./admission-fixture.mjs');
@@ -235,4 +235,247 @@ test('canonical null credential remains a present malformed row, never a cold mi
   let reads = 0; f.beforeRead(() => { reads++; }); f.records.set('credentials/fixture', f.credential);
   await assert.rejects(f.call('/admission/resolve', { credentialId: 'fixture', secretSha256: f.credential.secretSha256, providers: [admissionProvider] }), error => !isIdentityFailure(error));
   assert.equal(reads, 0); assert.equal([...f.authority.sql.exec('SELECT credential_json FROM proxy_credentials')][0].credential_json, 'null');
+});
+
+for (const [position, wrap] of [
+  ['credential', raw => '{"credential":{"credential":' + raw + '}}'],
+  ['policy', raw => '{"policy":{"policy":' + raw + '}}'],
+  ['owner', raw => '{"owner":{"record":' + raw + '}}'],
+  ['connection', raw => '{"connections":[' + raw + ']}'],
+  ['grant reply', raw => '{"grant":' + raw + '}'],
+  ['selected grant', raw => '{"selection":{"selected":{"grant":' + raw + '}}}'],
+  ['snapshot grant', raw => '{"snapshots":{"p":{"candidates":[{"grant":' + raw + '}]}}}'],
+]) test(`embedded ${position}: record limit before JSON.parse under the complete-envelope limit`, async t => {
+  const raw = wrap('{"a":"' + 'x'.repeat(600000) + '","b":"' + 'y'.repeat(600000) + '"}');
+  assert.ok(Buffer.byteLength(raw) < 2097152);
+  const original = JSON.parse; let parses = 0;
+  t.mock.method(JSON, 'parse', (...args) => { parses++; return original(...args); });
+  await assert.rejects(readIdentityResponse(() => Promise.resolve(accessBytesResponse(raw, '')), undefined, undefined, undefined, position === 'grant reply' ? 'grant' : 'identity'), denied);
+  assert.equal(parses, 0);
+});
+
+test('embedded raw occurrences include discarded records and duplicate members; unknown names stay generic', async () => {
+  const read = (raw, envelope = 'identity') => readIdentityResponse(() => Promise.resolve(accessBytesResponse(raw, '')), undefined, undefined, undefined, envelope);
+  const duplicates = '{' + '"x":0,'.repeat(32768) + '"x":1}';
+  await assert.rejects(read('{"owner":{"record":' + duplicates + ',"record":{}}}'), denied);
+  const array = '[' + '0,'.repeat(16384) + '0]';
+  await assert.rejects(read('{"grant":{"values":' + array + '}}', 'grant'), denied);
+  await assert.rejects(read('{"grant":' + '['.repeat(17) + '0' + ']'.repeat(17) + '}', 'grant'), denied);
+  const unknown = await read('{"unknown":{"owner":{"record":{"a":"' + 'x'.repeat(600000) + '","b":"' + 'y'.repeat(600000) + '"}}}}');
+  assert.equal(unknown.unknown.owner.record.a.length, 600000);
+  const raw = '{"x":"' + 'x'.repeat(1048568) + '"}';
+  assert.equal(Buffer.byteLength(raw), 1048576);
+  assert.equal((await read('{"grant":' + raw + '}', 'grant')).grant.x.length, 1048568);
+  await assert.rejects(read('{"grant":' + raw.slice(0, -1) + ' } }', 'grant'), denied);
+});
+
+test('closed envelope selection guards materialization records, not similarly named unknown fields', async () => {
+  const record = '{"a":"' + 'x'.repeat(600000) + '","b":"' + 'y'.repeat(600000) + '"}';
+  const read = (raw, envelope) => readIdentityResponse(() => Promise.resolve(accessBytesResponse(raw, '')), undefined, undefined, undefined, envelope);
+  assert.equal((await read('{"grant":' + record + '}', 'identity')).grant.a.length, 600000);
+  assert.equal((await read('{"owner":{"record":' + record + '}}', 'generic')).owner.record.b.length, 600000);
+  for (const key of ['grant', 'legacy']) {
+    const request = new Request('https://fixture.example/materialize', { method: 'POST', headers: { 'x-clawrouter-identity-admission': 'v1' },
+      body: accessBytesResponse('{"' + key + '":' + record + '}', '').body, duplex: 'half' });
+    await assert.rejects(readIdentityRequest(request, true), denied);
+    assert.equal(request.body.locked, false);
+  }
+});
+
+test('embedded ORIGINAL wire offsets preserve BOM/replacement/split UTF8 without re-encoding as source bytes', async () => {
+  const prefix = Buffer.from('\ufeff{"unknown":"😀","grant":{"x":"'), suffix = Buffer.from('"}}');
+  const bytes = Buffer.concat([prefix, Buffer.alloc(1048568, 0x80), suffix]);
+  const value = await readIdentityResponse(() => Promise.resolve(accessBytesResponse(bytes, '')), undefined, undefined, undefined, 'grant');
+  assert.equal(value.unknown, '😀'); assert.equal(value.grant.x.length, 1048568);
+  assert.equal(value.grant.x.charCodeAt(0), 0xfffd);
+  // Raw source admission is distinct from prospective reserialization/copy.
+  assert.throws(() => admitIdentity(value.grant, 'record'), denied);
+});
+
+test('admission colo embedded oversize is terminal; bodyless and empty-byte malformed entries are ordinary misses', async t => {
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'caches');
+  t.after(() => { if (prior) Object.defineProperty(globalThis, 'caches', prior); else delete globalThis.caches; });
+  const config = { maxAgeMs: 60000, freshMs: 10000 }; let mode = 'null';
+  const value = { ...empty(), owner: { email: 'fixture@example.invalid', record: { a: 'x'.repeat(600000), b: 'y'.repeat(600000) } } };
+  const raw = JSON.stringify({ version: 1, fetchedAt: Date.now(), value }); assert.ok(Buffer.byteLength(raw) < 2097152);
+  Object.defineProperty(globalThis, 'caches', { configurable: true, value: { default: { async match() {
+    return mode === 'null' ? new Response(null) : accessBytesResponse(mode === 'empty' ? '' : raw, '');
+  } } } });
+  assert.equal(await coloGet('admission', 'fixture', config), undefined);
+  mode = 'empty'; assert.equal(await coloGet('admission', 'fixture', config), undefined);
+  mode = 'oversize'; await assert.rejects(coloGet('admission', 'fixture', config), denied);
+  assert.throws(() => admitAdmission(value), denied);
+});
+
+
+test('FINAL combined refresh denial: admitted new principal, tiers and policy leave EVERY old published field intact', async () => {
+  const f = await admissionFixture(), provider = providerById('anthropic'), endpoint = provider.endpoints.find(e => e.id === 'messages');
+  const auth = await authenticateProxyKey(new Headers(admissionHeaders), f.env, [admissionProvider]);
+  // Labelled request-owned unknown fields. Each old identity and refresh reply
+  // fits independently; only their actual final replacement exceeds 2 MiB.
+  auth.retainedFixtureA = 'a'.repeat(900000); auth.retainedFixtureB = 'b'.repeat(900000); admitIdentity(auth);
+  const oldFields = { ...auth }, oldAdmission = proxyAdmission(auth);
+  const policy = { ...f.policy, metadata: 'p'.repeat(400000) };
+  const credential = { ...f.credential, principalId: 'new-owner@example.com', serviceTiers: ['default'] };
+  f.authority.sql.exec('UPDATE access_policies SET policy_json = ? WHERE policy_id = ?', JSON.stringify(policy), 'fixture');
+  f.authority.sql.exec('UPDATE proxy_credentials SET credential_json = ? WHERE credential_id = ?', JSON.stringify(credential), 'fixture');
+  f.authority.sql.exec('INSERT INTO access_users (email,user_json) VALUES (?,?)', credential.principalId, '{"enabled":true}');
+  const input = { credentialId: 'fixture', secretSha256: credential.secretSha256, providers: [admissionProvider],
+    selection: { providerId: provider.id, endpointId: endpoint.id, mode: 'http', model: 'claude-sonnet-5', catalogModelId: 'anthropic/claude-sonnet-5', capability: 'llm.messages', excludedKeys: ['oauth/fixture/excluded'] } };
+  const refresh = await f.call('/admission/resolve', input); admitAdmission(refresh);
+  const next = { serviceTiers: refresh.credential.credential.serviceTiers, principalId: refresh.credential.credential.principalId,
+    policyId: refresh.policy.policyId, policy: admittedEffectivePolicy(refresh.policy.policyId, refresh.policy.policy, refresh.owner?.record.budgetOverrides) };
+  admitIdentity(next); assert.notEqual(next.principalId, oldFields.principalId); assert.notDeepEqual(next.serviceTiers, oldFields.serviceTiers);
+  assert.equal(next.policy.metadata, policy.metadata);
+  assert.throws(() => admitIdentity({ ...auth, ...next }), denied);
+  await assert.rejects(admittedGrantSelection(auth, f.env, { provider, endpoint, mode: 'http', model: 'claude-sonnet-5' }, new Set(input.selection.excludedKeys)), denied);
+  assert.deepEqual(Object.keys(auth), Object.keys(oldFields));
+  for (const key of Object.keys(oldFields)) assert.equal(auth[key], oldFields[key], 'unpublished field: ' + key);
+  assert.equal(proxyAdmission(auth), oldAdmission);
+  auth.retainedFixtureB = ''; // Same canonical refresh now fits the final representation.
+  await admittedGrantSelection(auth, f.env, { provider, endpoint, mode: 'http', model: 'claude-sonnet-5' }, new Set(input.selection.excludedKeys));
+  assert.equal(auth.principalId, credential.principalId); assert.deepEqual(auth.serviceTiers, credential.serviceTiers);
+  assert.equal(auth.policy.metadata, policy.metadata); assert.notEqual(proxyAdmission(auth), oldAdmission);
+});
+
+const protoRouting = mode => JSON.parse('{' + [
+  ...(mode !== 'shared' ? ['"eligibleGrants":{"__proto__":["token"],"anthropic":["anthropic"]}'] : []),
+  ...(mode !== 'eligible' ? ['"sharedGrants":{"__proto__":' + JSON.stringify(Array.from({ length: 32 }, (_, i) => 'oauth/shared/k' + i)) + ',"anthropic":["oauth/shared/later"]}'] : []),
+].join(',') + '}');
+for (const mode of ['eligible', 'shared', 'both']) test('fresh routing dictionary canonicalization at actual cold SQL admission: ' + mode, async () => {
+  const { normalizePolicyRecord } = await import('../authority-policy.ts');
+  const f = await admissionFixture(), raw = { ...f.policy, grantRouting: protoRouting(mode) }, before = JSON.stringify(raw);
+  const expected = JSON.stringify(normalizePolicyRecord(raw, false));
+  f.authority.sql.exec('DELETE FROM access_policies');
+  f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', 'policies_global_initialized');
+  f.records.set('policies/fixture', raw);
+  const admission = await f.call('/admission/resolve', { credentialId: 'fixture', secretSha256: f.credential.secretSha256, providers: [admissionProvider] });
+  assert.equal(JSON.stringify(admission.policy.policy), expected);
+  assert.equal([...f.authority.sql.exec('SELECT policy_json FROM access_policies WHERE policy_id = ?', 'fixture')][0].policy_json, expected);
+  assert.equal(JSON.stringify(raw), before); assert.equal(Object.hasOwn(raw.grantRouting[mode === 'shared' ? 'sharedGrants' : 'eligibleGrants'], '__proto__'), true);
+  if (mode !== 'eligible') assert.deepEqual(admission.policy.policy.grantRouting.sharedGrants.anthropic, [], 'prototype references consumed all 32 slots before the later own provider');
+  if (mode !== 'shared') assert.deepEqual(admission.policy.policy.grantRouting.eligibleGrants.anthropic, ['anthropic']);
+});
+
+test('cold routing canonical winner and prototype-only omission preserve normalizer bytes; generic prototypes remain rejected', async () => {
+  const { normalizePolicyRecord } = await import('../authority-policy.ts');
+  const f = await admissionFixture(), raw = { ...f.policy, grantRouting: JSON.parse('{"sharedGrants":{"__proto__":["oauth/shared/token"]}}') }, before = JSON.stringify(raw);
+  const expected = normalizePolicyRecord(raw, false); assert.equal(Object.hasOwn(expected.grantRouting, 'sharedGrants'), false);
+  f.authority.sql.exec('DELETE FROM access_policies'); f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', 'policies_global_initialized');
+  f.records.set('policies/fixture', raw);
+  let admission = await f.call('/admission/resolve', { credentialId: 'fixture', secretSha256: f.credential.secretSha256, providers: [admissionProvider] });
+  assert.equal(JSON.stringify(admission.policy.policy), JSON.stringify(expected)); assert.equal(JSON.stringify(raw), before);
+  f.authority.sql.exec('DELETE FROM access_policies'); f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', 'policies_global_initialized');
+  const winner = { ...f.policy, unknown: { kept: true } }, winnerBytes = JSON.stringify(winner);
+  f.beforeRead(key => { assert.equal(key, 'policies/fixture'); f.authority.sql.exec('INSERT INTO access_policies (policy_id,policy_json) VALUES (?,?)', 'fixture', winnerBytes); });
+  admission = await f.call('/admission/resolve', { credentialId: 'fixture', secretSha256: f.credential.secretSha256, providers: [admissionProvider] });
+  assert.deepEqual(admission.policy.policy, winner); assert.equal(JSON.stringify(raw), before);
+  assert.equal([...f.authority.sql.exec('SELECT policy_json FROM access_policies WHERE policy_id = ?', 'fixture')][0].policy_json, winnerBytes);
+  for (const prototype of [[], { unexpected: true }]) {
+    const borrowed = Object.setPrototypeOf({ own: 'kept' }, prototype);
+    assert.throws(() => admitIdentity({ grantRouting: { eligibleGrants: borrowed } }), denied);
+    assert.equal(Object.getPrototypeOf(borrowed), prototype); assert.equal(borrowed.own, 'kept');
+  }
+});
+
+for (const copilot of [false, true]) test('actual selection double-normalization preserves fresh routing output: ' + (copilot ? 'Copilot' : 'generic'), async () => {
+  const { resolveGrantSelection, selectCopilotPublicGrant } = await import('../grant-selection.ts');
+  const provider = copilot ? 'github-copilot' : 'anthropic', key = 'oauth/fixture/token';
+  const grant = copilot ? { provider, enabled: true, kind: 'oauth', credentialStore: 'durable_object', credentialStatus: 'reauth_required', credentialGeneration: 3, credentialLineage: 'original-lineage-fixture' }
+    : { provider, enabled: true, kind: 'api_key', credential: 'synthetic-token' };
+  const routing = protoRouting('both'); routing.eligibleGrants[provider] = ['token'];
+  const before = JSON.stringify(routing), calls = [];
+  const env = { ACCESS_CONTROL: { idFromName: name => name, get: () => ({ async fetch(url, init) {
+    const path = new URL(url).pathname, input = JSON.parse(init.body); calls.push(path);
+    if (path === '/grant-pools/select') { assert.deepEqual(input.candidates.map(row => row.key), [key]); return accessBytesResponse(JSON.stringify({ selectedKey: key }), ''); }
+    assert.equal(path, '/grant-pools/resolve'); return accessBytesResponse(JSON.stringify({ keys: [key], states: {} }), '');
+  } }) }, POLICY_KV: { async get(requested, type) { assert.equal(type, 'stream'); return requested === key ? accessBytesResponse(JSON.stringify(grant), '').body : null; } } };
+  const selected = copilot ? await selectCopilotPublicGrant('fixture', { grantRouting: routing }, env, 'token')
+    : (await resolveGrantSelection(provider, 'fixture', 'default', 'token', env, new Set(), routing)).selected;
+  assert.equal(selected.key, key); assert.deepEqual(selected.grant, grant); assert.equal(JSON.stringify(routing), before);
+  assert.deepEqual(calls, ['/grant-pools/resolve', '/grant-pools/select']);
+});
+
+
+for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alternate identity admission: ' + failure, async t => {
+  const { fixture } = await import('./http-continuation-fixture.mjs');
+  const { default: handler } = await import('../index.ts');
+  const f = await fixture(t, true, { limit: 1000000, fixedCost: 7 });
+  // This Node namespace CONSTRUCTS its own Request/Response bodies. Make those
+  // selected synthetic producers explicit bytes; actual Workerd bodies stay original.
+  const kvGet = f.env.POLICY_KV.get.bind(f.env.POLICY_KV);
+  f.env.POLICY_KV.get = async (key, type) => {
+    const value = await kvGet(key, type);
+    return type === 'stream' && value !== null ? accessBytesResponse(JSON.stringify(value), '').body : value;
+  };
+  const get = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+  f.env.ACCESS_CONTROL.get = name => {
+    const stub = get(name);
+    return { ...stub, async fetch(url, init) {
+      if (!new Headers(init?.headers).has('x-clawrouter-identity-admission')) return stub.fetch(url, init);
+      const response = await stub.fetch(url, { ...init, body: accessBytesResponse(init.body, '').body, duplex: 'half' });
+      return accessBytesResponse(await response.text(), '', { status: response.status, headers: response.headers });
+    } };
+  };
+  const namespace = f.env.BUDGET_LEDGER, budgetGet = namespace.get.bind(namespace), originalIds = [], dispatchedIds = [], settledIds = [];
+  namespace.get = name => {
+    const stub = budgetGet(name);
+    return { ...stub, async fetch(url, init) {
+      const path = new URL(url).pathname, body = JSON.parse(init.body);
+      if (path === '/reserve') originalIds.push(body.reservationId);
+      if (path === '/dispatch') dispatchedIds.push(body.reservationId);
+      if (path === '/settle') settledIds.push(body.reservationId);
+      return stub.fetch(url, init);
+    } };
+  };
+  const sql = f.env.ACCESS_CONTROL.objects.get('policy-bindings').db;
+  let alternateCalls = 0, response, consume;
+  const requestId = 'identity-alternate-' + failure;
+  let hasPrimary = false, primary; const roots = [];
+  const track = actual => { roots.push(Promise.resolve(actual).then(() => ({ failed: false }), error => ({ failed: true, error }))); return actual; };
+  const body = () => consume ??= track(response.text());
+  t.after(async () => {
+    const errors = [];
+    if (response) try { await body(); } catch (error) { errors.push(error); }
+    let index = 0;
+    while (index < roots.length) { const batch = roots.slice(index); index = roots.length; for (const outcome of await Promise.all(batch)) if (outcome.failed) errors.push(outcome.error); }
+    if (errors.length) throw new AggregateError(hasPrimary ? [primary, ...errors] : errors, 'primary and independent public fixture roots');
+  });
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    if (new URL(request.url).pathname === '/admission/resolve' && (await request.clone().json()).selection?.excludedKeys?.length) {
+      alternateCalls++;
+      if (failure === 'ordinary-selection') throw Error('synthetic ordinary selection failure');
+    }
+  };
+  f.response = request => {
+    assert.equal(originalIds.length, 2);
+    if (failure === 'record-limit') {
+      const raw = JSON.stringify({ ...f.policy, unknownA: 'a'.repeat(600000), unknownB: 'b'.repeat(600000) });
+      assert.ok(Buffer.byteLength(raw) > 1048576 && Buffer.byteLength(raw) < 2097152);
+      // Real canonical source changes AFTER the one original provider request.
+      sql.prepare('UPDATE access_policies SET policy_json = ? WHERE policy_id = ?').run(raw, 'fixture');
+    }
+    return Response.json({ error: 'original nonbillable rejection' }, { status: 429 });
+  };
+  try {
+    response = await track(handler.fetch(new Request('https://router.example/v1/responses', { method: 'POST',
+      headers: { authorization: 'Bearer clawrouter-live-fixture-fixture-secret', 'content-type': 'application/json', 'x-request-id': requestId },
+      body: JSON.stringify({ model: 'openai/gpt-6-astra', input: 'fixture' }),
+    }), f.env, { waitUntil: track }));
+    const text = await body(); let index = 0;
+    while (index < roots.length) { const batch = roots.slice(index); index = roots.length; for (const outcome of await Promise.all(batch)) if (outcome.failed) throw outcome.error; }
+    assert.equal(response.status, failure === 'record-limit' ? 503 : 429);
+    const value = JSON.parse(text);
+    if (failure === 'record-limit') assert.equal(value.error.code, 'identity_admission_unavailable');
+    else assert.deepEqual(value, { error: 'original nonbillable rejection' });
+    assert.equal(alternateCalls, 1); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    const event = f.events[0]; assert.equal(event.actual_cost_micros, 0); assert.equal(event.status, failure === 'record-limit' ? 'provider_error' : 'client_error');
+    assert.equal(event.request_id, response.headers.get('x-clawrouter-request-id'));
+    assert.equal(event.request_id, requestId);
+    assert.ok(event.request_id); assert.equal(new Set(originalIds).size, 2);
+    assert.deepEqual([...dispatchedIds].sort(), [...originalIds].sort()); assert.deepEqual([...settledIds].sort(), [...originalIds].sort());
+    const rows = ['default:fixture', 'provider:openai'].flatMap(owner => budgetGet(owner).reservations());
+    assert.deepEqual(rows.map(row => row.reservation_id).sort(), [...originalIds].sort());
+    for (const row of rows) { assert.equal(row.settled, 1); assert.equal(row.dispatch_started, 1); assert.equal(row.reserved_micros, 0); }
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 });

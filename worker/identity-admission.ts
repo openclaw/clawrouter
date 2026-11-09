@@ -1,8 +1,8 @@
-import { identityJsonProfiles, isAccessDenial, parseAccessJson, type UserSourceCounts } from "./access-json.ts";
+import { identityJsonProfiles, isAccessDenial, parseAccessJson, type UserSourceCounts, type IdentityEnvelope } from "./access-json.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { budgetFields, effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { HttpError } from "./utils.ts";
-import type { AccessPolicy, BudgetOverride } from "./types";
+import type { AccessPolicy, BudgetOverride, GrantRoutingPolicy } from "./types";
 import type { AdmissionResult } from "./authority-admission.ts";
 
 export const identityHeader = "x-clawrouter-identity-admission";
@@ -39,9 +39,9 @@ export function admitIdentityText(text: string, budget: IdentitySourceBudget, pr
   if (typeof text !== "string" || text.length > identityJsonProfiles[profile].wire || text.length > 2097152 - budget.text) fail("limit");
   budget.text += text.length;
 }
-export function parseIdentity(text: string, budget: IdentitySourceBudget, profile: IdentityProfile = "record"): unknown {
+export function parseIdentity(text: string, budget: IdentitySourceBudget, profile: IdentityProfile = "record", envelope?: IdentityEnvelope, wire?: (start: number, end: number) => number): unknown {
   admitIdentityText(text, budget, profile);
-  try { return parseAccessJson(text, profile === "record" ? "identity_record" : "identity_complete", budget); }
+  try { return parseAccessJson(text, profile === "record" ? "identity_record" : "identity_complete", budget, envelope, wire); }
   catch (error) { if (isAccessDenial(error)) fail("limit"); throw error; } // Ordinary malformed JSON retains its existing caller mapping.
 }
 
@@ -135,6 +135,9 @@ export function admitIdentityCount(count: number, maximum: number): void {
 // ordinary JSON; it never inherits these actual admission-container quotas.
 export function admitAdmission(value: AdmissionResult): void {
   admitIdentity(value);
+  for (const record of [value.credential?.credential, value.policy?.policy, value.owner?.record, value.selection?.selected?.grant]) if (record != null) admitIdentity(record, "record");
+  for (const connection of value.connections) admitIdentity(connection, "record");
+  for (const key in value.snapshots) if (Object.hasOwn(value.snapshots, key)) for (const candidate of value.snapshots![key].candidates) if (candidate.grant != null) admitIdentity(candidate.grant, "record");
   admitIdentityCount(value.connections.length, 128);
   let pools = 0, candidates = 0;
   for (const key in value.pools) if (Object.hasOwn(value.pools, key)) {
@@ -150,6 +153,14 @@ export function admitAdmission(value: AdmissionResult): void {
   }
   admitIdentityCount(candidates, 1024);
 }
+// Call ONLY with the fresh return of the existing normalizer. Its __proto__
+// assignment consumed the original quota but emitted no own JSON property.
+export function canonicalFreshIdentityRouting(routing: GrantRoutingPolicy): GrantRoutingPolicy {
+  if (Array.isArray(Object.getPrototypeOf(routing.eligibleGrants))) Object.setPrototypeOf(routing.eligibleGrants, Object.prototype);
+  if (Object.hasOwn(routing, "sharedGrants") && Array.isArray(Object.getPrototypeOf(routing.sharedGrants!))) Object.setPrototypeOf(routing.sharedGrants!, Object.prototype);
+  return routing;
+}
+
 export function admittedEffectivePolicy(id: string, policy: AccessPolicy, overrides?: Record<string, BudgetOverride>): AccessPolicy {
   admitIdentity(policy, "record");
   const override = policy.budgetScope === "principal" ? overrides?.[id] : undefined;
@@ -182,6 +193,38 @@ function wait<T>(actual: Promise<T>, signal?: AbortSignal): Promise<T> {
     actual.then(value => { signal.removeEventListener("abort", abort); if (signal.aborted) abort(); else resolve(value); },
       () => { signal.removeEventListener("abort", abort); reject(identityFailure("transport")); });
   });
+}
+
+// Original-wire offsets for embedded records, including replacement-decoded
+// UTF8. Each retained block is admitted before its <=16 KiB copy; the complete
+// source ceiling bounds their sum. Discard with the reader after parsing.
+class IdentityWire {
+  private blocks: Uint8Array[] = [];
+  private block = 0; private offset = 0; private bytes = 0; private units = 0;
+  add(bytes: Uint8Array): void { if (bytes.byteLength) this.blocks.push(bytes.slice()); }
+  private peek(ahead = 0): number | undefined {
+    let block = this.block, offset = this.offset + ahead;
+    while (block < this.blocks.length && offset >= this.blocks[block].length) offset -= this.blocks[block++].length;
+    return this.blocks[block]?.[offset];
+  }
+  private advance(target: number): number {
+    while (this.units < target) {
+      const first = this.peek(); if (first === undefined) fail("protocol");
+      let size = 1, expected = first >= 0xc2 && first <= 0xdf ? 2 : first >= 0xe0 && first <= 0xef ? 3 : first >= 0xf0 && first <= 0xf4 ? 4 : 1;
+      for (; size < expected; size++) {
+        const next = this.peek(size), low = size === 1 && first === 0xe0 ? 0xa0 : size === 1 && first === 0xf0 ? 0x90 : 0x80;
+        const high = size === 1 && first === 0xed ? 0x9f : size === 1 && first === 0xf4 ? 0x8f : 0xbf;
+        if (next === undefined || next < low || next > high) break;
+      }
+      const bom = this.bytes === 0 && size === 3 && first === 0xef && this.peek(1) === 0xbb && this.peek(2) === 0xbf;
+      this.units += bom ? 0 : size === expected && expected === 4 ? 2 : 1;
+      this.bytes += size; this.offset += size;
+      while (this.block < this.blocks.length && this.offset >= this.blocks[this.block].length) this.offset -= this.blocks[this.block++].length;
+    }
+    if (this.units !== target) fail("protocol");
+    return this.bytes;
+  }
+  span = (start: number, end: number): number => { const from = this.advance(start); return this.advance(end) - from; };
 }
 
 // Original body only. The default reader is a cancellation owner, never a read
@@ -225,13 +268,13 @@ class IdentitySource {
     })().then(resolve, () => reject(identityFailure("cleanup")));
     return this.ending;
   }
-  async text(budget: IdentitySourceBudget, signal?: AbortSignal, profile: IdentityProfile = "complete"): Promise<string> {
+  async text(budget: IdentitySourceBudget, signal?: AbortSignal, profile: IdentityProfile = "complete", wire?: IdentityWire): Promise<string> {
     let eof = false, reason: Kind = "protocol";
     try {
       if (!this.body) fail(reason);
       reason = "transport"; if (!this.byob || !this.input) fail(reason);
       const maximum = identityJsonProfiles[profile].wire;
-      let backing: Uint8Array<ArrayBuffer> = new Uint8Array(16384), text = "", reads = 0, wire = 0;
+      let backing: Uint8Array<ArrayBuffer> = new Uint8Array(16384), text = "", reads = 0, wireBytes = 0;
       const decoder = new TextDecoder();
       const append = (part: string) => { if (part.length > maximum - text.length || part.length > 2097152 - budget.text - text.length) fail("limit"); text += part; };
       for (;;) {
@@ -242,8 +285,9 @@ class IdentitySource {
         reason = "limit";
         if (part.value) {
           if (!(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > 16384) fail(reason);
-          if ((wire += part.value.byteLength) > maximum) fail("limit");
+          if ((wireBytes += part.value.byteLength) > maximum) fail("limit");
           admitIdentityBytes(budget, part.value.byteLength, maximum);
+          wire?.add(part.value);
           append(decoder.decode(part.value, { stream: !part.done }));
           backing = new Uint8Array(part.value.buffer);
         }
@@ -276,20 +320,22 @@ export async function readIdentityRequest(request: Request, validPath: boolean):
     if (!validPath || request.method !== "POST" || request.headers.get(identityHeader) !== identityVersion) fail("protocol");
     admitHeaders(request.headers);
     const budget = identitySourceBudget();
-    return parseIdentity(await owner.text(budget, request.signal), budget, "complete");
+    const wire = new IdentityWire();
+    return parseIdentity(await owner.text(budget, request.signal, "complete", wire), budget, "complete", new URL(request.url).pathname === "/materialize" ? "grant" : "generic", wire.span);
   } finally { await owner.retire("cancel"); }
 }
 // Own the ORIGINAL response before status/header rejection. Late fetch, FIRST
 // cancel (including rejection), pending read and unlock all remain joined.
 export async function readIdentityResponse<T>(start: () => Promise<Response>, budget = identitySourceBudget(), signal?: AbortSignal,
-  businessError?: (status: number, value: unknown) => never): Promise<T> {
+  businessError?: (status: number, value: unknown) => never, envelope: IdentityEnvelope = "identity"): Promise<T> {
   if (signal?.aborted) fail("transport");
   let owner: IdentitySource | undefined, response: Response | undefined, result: unknown;
   const actual = identityActual(start).then(value => { response = value; owner = new IdentitySource(value.body); });
   void actual.catch(() => undefined);
   try {
     await wait(actual, signal); admitHeaders(response!.headers);
-    result = parseIdentity(await owner!.text(budget, signal), budget, "complete");
+    const wire = new IdentityWire();
+    result = parseIdentity(await owner!.text(budget, signal, "complete", wire), budget, "complete", envelope, wire.span);
     if (!response!.ok) {
       const error = (result as { error?: { code?: unknown; message?: unknown } })?.error;
       if (response!.status === 503 && error?.code === "identity_admission_unavailable") {

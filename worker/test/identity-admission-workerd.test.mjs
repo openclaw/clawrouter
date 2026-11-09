@@ -14,6 +14,7 @@ import {PolicyBindingIndexObject as Base,authorityCall} from './worker/authority
 import {authenticateProxyKey,admittedGrantSelection,proxyAdmission} from './worker/proxy-auth.ts';
 import {readIdentityResponse,isIdentityFailure} from './worker/identity-admission.ts';
 import {providerById} from './worker/providers.ts';
+import {normalizePolicyRecord} from './worker/authority-policy.ts';
 import {clearHotCaches} from './worker/hot-cache.ts';
 import {sha256Hex} from './worker/utils.ts';
 const faultStates=new Map();
@@ -38,7 +39,11 @@ async function probe(body){
  try{reader=body.getReader({mode:'byob'});let backing=new Uint8Array(16384);
   for(;;){const part=await reader.read(backing);if(part.value){check(part.value.buffer.byteLength<=16384,'whole backing');backing=new Uint8Array(part.value.buffer);}if(part.done){eof=true;break;}}
  }catch(error){hasPrimary=true;primary=error;}
- finally{if(reader){if(!eof)try{await reader.cancel();}catch(error){failures.push(error);}try{reader.releaseLock();}catch(error){failures.push(error);}}}
+ finally{
+  if(reader){if(!eof)try{await reader.cancel();}catch(error){failures.push(error);}try{reader.releaseLock();}catch(error){failures.push(error);}}
+  else if(!body.locked){try{await body.cancel();}catch(error){failures.push(error);}}
+  else failures.push(Error('capability probe: original lock owner unknown; disposal is not retirement'));
+ }
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'probe cleanup');if(hasPrimary)throw primary;
  return record;
 }
@@ -64,6 +69,18 @@ export class PolicyBindingIndexObject extends Base{
 }
 export default {async fetch(request,bindings,context){
  const path=new URL(request.url).pathname;
+ if(path==='/probe-reject'){
+  await request.text();const outcomes=[];
+  for(const reason of [undefined,Error('synthetic shared probe reason')]){
+   let cancels=0;const body=new ReadableStream({cancel(){cancels++;throw reason;}});
+   // Deliberately unsupported fixture producer; the SAME capability helper must
+   // join its ORIGINAL unlocked body's cancellation, including identical reasons.
+   body.getReader=()=>{throw reason;};let failed=false;
+   try{await probe(body);}catch(error){failed=true;check(error instanceof AggregateError&&error.errors.length===2,'both probe outcomes');check(Object.is(error.errors[0],reason)&&Object.is(error.errors[1],reason),'original outcome identities');}
+   check(failed&&cancels===1&&!body.locked,'probe FIRST cleanup joined');outcomes.push({failed,cancels,unlocked:!body.locked});
+  }
+  return Response.json({label:'synthetic unsupported BYOB producer; not a healthy platform capability',outcomes});
+ }
  if(path==='/fault-state')return Response.json(faultStates.get('current')??null);
  if(path==='/fault'){
   await request.text();
@@ -129,6 +146,13 @@ export default {async fetch(request,bindings,context){
   if(mode==='cold'){
    await sql('DELETE FROM proxy_credentials');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','credentials_global_initialized');await putKv('credentials/'+id,credential);
   }
+  let coldRoutingBytes;
+  if(mode==='cold-routing'){
+   record.grantRouting=JSON.parse('{"eligibleGrants":{"__proto__":["token"]},"sharedGrants":{"__proto__":'+JSON.stringify(Array.from({length:32},(_,i)=>'oauth/shared/key'+i))+',"anthropic":["oauth/shared/later"]}}');
+   const raw=JSON.stringify(record);coldRoutingBytes=JSON.stringify(normalizePolicyRecord(record,false));
+   check(JSON.stringify(record)===raw,'normalizer leaves RAW policy unchanged');
+   await sql('DELETE FROM access_policies');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','policies_global_initialized');await putKv('policies/'+id,raw);
+  }
   if(mode==='sql-limit')await sql('UPDATE proxy_credentials SET credential_json = ? WHERE credential_id = ?',' '.repeat(1048576)+'{}',id);
   if(mode==='kv-limit'){
    await sql('DELETE FROM proxy_credentials');await sql('DELETE FROM policy_binding_meta WHERE meta_key = ?','credentials_global_initialized');await putKv('credentials/'+id,' '.repeat(1048576)+'{}');
@@ -142,6 +166,11 @@ export default {async fetch(request,bindings,context){
   const firstTrace=await call('/fixture/trace',{});
   if(!limited){
    const admission=await authorityCall(env,'/admission/resolve',{credentialId:id,secretSha256:credential.secretSha256,providers:[{id:'anthropic',tokenRef:'anthropic'}]});
+   if(mode==='cold-routing'){
+    const storedPolicy=await sql('SELECT policy_json FROM access_policies WHERE policy_id = ?',id);
+    check(storedPolicy[0].policy_json===coldRoutingBytes&&JSON.stringify(admission.policy.policy)===coldRoutingBytes,'actual cold routing canonical JSON bytes');
+    check(admission.policy.policy.grantRouting.sharedGrants.anthropic.length===0,'raw prototype shared quota consumed');
+   }
    check(admission.owner.record.assignmentRevision===legacy&&legacy.length>65536,'actual complete legacy reply');
    check(Object.hasOwn(admission.owner.record.unknown,'__proto__')&&admission.owner.record.unknown.policyId.length===1025,'actual unknown SQL fields');
    const stored=await sql('SELECT user_json FROM access_users WHERE email = ?','owner@example.invalid');check(stored[0].user_json===canonicalUser,'canonical bytes unchanged');
@@ -207,17 +236,31 @@ test('identity profile: ORIGINAL KV/DO/Cache bodies then real public SQLite/KV/c
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     directory = await mkdtemp(join(tmpdir(), 'identity-profile-workerd-'));
     runtime = await startWorkerdFixture(directory, router, upstream.replace('PORT', String(server.address().port)), { hotCache: true, preventEviction: true });
-    for (const mode of ['healthy', 'cold', 'sql-limit', 'kv-limit', 'colo', 'refresh']) {
+    for (const mode of ['healthy', 'cold', 'cold-routing', 'sql-limit', 'kv-limit', 'colo', 'refresh']) {
       const result = await send(mode); assert.equal(result.closed, true);
       for (const capability of [result.kvCapability, result.requestCapability, ...(result.coloCapability ? [result.coloCapability] : [])]) {
         assert.equal(capability.byob, true); assert.equal(capability.eof, true); assert.equal(capability.unlocked, true); assert.equal(capability.locked, false); assert.ok(capability.maxBacking <= 16384);
       }
       assert.equal(result.status, mode.endsWith('limit') ? 503 : 200);
-      for (const row of result.traces.reply) { assert.equal(row.byob, true); assert.equal(row.unlocked, true); assert.ok(row.maxBacking <= 16384); }
-      if (mode === 'cold') assert.ok(result.traces.kv.some(row => row.byob && row.eof && row.unlocked));
+      const denied = mode.endsWith('limit');
+      if (!denied) {
+        assert.ok(result.sql.selectedRequests.length > 0, 'actual marked public request');
+        assert.ok(result.traces.reply.length > 0, 'actual marked public reply');
+        assert.ok(result.traces.providerPosts > 0, 'actual healthy provider POST');
+        for (const row of [...result.sql.selectedRequests, ...result.traces.reply]) {
+          assert.equal(row.byob, true); assert.ok(row.reads > 0); assert.equal(row.eof, true);
+          assert.equal(row.unlocked, true); assert.equal(row.locked, false); assert.ok(row.maxBacking > 0 && row.maxBacking <= 16384);
+        }
+      } else {
+        assert.equal(result.traces.providerPosts, 0);
+        for (const row of result.traces.reply) { assert.equal(row.byob, true); assert.equal(row.unlocked, true); assert.ok(row.maxBacking <= 16384); }
+      }
+      if (mode === 'cold' || mode === 'cold-routing') assert.ok(result.traces.kv.some(row => row.byob && row.eof && row.unlocked));
       if (mode === 'colo') assert.equal(result.adopted, true);
       if (mode === 'refresh') assert.equal(result.refreshUnchanged, true);
     }
+    const unsupported = await send('probe-reject');
+    assert.deepEqual(unsupported.outcomes, [{ failed: true, cancels: 1, unlocked: true }, { failed: true, cancels: 1, unlocked: true }]);
     let settled = false; const fault = send('fault'); const outcome = fault.then(value => { settled = true; return { failed: false, value }; }, error => { settled = true; return { failed: true, error }; });
     const wait = async predicate => {
       for (let attempts = 0; attempts < 500; attempts++) {

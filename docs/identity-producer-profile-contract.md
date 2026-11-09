@@ -30,6 +30,12 @@ The occurrence scanner counts overwritten and discarded JSON members before
 `__proto__` members and valid legacy revisions above 64 KiB remain supported.
 Prospective JSON admission preserves ordinary nonfinite-number serialization,
 object undefined omission, array null substitution and escaped lone surrogates.
+Actual embedded credential, policy, owner, connection and grant records also
+pass the independent record vector during scanning, before parsing the enclosing
+admission, materialization or colo envelope. Discarded records and duplicate
+members count there too. Closed admission/colo/materialization selectors identify
+these positions; similarly named unknown pool fields and nested `record` fields
+remain generic.
 Access, assignment, user and policy-collection scanner profiles remain separate.
 
 Actual admission positions allow 128 connections/pools, 256 candidates per pool
@@ -75,6 +81,11 @@ Complete admission and serialization precede staged import and selection writes.
 A resource failure cannot commit an accepted prefix. Ordinary storage failures
 retain existing uncertainty; this adds no transaction, replay or compensation
 promise. Normalizers keep their existing projection and validation behavior.
+Only fresh normalizer-owned routing dictionaries whose direct prototype became
+an array through an own `__proto__` input are restored to `Object.prototype`.
+Their own JSON fields/order and already-consumed shared quota are unchanged;
+prototype-only shared dictionaries remain omitted. Borrowed/raw dictionaries and
+other unexpected prototypes do not receive this exception.
 
 ## Original stream custody
 
@@ -90,13 +101,22 @@ only. Unknown body or lock ownership remains held. No healthy body is replaced,
 no default-reader read fallback is introduced, and no timer grants retirement.
 Original wire bytes and replacement-decoded UTF16 are charged separately; BOM,
 replacement decoding, empty response URL and existing MIME behavior remain.
+For embedded-record spans, the scanner maps decoded offsets to original bytes
+using source-admitted blocks of at most 16 KiB, retained only through this parse.
+This avoids charging replacement-character re-encoding as original wire bytes;
+subsequent prospective serialization still has its own independent limit.
 
 Capacity, protocol, transport and cleanup denials use a private WeakSet brand and
 fixed sanitized `503 identity_admission_unavailable`. Ordinary error objects
 cannot forge the brand. Selected hydration, migration, materialization and colo
 catches rethrow it rather than rescuing through old authorization, legacy records
-or another provider. Ordinary bounded malformed/missing/revoked behavior remains;
-ordinary cache lookup failure is still a miss. Unrelated colo namespaces keep
+or another provider. An alternate profile denial joins preparation and the
+original abort fence before propagating; it cannot dispatch another provider
+request or replace the original reservation/event IDs. Received nonbillable
+upstream rejection remains nonbillable. Ordinary selection failure still permits
+the original rejection response. Ordinary bounded malformed/missing/revoked
+behavior remains; bodyless and empty-byte malformed cache entries, like ordinary
+cache lookup failures, are misses. Unrelated colo namespaces keep
 their existing behavior. No raw record, secret or error cause is archived.
 
 ## Publication and copies
@@ -121,14 +141,21 @@ per-representation admission, not a total number of selected copies.
 
 Focused Node fixtures cover raw exact/+1 vectors, discarded occurrences, semantic
 quotas and the separate 98/99 guard, SQL metadata ordering, canonical winners,
-legacy bytes, zero staged writes, effective overrides, atomic failed refresh,
-colo terminal denial and cancellation/unlock. Synthetic producers explicitly emit
+legacy bytes, zero staged writes, effective overrides, earlier source denial and
+a separately labelled final combined-refresh denial with an independently admitted
+replacement. They also cover fresh routing canonicalization, real public alternate
+profile denial with original reservation/event IDs, colo misses versus terminal
+denial and cancellation/unlock. Synthetic producers explicitly emit
 byte streams; they do not qualify the platform's original streams.
 
 The actual Workerd fixture first probes original KV/request/Cache bodies and then
 runs a public route with current-request SQLite/KV owners and original selected
-replies. It checks cold import, warm colo adoption, terminal SQL/KV/colo denial and
-refresh. A separate labelled fault producer holds HTTP bytes to establish a
+replies. Healthy public cases require nonempty marked request/reply observations,
+positive reads/provider POST, BYOB/EOF/backing/unlock, independently of capability
+probes. It checks cold import including routing normalization, warm colo adoption,
+terminal SQL/KV/colo denial and earlier source-denied refresh. A deliberately
+unsupported synthetic producer checks probe cancellation with original undefined
+and shared error reasons; it does not qualify healthy platform capability. A separate labelled fault producer holds HTTP bytes to establish a
 native pending read. Its cancellation continuation is deliberately held *after*
 actual cancellation settles, then rejects; this is not a claim that the native
 cancellation itself remained pending. Finite request, body and cleanup roots are

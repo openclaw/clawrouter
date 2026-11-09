@@ -1563,7 +1563,7 @@ async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, 
     admitIdentity((body as MaterializeRequest).grant, "record");
     const text = identityJson(body);
     return readIdentityResponse<T>(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal, headers: { [identityHeader]: "v1" } }), identitySourceBudget(), signal,
-      (status, value) => { const payload = value as { error?: { code?: string; message?: string } }; throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed"); });
+      (status, value) => { const payload = value as { error?: { code?: string; message?: string } }; throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed"); }, "grant");
   }
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();

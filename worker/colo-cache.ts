@@ -28,8 +28,8 @@ export async function coloGet<V>(namespace: string, key: string, config: HotCach
     // Once a body arrives, read/cleanup denial is terminal below.
     const actual = Promise.resolve().then(() => cache.match(url)); void actual.catch(() => undefined);
     const response = await actual;
-    if (!response) return undefined;
-    const entry = namespace === "admission" ? await readIdentityResponse<{ version: number; fetchedAt: number; value: V }>(() => Promise.resolve(response), source ?? identitySourceBudget())
+    if (!response || namespace === "admission" && response.body === null) return undefined;
+    const entry = namespace === "admission" ? await readIdentityResponse<{ version: number; fetchedAt: number; value: V }>(() => Promise.resolve(response), source ?? identitySourceBudget(), undefined, undefined, "colo")
       : await response.json<{ version: number; fetchedAt: number; value: V }>();
     if (namespace === "admission") admitAdmission(entry.value as AdmissionResult);
     const age = hotCacheNow() - entry.fetchedAt;

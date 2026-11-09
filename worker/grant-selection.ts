@@ -1,4 +1,4 @@
-import { admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
+import { canonicalFreshIdentityRouting, admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
 import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { HttpError } from "./utils.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
@@ -61,7 +61,7 @@ export async function resolveGrantSelection(
   admittedPool?: AdmissionPool,
 ): Promise<GrantSelectionResult> {
   admitIdentity(routing, "record");
-  routing = grantRoutingPolicy(routing);
+  routing = canonicalFreshIdentityRouting(grantRoutingPolicy(routing));
   const candidates = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
   const { available, hasConfiguredGrant } = candidates;
   const nowMs = Date.now();
@@ -91,7 +91,7 @@ export async function resolveGrantCandidates(
   privateCopilot = false,
 ): Promise<GrantCandidates> {
   admitIdentity(routing, "record");
-  routing = grantRoutingPolicy(routing);
+  routing = canonicalFreshIdentityRouting(grantRoutingPolicy(routing));
   const source = identitySourceBudget();
   if (privateCopilot) admitIdentityCount((routing.eligibleGrants[providerId] ?? []).length * 2 + 2, 256);
   const defaultKeys = [
@@ -127,7 +127,8 @@ export async function resolveGrantCandidates(
 // owner through model qualification. Never retry a different owner after read.
 export async function selectCopilotPublicGrant(policyId: string, policy: import("./types.ts").AccessPolicy, env: Env,
   tokenRef: string, stickyHash: string | null = null): Promise<SelectedGrant> {
-  const routing = grantRoutingPolicy(policy.grantRouting), tenant = policy.tenantId ?? "default";
+  admitIdentity(policy.grantRouting ?? DEFAULT_GRANT_ROUTING, "record");
+  const routing = canonicalFreshIdentityRouting(grantRoutingPolicy(policy.grantRouting)), tenant = policy.tenantId ?? "default";
   const candidates = await resolveGrantCandidates("github-copilot", policyId, tenant, tokenRef, env, new Set(), routing, undefined, undefined, undefined, true);
   const scoped = candidates.available.filter(entry => entry.key.startsWith(`oauth/${policyId}/`) || entry.key.startsWith(`oauth/tenants/${tenant}/`));
   const priority = scoped.length ? Math.min(...scoped.map(entry => grantPriority(entry.grant))) : null;
