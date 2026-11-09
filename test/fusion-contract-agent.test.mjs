@@ -7,7 +7,7 @@ const task = { instruction: 'Repair both admission and settlement.', editPaths: 
 const config = { maxTurns: 8, outputTokens: 8192, deadlineMs: 10000 };
 const actionBody = { messages: [], max_tokens: 256 };
 const result = () => ({ files: [{ path: 'worker/a.ts', content: 'private source sentinel' }], publicPassed: true,
-  actions: [{ action: 'finish', status: 'ok' }], toolMs: 2, turns: 1 });
+  actions: [{ action: 'finish', status: 'ok' }], toolMs: 2, turns: 1, outcome: 'submitted' });
 
 function fixture(probes, responses = [{ probe: 'private probe sentinel' }]) {
   const seen = [], boxes = [], pending = [...probes], generated = [...responses];
@@ -40,6 +40,30 @@ test('a reproduced frozen check accepts the cheap candidate without strong repai
   const { files, ...trace } = output;
   assert.ok(!JSON.stringify(trace).includes('sentinel'));
   assert.ok(f.boxes.every(box => box.closed));
+});
+
+test('a passing partial candidate cannot skip fallback without a completed submission', async () => {
+  for (const outcome of ['turn_limit', 'deadline', 'budget', 'draft_rejected', undefined]) {
+    const f = fixture([failed, passed, passed]);
+    const cheapAgent = async (...args) => ({ ...await f.dependencies.agent(...args), outcome });
+    const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke,
+      { ...f.dependencies, cheapAgent, providedProbe: 'public reproducer' });
+    assert.equal(output.escalated, true);
+    assert.equal(output.outcome, 'submitted');
+    assert.deepEqual(f.seen.filter(x => x.role).map(x => x.role), [models.cheap, models.strong]);
+    assert.equal(output.turns, 2);
+    assert.ok(output.actions.some(action => action.action === 'cheap_completion' && action.status === 'incomplete'));
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('a completed one-shot draft can still pass the cheap gate', async () => {
+  const f = fixture([failed, passed]);
+  const cheapAgent = async (...args) => ({ ...await f.dependencies.agent(...args), outcome: 'draft_submitted' });
+  const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke,
+    { ...f.dependencies, cheapAgent, providedProbe: 'public reproducer' });
+  assert.equal(output.escalated, false);
+  assert.deepEqual(f.seen.filter(x => x.role).map(x => x.role), [models.cheap]);
 });
 
 test('the test author receives the same declared original-source context as repair workers', async () => {
