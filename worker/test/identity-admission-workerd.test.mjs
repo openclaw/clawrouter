@@ -177,6 +177,27 @@ export default {async fetch(request,bindings,context){
   }
   if(mode==='sql-limit'){check(firstTrace.sizes===1&&firstTrace.values===0&&firstTrace.writes===0,'metadata before SQL values/writes');}
   if(mode==='kv-limit'){check(firstTrace.writes===0,'no cold resource import');}
+  const poolCommits=[];
+  if(mode==='pool-commit'){
+   // SQL-seeded secretless projections exercise the REAL selected admission
+   // commit after its planning transaction, not the direct selection endpoint.
+   const keys=['oauth/'+id+'/anthropic','oauth/tenants/fixture/anthropic'],poolKey='anthropic/'+id+'/fixture';
+   await sql('UPDATE access_policies SET policy_json = ? WHERE policy_id = ?',JSON.stringify({...record,grantRouting:{...record.grantRouting,strategy:'round_robin',stickiness:'none'}}),id);
+   for(const key of keys)await sql('INSERT OR REPLACE INTO upstream_grant_projections (grant_key,projection_json,legacy) VALUES (?,?,0)',key,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,hasCredential:true}));
+   const input={credentialId:id,secretSha256:credential.secretSha256,providers:[{id:'anthropic',tokenRef:'anthropic'}],snapshot:'select',selection:{providerId:'anthropic',endpointId:'messages',mode:'http',model:'claude-sonnet-5',catalogModelId:'anthropic/claude-sonnet-5',capability:'llm.messages'}};
+   for(let turn=0;turn<4;turn++){
+    const reply=await authorityCall(env,'/admission/resolve',input),key=keys[turn%2],snapshot=reply.snapshots?.anthropic;
+    check(reply.selection?.selected?.key===key&&reply.selection.hasConfiguredGrant,'nonempty selected pool');
+    check(snapshot?.cursorKey===key&&snapshot.counts[key].count===Math.floor(turn/2)+1,'admitted planned selection state');
+    // A separate DO request rereads committed SQLite state after every response.
+    const counts=await sql('SELECT grant_key,selected_count FROM upstream_grant_selection WHERE pool_key = ? ORDER BY grant_key',poolKey);
+    const cursor=await sql('SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?',poolKey);
+    check(counts.length===Math.min(turn+1,2)&&counts.reduce((sum,row)=>sum+row.selected_count,0)===turn+1,'ONE counter increment per admission');
+    for(const row of counts)check(row.selected_count===(row.grant_key===keys[0]?Math.ceil((turn+1)/2):Math.floor((turn+1)/2)),'canonical repeated counter reread');
+    check(cursor.length===1&&cursor[0].grant_key===key,'canonical repeated cursor reread');
+    poolCommits.push({key,count:snapshot.counts[key].count,total:turn+1});
+   }
+  }
   let coloCapability=null,adopted=false,refreshUnchanged=false;
   if(mode==='colo'){
    check(!!cacheKey,'actual colo publication');coloCapability=await probe((await cache.match(cacheKey)).body);
@@ -198,7 +219,7 @@ export default {async fetch(request,bindings,context){
    await admittedGrantSelection(auth,env,{provider,endpoint,mode:'http',model:'claude-sonnet-5'},new Set(['oauth/fixture/rejected']));check(auth.policy!==oldPolicy&&proxyAdmission(auth)!==oldAdmission,'successful replacement');
   }
   closed=true;await drain();
-  result={label:'originating-request diagnostic; no retirement/heap claim',mode,status:first.status,kvCapability,requestCapability,coloCapability,traces,sql:firstTrace,adopted,refreshUnchanged,closed};
+  result={label:'originating-request diagnostic; no retirement/heap claim',mode,status:first.status,kvCapability,requestCapability,coloCapability,traces,sql:firstTrace,adopted,refreshUnchanged,poolCommits,closed};
  }catch(error){hasPrimary=true;primary=error;}
  finally{closed=true;try{await drain();}catch(error){cleanup.push(error);}globalThis.fetch=originalFetch;cache.put=put;}
  if(cleanup.length)throw new AggregateError(hasPrimary?[primary,...cleanup]:cleanup,'primary and independent fixture cleanup');if(hasPrimary)throw primary;
@@ -236,7 +257,7 @@ test('identity profile: ORIGINAL KV/DO/Cache bodies then real public SQLite/KV/c
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
     directory = await mkdtemp(join(tmpdir(), 'identity-profile-workerd-'));
     runtime = await startWorkerdFixture(directory, router, upstream.replace('PORT', String(server.address().port)), { hotCache: true, preventEviction: true });
-    for (const mode of ['healthy', 'cold', 'cold-routing', 'sql-limit', 'kv-limit', 'colo', 'refresh']) {
+    for (const mode of ['healthy', 'cold', 'cold-routing', 'pool-commit', 'sql-limit', 'kv-limit', 'colo', 'refresh']) {
       const result = await send(mode); assert.equal(result.closed, true);
       for (const capability of [result.kvCapability, result.requestCapability, ...(result.coloCapability ? [result.coloCapability] : [])]) {
         assert.equal(capability.byob, true); assert.equal(capability.eof, true); assert.equal(capability.unlocked, true); assert.equal(capability.locked, false); assert.ok(capability.maxBacking <= 16384);
@@ -258,6 +279,12 @@ test('identity profile: ORIGINAL KV/DO/Cache bodies then real public SQLite/KV/c
       if (mode === 'cold' || mode === 'cold-routing') assert.ok(result.traces.kv.some(row => row.byob && row.eof && row.unlocked));
       if (mode === 'colo') assert.equal(result.adopted, true);
       if (mode === 'refresh') assert.equal(result.refreshUnchanged, true);
+      if (mode === 'pool-commit') assert.deepEqual(result.poolCommits, [
+        { key: 'oauth/identitypoolcommit/anthropic', count: 1, total: 1 },
+        { key: 'oauth/tenants/fixture/anthropic', count: 1, total: 2 },
+        { key: 'oauth/identitypoolcommit/anthropic', count: 2, total: 3 },
+        { key: 'oauth/tenants/fixture/anthropic', count: 2, total: 4 },
+      ]);
     }
     const unsupported = await send('probe-reject');
     assert.deepEqual(unsupported.outcomes, [{ failed: true, cancels: 1, unlocked: true }, { failed: true, cancels: 1, unlocked: true }]);

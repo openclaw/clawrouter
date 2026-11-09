@@ -78,6 +78,8 @@ this claim. Metadata checks are not rollback or storage-allocation guarantees.
 Cold selected records and projection imports are staged. Current canonical rows,
 publication markers and attachment revisions still win after every yielding read.
 Complete admission and serialization precede staged import and selection writes.
+Each selected counter commit consumes its single-row `RETURNING` cursor before
+replying; the existing SQL and transaction boundaries stay unchanged.
 A resource failure cannot commit an accepted prefix. Ordinary storage failures
 retain existing uncertainty; this adds no transaction, replay or compensation
 promise. Normalizers keep their existing projection and validation behavior.
@@ -153,7 +155,9 @@ runs a public route with current-request SQLite/KV owners and original selected
 replies. Healthy public cases require nonempty marked request/reply observations,
 positive reads/provider POST, BYOB/EOF/backing/unlock, independently of capability
 probes. It checks cold import including routing normalization, warm colo adoption,
-terminal SQL/KV/colo denial and earlier source-denied refresh. A deliberately
+terminal SQL/KV/colo denial and earlier source-denied refresh. A SQL-seeded
+nonempty pool exercises repeated selected-admission commits and separate real
+SQLite counter/cursor rereads, checking one increment per admission. A deliberately
 unsupported synthetic producer checks probe cancellation with original undefined
 and shared error reasons; it does not qualify healthy platform capability. A separate labelled fault producer holds HTTP bytes to establish a
 native pending read. Its cancellation continuation is deliberately held *after*
