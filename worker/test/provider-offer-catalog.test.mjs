@@ -2,6 +2,7 @@ import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { catalogResponse, modelsResponse } = await import("../discovery.ts");
 const { snapshot } = await import("../providers.ts");
 const { sha256Hex } = await import("../utils.ts");
@@ -32,7 +33,11 @@ async function fixture(t) {
   const env = {
     OPENAI_API_KEY: "fixture-environment", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map(item => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map(item => [item, records.get(item) ?? null]));
+        const value = records.get(key) ?? null;
+        return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+      },
     },
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body); paths.push(path);
