@@ -1,3 +1,5 @@
+import { admitAdmission, admitIdentity, identityJson, identitySourceBudget, isIdentityFailure, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import type { AdmissionResult } from "./authority-admission.ts";
 import { hotCacheNow, tryRunInBackground, sharedHotCacheFence, type HotCacheConfig } from "./hot-cache.ts";
 import { sha256Hex } from "./utils.ts";
 
@@ -17,25 +19,32 @@ async function entryUrl(namespace: string, key: string): Promise<string> {
   return `${ORIGIN}/v${VERSION}/${namespace}/${await sha256Hex(`${namespace}\n${key}`)}`;
 }
 
-export async function coloGet<V>(namespace: string, key: string, config: HotCacheConfig): Promise<{ value: V; fetchedAt: number } | undefined> {
+export async function coloGet<V>(namespace: string, key: string, config: HotCacheConfig, source?: IdentitySourceBudget): Promise<{ value: V; fetchedAt: number } | undefined> {
   const cache = sharedCache();
   if (!cache || !config.maxAgeMs) return undefined;
   try {
-    const response = await cache.match(await entryUrl(namespace, key));
+    const url = await entryUrl(namespace, key);
+    // Register before invocation, retaining ordinary lookup-failure-as-miss.
+    // Once a body arrives, read/cleanup denial is terminal below.
+    const actual = Promise.resolve().then(() => cache.match(url)); void actual.catch(() => undefined);
+    const response = await actual;
     if (!response) return undefined;
-    const entry = await response.json<{ version: number; fetchedAt: number; value: V }>();
+    const entry = namespace === "admission" ? await readIdentityResponse<{ version: number; fetchedAt: number; value: V }>(() => Promise.resolve(response), source ?? identitySourceBudget())
+      : await response.json<{ version: number; fetchedAt: number; value: V }>();
+    if (namespace === "admission") admitAdmission(entry.value as AdmissionResult);
     const age = hotCacheNow() - entry.fetchedAt;
     if (entry.version !== VERSION || !Number.isFinite(age) || age < 0 || age >= config.maxAgeMs || entry.fetchedAt <= sharedHotCacheFence()) return undefined;
     return { value: entry.value, fetchedAt: entry.fetchedAt };
-  } catch { return undefined; } // The colo layer is an optimization; failures fall through to the authority.
+  } catch (error) { if (isIdentityFailure(error)) throw error; return undefined; } // The colo layer is an optimization; failures fall through to the authority.
 }
 
 export function coloPut(namespace: string, key: string, value: unknown, fetchedAt: number, config: HotCacheConfig): void {
   const cache = sharedCache();
   if (!cache || !config.maxAgeMs) return;
+  if (namespace === "admission") admitIdentity({ version: VERSION, fetchedAt, value });
   tryRunInBackground(async () => {
     const ttl = Math.max(1, Math.ceil((config.maxAgeMs - (hotCacheNow() - fetchedAt)) / 1_000));
-    await cache.put(await entryUrl(namespace, key), new Response(JSON.stringify({ version: VERSION, fetchedAt, value }), {
+    await cache.put(await entryUrl(namespace, key), new Response(namespace === "admission" ? identityJson({ version: VERSION, fetchedAt, value }) : JSON.stringify({ version: VERSION, fetchedAt, value }), {
       headers: { "content-type": "application/json", "cache-control": `max-age=${ttl}` },
     }));
   });

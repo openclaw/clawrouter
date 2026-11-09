@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
@@ -29,7 +30,7 @@ async function fixture(t) {
     ANTHROPIC_API_KEY: "synthetic-api-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex("synthetic-admin"),
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: authority.fetch }) },
-    POLICY_KV: { async get(requested) { return Array.isArray(requested) ? new Map(requested.map(name => [name, structuredClone(values.get(name) ?? null)])) : structuredClone(values.get(requested) ?? null); }, async put(name, value) { values.set(name, JSON.parse(value)); }, async list({ prefix }) { return { keys: [...values.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true }; } },
+    POLICY_KV: { async get(requested, type) { if (type === "stream") { const value = values.get(requested); return value == null ? null : accessBytesResponse(JSON.stringify(value), "").body; } return Array.isArray(requested) ? new Map(requested.map(name => [name, structuredClone(values.get(name) ?? null)])) : structuredClone(values.get(requested) ?? null); }, async put(name, value) { values.set(name, JSON.parse(value)); }, async list({ prefix }) { return { keys: [...values.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true }; } },
   }, { useExistingAuthority: true });
   Object.assign(authorityEnv, env);
   const auth = { policyId: "pool", credentialId: "client", principalId: null, authType: "proxy_key", policy: { enabled: true, generation: "g1", providers: ["anthropic"], tenantId: "tenant-pool", retainRequestContent: false, grantRouting: routing({ environmentFallback: true }) } };

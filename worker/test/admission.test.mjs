@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -82,7 +83,7 @@ for (const [name, setup, expected] of [
 test('legacy subscription inference retains two authority RPCs and streams JSON before EOF/accounting', async t => {
   const f = await fixture(), key = 'oauth/fixture/anthropic';
   f.records.set(key, { provider: provider.id, kind: 'subscription', enabled: true, credentialStore: 'durable_object', hasAccessToken: true, credentialStatus: 'active', updatedAt: '2026-01-01T00:00:00Z' });
-  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ grant: { ...f.records.get(key), accessToken: 'synthetic-subscription' }, changed: false, migrated: false }) }) };
+  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => accessBytesResponse(JSON.stringify({ grant: { ...f.records.get(key), accessToken: 'synthetic-subscription' }, changed: false, migrated: false }), "") }) };
   const eof = Promise.withResolvers(), settlement = Promise.withResolvers();
   f.env.USAGE_QUEUE.send = () => settlement.promise;
   const prefix = '{"content":[{"type":"text","text":"hello"}],';

@@ -1,8 +1,9 @@
+import { admitAdmission, admitIdentity, copyIdentity, identityPlan, identitySourceBudget, type IdentitySourceBudget } from "./identity-admission.ts";
 import { authorityCall, type AdmissionResult } from "./authority.ts";
 import type { AdmissionPoolSnapshot, AdmissionRequest, AdmissionSelection } from "./authority-admission.ts";
 import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
-import type { GrantSelectionResult } from "./grant-eligibility.ts";
+import { currentGrantRuntime, type GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
 import { HotCache, fenceSharedHotCache, hotCacheAcquiredAt, hotCacheConfig, hotCacheNow, registerHotCache, tryRunInBackground, sharedHotCacheFence, type CachePublication, type HotCacheConfig, type HotCacheState } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
@@ -23,10 +24,11 @@ const admissions = registerHotCache(new HotCache<AdmissionResult>(2048));
 type CachedAdmissionRequest = AdmissionRequest & { secretSha256: string };
 
 export async function resolveAdmission(env: Env, request: CachedAdmissionRequest, freshness: "cached" | "authoritative" = "cached"): Promise<{ admission: AdmissionResult; cache: HotCacheState }> {
-  const config = hotCacheConfig(env);
+  admitIdentity(request);
+  const source = identitySourceBudget(), config = hotCacheConfig(env);
   // Delayed uploads re-admit after the body is complete. They must not reuse a
   // pre-upload isolate/colo snapshot or join another request's old admission.
-  if (!config.maxAgeMs || freshness === "authoritative") return { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", request), cache: "off" };
+  if (!config.maxAgeMs || freshness === "authoritative") return { admission: await authorityCall<AdmissionResult>(env, "/admission/resolve", request, "policy-bindings", undefined, undefined, undefined, undefined, undefined, source), cache: "off" };
   const key = cacheKey(request);
   // Failover after an upstream rejection is off the hot path: it always takes a
   // fresh authoritative admission so tenant/pool changes apply to the alternate.
@@ -62,9 +64,9 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
   try {
     prefetchRememberedCredential(env, key, request);
     // Another isolate in this location may have fetched it moments ago.
-    const shared = failover || !publication ? undefined : await coloGet<AdmissionResult>("admission", key, config);
+    const shared = failover || !publication ? undefined : await coloGet<AdmissionResult>("admission", key, config, source);
     if (shared && admissions.ownsPublication(key, publication) && shared.fetchedAt > sharedHotCacheFence() && cacheable(shared.value, request.secretSha256)) {
-      applyPendingRuntime(shared.value);
+      applyPendingRuntime(shared.value); admitAdmission(shared.value);
       admissions.publish(key, publication, shared.value, config, expiryOf(shared.value), shared.fetchedAt);
       const selection = request.selection ? localSelection(env, shared.value, request.selection) : undefined;
       if (!request.selection || selection) {
@@ -74,7 +76,7 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
         return { admission: { ...shared.value, ...(selection ? { selection } : {}) }, cache: "colo" };
       }
     }
-    const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined }, publication);
+    const loaded = await load(env, config, { ...request, snapshot: request.selection ? "select" : undefined }, publication, source);
     if (loaded.cacheable && admissions.ownsPublication(key, publication)) rememberSelection(key, request, loaded.value.selection);
     if (loaded.cacheable) admissions.publish(key, publication, withoutSelection(loaded.value), config, loaded.expiresAt, loaded.storedAt);
     // A wrong secret must not evict the key owner's entry; only an outcome
@@ -85,18 +87,20 @@ export async function resolveAdmission(env: Env, request: CachedAdmissionRequest
   finally { admissions.endPublication(key, publication); }
 }
 
-async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest, publication: CachePublication | undefined) {
+async function load(env: Env, config: HotCacheConfig, request: CachedAdmissionRequest, publication: CachePublication | undefined, source: IdentitySourceBudget = identitySourceBudget()) {
   // While feedback is pending, ask for an authorized snapshot rather than
   // incrementing an authority selection that may already be locally ineligible.
   const deferred = request.snapshot === "select" && !!request.selection && pendingRuntime.size > 0;
   const storedAt = hotCacheAcquiredAt();
-  const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", deferred ? { ...request, snapshot: "only" } : request);
+  const value = await authorityCall<AdmissionResult>(env, "/admission/resolve", deferred ? { ...request, snapshot: "only" } : request, "policy-bindings", undefined, undefined, undefined, undefined, undefined, source);
+  admitAdmission(value);
   const overlaid = applyPendingRuntime(value);
   const ok = config.maxAgeMs > 0 && cacheable(value, request.secretSha256);
   if (ok && request.selection && (deferred || overlaid && value.selection)) {
     const selection = localSelection(env, value, request.selection, value.selection?.selected?.key);
     if (selection) value.selection = selection;
   }
+  admitAdmission(value);
   // A current owner may publish even at an equal/rolled-back clock. The shared
   // timestamp fence governs adoption; it does not revoke new publication rights.
   if (ok && admissions.ownsPublication(cacheKey(request), publication)) coloPut("admission", cacheKey(request), withoutSelection(value), storedAt, config);
@@ -143,6 +147,7 @@ function cacheKey(request: AdmissionRequest): string {
 
 // Only fully admitted outcomes are cached; failures always re-ask the authority.
 function cacheable(result: AdmissionResult, secretSha256: string): boolean {
+  admitAdmission(result);
   const credential = result.credential?.credential;
   if (!credential || !result.policy || result.policyUnavailable || result.ownerUnavailable || result.connectionsUnavailable) return false;
   if (!safeEqual(secretSha256, credential.secretSha256.toLowerCase())) return false;
@@ -156,6 +161,7 @@ function withoutSelection(result: AdmissionResult): AdmissionResult {
 }
 
 function localSelection(env: Env, admission: AdmissionResult, request: AdmissionSelection, alreadySelected?: string): GrantSelectionResult | undefined {
+  admitAdmission(admission); admitIdentity(request);
   const pool = admission.pools[request.providerId], snap = admission.snapshots?.[request.providerId], policy = admission.policy;
   if (!pool || !snap || !policy) return undefined;
   const provider = snapshot.providers.find(item => item.id === request.providerId);
@@ -166,14 +172,44 @@ function localSelection(env: Env, admission: AdmissionResult, request: Admission
   try { assertPolicyModel(policy.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint, capability: request.capability }); } catch { return undefined; }
   const result = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey: snap.poolKey, candidates: snap.candidates, states: pool.states, identityHash: snap.identityHash, fallbackSessionHash: snap.fallbackSessionHash }, choice => alreadySelected && choice.candidates.some(candidate => candidate.key === alreadySelected)
     ? { selectedKey: alreadySelected } // Keep an eligible authority choice without counting it twice.
-    : chooseLocally(env, snap, choice), key => snap.revisions[key]);
+    : chooseLocally(env, admission, snap, choice), key => snap.revisions[key]);
   // The snapshot is shared by concurrent requests; hand out a private copy.
-  return result.selected ? { ...result, selected: structuredClone(result.selected) } : result;
+  return result.selected ? { ...result, selected: copyIdentity(result.selected) } : result;
 }
 
-function chooseLocally(env: Env, snap: AdmissionPoolSnapshot, input: GrantChoiceInput): { selectedKey: string } {
+function chooseLocally(env: Env, admission: AdmissionResult, snap: AdmissionPoolSnapshot, input: GrantChoiceInput): { selectedKey: string } {
   const choice = chooseGrantKey(input, normalizedChoiceCandidates(input.candidates), { cursorKey: snap.cursorKey, counts: new Map(Object.entries(snap.counts)) });
-  const now = Date.now();
+  const now = Date.now(), next = { count: (snap.counts[choice.selectedKey]?.count ?? 0) + 1, lastMs: now };
+  const plan = identityPlan();
+  plan.object(0, field => {
+    for (const key in admission) if (Object.hasOwn(admission, key)) {
+      if (key !== "snapshots") field(key, admission[key as keyof AdmissionResult]);
+      else field(key, undefined, () => plan.object(1, snapshot => {
+        for (const id in admission.snapshots) if (Object.hasOwn(admission.snapshots, id)) {
+          const value = admission.snapshots![id];
+          if (value !== snap) snapshot(id, value);
+          else snapshot(id, undefined, () => plan.object(2, part => {
+            for (const name in snap) if (Object.hasOwn(snap, name)) {
+              if (name === "cursorKey") part(name, choice.cursorKey ?? snap.cursorKey);
+              else if (name !== "counts") part(name, snap[name as keyof AdmissionPoolSnapshot]);
+              else part(name, undefined, () => plan.object(3, counter => {
+                for (const grant in snap.counts) if (Object.hasOwn(snap.counts, grant) && grant !== choice.selectedKey) counter(grant, snap.counts[grant]);
+                counter(choice.selectedKey, next);
+              }));
+            }
+          }));
+        }
+      }));
+    }
+  });
+  const selected = snap.candidates.find(candidate => candidate.key === choice.selectedKey);
+  let state: GrantRuntimeState | undefined;
+  for (const key in admission.snapshots) if (Object.hasOwn(admission.snapshots, key) && admission.snapshots![key] === snap) state = admission.pools[key]?.states[choice.selectedKey];
+  if (selected?.grant) identityPlan("record").object(0, field => {
+    field("key", selected.key); field("grant", selected.grant);
+    field("runtimeState", currentGrantRuntime(selected.grant!, state));
+    field("authorityRevision", snap.revisions[selected.key]);
+  }); // Before advisory mutation and the later private clone.
   const counter = snap.counts[choice.selectedKey] ??= { count: 0, lastMs: 0 };
   counter.count++; counter.lastMs = now;
   if (choice.cursorKey) snap.cursorKey = choice.cursorKey;

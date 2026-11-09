@@ -1,3 +1,4 @@
+import { admitAdmission, admitIdentity, admittedEffectivePolicy, identityPlan } from "./identity-admission.ts";
 import { videoControlVersion, videoUnavailable, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { authorityCall } from "./authority.ts";
 import { coverControlHeaders, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -56,6 +57,7 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
   if (video && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable)) videoUnavailable();
   if (search && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable)) searchUnavailable();
   if (cover && (admission.connectionsUnavailable || admission.connections.length !== 1 || admission.pools.minimax?.unavailable || !admission.selection?.selected)) musicCoverUnavailable();
+  if (!cover && !video && !search) admitAdmission(admission);
   const credentialEntry = admission.credential;
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
   if (!safeEqual(secretSha256, credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
@@ -77,9 +79,10 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
     principalId: credentialEntry.credential.principalId ?? null,
     authType: "proxy_key",
     policyId: credentialEntry.credential.policyId,
-    policy: effectiveBudgetPolicy(credentialEntry.credential.policyId, policyEntry!.policy, owner?.record.budgetOverrides),
+    policy: cover || video || search ? effectiveBudgetPolicy(credentialEntry.credential.policyId, policyEntry!.policy, owner?.record.budgetOverrides) : admittedEffectivePolicy(credentialEntry.credential.policyId, policyEntry!.policy, owner?.record.budgetOverrides),
     contentRetentionDisabled: owner?.record.contentRetentionDisabled ?? false,
   };
+  if (!cover && !video && !search) admitIdentity(identity);
   recordAdmissionDuration(identity, admissionStart, cache);
   verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256, expiresAt: credentialEntry.credential.expiresAt }));
   admissions.set(identity, admission);
@@ -95,8 +98,7 @@ const selections = new WeakMap<AuthorizedIdentity, { request: AdmissionSelection
 
 export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env, requirement: GrantRequirement, excludedKeys: ReadonlySet<string>, pinnedKey?: string | null): Promise<GrantSelectionResult | undefined> {
   const initial = selections.get(auth);
-  selections.delete(auth);
-  if (!excludedKeys.size) return initial && initial.request.providerId === requirement.provider.id && initial.request.endpointId === requirement.endpoint.id && initial.request.mode === requirement.mode && initial.request.model === requirement.model && initial.request.pinnedKey === pinnedKey ? initial.result : undefined;
+  if (!excludedKeys.size) { selections.delete(auth); return initial && initial.request.providerId === requirement.provider.id && initial.request.endpointId === requirement.endpoint.id && initial.request.mode === requirement.mode && initial.request.model === requirement.model && initial.request.pinnedKey === pinnedKey ? initial.result : undefined; }
   const verified = verifiedKeys.get(auth);
   if (!verified) return undefined;
   const request: AdmissionSelection = { providerId: requirement.provider.id, endpointId: requirement.endpoint.id, mode: requirement.mode, model: requirement.model, capability: requirement.provider.capabilities.find(item => item.endpoint === requirement.endpoint.id)?.id ?? requirement.endpoint.id, catalogModelId: admissionRequests.get(auth)?.catalogModelId ?? requirement.provider.models.find(item => item.upstream === requirement.model || item.id === requirement.model)?.id ?? null, excludedKeys: [...excludedKeys], sessionHash: sessionHashes.get(auth), pinnedKey };
@@ -108,11 +110,19 @@ export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env,
   if (admission.policy!.policy.providers.length && !admission.policy!.policy.providers.includes(requirement.provider.id)) throw new HttpError(403, "provider_not_allowed", "policy does not allow provider");
   if (admission.connections.find(item => item.providerId === requirement.provider.id)?.enabled === false) throw new HttpError(503, "provider_disabled", "provider is disabled");
   assertPolicyModel(admission.policy!.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint: requirement.endpoint, capability: request.capability });
-  auth.serviceTiers = admission.credential.credential.serviceTiers;
-  auth.principalId = admission.credential.credential.principalId ?? null;
-  auth.policyId = admission.policy!.policyId;
-  auth.policy = effectiveBudgetPolicy(auth.policyId, admission.policy!.policy, admission.owner?.record.budgetOverrides);
-  admissions.set(auth, admission);
+  admitAdmission(admission);
+  const next = {
+    serviceTiers: admission.credential.credential.serviceTiers,
+    principalId: admission.credential.credential.principalId ?? null,
+    policyId: admission.policy!.policyId,
+    policy: admittedEffectivePolicy(admission.policy!.policyId, admission.policy!.policy, admission.owner?.record.budgetOverrides),
+  };
+  identityPlan().object(0, field => {
+    for (const key in auth) if (Object.hasOwn(auth, key) && !Object.hasOwn(next, key)) field(key, (auth as unknown as Record<string, unknown>)[key]);
+    for (const key in next) if (Object.hasOwn(next, key)) field(key, next[key as keyof typeof next]);
+  });
+  // No await or possible profile denial after the first published field changes.
+  Object.assign(auth, next); admissions.set(auth, admission); selections.delete(auth);
   return admission.selection;
 }
 

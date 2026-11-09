@@ -1,3 +1,4 @@
+import { admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
 import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { HttpError } from "./utils.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
@@ -7,6 +8,8 @@ import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, f
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
+  admitIdentity(pools); admitIdentityCount(pools.length, 128);
+  let total = 0; for (const pool of pools) { admitIdentityCount(pool.candidates.available.length, 256); total += pool.candidates.available.length; } admitIdentityCount(total, 1024);
   const compatible = pools.map(({ entry, candidates }) => ({
     entry,
     candidates: { ...candidates, available: candidates.available.filter(({ grant }) => !requirement || grantSupports(requirement, grant)) },
@@ -57,6 +60,7 @@ export async function resolveGrantSelection(
   requirement?: GrantRequirement,
   admittedPool?: AdmissionPool,
 ): Promise<GrantSelectionResult> {
+  admitIdentity(routing, "record");
   routing = grantRoutingPolicy(routing);
   const candidates = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
   const { available, hasConfiguredGrant } = candidates;
@@ -86,7 +90,10 @@ export async function resolveGrantCandidates(
   admittedPool?: AdmissionPool,
   privateCopilot = false,
 ): Promise<GrantCandidates> {
+  admitIdentity(routing, "record");
   routing = grantRoutingPolicy(routing);
+  const source = identitySourceBudget();
+  if (privateCopilot) admitIdentityCount((routing.eligibleGrants[providerId] ?? []).length * 2 + 2, 256);
   const defaultKeys = [
     `oauth/${policyId}/${defaultTokenRef}`,
     `oauth/tenants/${tenantId}/${defaultTokenRef}`,
@@ -98,17 +105,14 @@ export async function resolveGrantCandidates(
       `oauth/${policyId}/${ref}`, `oauth/tenants/${tenantId}/${ref}`,
     ]) : []),
   ];
-  const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
+  const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys }, "policy-bindings", undefined, undefined, undefined, undefined, undefined, source);
   if (admittedPool?.unavailable) throw new Error("admission pool resolution failed");
   if (privateCopilot && (providerId !== "github-copilot" || pool.keys.length > 128)) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
+  admitIdentity(pool); admitIdentityCount(defaultKeys.length + pool.keys.length, 256);
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
   if (privateCopilot && keys.length > 128) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
-  const grants = !privateCopilot && keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
-  if (privateCopilot) {
-    for (let offset = 0; offset < keys.length; offset += 64) {
-      for (const [key, value] of await env.POLICY_KV.get<UpstreamGrant>(keys.slice(offset, offset + 64), "json")) grants.set(key, value);
-    }
-  }
+  const grants = new Map<string, UpstreamGrant | null>();
+  for (const key of keys) grants.set(key, await readIdentityKv<UpstreamGrant>(() => env.POLICY_KV.get(key, "stream"), source));
   const nowMs = Date.now();
   const candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }> = keys
     .map((key) => {

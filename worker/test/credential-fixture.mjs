@@ -39,7 +39,9 @@ export async function fixture(t, entries = [], { held = true, legacy = false } =
         state.beforeMutation = null;
         await action?.(JSON.parse(init.body));
       }
-      return owner.fetch(new Request(url, init));
+      if (!new Headers(init?.headers).has("x-clawrouter-identity-admission")) return owner.fetch(new Request(url, init));
+      const response = await owner.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+      return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
     } }) },
     POLICY_KV: {
       async list({ prefix }) { return { list_complete: true, keys: [...store.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })) }; },

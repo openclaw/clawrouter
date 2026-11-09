@@ -146,9 +146,9 @@ test('legacy projections use the old path until owner publication, without stori
   f.records.set(keyA, grant());
   const first = await f.admit(); assert.equal(first.selection, undefined);
   assert.deepEqual(f.authority.sql.exec('SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?', keyA).map(row => ({ ...row })), [{ projection_json: null, legacy: 1 }]);
-  let bulkReads = 0; const get = f.env.POLICY_KV.get;
-  t.mock.method(f.env.POLICY_KV, 'get', async (...args) => { if (Array.isArray(args[0])) bulkReads++; return get(...args); });
-  await f.admit(); assert.equal(bulkReads, 0, 'import marker prevents repeating the legacy import');
+  let streamReads = 0; const get = f.env.POLICY_KV.get;
+  t.mock.method(f.env.POLICY_KV, 'get', async (...args) => { if (args[1] === "stream") streamReads++; return get(...args); });
+  await f.admit(); assert.equal(streamReads, 0, 'import marker prevents repeating the legacy import');
   t.mock.method(globalThis, 'fetch', async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }));
   f.calls.length = 0;
   const response = await f.request(); assert.equal(response.status, 200); await response.text(); await Promise.all(f.pending);
@@ -160,13 +160,13 @@ test('legacy projections use the old path until owner publication, without stori
 test('bounded projection backfill imports current metadata once; null defaults stay fenced', async t => {
   const f = await fixture(); await f.put(keyA, grant());
   f.authority.sql.exec('DELETE FROM upstream_grant_projections');
-  let reads = 0; const get = f.env.POLICY_KV.get;
-  t.mock.method(f.env.POLICY_KV, 'get', async (...args) => { if (Array.isArray(args[0])) { reads++; assert.ok(args[0].length <= 66); } return get(...args); });
-  assert.ok((await f.admit()).selection.selected); assert.equal(reads, 1);
-  await f.admit(); assert.equal(reads, 1);
+  const reads = []; const get = f.env.POLICY_KV.get;
+  t.mock.method(f.env.POLICY_KV, 'get', async (...args) => { if (args[1] === 'stream') reads.push(args[0]); return get(...args); });
+  assert.ok((await f.admit()).selection.selected); assert.deepEqual(reads, [keyA, 'oauth/tenants/fixture/anthropic']);
+  await f.admit(); assert.equal(reads.length, 2);
   // A late legacy KV row cannot resurrect a default-key miss after its marker.
   f.records.set('oauth/tenants/fixture/anthropic', grant());
-  await f.admit(); assert.equal(reads, 1);
+  await f.admit(); assert.equal(reads.length, 2);
 });
 
 for (const change of ['rotate', 'revoke']) test(`owner ${change} during backfill beats a delayed KV read`, async t => {
@@ -174,7 +174,7 @@ for (const change of ['rotate', 'revoke']) test(`owner ${change} during backfill
   const get = f.env.POLICY_KV.get; let delayed = true;
   t.mock.method(f.env.POLICY_KV, 'get', async (...args) => {
     const stale = await get(...args);
-    if (delayed && Array.isArray(args[0])) { delayed = false; if (change === 'rotate') await f.put(keyA, grant({ accessToken: 'synthetic-replacement' })); else await revokeGrantCredentials(f.env, keyA); }
+    if (delayed && args[1] === 'stream') { delayed = false; if (change === 'rotate') await f.put(keyA, grant({ accessToken: 'synthetic-replacement' })); else await revokeGrantCredentials(f.env, keyA); }
     return stale;
   });
   const admission = await f.admit();
@@ -187,7 +187,7 @@ test('policy tenant changes during backfill cannot reuse the previous tenant poo
   const get = f.env.POLICY_KV.get; let delayed = true;
   t.mock.method(f.env.POLICY_KV, 'get', async (...args) => {
     const value = await get(...args);
-    if (delayed && Array.isArray(args[0])) { delayed = false; f.policy.tenantId = 'other'; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy }); }
+    if (delayed && args[1] === 'stream') { delayed = false; f.policy.tenantId = 'other'; await f.call('/policies/put', { policyId: 'fixture', policy: f.policy }); }
     return value;
   });
   const admission = await f.admit();

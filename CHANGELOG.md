@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound selected identity SQL/KV sources, admission replies and private copies with complete record/graph profiles, metadata-first SQL guards and atomic refresh publication. Cumulative 2 MiB source overflow denies the whole generation without truncating pools or falling back to old authorization; existing narrower selection guards and specialized owners remain. These are representation limits, not a combined heap or generation-count guarantee.
+
 - Include declared product summaries in provider package indexes, sharing metadata types with the plugin contract while keeping execution and auth configuration private.
 
 - Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.

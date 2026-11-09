@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -80,8 +81,8 @@ test("private owner selection nominates only explicit current policy references 
   const env = { ACCESS_CONTROL: { idFromName: name => name, get: () => ({ async fetch(url, init) {
     assert.equal(new URL(url).pathname, "/grant-pools/resolve"); const body = JSON.parse(init.body);
     assert.ok(body.defaultKeys.every(key => key.startsWith("oauth/fixture/") || key.startsWith("oauth/tenants/default/")));
-    return Response.json({ keys: [], states: {} });
-  } }) }, POLICY_KV: { async get(keys) { assert.ok(keys.length <= 64); requested.push(...keys); return new Map(keys.map(key => [key, records.get(key) ?? null])); } } };
+    return accessBytesResponse(JSON.stringify({ keys: [], states: {} }), "");
+  } }) }, POLICY_KV: { async get(key, type) { assert.equal(type, "stream"); assert.equal(typeof key, "string"); requested.push(key); const value = records.get(key); return value == null ? null : accessBytesResponse(JSON.stringify(value), "").body; } } };
   const routing = { eligibleGrants: { "github-copilot": ["explicit", "../foreign"] } };
   const privateRows = await resolveGrantCandidates("github-copilot", "fixture", "default", "copilot", env, new Set(), routing, undefined, undefined, undefined, true);
   assert.deepEqual(privateRows.available.map(row => row.key), ["oauth/fixture/explicit"]);

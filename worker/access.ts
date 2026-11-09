@@ -1,5 +1,5 @@
+import { admitIdentity, admittedEffectivePolicy, identityPlan } from "./identity-admission.ts";
 import { PolicyCollection, admitEffectivePolicies, admitPolicyIds, policyCollectionFailure } from "./policy-collection.ts";
-import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
@@ -104,7 +104,13 @@ export async function accessSessionIdentity(session: AccessSession, env: Env, pr
 }
 
 export function sessionPolicyIdentity(session: AccessSession, entry: AccessPolicyEntry): AuthorizedIdentity {
+  admitIdentity(entry);
+  identityPlan().object(0, field => {
+    for (const key in entry) if (Object.hasOwn(entry, key) && !["credentialId", "principalId", "authType", "contentRetentionDisabled"].includes(key)) field(key, entry[key as keyof AccessPolicyEntry]);
+    field("credentialId", null); field("principalId", session.email); field("authType", "access"); field("contentRetentionDisabled", session.contentRetentionDisabled);
+  });
   const identity: AuthorizedIdentity = { ...entry, credentialId: null, principalId: session.email, authType: "access", contentRetentionDisabled: session.contentRetentionDisabled };
+  admitIdentity(identity);
   const proof = verifiedSessions.get(session) ?? localSessionVerification(session);
   if (proof) verifiedIdentities.set(identity, proof);
   return identity;
@@ -125,7 +131,7 @@ export async function sessionPolicies(session: AccessSession, env: Env): Promise
   const byId = new Map(entries.map((entry) => [entry.policyId, entry]));
   return ids.flatMap((id) => {
     const entry = byId.get(id);
-    return entry?.policy.enabled ? [{ ...entry, policy: effectiveBudgetPolicy(id, entry.policy, session.budgetOverrides) }] : [];
+    return entry?.policy.enabled ? [{ ...entry, policy: admittedEffectivePolicy(id, entry.policy, session.budgetOverrides) }] : [];
   });
 }
 

@@ -1,3 +1,4 @@
+import { admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
@@ -32,7 +33,7 @@ import { admitAssignmentBytes, assignmentJsonText, assignmentSourceBudget, assig
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
-type AuthorityReadBound = { bytes: number; records?: number; video?: boolean;
+type AuthorityReadBound = { identity?: IdentitySourceBudget; staged?: Map<string, { value: unknown; marker: string }>; commit?: (() => void)[]; bytes: number; records?: number; video?: boolean;
   videoCounts?: { values: number; members: number; entries: number; units: number } };
 function inspectVideoRecord(text: string, bound: AuthorityReadBound): void {
   const next = inspectVideoJson(text), total = bound.videoCounts ??= { values: 0, members: 0, entries: 0, units: 0 };
@@ -113,6 +114,9 @@ export class PolicyBindingIndexObject implements DurableObject {
           throw userMaterializationFailure("protocol");
         }
       }
+      const identityPaths = ["/admission/resolve", "/grant-pools/resolve", "/grant-pools/select"];
+      const identityInput = request.headers.has(identityHeader) ? await readIdentityRequest(request, identityPaths.includes(path)) : undefined;
+      const identityBound: AuthorityReadBound | undefined = identityInput !== undefined ? { bytes: 0, identity: identitySourceBudget(), staged: new Map(), commit: [] } : undefined;
       const cover = request.headers.get(musicCoverControlHeader) === musicCoverControlVersion;
       if (cover && !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
       const coverInput = cover ? await readCoverControlRequest(request) : undefined;
@@ -123,27 +127,61 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/grant-video/authorize") return json(this.authorizeVideoGrant(await readJson<VideoGrantAttestation>(request, undefined, 16 * 1024)));
       if (path === "/authorization/snapshot") {
         const input = (cover ? coverInput : await readJson<AuthorizationSnapshotRequest & { video?: string }>(request, undefined, 64 * 1024)) as AuthorizationSnapshotRequest & { video?: string };
-        const bound = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion || input.video === videoControlVersion ? { bytes: 0, video: true }
+        const bound: AuthorityReadBound | undefined = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion || input.video === videoControlVersion ? { bytes: 0, video: true }
           : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
         const result = this.authorizationSnapshot(input, bound);
         if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result); return json(result);
       }
       if (path === "/admission/resolve") {
-        const input = (cover ? coverInput : await readJson<AdmissionRequest>(request)) as AdmissionRequest;
+        const input = (cover ? coverInput : identityBound ? identityInput : await readJson<AdmissionRequest>(request)) as AdmissionRequest;
         if (cover !== (input.cover === musicCoverControlVersion)) musicCoverUnavailable();
-        const bound = cover ? { bytes: 0 } : input.video === videoControlVersion ? { bytes: 0, video: true } : input.search === searchControlVersion ? { bytes: 0 } : undefined;
+        const bound: AuthorityReadBound | undefined = cover ? { bytes: 0 } : input.video === videoControlVersion ? { bytes: 0, video: true } : input.search === searchControlVersion ? { bytes: 0 } : identityBound;
         const result = await resolveAdmission(this.env, input, {
+        identity: bound?.identity,
         getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: id => this.getUser(id, bound), hasMeta: key => this.hasMeta(key),
-        seedCredential: (id, value) => this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]),
-        seedPolicy: (id, value) => this.initializePolicies([{ policyId: id, policy: normalizePolicyRecord(value, contentRetentionDefault(this.env)) }]),
-        initializeUsers: users => this.initializeUsers(users), initializeConnections: connections => this.initializeConnections(connections),
-        resolveConnections: ids => this.resolveConnections(ids, bound), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input, bound), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
+        seedCredential: (id, value) => {
+          if (!bound?.identity) return this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]);
+          if (this.getCredential(id, bound) || this.hasMeta("credentials_global_initialized")) return;
+          const { copilotPublicIdentity: _untrusted, ...credential } = normalizeCredentialRecord(value, id);
+          if (bound?.identity) this.stageIdentityRecord(bound, "proxy_credentials", "credential_id", "credential_json", id, credential, "credentials_global_initialized");
+          else this.initializeCredentials([{ credentialId: id, credential }]);
+        },
+        seedPolicy: (id, value) => {
+          if (!bound?.identity) return this.initializePolicies([{ policyId: id, policy: normalizePolicyRecord(value, contentRetentionDefault(this.env)) }]);
+          if (this.getPolicy(id, bound) || this.hasMeta("policies_global_initialized")) return;
+          const policy = normalizePolicyRecord(value, contentRetentionDefault(this.env));
+          if (bound?.identity) this.stageIdentityRecord(bound, "access_policies", "policy_id", "policy_json", id, policy, "policies_global_initialized");
+          else this.initializePolicies([{ policyId: id, policy }]);
+        },
+        initializeUsers: users => {
+          if (!bound?.identity) return this.initializeUsers(users);
+          if (this.hasMeta("users_global_initialized")) return;
+          for (const raw of users) if (!this.getUser(raw.email, bound)) {
+            const user = normalizeUser(raw);
+            this.stageIdentityRecord(bound, "access_users", "email", "user_json", user.email, user.record, "users_global_initialized");
+          }
+        },
+        initializeConnections: connections => {
+          if (!bound?.identity) return this.initializeConnections(connections);
+          if (this.hasMeta("connections_global_initialized")) return;
+          for (const raw of connections) if (!this.getConnection(raw.providerId, bound)) {
+            const connection = { enabled: true, label: null, monthlyBudgetMicros: null, ...normalizeConnectionMutation(raw, raw.providerId) };
+            this.stageIdentityRecord(bound, "provider_connections", "provider_id", "connection_json", connection.providerId, connection, "connections_global_initialized");
+          }
+        },
+        resolveConnections: ids => this.resolveConnections(ids, bound), putMeta: key => { if (bound?.identity) bound.commit!.push(() => this.putMeta(key)); else this.putMeta(key); }, resolveGrantPool: input => this.resolveGrantPool(input, bound), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
+          identity: bound?.identity, afterAdmission: action => bound!.commit!.push(action),
           getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: email => this.getUser(email, bound),
           resolveConnections: ids => this.resolveConnections(ids, bound), resolveGrantPool: request => this.resolveGrantPool(request, bound),
           grantAttachment: key => this.grantAttachment(key), consumeProjectionBytes: (bytes, text) => { if (bound && (bound.bytes += bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable(); if (bound?.video && text !== undefined) inspectVideoRecord(text, bound); },
-          selectGrant: request => this.selectGrant(request, bound), selectionState: poolKey => this.selectionState(poolKey),
+          selectGrant: request => this.selectGrant(request, bound), selectionState: poolKey => this.selectionState(poolKey, bound), planGrant: request => this.planGrant(request, bound),
         }),
         });
+        if (bound?.identity) {
+          admitAdmission(result); const text = identityJson(result);
+          for (const commit of bound.commit!) commit();
+          return new Response(text, { headers: { "content-type": "application/json" } });
+        }
         if (bound) (bound.video ? videoJsonBytes : searchJsonBytes)(result);
         return json(result);
       }
@@ -181,7 +219,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       }
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
       if (path === "/connections/resolve") {
-        const bound = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion ? { bytes: 0, video: true }
+        const bound: AuthorityReadBound | undefined = cover ? { bytes: 0 } : request.headers.get(videoControlHeader) === videoControlVersion ? { bytes: 0, video: true }
           : request.headers.get(searchControlHeader) === searchControlVersion ? { bytes: 0 } : undefined;
         const input = (cover ? coverInput : await readJson<{ providerIds: string[] }>(request)) as { providerIds: string[] };
         if (bound && (input.providerIds.length !== 1 || input.providerIds[0] !== "minimax")) searchUnavailable();
@@ -190,7 +228,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
       if (path === "/connections/put") return json(this.putConnection(await readJson<ProviderConnectionMutation>(request)));
-      if (path === "/grant-pools/resolve") return json(this.resolveGrantPool(await readJson<GrantPoolResolveRequest>(request)));
+      if (path === "/grant-pools/resolve") { const result = this.resolveGrantPool((identityBound ? identityInput : await readJson<GrantPoolResolveRequest>(request)) as GrantPoolResolveRequest, identityBound); return identityBound ? new Response(identityJson(result), { headers: { "content-type": "application/json" } }) : json(result); }
       if (path === "/grant-pools/attachment") return json(this.grantAttachment((await readJson<{ key: string }>(request)).key));
       if (path === "/grant-pools/admit") return json(this.admitGrantAttachment(await readJson<GrantAttachmentMutation>(request)));
       if (path === "/grant-pools/publish") return json(this.publishGrantAttachment(await readJson<GrantAttachmentMutation>(request)));
@@ -198,7 +236,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/grant-pools/pending") return json(this.pendingGrantAttachments(await readJson<{ cursor?: string; limit?: number }>(request)));
       if (path === "/grant-pools/feedback") { this.putGrantRuntime(await readJson<GrantRuntimeFeedbackRequest>(request)); return new Response("updated"); }
       if (path === "/grant-pools/states") return json({ states: this.grantRuntimeStates((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
-      if (path === "/grant-pools/select") return json(this.selectGrant(await readJson<GrantPoolSelectRequest>(request)));
+      if (path === "/grant-pools/select") { const result = this.selectGrant((identityBound ? identityInput : await readJson<GrantPoolSelectRequest>(request)) as GrantPoolSelectRequest, identityBound); return identityBound ? new Response(identityJson(result), { headers: { "content-type": "application/json" } }) : json(result); }
       if (path === "/grant-pools/record") { this.recordSelections(await readJson<GrantSelectionRecordRequest>(request)); return new Response("recorded"); }
       if (path === "/grant-pools/stats") return json({ stats: this.grantSelectionStats((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
       if (path === "/submission-tickets/put") return json(this.putSubmissionTicket(await readJson<PoolSubmissionTicket>(request)));
@@ -434,9 +472,29 @@ export class PolicyBindingIndexObject implements DurableObject {
     return this.getUser(defaults.email)!;
   }
 
-  private searchStored(table: string, column: string, keyColumn: string, key: string, bound: AuthorityReadBound): unknown {
+  private stageIdentityRecord(bound: AuthorityReadBound, table: string, keyColumn: string, column: string, key: string, value: unknown, marker: string): void {
+    const text = identityJson(value, "record"), identity = `${table}/${key}`;
+    if (bound.staged!.has(identity)) return;
+    const plan = identityPlan();
+    plan.array(0, entry => { for (const row of bound.staged!.values()) entry(row.value); entry(value); });
+    bound.staged!.set(identity, { value, marker });
+    bound.commit!.push(() => this.sql.exec(`INSERT INTO ${table} (${keyColumn}, ${column}) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE ${keyColumn} = ?) AND NOT EXISTS (SELECT 1 FROM policy_binding_meta WHERE meta_key = ?)`, key, text, key, marker));
+  }
+
+  private searchStored(table: string, column: string, keyColumn: string, key: string, bound: AuthorityReadBound, envelope = false): unknown {
     const size = rows<{ bytes: number }>(this.sql.exec(`SELECT length(CAST(${column} AS BLOB)) AS bytes FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
-    if (!size) return null;
+    if (!size) {
+      const staged = bound.staged?.get(`${table}/${key}`);
+      return staged && !this.hasMeta(staged.marker) ? envelope ? { value: staged.value } : staged.value : null;
+    }
+    if (bound.identity) {
+      if (size.bytes === null) return null;
+      admitIdentityBytes(bound.identity, size.bytes);
+      const row = rows<{ value: string }>(this.sql.exec(`SELECT ${column} AS value FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
+      if (!row) throw identityFailure("protocol");
+      const value = parseIdentity(row.value, bound.identity);
+      return envelope ? { value } : value;
+    }
     if ((bound.records = (bound.records ?? 0) + 1) > 32) searchUnavailable();
     if (!Number.isSafeInteger(size.bytes) || size.bytes < 1 || (bound.bytes += size.bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
     const row = rows<{ value: string }>(this.sql.exec(`SELECT ${column} AS value FROM ${table} WHERE ${keyColumn} = ?`, key))[0];
@@ -448,6 +506,10 @@ export class PolicyBindingIndexObject implements DurableObject {
   private getUser(email: string, bound?: AuthorityReadBound): AccessControlUser | null {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;
+    if (bound?.identity) {
+      const row = this.searchStored("access_users", "user_json", "email", normalized, bound, true) as { value: AccessUserRecord } | null;
+      return row ? { email: normalized, record: row.value } : null;
+    }
     if (bound) { const record = this.searchStored("access_users", "user_json", "email", normalized, bound) as AccessUserRecord | null; return record ? { email: normalized, record } : null; }
     const row = rows<{ user_json: string }>(this.sql.exec("SELECT user_json FROM access_users WHERE email = ?", normalized))[0];
     return row ? { email: normalized, record: JSON.parse(row.user_json) } : null;
@@ -579,6 +641,10 @@ export class PolicyBindingIndexObject implements DurableObject {
     for (const entry of entries) if (!this.getPolicy(entry.policyId)) this.putPolicy(entry);
   }
   private getPolicy(id: string, bound?: AuthorityReadBound): AccessPolicyEntry | null {
+    if (bound?.identity) {
+      const row = this.searchStored("access_policies", "policy_json", "policy_id", id, bound, true) as { value: AccessPolicy } | null;
+      return row ? { policyId: id, policy: row.value } : null;
+    }
     if (bound) { const policy = this.searchStored("access_policies", "policy_json", "policy_id", id, bound) as AccessPolicy | null; return policy ? { policyId: id, policy } : null; }
     const row = rows<{ policy_json: string }>(this.sql.exec("SELECT policy_json FROM access_policies WHERE policy_id = ?", id))[0];
     return row ? { policyId: id, policy: JSON.parse(row.policy_json) } : null;
@@ -704,6 +770,10 @@ export class PolicyBindingIndexObject implements DurableObject {
     }
   }
   private getCredential(id: string, bound?: AuthorityReadBound): ProxyCredentialEntry | null {
+    if (bound?.identity) {
+      const row = this.searchStored("proxy_credentials", "credential_json", "credential_id", id, bound, true) as { value: ProxyCredential } | null;
+      return row ? { credentialId: id, credential: row.value } : null;
+    }
     if (bound) { const credential = this.searchStored("proxy_credentials", "credential_json", "credential_id", id, bound) as ProxyCredential | null; return credential ? { credentialId: id, credential } : null; }
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];
     return row ? { credentialId: id, credential: JSON.parse(row.credential_json) } : null;
@@ -750,6 +820,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     return row ? JSON.parse(row.connection_json) : null;
   }
   private resolveConnections(ids: string[], bound?: AuthorityReadBound): { initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] } {
+    if (bound?.identity) { admitIdentity(ids); admitIdentityCount(ids.length, 128); }
     const connections: ProviderConnection[] = [], missingProviderIds: string[] = [];
     for (const id of [...new Set(ids)]) { const entry = this.getConnection(id, bound); if (entry) connections.push(entry); else missingProviderIds.push(id); }
     return { initialized: this.hasMeta("connections_global_initialized"), connections, missingProviderIds };
@@ -762,7 +833,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     // Only the stored consumer policy can share another scope's owner. Never
     // accept membership from a request or follow another policy's references.
     const shared = policyId ? this.getPolicy(policyId, bound)?.policy.grantRouting?.sharedGrants?.[providerId] ?? [] : [];
-    if (bound) {
+    if (bound && !bound.identity) {
       if (shared.length) searchUnavailable();
       let members = 0, bytes = 0;
       for (const [scope, id] of [["policies", policyId], ["tenants", tenantId]]) {
@@ -772,20 +843,33 @@ export class PolicyBindingIndexObject implements DurableObject {
       }
       if (members > 32 || bytes > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
     }
+    if (bound?.identity) {
+      admitIdentity(input); admitIdentity(shared);
+      let count = (input.defaultKeys ?? []).length + shared.length;
+      for (const [scope, id] of [["policies", policyId], ["tenants", tenantId]]) if (id) {
+        const size = rows<{ count: number }>(this.sql.exec("SELECT count(*) AS count FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active')", scope, id, providerId))[0];
+        count += size.count;
+      }
+      admitIdentityCount(count, 256);
+    }
     const sharedKeys = shared.filter(key => {
       if (this.attachmentMember(grantPoolIdentity(key), providerId)?.status !== "active") return false;
+      if (bound?.identity) {
+        const grant = this.searchStored("upstream_grant_projections", "projection_json", "grant_key", key, bound) as UpstreamGrant | null;
+        return grant?.kind === "subscription" && grant.provider === providerId;
+      }
       const row = rows<{ projection_json: string | null }>(this.sql.exec("SELECT projection_json FROM upstream_grant_projections WHERE grant_key = ? AND legacy = 0", key))[0];
       const grant: UpstreamGrant | null = row?.projection_json ? JSON.parse(row.projection_json) : null;
       return grant?.kind === "subscription" && grant.provider === providerId;
     });
     const keys = [...new Set([
-      ...(bound ? [] : (input.defaultKeys ?? []).map((key) => grantKey(key))),
-      ...(policyId ? this.poolTokenRefs("policies", policyId, providerId).map((tokenRef) => `oauth/${policyId}/${tokenRef}`) : []),
-      ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
+      ...(bound && !bound.identity ? [] : (input.defaultKeys ?? []).map((key) => grantKey(key))),
+      ...(policyId ? this.poolTokenRefs("policies", policyId, providerId, bound).map((tokenRef) => `oauth/${policyId}/${tokenRef}`) : []),
+      ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId, bound).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
       ...sharedKeys,
     ])];
     const hasAttachment = shared.length > 0 || [policyId && ["policies", policyId], tenantId && ["tenants", tenantId]].some((scope) => scope && rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? LIMIT 1", ...scope, providerId)).length > 0);
-    if (bound && keys.length > 32) searchUnavailable();
+    if (bound && !bound.identity && keys.length > 32) searchUnavailable();
     return { keys, states: this.grantRuntimeStates(keys, bound), hasAttachment };
   }
 
@@ -928,6 +1012,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private selectGrant(input: GrantPoolSelectRequest, bound?: AuthorityReadBound): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
+    if (bound?.identity) { const plan = this.planGrant(input, bound); plan.commit(); return plan.result; }
     const poolKey = grantSelectionPoolKey(input.poolKey);
     if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 98) invalidAuthorityRequest("grant selection candidates must be a bounded array");
     if (bound) {
@@ -944,9 +1029,51 @@ export class PolicyBindingIndexObject implements DurableObject {
     return { selectedKey: choice.selectedKey, selectedCount: row.selected_count, lastSelectedAt: new Date(nowMs).toISOString() };
   }
 
+  private planGrant(input: GrantPoolSelectRequest, bound?: AuthorityReadBound) {
+    const poolKey = grantSelectionPoolKey(input.poolKey);
+    if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 98) invalidAuthorityRequest("grant selection candidates must be a bounded array");
+    if (bound && !bound.identity) {
+      const size = rows<{ count: number; bytes: number }>(this.sql.exec("SELECT count(*) AS count, coalesce(sum(length(CAST(grant_key AS BLOB))),0) AS bytes FROM upstream_grant_selection WHERE pool_key = ?", poolKey))[0];
+      if (size.count > 32 || (bound.bytes += size.bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable();
+    }
+    if (bound?.identity) admitIdentity(input);
+    const previous = bound?.identity ? this.selectionState(poolKey, bound) : undefined;
+    const candidates = normalizedChoiceCandidates(input.candidates, grantKey);
+    const cursorKey = previous ? previous.cursorKey : rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
+    const counts = input.strategy === "least_used" ? previous ? new Map(Object.entries(previous.counts)) : this.selectionCounts(poolKey) : new Map<string, { count: number; lastMs: number }>();
+    const choice = chooseGrantKey(input, candidates, { cursorKey, counts });
+    const nowMs = Date.now(), lastSelectedAt = new Date(nowMs).toISOString();
+    const current = previous?.counts[choice.selectedKey]?.count ?? (rows<{ selected_count: number }>(this.sql.exec("SELECT selected_count FROM upstream_grant_selection WHERE pool_key = ? AND grant_key = ?", poolKey, choice.selectedKey))[0]?.selected_count ?? 0);
+    const result = { selectedKey: choice.selectedKey, selectedCount: current + 1, lastSelectedAt };
+    if (previous) {
+      const plan = identityPlan();
+      plan.object(0, field => {
+        field("cursorKey", choice.cursorKey ?? cursorKey);
+        field("counts", undefined, () => plan.object(1, count => {
+          for (const key in previous.counts) if (Object.hasOwn(previous.counts, key) && key !== choice.selectedKey) count(key, previous.counts[key]);
+          count(choice.selectedKey, { count: result.selectedCount, lastMs: nowMs });
+        }));
+      });
+    }
+    const state = previous ? { cursorKey: choice.cursorKey ?? cursorKey, counts: { ...previous.counts, [choice.selectedKey]: { count: result.selectedCount, lastMs: nowMs } } } : undefined;
+    if (bound?.identity) { admitIdentity(result); admitIdentity(state); }
+    let committed = false;
+    return { result, state, commit: () => {
+      if (committed) return; committed = true;
+      if (choice.cursorKey) this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, choice.cursorKey);
+      this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms RETURNING selected_count", poolKey, choice.selectedKey, nowMs);
+    } };
+  }
+
   /** Pool counters and cursor for an isolate-local selection snapshot. */
-  private selectionState(rawPoolKey: string): { cursorKey: string | null; counts: Record<string, { count: number; lastMs: number }> } {
+  private selectionState(rawPoolKey: string, bound?: AuthorityReadBound): { cursorKey: string | null; counts: Record<string, { count: number; lastMs: number }> } {
     const poolKey = grantSelectionPoolKey(rawPoolKey);
+    if (bound?.identity) {
+      const cursor = identitySqlRows(this.sql, "SELECT json_object('grant_key', grant_key) AS value FROM upstream_grant_pool_cursors WHERE pool_key = ?", [poolKey], bound.identity, 1) as { grant_key: string }[];
+      const history = identitySqlRows(this.sql, "SELECT json_object('grant_key', grant_key, 'selected_count', selected_count, 'last_selected_ms', last_selected_ms) AS value FROM upstream_grant_selection WHERE pool_key = ?", [poolKey], bound.identity) as { grant_key: string; selected_count: number; last_selected_ms: number }[];
+      admitIdentity(history);
+      return { cursorKey: cursor[0]?.grant_key ?? null, counts: Object.fromEntries(history.map(row => [row.grant_key, { count: row.selected_count, lastMs: row.last_selected_ms }])) };
+    }
     return {
       cursorKey: rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null,
       counts: Object.fromEntries(this.selectionCounts(poolKey)),
@@ -1036,7 +1163,8 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("INSERT OR REPLACE INTO pool_submission_tickets (ticket_id, ticket_json, expires_at_ms) VALUES (?, ?, ?)", ticket.id, JSON.stringify(ticket), ticket.expiresAtMs);
   }
 
-  private poolTokenRefs(scope: "policies" | "tenants", scopeId: string, providerId: string): string[] {
+  private poolTokenRefs(scope: "policies" | "tenants", scopeId: string, providerId: string, bound?: AuthorityReadBound): string[] {
+    if (bound?.identity) return (identitySqlRows(this.sql, "SELECT json_object('token_ref', token_ref) AS value FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active') ORDER BY token_ref", [scope, scopeId, providerId], bound.identity, 256) as { token_ref: string }[]).map(row => row.token_ref);
     return rows<{ token_ref: string }>(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active') ORDER BY token_ref LIMIT 32", scope, scopeId, providerId)).map((row) => row.token_ref);
   }
 
@@ -1182,7 +1310,7 @@ function invalidAuthorityValue(message: string): never {
 }
 
 
-export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
+export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, identityBudget?: IdentitySourceBudget): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
   if (cover) {
     if (!isMusicCoverControl(cover) || objectName !== "policy-bindings" || !["/admission/resolve", "/authorization/snapshot", "/connections/resolve"].includes(path)) musicCoverUnavailable();
@@ -1207,6 +1335,11 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
     return await readAssignmentResponse(() => stub.fetch("https://clawrouter.internal/users/reconcile-assignments", {
       method: "POST", body: text, signal, headers: { [assignmentSourceHeader]: assignmentSourceVersion },
     }), signal) as T;
+  }
+  if (objectName === "policy-bindings" && ["/admission/resolve", "/grant-pools/resolve", "/grant-pools/select"].includes(path)) {
+    const text = identityJson(body);
+    return readIdentityResponse<T>(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal,
+      headers: { [identityHeader]: identityVersion } }), identityBudget ?? identitySourceBudget(), signal);
   }
   const collection = objectName === "policy-bindings" && isPolicyCollectionPath(path);
   if (collection) admitPolicyCall(path, body);

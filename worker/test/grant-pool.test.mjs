@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveGrantSelection, selectGrant, selectProviderPolicy, validGrantSegment } from "../grant-selection.ts";
@@ -131,7 +132,7 @@ test("Access policy choice respects endpoint support and pinned grant revisions 
   const auth = { policyId: "policy_b", policy: policy("policy_b").policy };
   env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
     const { grant } = JSON.parse(init.body);
-    return Response.json({ grant, projection: { credentialGeneration: grant.credentialGeneration }, changed: false, migrated: false });
+    return accessBytesResponse(JSON.stringify({ grant, projection: { credentialGeneration: grant.credentialGeneration }, changed: false, migrated: false }), "");
   } }) };
   await assert.rejects(upstreamAuth(provider, auth, env, new Set(), null, false, { key: "oauth/policy_b/api", revision: "old" }, requirement), (error) => error.code === "upstream_grant_changed");
 });
@@ -177,7 +178,7 @@ function mockEnv(initial = {}) {
       async get(key, type) {
         if (Array.isArray(key)) return new Map(key.map((item) => [item, structuredClone(values.get(item) ?? null)]));
         const value = values.get(key) ?? null;
-        return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value);
+        return type === "stream" && value !== null ? accessBytesResponse(JSON.stringify(value), "").body : type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value);
       },
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
@@ -188,14 +189,14 @@ function mockEnv(initial = {}) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
           if (path === "/grant-pools/resolve") {
             const { keys } = await env.grantAuthority.call("resolve", body);
-            return Response.json({ keys, states: Object.fromEntries(keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
+            return accessBytesResponse(JSON.stringify({ keys, states: Object.fromEntries(keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) }), "");
           }
           if (path === "/grant-pools/feedback") { runtime.set(body.key, body.state); return new Response("updated"); }
           if (path === "/grant-pools/states") return Response.json({ states: Object.fromEntries(body.keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
           if (path === "/grant-pools/select") {
             selections.push(body);
             const selected = [...body.candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
-            return Response.json({ selectedKey: selected.key, selectedCount: 1, lastSelectedAt: new Date().toISOString() });
+            return accessBytesResponse(JSON.stringify({ selectedKey: selected.key, selectedCount: 1, lastSelectedAt: new Date().toISOString() }), "");
           }
           if (path === "/grant-pools/stats") return Response.json({ stats: Object.fromEntries(body.keys.map((key) => [key, { selectedCount: 0, lastSelectedAt: null }])) });
           return new Response("not found", { status: 404 });
