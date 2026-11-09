@@ -1,3 +1,4 @@
+import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure } from "./identity-admission.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
@@ -220,6 +221,7 @@ class JsonAdmission implements JsonIntake {
     }
     if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
   }
+  ordinaryCompletion(): boolean { return !this.search && !this.wan && !this.input && !this.intakeOperation; }
   finish(context: ExecutionContext): void {
     if (this.search) { context.waitUntil(this.search.finish()); return; }
     if (this.wanRefusal) context.waitUntil(this.wanRefusal);
@@ -548,11 +550,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     }
     const method = (envelope.method ?? endpoint.method).toUpperCase();
     if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
+    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+    const selection: ProxySelection = { preparation, provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, selection);
     if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
     if (preauthenticated instanceof Response) return preauthenticated;
-    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-    const selection = { preparation, provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     prepared.body = {};
     await admission.prepareMusic(selection);
     return await proxySelected(request, env, context, mode, selection, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
@@ -785,11 +787,61 @@ async function proxyMiniMaxSearch(request: Request, env: Env, context: Execution
   } finally { admission.finish(context); }
 }
 
+// Normalization may replay a body or detach its reader cancellation. Keep an
+// independent receipt for the ORIGINAL source before giving it to those wrappers.
+function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {
+  if (!response.body) return response;
+  let forwarded!: Response;
+  completion.start(source => {
+    const reader = response.body!.getReader(), input = inputRetirement(reader);
+    let stopped = false;
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          return source.start(async () => {
+            try {
+              const next = await input.read(() => reader.read());
+              if (stopped) return;
+              if (next.done) {
+                stopped = true; controller.close();
+                void input.retire("eof");
+              } else controller.enqueue(next.value); // Forward the original chunk, without a copy.
+            } catch (error) {
+              if (!stopped) { stopped = true; controller.error(error); }
+              void input.retire("cancel", error);
+            }
+          });
+        },
+        cancel(reason) { stopped = true; return input.retire("cancel", reason); },
+      }, { highWaterMark: 0 });
+      forwarded = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    } catch (error) {
+      // Construction failure still owns the acquired source; preserve the throw.
+      source.start(() => input.retire("cancel", error));
+      throw error;
+    }
+    // Neither a pull nor cancel waits on encompassing caller completion. The
+    // active source scope can enroll pulls until its original receipt settles.
+    return input.retired;
+  });
+  return forwarded;
+}
+
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
-  const searchOwner = admission?.search;
-  const published = publishedMusicInput(selection);
-  const music = inlineMusicInput(selection) ?? published;
-  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
+  // Invoke only at the authenticated, validated boundary (or the earlier
+  // identity-denial receipt). Never reconstruct the selection or reauthenticate.
+  const complete = async (start: (scope?: ProxyCompletion) => Promise<Response>): Promise<Response> => {
+    const ordinary = admission?.ordinaryCompletion() && !compound && !reservedBudget && !selection.nativeResponse
+      && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
+      && !["minimax", "anthropic-vertex", "gmi"].includes(selection.provider.id)
+      && ["openai.chat_completions", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "anthropic.messages"].includes(selection.endpoint.request_format);
+    const completion = ordinary ? new ProxyCompletion() : undefined;
+    if (completion) admission!.completion = completion.completion;
+    try {
+      if (completion) context.waitUntil(completion.completion);
+      return await (completion ? completion.start(start) : start());
+    } finally { completion?.seal(); }
+  };
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
@@ -800,8 +852,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   const identityDenial = identitySelectionDenied(request, selection.provider.id);
   if (identityDenial) {
-    createProxyAccounting({ context, env, auth, selection, request, compound, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } }).fail(identityDenial.status, "denied");
-    return identityDenial;
+    return complete(async completion => {
+      const accounting = createProxyAccounting({ context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } });
+      try { accounting.fail(identityDenial.status, "denied"); return identityDenial; }
+      finally { accounting.close(); }
+    });
   }
   if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
   if (selection.endpoint.request_format === "openrouter.audio_transcription"
@@ -811,13 +866,26 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (selection.endpoint.inputProfile !== undefined)
     throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
   validateSelectedInput(selection);
+  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion));
+}
+
+async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion): Promise<Response> {
+  let failureAccounting: ReturnType<typeof createProxyAccounting> | undefined;
+  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+  let retention: PreparedContentRetention | null | undefined;
+  let accountingDeferred = false, retentionDeferred = false;
+  const run = <T>(start: () => Promise<T>): Promise<T> => completion ? completion.start(start) : start();
+  try {
+  const searchOwner = admission?.search;
+  const published = publishedMusicInput(selection);
+  const music = inlineMusicInput(selection) ?? published;
+  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
-  const accountingContext = { context, env, auth, selection, request, compound, search: searchOwner, startedAtMs: Date.now() };
-  const failureAccounting = createProxyAccounting(accountingContext);
-  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+  const accountingContext = { context, env, auth, selection, request, compound, completion, search: searchOwner, startedAtMs: Date.now() };
+  failureAccounting = createProxyAccounting(accountingContext);
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
@@ -833,7 +901,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner);
+    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
@@ -885,7 +953,6 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let upstreamMs = 0;
   const budgetStart = performance.now();
   let reservation = reservedBudget?.reservation;
-  let retention: PreparedContentRetention | null;
   try {
     if (music) {
       const pending = prepareInlineMusicRetention(env, auth, published?.retentionSelection() ?? selection, requestId, music.operation.signal);
@@ -941,7 +1008,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // Durable background owners read the stored bytes, and expanded bodies must
     // not overlap transport memory: both keep the write ahead of dispatch.
-    if (retention && !searchOwner && (background || retention.large)) await retention.write();
+    if (retention && !searchOwner && (background || retention.large)) await run(() => retention!.write());
   }
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", null));
@@ -952,7 +1019,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Best-effort and off the critical path: the timer lets dispatch start first,
     // so serialization and the R2 put overlap the upstream request.
     const pendingRetention = retention;
-    context.waitUntil(new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).catch(() => logCorrelationError("request content retention failed", requestId)));
+    retentionDeferred = true;
+    context.waitUntil(run(() => new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).finally(() => { if (completion) pendingRetention.discardUnused?.(); })).catch(() => logCorrelationError("request content retention failed", requestId)));
   }
   try {
     const dispatchStart = performance.now();
@@ -971,7 +1039,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
   if ((prepared.revalidateAccount || prepared.revalidateMedia) && !searchOwner) {
-    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateMedia ? prepared.revalidateMedia(env, signal) : prepared.revalidateAccount!(signal)); }
+    try { signal.throwIfAborted(); await operation.wait(run(() => prepared.revalidateMedia ? prepared.revalidateMedia(env, signal) : prepared.revalidateAccount!(signal))); }
     catch (error) {
       const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
       const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
@@ -996,12 +1064,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (signal.aborted) void input.retire("cancel", signal.reason).catch(() => undefined);
   };
   let discarded: WeakMap<Response, Promise<void>> | undefined;
-  const discard = (response: Response): Promise<void> => {
+  const discard = (response: Response, owner = completion): Promise<void> => {
     if (searchOwner) return searchOwner.discard(response);
     let pending = discarded?.get(response);
     if (!pending) {
-      pending = (async () => {
-        if (!catalogInputs) { await response.body?.cancel(signal.reason).catch(() => undefined); return; }
+      const dispose = async () => {
+        if (!catalogInputs) {
+          if (owner) await response.body?.cancel(signal.reason);
+          else await response.body?.cancel(signal.reason).catch(() => undefined);
+          return;
+        }
         if (!response.body) return;
         let input = catalogInputs.get(response.body);
         if (!input) {
@@ -1011,12 +1083,19 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
           registerCatalogInput(input, response);
         }
         await input.retire("cancel", signal.reason);
-      })();
+      };
+      pending = owner ? owner.start(dispose) : dispose();
       void pending.catch(() => undefined);
       (discarded ??= new WeakMap()).set(response, pending);
     }
     return pending;
   };
+  const ordinaryFetch = (start: () => Promise<Response>): Promise<Response> => completion ? completion.start(children => {
+    const work = start();
+    // Enroll late-body cleanup before the fetch can settle or the caller can stop waiting.
+    children.start(() => work.then(response => signal.aborted ? discard(response, children) : undefined, () => undefined));
+    return work;
+  }) : start();
   const registerCatalogFetch = (pending: Promise<Response>, dispose = discard): void => {
     // A fetched body transfers into its reader registration. Only unclaimed
     // bodies remain strong references; settled evidence carries no page payload.
@@ -1058,14 +1137,19 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         active.throwIfAborted();
         dispatched = true;
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: active, redirect: "manual" });
-      }) : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+      }) : ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }));
     if (selection.nativeResponse) nativeFetch = pending;
     if (prepared.featherlessCatalog) catalogWork = pending;
     else if (catalogInputs) registerCatalogFetch(pending);
     if (useSoft) {
-      soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
-      reservation = soft.reservation;
-      context.waitUntil(soft.check);
+      const checking = completion?.fork();
+      try {
+        soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
+        reservation = soft.reservation;
+        if (checking) checking.start(() => soft!.check);
+        context.waitUntil(soft.check);
+      } catch (error) { checking?.fail(); throw error; }
+      finally { checking?.seal(); }
     }
     response = await operation.wait(pending, "upstream", discard);
     if (music) {
@@ -1078,7 +1162,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       let capacityFailure: HttpError | undefined;
-      const preparation = prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+      const preparation = run(() => prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
       const preparationSettled = preparation.then(() => {}, () => {});
       try {
         retry = await operation.wait(preparation);
@@ -1093,14 +1177,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       if (capacityFailure) throw capacityFailure;
       if (retry) {
         signal.throwIfAborted();
-        void response.body?.cancel().catch(() => undefined);
+        if (completion) void discard(response);
+        else void response.body?.cancel().catch(() => undefined);
         signal.throwIfAborted();
         // The alternate may execute without returning headers. Its uncertainty
         // must not inherit the discarded attempt's nonbillable rejection.
         response = undefined;
         prepared = retry;
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
-        response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }), "upstream", discard);
+        response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
         accounting.observeUpstreamResponse(response, prepared.url);
         captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
         if (prepared.continuation) continuation?.bind(prepared.continuation);
@@ -1148,13 +1233,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
+    if (completion) response = ownOrdinaryResponse(response, completion);
     response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
     // Search retains its original deadline through delivery; other native paths
     // retire only the timer and keep caller cancellation connected through EOF.
     if (!searchOwner) operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
-      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
+      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting!.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
   } catch (error) {
@@ -1234,7 +1320,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // keeps its operation deadline through downstream EOF or cancellation.
   if (!searchOwner) operation.retireDeadline();
   if (continuation && response.ok && !operation.receivedRejection && selection.capability !== "llm.responses.compact") {
-    try { await operation.wait(continuation.headers(response), "publication"); }
+    try { await operation.wait(run(() => continuation!.headers(response!)), "publication"); }
     catch (error) {
       operation.stop("publication", error);
       discard(response);
@@ -1248,12 +1334,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
+  let observed!: ReturnType<typeof observeUsage>;
+  const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
+  if (completion) completion.start(() => { observed = observe(); return observed.retired; });
+  else observed = observe();
   if (nativeLease) {
     const deliveryLease = nativeLease;
     context.waitUntil(observed.retired.then(() => deliveryLease.release()));
   }
-  if (admission) admission.completion = observed.result;
+  if (!completion && admission) admission.completion = observed.result;
   if (searchOwner) searchOwner.track(observed.retired);
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
@@ -1265,13 +1354,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         statusCode, status: operation.status ?? "provider_error", billable: !result.nonbillable, tokens: result.tokens, contentRef: content,
       })));
     }
-  } else context.waitUntil(observed.result.then(result => {
+  } else {
+    accountingDeferred = true;
+    const terminalAccounting = accounting;
+    context.waitUntil(run(() => observed.result.then(result => {
     const failure = priceGuard?.failure();
     // Replacing an unpriced response doesn't undo the dispatched work. Retain
     // the hard reservation and record the original usage, not a free rejection.
-    return failure ? accounting.pricingFailure(failure.tokens, reservation!, content)
-      : accounting.complete(observed.response, result, reservation!, content, operation.status);
-  }));
+    return failure ? terminalAccounting.pricingFailure(failure.tokens, reservation!, content)
+      : terminalAccounting.complete(observed.response, result, reservation!, content, operation.status);
+    }).finally(() => { if (completion) terminalAccounting.close(); })));
+  }
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
   // Header sanitization strips upstream router-code spoofing. Only a verified
@@ -1283,6 +1376,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+  } finally {
+    if (completion) {
+      failureAccounting?.close();
+      if (!accountingDeferred) accounting?.close();
+      if (!retentionDeferred) retention?.discardUnused?.();
+    }
+  }
 }
 
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
