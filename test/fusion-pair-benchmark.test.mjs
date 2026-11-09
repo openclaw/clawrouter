@@ -56,7 +56,7 @@ test('fixed controls receive identical supplied context without invoking or budg
     await writeFile(options.qualificationPath, JSON.stringify(qualification));
     const seen = [];
     const state = await runPairBenchmark({ ...options, controlsOnly: true, policy: 'contract-provided',
-      config: { ...config, maxCalls: 4, campaignBudgetMicros: config.priorCostMicros + 2 * config.trialBudgetMicros },
+      config: { ...config, maxCalls: 2, campaignBudgetMicros: config.priorCostMicros + 2 * config.trialBudgetMicros },
       grade, fetcher: success,
       contractAgent: async () => { assert.fail('candidate must not run'); },
       agent: async (task, _image, _strategy, id, settings, invoke, _unused, agentOptions) => {
@@ -67,7 +67,7 @@ test('fixed controls receive identical supplied context without invoking or budg
     });
     assert.deepEqual(seen[0], seen[1]);
     assert.match(seen[0].instruction, /known regression/);
-    assert.equal(seen[0].settings.maxTurns, 4);
+    assert.equal(seen[0].settings.maxTurns, 2);
     assert.equal(seen[0].preloadSource, true);
     assert.equal(state.kind, 'native-controls-repository');
     assert.equal(state.controlsOnly, true);

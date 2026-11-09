@@ -60,7 +60,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
     || (controlsOnly && !includeControls) || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (policy !== 'architect') preloadSource = true;
-  if (contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
+  if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', policy] : [policy];
   const tasks = await loadTasks(taskManifest);
   if (providedPolicies.includes(policy) && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
